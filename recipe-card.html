@@ -528,7 +528,13 @@ grist.onRecord(async (record) => {
           Layer_Order: get('Layer_Order'),
         };
       })
-      .filter(c => c.Recipe === recipeId);
+      .filter(c => {
+        const ref = c.Recipe;
+        // Grist reference columns return the row ID as a number
+        if (typeof ref === 'number') return ref === recipeId;
+        if (typeof ref === 'object' && ref !== null) return ref.rowId === recipeId;
+        return false;
+      });
 
   } catch(e) {
     console.error('Failed to fetch components:', e);
