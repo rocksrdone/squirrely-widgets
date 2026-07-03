@@ -474,18 +474,8 @@ function resetSteps() {
 
 // ── GRIST INTEGRATION ──
 grist.ready({
-  requiredAccess: 'read table',
-  columns: [
-    { name: 'Recipe_Name', type: 'Text' },
-    { name: 'Dye_Method', type: 'Text', optional: true },
-    { name: 'Fiber_Type', type: 'Text', optional: true },
-    { name: 'Recipe_Scope', type: 'Text', optional: true },
-    { name: 'General_Notes', type: 'Text', optional: true },
-    { name: 'Layout_Description', type: 'Text', optional: true },
-    { name: 'Photo_Process_1', type: 'Text', optional: true },
-    { name: 'Photo_Process_2', type: 'Text', optional: true },
-    { name: 'Photo_Finished', type: 'Text', optional: true },
-  ]
+  requiredAccess: 'read table',   // ← this is the bug
+  columns: [ ... ]
 });
 
 grist.onRecord(async (record) => {
