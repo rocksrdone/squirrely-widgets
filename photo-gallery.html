@@ -422,15 +422,11 @@ async function sharePhoto(photoId, btnEl) {
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
 
-    existingShares.push({
-      photoId, workOrderId: currentOrder.id,
-      destPath: `vendor-share/${vendorCode}/order-${currentOrder.Order_Number}/`,
-      sharedAt: new Date().toISOString(),
-    });
-    btnEl.textContent = 'Shared ✓';
-    btnEl.classList.add('shared');
-    btnEl.disabled = false;
     showToast(`Sent to ${vendorCode} — order ${currentOrder.Order_Number}`);
+    const searchValue = document.getElementById('searchBox').value;
+    await loadData(currentOrder);
+    document.getElementById('searchBox').value = searchValue;
+    renderSearch(searchValue);
   } catch (e) {
     console.error('Share failed:', e);
     btnEl.textContent = originalText;
