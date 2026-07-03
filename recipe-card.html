@@ -496,45 +496,47 @@ grist.onRecord(async (record) => {
   }
 
   currentRecipe = record;
+  const recipeRowId = record.id;
+  console.log('Selected recipe row ID:', recipeRowId, 'Name:', record.Recipe_Name);
 
-  // Fetch linked dye components from Recipe Dye Components table
   try {
     const tableData = await grist.docApi.fetchTable('Recipe_Dye_Components');
-    const recipeId = record.id;
-
-    // Build component objects filtering by this recipe's ID
     const ids = tableData.id || [];
-    currentComponents = ids
-      .map((id, i) => {
-        const get = (col) => {
-          const arr = tableData[col];
-          return arr ? arr[i] : undefined;
-        };
-        return {
-          id,
-          Recipe: get('Recipe'),
-          Dye_Name: get('Dye_Name'),
-          Dye_Full: get('Dye_Full'),
-          'Std_Powder_(tsp)': get('Std_Powder_(tsp)'),
-          'Std_Water_(mL)': get('Std_Water_(mL)'),
-          'Default_mL_per_100_yds': get('Default_mL_per_100_yds'),
-          'Effective_mL_per_100_yd': get('Effective_mL_per_100_yd'),
-          Dilution_Ratio: get('Dilution_Ratio'),
-          Step_Order: get('Step_Order'),
-          Step_Number: get('Step_Number'),
-          Application_Notes: get('Application_Notes'),
-          Position: get('Position'),
-          Technique: get('Technique'),
-          Layer_Order: get('Layer_Order'),
-        };
-      })
-      .filter(c => {
-        const ref = c.Recipe;
-        // Grist reference columns return the row ID as a number
-        if (typeof ref === 'number') return ref === recipeId;
-        if (typeof ref === 'object' && ref !== null) return ref.rowId === recipeId;
-        return false;
-      });
+    const recipeRefs = tableData.Recipe || [];
+    
+    console.log('Total components:', ids.length);
+    console.log('First few Recipe refs:', recipeRefs.slice(0, 5));
+    console.log('Looking for ID:', recipeRowId);
+
+    currentComponents = ids.map((id, i) => {
+      const get = (col) => Array.isArray(tableData[col]) ? tableData[col][i] : undefined;
+      return {
+        id,
+        Recipe: get('Recipe'),
+        Dye_Name: get('Dye_Name'),
+        Dye_Full: get('Dye_Full'),
+        'Std_Powder_(tsp)': get('Std_Powder_(tsp)'),
+        'Std_Water_(mL)': get('Std_Water_(mL)'),
+        'Default_mL_per_100_yds': get('Default_mL_per_100_yds'),
+        'Effective_mL_per_100_yd': get('Effective_mL_per_100_yd'),
+        Dilution_Ratio: get('Dilution_Ratio'),
+        Step_Order: get('Step_Order'),
+        Step_Number: get('Step_Number'),
+        Application_Notes: get('Application_Notes'),
+        Position: get('Position'),
+        Technique: get('Technique'),
+        Layer_Order: get('Layer_Order'),
+      };
+    }).filter(c => {
+      const ref = c.Recipe;
+      // Handle all possible formats Grist might return
+      if (typeof ref === 'number') return ref === recipeRowId;
+      if (Array.isArray(ref)) return ref[1] === recipeRowId;
+      if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId === recipeRowId;
+      return false;
+    });
+
+    console.log('Matched components:', currentComponents.length);
 
   } catch(e) {
     console.error('Failed to fetch components:', e);
@@ -547,6 +549,4 @@ grist.onRecord(async (record) => {
   renderLeft();
   renderRight();
 });
-</script>
-</body>
-</html>
+
