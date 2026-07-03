@@ -273,6 +273,7 @@ async function loadData(record) {
     if (sharesData) {
       const shareRows = rowsFromTableData(sharesData, ['Photo', 'Work_Order', 'Dest_Path', 'Shared_At']);
       existingShares = shareRows.map(s => ({
+        shareId: s.id,
         photoId: getRefId(s.Photo),
         workOrderId: getRefId(s.Work_Order),
         destPath: s.Dest_Path,
@@ -310,8 +311,12 @@ function matchPhotos(colorwayGuess) {
 }
 
 function photoCardHTML(p) {
-  const alreadyShared = existingShares.some(s => s.photoId === p.id && s.workOrderId === currentOrder.id);
+  const shareRecord = existingShares.find(s => s.photoId === p.id && s.workOrderId === currentOrder.id);
   const fav = !!p.Is_Favorite;
+  const safeDestPath = shareRecord ? shareRecord.destPath.replace(/'/g, "\\'").replace(/"/g, '&quot;') : '';
+  const sharedDateLabel = shareRecord && shareRecord.sharedAt
+    ? new Date(shareRecord.sharedAt * 1000).toLocaleDateString()
+    : '';
   return `
     <div class="pcard ${fav ? 'fav' : ''}" id="pcard-${p.id}">
       <img src="${p.Nextcloud_URL || ''}" alt="${p.Colorway_Name || ''}" onerror="this.style.opacity=0.2">
@@ -321,11 +326,11 @@ function photoCardHTML(p) {
         <span class="pcard-status ${statusClass(p.Status)}">${p.Status || 'unknown'}</span>
         <div class="pcard-actions">
           <button class="star-btn ${fav ? 'on' : ''}" onclick="toggleFavorite(${p.id}, ${fav})" title="Mark as favorite">★</button>
-          <button class="share-btn ${alreadyShared ? 'shared' : ''}" onclick="sharePhoto(${p.id}, this)">
-            ${alreadyShared ? 'Shared ✓' : 'Share to order'}
-          </button>
+          ${shareRecord
+            ? `<button class="share-btn shared" onclick="unsharePhoto(${p.id}, ${shareRecord.shareId}, '${safeDestPath}', this)" title="Click to remove from vendor folder">Shared ✓ — undo</button>`
+            : `<button class="share-btn" onclick="sharePhoto(${p.id}, this)">Share to order</button>`}
         </div>
-        ${alreadyShared ? `<div class="share-note">Already sent for this order</div>` : ''}
+        ${shareRecord ? `<div class="share-note">Sent${sharedDateLabel ? ' ' + sharedDateLabel : ''} — click to remove</div>` : ''}
       </div>
     </div>`;
 }
@@ -431,6 +436,35 @@ async function sharePhoto(photoId, btnEl) {
     btnEl.textContent = originalText;
     btnEl.disabled = false;
     showToast('Share failed — is the n8n webhook live?');
+  }
+}
+
+const UNSHARE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/unshare-photo';
+
+async function unsharePhoto(photoId, shareId, destPath, btnEl) {
+  if (!confirm('Remove this photo from the vendor folder for this order?')) return;
+
+  btnEl.disabled = true;
+  const originalText = btnEl.textContent;
+  btnEl.textContent = 'Removing...';
+
+  try {
+    const res = await fetch(UNSHARE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share_id: shareId, dest_path: destPath }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    existingShares = existingShares.filter(s => s.shareId !== shareId);
+    renderLines();
+    renderSearch(document.getElementById('searchBox').value);
+    showToast('Removed from vendor folder');
+  } catch (e) {
+    console.error('Unshare failed:', e);
+    btnEl.disabled = false;
+    btnEl.textContent = originalText;
+    showToast('Remove failed — is the n8n webhook live?');
   }
 }
 
