@@ -251,7 +251,7 @@ async function loadData(record) {
 
     // All product photos
     allPhotos = rowsFromTableData(photosData, ['Colorway_Name', 'Recipe', 'Fiber_Type', 'Lot_Date',
-      'Nextcloud_URL', 'Status', 'Share_With', 'Is_Favorite', 'Notes']);
+      'Nextcloud_URL', 'Status', 'Share_With', 'Is_Favorite', 'Notes', 'Source_Filename']);
 
     // Vendor code lookup — tries common column names, falls back gracefully
     const nameCol = findColumn(customersData, ['Name', 'Customer_Name', 'Vendor_Name']);
@@ -390,6 +390,11 @@ async function sharePhoto(photoId, btnEl) {
   const p = allPhotos.find(p => p.id === photoId);
   if (!p || !currentOrder) return;
 
+  if (!p.Source_Filename) {
+    showToast('Missing Source_Filename for this photo — add it in Product Photos first');
+    return;
+  }
+
   btnEl.disabled = true;
   const originalText = btnEl.textContent;
   btnEl.textContent = 'Sharing...';
@@ -397,6 +402,7 @@ async function sharePhoto(photoId, btnEl) {
   const payload = {
     photo_id: photoId,
     work_order_id: currentOrder.id,
+    source_filename: p.Source_Filename,
     source_path: p.Nextcloud_URL,
     vendor_code: vendorCode,
     order_number: currentOrder.Order_Number,
