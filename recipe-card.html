@@ -75,6 +75,19 @@
     margin-bottom: 6px;
   }
   .recipe-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .recipe-header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .product-preview-thumb {
+    flex: 0 0 auto;
+    width: 56px; height: 56px;
+    border-radius: 8px; overflow: hidden;
+    border: 1.5px solid var(--rule);
+    background: var(--warm);
+    cursor: pointer;
+    transition: transform .15s ease, border-color .15s ease;
+  }
+  .product-preview-thumb:hover { transform: scale(1.05); border-color: var(--accent); }
+  .product-preview-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  body.big-mode .product-preview-thumb { width: 90px; height: 90px; }
   .meta-tag {
     font-size: 10px;
     padding: 2px 7px;
@@ -442,6 +455,7 @@ let currentYardage = 100;
 let currentRecipe = null;
 let currentComponents = [];
 let currentPhotoIndex = 0;
+let currentPreviewUrl = null;
 
 function getPhotoList(r) {
   const list = [];
@@ -610,8 +624,17 @@ function renderLeft() {
   const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
 
   document.getElementById('leftPanel').innerHTML = `
-    <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
-    <div class="recipe-meta">${tags}</div>
+    <div class="recipe-header-row">
+      <div>
+        <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
+        <div class="recipe-meta">${tags}</div>
+      </div>
+      ${currentPreviewUrl ? `
+        <div class="product-preview-thumb" onclick="openLightbox('${currentPreviewUrl.replace(/'/g, "\\'")}','Product photo')" title="Product photo preview">
+          <img src="${currentPreviewUrl}" alt="Product preview" onerror="this.parentElement.style.display='none'">
+        </div>
+      ` : ''}
+    </div>
 
     <div class="yardage-row">
       <span class="yardage-label">Yards</span>
@@ -771,6 +794,31 @@ grist.onRecord(async (record) => {
   } catch(e) {
     console.error('Failed to fetch components:', e);
     currentComponents = [];
+  }
+
+  try {
+    const photoTable = await grist.docApi.fetchTable('Product_Photos');
+    const ids = photoTable.id || [];
+    const refs = photoTable.Recipe || [];
+    const previews = photoTable.Is_Preview || [];
+    const urls = photoTable.Nextcloud_URL || [];
+
+    let matchUrl = null;
+    for (let i = 0; i < ids.length; i++) {
+      const ref = refs[i];
+      const refId = typeof ref === 'number' ? ref
+        : Array.isArray(ref) ? ref[1]
+        : (ref && typeof ref === 'object' && 'rowId' in ref) ? ref.rowId
+        : null;
+      if (refId === recipeRowId && previews[i]) {
+        matchUrl = urls[i];
+        break;
+      }
+    }
+    currentPreviewUrl = matchUrl;
+  } catch (e) {
+    console.error('Failed to fetch preview photo:', e);
+    currentPreviewUrl = null;
   }
 
   document.getElementById('emptyState').style.display = 'none';

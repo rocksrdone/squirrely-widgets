@@ -112,6 +112,14 @@
   }
   .slot-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
 
+  .doctype-row { display: flex; gap: 4px; margin-top: 8px; }
+  .doctype-btn {
+    flex: 1; font-size: 10px; padding: 5px 4px; border-radius: 4px;
+    border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer;
+    font-weight: 600;
+  }
+  .doctype-btn.active { background: var(--teal); border-color: var(--teal); color: white; }
+
   .note-input {
     width: 100%; margin-top: 8px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
     font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: none;
@@ -151,6 +159,8 @@
 <script>
 const LIST_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/inbox-photos';
 const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
+const PRODUCT_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-product-photo';
+const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
 
 const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
   'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
@@ -239,7 +249,7 @@ async function loadEverything() {
 
     cardState = {};
     inboxPhotos.forEach(p => {
-      cardState[p.path] = { recipe: null, slot: p.default_slot || null, note: '' };
+      cardState[p.path] = { recipe: null, slot: p.default_slot || null, note: '', docType: 'recipe' };
     });
 
     document.getElementById('headerSub').textContent =
@@ -263,7 +273,7 @@ function renderGrid() {
 }
 
 function photoCardHTML(p) {
-  const state = cardState[p.path] || { recipe: null, slot: null, note: '' };
+  const state = cardState[p.path] || { recipe: null, slot: null, note: '', docType: 'recipe' };
   const key = btoa(p.path).replace(/=/g, '');
 
   const recipeSection = state.recipe
@@ -276,11 +286,18 @@ function photoCardHTML(p) {
          <div class="recipe-suggestions" id="suggestions-${key}" style="display:none"></div>
        </div>`;
 
-  const slotButtons = Object.entries(SLOTS).map(([slotKey, s]) => `
-    <button class="slot-btn ${state.slot === slotKey ? 'active' : ''}" onclick="setSlot('${key}','${slotKey}')">${s.label}</button>
-  `).join('');
+  const doctypeRow = `
+    <div class="doctype-row">
+      <button class="doctype-btn ${state.docType !== 'product' ? 'active' : ''}" onclick="setDocType('${key}','recipe')">Recipe Photo</button>
+      <button class="doctype-btn ${state.docType === 'product' ? 'active' : ''}" onclick="setDocType('${key}','product')">Product Photo</button>
+    </div>`;
 
-  const canFile = !!(state.recipe && state.slot);
+  const slotRow = state.docType === 'product' ? '' : `
+    <div class="slot-row">${Object.entries(SLOTS).map(([slotKey, s]) => `
+      <button class="slot-btn ${state.slot === slotKey ? 'active' : ''}" onclick="setSlot('${key}','${slotKey}')">${s.label}</button>
+    `).join('')}</div>`;
+
+  const canFile = !!(state.recipe && (state.docType === 'product' || state.slot));
 
   return `
     <div class="photo-card" id="card-${key}">
@@ -291,8 +308,8 @@ function photoCardHTML(p) {
         <span class="source-tag source-${p.source}">${p.source === 'dslr' ? 'DSLR' : 'Phone'}</span>
 
         ${recipeSection}
-
-        <div class="slot-row">${slotButtons}</div>
+        ${doctypeRow}
+        ${slotRow}
 
         <textarea class="note-input" rows="2" placeholder="Optional note (what did you do differently?)"
           oninput="setNote('${key}', this.value)">${state.note || ''}</textarea>
@@ -352,6 +369,13 @@ function setSlot(key, slotKey) {
   refreshCard(key);
 }
 
+function setDocType(key, docType) {
+  const path = keyToPath(key);
+  const current = cardState[path] || {};
+  cardState[path] = { ...current, docType, slot: docType === 'product' ? null : current.slot };
+  refreshCard(key);
+}
+
 function setNote(key, value) {
   const path = keyToPath(key);
   cardState[path] = { ...(cardState[path] || {}), note: value };
@@ -365,8 +389,6 @@ function refreshCard(key) {
   const cardEl = document.getElementById(`card-${key}`);
   if (cardEl) cardEl.outerHTML = photoCardHTML(p);
 }
-
-const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
 
 async function deleteInboxPhoto(key) {
   const path = keyToPath(key);
@@ -403,31 +425,51 @@ async function fileThisPhoto(key) {
   const path = keyToPath(key);
   const p = inboxPhotos.find(ph => ph.path === path);
   const state = cardState[path];
-  if (!p || !state || !state.recipe || !state.slot) return;
+  if (!p || !state || !state.recipe) return;
+  if (state.docType !== 'product' && !state.slot) return;
 
   const btn = document.getElementById(`file-btn-${key}`);
   btn.disabled = true;
   btn.textContent = 'Filing...';
 
-  const slotInfo = SLOTS[state.slot];
-  const folder = recipeFolderName(state.recipe);
-  const destFolder = `Squirrely Stash/recipes/photos/${folder}/`;
   const extMatch = p.filename.match(/\.[^.]+$/);
   const ext = extMatch ? extMatch[0] : '.jpg';
-  const destPath = `${destFolder}${slotInfo.filenameBase}${ext}`;
 
-  const payload = {
-    source_path: p.path,
-    dest_folder: destFolder,
-    dest_path: destPath,
-    recipe_id: state.recipe.id,
-    photo_field: slotInfo.photoField,
-    note_field: slotInfo.noteField,
-    note_text: state.note || '',
-  };
+  let payload, webhookUrl, successLabel;
+
+  if (state.docType === 'product') {
+    webhookUrl = PRODUCT_FILE_WEBHOOK_URL;
+    payload = {
+      source_path: p.path,
+      recipe_id: state.recipe.id,
+      colorway_name: state.recipe.Recipe_Name,
+      fiber_type: state.recipe.Fiber_Type,
+      recipe_scope: state.recipe.Recipe_Scope,
+      sku_base: state.recipe.SKU_Base,
+      note_text: state.note || '',
+      ext,
+    };
+    successLabel = `Filed to Product Photos — ${state.recipe.Recipe_Name}`;
+  } else {
+    const slotInfo = SLOTS[state.slot];
+    const folder = recipeFolderName(state.recipe);
+    const destFolder = `Squirrely Stash/recipes/photos/${folder}/`;
+    const destPath = `${destFolder}${slotInfo.filenameBase}${ext}`;
+    webhookUrl = FILE_WEBHOOK_URL;
+    payload = {
+      source_path: p.path,
+      dest_folder: destFolder,
+      dest_path: destPath,
+      recipe_id: state.recipe.id,
+      photo_field: slotInfo.photoField,
+      note_field: slotInfo.noteField,
+      note_text: state.note || '',
+    };
+    successLabel = `Filed to ${state.recipe.Recipe_Name} — ${slotInfo.label}`;
+  }
 
   try {
-    const res = await fetch(FILE_WEBHOOK_URL, {
+    const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -436,7 +478,7 @@ async function fileThisPhoto(key) {
 
     btn.textContent = 'Filed ✓';
     btn.classList.add('filed');
-    showToast(`Filed to ${state.recipe.Recipe_Name} — ${slotInfo.label}`);
+    showToast(successLabel);
 
     inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
     delete cardState[path];
