@@ -168,89 +168,53 @@
   .layout-note { font-size: 10px; color: #6B5E52; font-style: italic; margin-top: 6px; }
 
   /* ── PHOTOS ── */
-  .process-strip {
+  .photo-viewer {
+    position: relative;
+    width: 100%;
+    height: 220px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1.5px solid var(--rule);
+    background: var(--warm);
+    cursor: pointer;
     display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .process-item {
-    display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 4px;
-    flex: 0 0 auto;
+    justify-content: center;
+    transition: border-color .15s ease;
   }
-  .process-item.hero-item { flex: 1 1 160px; align-items: stretch; }
-  .process-thumb {
-    position: relative;
-    width: 76px;
-    height: 76px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1.5px solid var(--rule);
-    background: var(--warm);
-    cursor: pointer;
-    transition: transform .15s ease, border-color .15s ease, width .15s ease, height .15s ease;
-  }
-  .process-thumb:hover { transform: scale(1.04); border-color: var(--accent); }
-  .process-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .process-thumb .step-badge {
-    position: absolute; top: 4px; left: 4px;
-    width: 16px; height: 16px; border-radius: 50%;
-    background: rgba(26,22,20,.72); color: white;
-    font-size: 9px; font-weight: 600;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .process-arrow {
-    flex: 0 0 auto;
-    font-size: 16px;
-    color: var(--rule);
-    align-self: center;
-    margin-top: 30px;
-  }
-  .process-hero {
-    position: relative;
-    height: 108px;
-    min-width: 0;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1.5px solid var(--rule);
-    background: var(--warm);
-    cursor: pointer;
-    transition: transform .15s ease, border-color .15s ease, height .15s ease;
-  }
-  .process-hero:hover { transform: scale(1.02); border-color: var(--accent); }
-  .process-hero img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .process-hero .hero-caption {
+  .photo-viewer:hover { border-color: var(--accent); }
+  .photo-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .viewer-caption {
     position: absolute; left: 0; right: 0; bottom: 0;
-    padding: 4px 8px;
-    font-size: 9px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
-    color: white;
-    background: linear-gradient(to top, rgba(26,22,20,.75), rgba(26,22,20,0));
+    padding: 6px 10px;
+    background: linear-gradient(to top, rgba(26,22,20,.78), rgba(26,22,20,0));
   }
-  .process-caption { text-align: center; max-width: 140px; }
-  .process-caption .cap-label {
-    font-size: 9px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #6B5E52;
+  .viewer-label {
     display: block;
+    font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: white;
+  }
+  .viewer-caption .photo-note {
+    color: rgba(255,255,255,.85);
   }
   .photo-note {
     display: block;
     font-size: 9px; color: #8B7D72; font-style: italic;
     margin-top: 1px;
   }
-  .photo-single-hero {
-    height: 190px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1.5px solid var(--rule);
-    background: var(--warm);
-    cursor: pointer;
-    transition: transform .15s ease, border-color .15s ease, height .15s ease;
+  .viewer-dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 8px;
   }
-  .photo-single-hero:hover { transform: scale(1.01); border-color: var(--accent); }
-  .photo-single-hero img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .viewer-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--rule);
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .viewer-dot.active { background: var(--accent); width: 20px; border-radius: 4px; }
 
   .lightbox-overlay {
     display: none;
@@ -313,15 +277,13 @@
   body.big-mode .recipe-name { font-size: 32px; }
   body.big-mode .meta-tag { font-size: 13px; padding: 4px 12px; }
 
-  body.big-mode .process-thumb { width: 18vh; height: 18vh; max-width: 220px; max-height: 220px; }
-  body.big-mode .process-hero { height: 26vh; max-height: 320px; }
-  body.big-mode .photo-single-hero { height: 42vh; max-height: 460px; }
-  body.big-mode .process-item.hero-item { flex: 1 1 260px; }
-  body.big-mode .process-arrow { font-size: 26px; margin-top: 62px; }
-  body.big-mode .process-caption { max-width: 220px; }
-  body.big-mode .process-caption .cap-label { font-size: 13px; }
-  body.big-mode .photo-note { font-size: 13px; }
-  body.big-mode .hero-caption { font-size: 14px; padding: 8px 14px; }
+  body.big-mode .photo-viewer { height: 46vh; max-height: 560px; }
+  body.big-mode .viewer-label { font-size: 15px; }
+  body.big-mode .viewer-caption .photo-note { font-size: 14px; }
+  body.big-mode .photo-note { font-size: 14px; }
+  body.big-mode .viewer-dots { margin-top: 12px; }
+  body.big-mode .viewer-dot { width: 12px; height: 12px; }
+  body.big-mode .viewer-dot.active { width: 30px; }
   body.big-mode .step-badge { width: 22px; height: 22px; font-size: 12px; }
   body.big-mode .layout-wrap { display: none; }
 
@@ -470,6 +432,54 @@ function closeLightbox() {
 let currentYardage = 100;
 let currentRecipe = null;
 let currentComponents = [];
+let currentPhotoIndex = 0;
+
+function getPhotoList(r) {
+  const list = [];
+  if (r.Photo_Process_1) list.push({ url: r.Photo_Process_1, label: 'Step 1', note: r.Photo_Process_1_Note });
+  if (r.Photo_Process_2) list.push({ url: r.Photo_Process_2, label: 'Step 2', note: r.Photo_Process_2_Note });
+  if (r.Photo_Finished) list.push({ url: r.Photo_Finished, label: 'Finished', note: r.Photo_Finished_Note });
+  return list;
+}
+
+function renderPhotoViewer() {
+  const wrap = document.getElementById('photoViewerWrap');
+  if (!wrap || !currentRecipe) return;
+
+  const photos = getPhotoList(currentRecipe);
+  if (!photos.length) { wrap.innerHTML = ''; return; }
+  if (currentPhotoIndex >= photos.length) currentPhotoIndex = 0;
+
+  const p = photos[currentPhotoIndex];
+  const dotsHTML = photos.length > 1
+    ? `<div class="viewer-dots">${photos.map((_, i) =>
+        `<span class="viewer-dot ${i === currentPhotoIndex ? 'active' : ''}" onclick="event.stopPropagation(); jumpToPhoto(${i})"></span>`
+      ).join('')}</div>`
+    : '';
+
+  wrap.innerHTML = `
+    <div class="photo-viewer" onclick="nextPhoto()" title="${photos.length > 1 ? 'Click for next photo' : ''}">
+      <img src="${p.url}" alt="${p.label}" onerror="this.style.display='none'">
+      <div class="viewer-caption">
+        <span class="viewer-label">${p.label}${photos.length > 1 ? ` · ${currentPhotoIndex + 1}/${photos.length}` : ''}</span>
+        ${p.note ? `<span class="photo-note">${p.note}</span>` : ''}
+      </div>
+    </div>
+    ${dotsHTML}
+  `;
+}
+
+function nextPhoto() {
+  const photos = getPhotoList(currentRecipe || {});
+  if (photos.length < 2) return;
+  currentPhotoIndex = (currentPhotoIndex + 1) % photos.length;
+  renderPhotoViewer();
+}
+
+function jumpToPhoto(i) {
+  currentPhotoIndex = i;
+  renderPhotoViewer();
+}
 
 function calcTsp(base) {
   if (!base || isNaN(base)) return '—';
@@ -538,66 +548,7 @@ function renderLeft() {
   const bars = colors.map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
   const barsRev = [...colors].reverse().map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
 
-  // Photos
-  let photosHTML = '';
-  const p1 = r.Photo_Process_1;
-  const p2 = r.Photo_Process_2;
-  const pf = r.Photo_Finished;
-  const n1 = r.Photo_Process_1_Note;
-  const n2 = r.Photo_Process_2_Note;
-  const nf = r.Photo_Finished_Note;
-
-  const escAttr = (s) => (s || '').toString().replace(/'/g, "\\'").replace(/"/g, '&quot;');
-
-  if (p1 || p2 || pf) {
-    const processShots = [];
-    if (p1) processShots.push({ url: p1, label: 'Step 1', note: n1 });
-    if (p2) processShots.push({ url: p2, label: 'Step 2', note: n2 });
-
-    const onlyFinished = pf && processShots.length === 0;
-
-    if (onlyFinished) {
-      photosHTML = `
-        <div class="slabel">Reference photo</div>
-        <div class="photo-single-hero" onclick="openLightbox('${escAttr(pf)}','Finished')">
-          <img src="${pf}" alt="Finished" onerror="this.parentElement.style.display='none'">
-        </div>
-        ${nf ? `<div class="process-caption"><span class="photo-note">${nf}</span></div>` : ''}
-      `;
-    } else {
-      const thumbsHTML = processShots.map((s, i) => `
-        <div class="process-item">
-          <div class="process-thumb" onclick="openLightbox('${escAttr(s.url)}','${escAttr(s.label)}')">
-            <span class="step-badge">${i + 1}</span>
-            <img src="${s.url}" alt="${s.label}" onerror="this.parentElement.style.display='none'">
-          </div>
-          <div class="process-caption">
-            <span class="cap-label">${s.label}</span>
-            ${s.note ? `<span class="photo-note">${s.note}</span>` : ''}
-          </div>
-        </div>
-        <span class="process-arrow">→</span>
-      `).join('');
-
-      const heroHTML = pf ? `
-        <div class="process-item hero-item">
-          <div class="process-hero" onclick="openLightbox('${escAttr(pf)}','Finished')">
-            <img src="${pf}" alt="Finished" onerror="this.parentElement.style.display='none'">
-            <div class="hero-caption">Finished</div>
-          </div>
-          ${nf ? `<div class="process-caption"><span class="photo-note">${nf}</span></div>` : ''}
-        </div>
-      ` : '';
-
-      photosHTML = `
-        <div class="slabel">Process → finished</div>
-        <div class="process-strip">
-          ${thumbsHTML}
-          ${heroHTML}
-        </div>
-      `;
-    }
-  }
+  const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
 
   document.getElementById('leftPanel').innerHTML = `
     <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
@@ -638,7 +589,7 @@ function renderLeft() {
       ${r.Layout_Description ? `<div class="layout-note">${r.Layout_Description}</div>` : ''}
     </div>` : ''}
 
-    ${photosHTML}
+    ${hasPhotos ? `<div class="slabel">Reference photos</div><div id="photoViewerWrap"></div>` : ''}
 
     ${r.General_Notes ? `
     <div class="notes-box">
@@ -646,6 +597,8 @@ function renderLeft() {
       ${r.General_Notes}
     </div>` : ''}
   `;
+
+  renderPhotoViewer();
 }
 
 function renderRight() {
@@ -713,6 +666,7 @@ grist.onRecord(async (record) => {
   }
 
   currentRecipe = record;
+  currentPhotoIndex = 0;
   const recipeRowId = record.id;
   console.log('Selected recipe row ID:', recipeRowId, 'Name:', record.Recipe_Name);
 
