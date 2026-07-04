@@ -195,7 +195,7 @@
     transition: transform .15s ease, border-color .15s ease, width .15s ease, height .15s ease;
   }
   .process-thumb:hover { transform: scale(1.04); border-color: var(--accent); }
-  .process-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .process-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .process-thumb .step-badge {
     position: absolute; top: 4px; left: 4px;
     width: 16px; height: 16px; border-radius: 50%;
@@ -222,7 +222,7 @@
     transition: transform .15s ease, border-color .15s ease, height .15s ease;
   }
   .process-hero:hover { transform: scale(1.02); border-color: var(--accent); }
-  .process-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .process-hero img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .process-hero .hero-caption {
     position: absolute; left: 0; right: 0; bottom: 0;
     padding: 4px 8px;
@@ -250,7 +250,7 @@
     transition: transform .15s ease, border-color .15s ease, height .15s ease;
   }
   .photo-single-hero:hover { transform: scale(1.01); border-color: var(--accent); }
-  .photo-single-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .photo-single-hero img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
   .lightbox-overlay {
     display: none;
@@ -306,16 +306,16 @@
   }
   body.big-mode .big-toggle-btn { background: var(--accent); color: white; }
 
-  body.big-mode .card { display: block; }
-  body.big-mode .panel { border-right: none; padding: 20px 28px; max-width: 900px; margin: 0 auto; }
-  body.big-mode #rightPanel { border-top: 2px solid var(--rule); margin-top: 8px; padding-top: 20px; }
+  body.big-mode .card { grid-template-columns: 1.15fr 0.85fr; }
+  body.big-mode .panel { border-right: 1px solid var(--rule); padding: 20px 24px; max-width: none; margin: 0; overflow-y: auto; height: 100vh; }
+  body.big-mode #rightPanel { border-top: none; margin-top: 0; padding-top: 20px; }
 
   body.big-mode .recipe-name { font-size: 32px; }
   body.big-mode .meta-tag { font-size: 13px; padding: 4px 12px; }
 
-  body.big-mode .process-thumb { width: 160px; height: 160px; }
-  body.big-mode .process-hero { height: 280px; }
-  body.big-mode .photo-single-hero { height: 380px; }
+  body.big-mode .process-thumb { width: 18vh; height: 18vh; max-width: 220px; max-height: 220px; }
+  body.big-mode .process-hero { height: 26vh; max-height: 320px; }
+  body.big-mode .photo-single-hero { height: 42vh; max-height: 460px; }
   body.big-mode .process-item.hero-item { flex: 1 1 260px; }
   body.big-mode .process-arrow { font-size: 26px; margin-top: 62px; }
   body.big-mode .process-caption { max-width: 220px; }
@@ -323,6 +323,7 @@
   body.big-mode .photo-note { font-size: 13px; }
   body.big-mode .hero-caption { font-size: 14px; padding: 8px 14px; }
   body.big-mode .step-badge { width: 22px; height: 22px; font-size: 12px; }
+  body.big-mode .layout-wrap { display: none; }
 
   body.big-mode .slabel { font-size: 12px; }
   body.big-mode .dye-table { font-size: 18px; }
