@@ -81,6 +81,21 @@
   .field-textarea { resize: vertical; min-height: 60px; }
   .field-wrap.wide { grid-column: 1 / -1; }
 
+  .sku-suggest-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6B5E52;
+  }
+  .sku-suggest-row code {
+    font-family: 'DM Mono', monospace; background: var(--warm); padding: 2px 6px; border-radius: 4px;
+  }
+  .btn-small {
+    font-size: 11px; padding: 4px 10px; border-radius: 5px; border: 1px solid var(--teal);
+    background: var(--teal-light); color: var(--teal); cursor: pointer;
+  }
+  .btn-small:hover { background: var(--teal); color: white; }
+  .sku-warning {
+    margin-top: 4px; font-size: 11px; color: var(--accent); font-weight: 600;
+  }
+
   .dye-row {
     border: 1px solid var(--rule); border-radius: 8px; padding: 10px; margin-bottom: 8px;
     background: var(--paper);
@@ -147,7 +162,7 @@
 
 <div id="content" style="display:none">
   <div class="top-bar">
-    <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved()">
+    <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion();">
     <div class="top-actions">
       <button class="btn" onclick="createNewRecipe()">+ New Recipe</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
@@ -159,7 +174,7 @@
     <div class="field-grid">
       <div class="field-wrap">
         <span class="field-label">Fiber Type</span>
-        <select class="field-select" id="fiberType" onchange="markUnsaved()">
+        <select class="field-select" id="fiberType" onchange="markUnsaved(); renderSkuSuggestion();">
           <option value="">—</option>
           <option>FF Nylon</option>
           <option>E Nylon</option>
@@ -177,16 +192,23 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Recipe Scope</span>
-        <select class="field-select" id="recipeScope" onchange="markUnsaved()">
+        <select class="field-select" id="recipeScope" onchange="markUnsaved(); onScopeChange(); renderSkuSuggestion();">
           <option value="">—</option>
           <option>General</option>
           <option>Customer Reserved</option>
         </select>
       </div>
+      <div class="field-wrap" id="reservedForWrap" style="display:none">
+        <span class="field-label">Reserved For</span>
+        <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion();">
+          <option value="">— pick vendor —</option>
+        </select>
+      </div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
-        <input class="field-input" id="skuBase" oninput="markUnsaved()">
+        <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion();">
       </div>
+      <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
         <span class="field-label">Notes</span>
         <textarea class="field-textarea" id="generalNotes" oninput="markUnsaved()"></textarea>
@@ -295,7 +317,20 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+  'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+
+function vendorCodeFromExistingSku(skuBase) {
+  if (!skuBase) return '';
+  const parts = skuBase.toString().split('_');
+  const last = (parts[parts.length - 1] || '').toUpperCase();
+  return VENDOR_CODES.includes(last) ? last : '';
+}
+
 let currentRecipeId = null;
+let allVendors = [];   // {name, code}
+let allOtherSkus = [];  // {id, sku, recipeName}
 let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder, water, dilution, position, technique, notes}
 let deletedDyeIds = [];
 let allDyes = [];        // for autocomplete: {name, brand, powder, water}
@@ -310,6 +345,89 @@ function markUnsaved() {
 function clearUnsaved() {
   unsavedChanges = false;
   document.getElementById('saveBtn').classList.remove('unsaved');
+}
+
+async function loadVendorsList() {
+  if (allVendors.length) return;
+  try {
+    const customersTable = await grist.docApi.fetchTable('Customers');
+    const nameCol = findColumn(customersTable, ['Name', 'Customer_Name', 'Vendor_Name']);
+    const codeCol = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+    if (!nameCol || !codeCol) return;
+    const ids = customersTable.id || [];
+    allVendors = ids.map((id, i) => ({
+      name: columnAsArray(customersTable, nameCol)[i],
+      code: columnAsArray(customersTable, codeCol)[i],
+    })).filter(v => v.name && v.code);
+
+    const select = document.getElementById('reservedFor');
+    select.innerHTML = '<option value="">— pick vendor —</option>' +
+      allVendors.map(v => `<option value="${v.code}">${v.name} (${v.code})</option>`).join('');
+  } catch (e) {
+    console.error('Could not load vendor list:', e);
+  }
+}
+
+async function loadAllSkus() {
+  try {
+    const recipesTable = await grist.docApi.fetchTable('Recipes');
+    const ids = recipesTable.id || [];
+    allOtherSkus = ids.map((id, i) => ({
+      id,
+      sku: columnAsArray(recipesTable, 'SKU_Base')[i],
+      recipeName: columnAsArray(recipesTable, 'Recipe_Name')[i],
+    }));
+  } catch (e) {
+    console.error('Could not load existing SKUs for duplicate check:', e);
+    allOtherSkus = [];
+  }
+}
+
+function onScopeChange() {
+  const scope = document.getElementById('recipeScope').value;
+  const wrap = document.getElementById('reservedForWrap');
+  wrap.style.display = /reserv/i.test(scope) ? 'flex' : 'none';
+}
+
+function slugifyForSku(name) {
+  return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function computeSuggestedSku() {
+  const fiberType = document.getElementById('fiberType').value;
+  const name = document.getElementById('nameInput').value;
+  const scope = document.getElementById('recipeScope').value;
+  const vendor = document.getElementById('reservedFor').value;
+
+  const fc = FIBER_NAME_TO_CODE[fiberType] || 'GEN';
+  const namePart = slugifyForSku(name) || 'UNNAMED';
+  let sku = `${fc}_${namePart}`;
+  if (/reserv/i.test(scope) && vendor) sku += `_${vendor}`;
+  return sku;
+}
+
+function renderSkuSuggestion() {
+  const wrap = document.getElementById('skuSuggestionWrap');
+  const suggestion = computeSuggestedSku();
+  const currentVal = document.getElementById('skuBase').value.trim().toUpperCase();
+
+  const dup = allOtherSkus.find(s =>
+    s.id !== currentRecipeId && s.sku && s.sku.toUpperCase() === currentVal && currentVal !== ''
+  );
+
+  wrap.innerHTML = `
+    <div class="sku-suggest-row">
+      <span>Suggested: <code>${suggestion}</code></span>
+      <button type="button" class="btn-small" onclick="applySkuSuggestion()">Use this</button>
+    </div>
+    ${dup ? `<div class="sku-warning">⚠ "${currentVal}" is already used by "${dup.recipeName}"</div>` : ''}
+  `;
+}
+
+function applySkuSuggestion() {
+  document.getElementById('skuBase').value = computeSuggestedSku();
+  markUnsaved();
+  renderSkuSuggestion();
 }
 
 async function loadDyesList() {
@@ -353,6 +471,13 @@ async function loadRecipe(record) {
   document.getElementById('noteP2').value = record.Photo_Process_2_Note || '';
   document.getElementById('notePF').value = record.Photo_Finished_Note || '';
   updatePhotoThumbs();
+
+  await loadVendorsList();
+  await loadAllSkus();
+  onScopeChange();
+  const existingVendor = vendorCodeFromExistingSku(record.SKU_Base);
+  if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
+  renderSkuSuggestion();
 
   deletedDyeIds = [];
   dyeRows = [];
@@ -602,6 +727,8 @@ async function saveRecipe() {
     deletedDyeIds = [];
     clearUnsaved();
     showToast('Recipe saved ✓');
+    await loadAllSkus();
+    renderSkuSuggestion();
   } catch (e) {
     console.error('Failed to save recipe:', e);
     showToast('Save failed — check widget access level and column names');
