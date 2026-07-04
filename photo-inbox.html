@@ -57,8 +57,18 @@
   }
 
   .photo-card {
+    position: relative;
     border: 1.5px solid var(--rule); border-radius: 8px; background: white; overflow: hidden;
   }
+  .delete-btn {
+    position: absolute; top: 6px; right: 6px; z-index: 5;
+    font-size: 9px; padding: 3px 7px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.4);
+    background: rgba(139,58,42,.75);
+    color: white;
+    cursor: pointer;
+  }
+  .delete-btn:hover { background: var(--accent); }
   .photo-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
   .photo-card-body { padding: 10px; }
   .photo-filename { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; }
@@ -274,6 +284,7 @@ function photoCardHTML(p) {
 
   return `
     <div class="photo-card" id="card-${key}">
+      <button class="delete-btn" onclick="deleteInboxPhoto('${key}')" title="Delete this photo permanently">🗑</button>
       <img src="${p.preview_url}" alt="${p.filename}" onerror="this.style.opacity=0.2">
       <div class="photo-card-body">
         <div class="photo-filename">${p.filename}</div>
@@ -353,6 +364,39 @@ function refreshCard(key) {
   if (!p) return;
   const cardEl = document.getElementById(`card-${key}`);
   if (cardEl) cardEl.outerHTML = photoCardHTML(p);
+}
+
+const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
+
+async function deleteInboxPhoto(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+
+  if (!confirm(`Permanently delete "${p.filename}"? This cannot be undone.`)) return;
+
+  const cardEl = document.getElementById(`card-${key}`);
+  if (cardEl) cardEl.style.opacity = '0.4';
+
+  try {
+    const res = await fetch(DELETE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p.path }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
+    delete cardState[path];
+    renderGrid();
+    document.getElementById('headerSub').textContent =
+      `${inboxPhotos.length} unfiled photo${inboxPhotos.length === 1 ? '' : 's'} · ${allRecipes.length} recipes loaded`;
+    showToast('Photo deleted');
+  } catch (e) {
+    console.error('Delete failed:', e);
+    if (cardEl) cardEl.style.opacity = '1';
+    showToast('Delete failed — is the n8n webhook live?');
+  }
 }
 
 async function fileThisPhoto(key) {
