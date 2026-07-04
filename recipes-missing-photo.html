@@ -161,13 +161,13 @@ async function loadEverything() {
     }));
 
     const linkedRecipeIds = new Set(
-      allPhotos.map(p => getRefId(p.Recipe)).filter(id => id !== null)
+      allPhotos.map(p => getRefId(p.Recipe)).filter(id => !!id)
     );
 
     missingRecipes = allRecipes
       .filter(r => !linkedRecipeIds.has(r.id))
       .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
-    unlinkedPhotos = allPhotos.filter(p => getRefId(p.Recipe) === null);
+    unlinkedPhotos = allPhotos.filter(p => !getRefId(p.Recipe));
 
     document.getElementById('headerSub').textContent =
       `${missingRecipes.length} recipe${missingRecipes.length === 1 ? '' : 's'} missing a photo · ${unlinkedPhotos.length} unlinked photo${unlinkedPhotos.length === 1 ? '' : 's'} available`;
