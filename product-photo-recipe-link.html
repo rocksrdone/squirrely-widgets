@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Assign Recipe</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 80vh; color: #8B7D72; text-align: center; padding: 40px;
+  }
+  .empty-icon { font-size: 34px; margin-bottom: 10px; opacity: .4; }
+  .empty-title { font-family: 'Libre Baskerville', serif; font-size: 15px; color: #6B5E52; }
+
+  .photo-preview {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px; border: 1.5px solid var(--rule); border-radius: 8px; background: white;
+    margin-bottom: 14px;
+  }
+  .photo-preview img { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+  .photo-preview-name { font-weight: 500; }
+  .photo-preview-file { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+
+  .current-link {
+    padding: 10px; border-radius: 8px; margin-bottom: 14px;
+    font-size: 12px;
+  }
+  .current-link.linked { background: var(--done-bg); border: 1px solid var(--done-border); }
+  .current-link.unlinked { background: var(--warm); border: 1px solid var(--rule); color: #6B5E52; }
+  .current-link strong { display: block; margin-top: 2px; font-size: 13px; }
+  .unlink-btn {
+    margin-top: 8px; font-size: 11px; padding: 4px 10px; border-radius: 4px;
+    border: 1px solid var(--accent); background: white; color: var(--accent); cursor: pointer;
+  }
+
+  .slabel {
+    font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    color: #8B7D72; margin-bottom: 8px;
+  }
+
+  .search-wrap { position: relative; }
+  .search-input {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
+    font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .suggestions {
+    margin-top: 6px;
+    border: 1px solid var(--rule); border-radius: 8px; background: white;
+    max-height: 280px; overflow-y: auto;
+  }
+  .suggestion-row {
+    padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--warm);
+  }
+  .suggestion-row:last-child { border-bottom: none; }
+  .suggestion-row:hover { background: var(--warm); }
+  .sr-name { font-weight: 500; }
+  .sr-meta { font-size: 10px; color: #8B7D72; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="empty" id="emptyState">
+  <div class="empty-icon">🔗</div>
+  <div class="empty-title">Click a row in Product Photos to assign it a recipe</div>
+</div>
+
+<div id="content" style="display:none">
+  <div class="photo-preview">
+    <img id="previewImg" src="" alt="">
+    <div>
+      <div class="photo-preview-name" id="previewName"></div>
+      <div class="photo-preview-file" id="previewFile"></div>
+    </div>
+  </div>
+
+  <div id="currentLinkWrap"></div>
+
+  <div class="slabel">Search recipes</div>
+  <div class="search-wrap">
+    <input class="search-input" id="searchBox" placeholder="Type a colorway name..." oninput="searchRecipes(this.value)">
+    <div class="suggestions" id="suggestions" style="display:none"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let allRecipes = [];
+let currentPhoto = null; // {id, Colorway_Name, Source_Filename, Nextcloud_URL, Recipe}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function normalize(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function loadRecipes() {
+  const recipesData = await grist.docApi.fetchTable('Recipes');
+  const ids = recipesData.id || [];
+  allRecipes = ids.map((id, i) => ({
+    id,
+    Recipe_Name: columnAsArray(recipesData, 'Recipe_Name')[i],
+    Fiber_Type: columnAsArray(recipesData, 'Fiber_Type')[i],
+    Recipe_Scope: columnAsArray(recipesData, 'Recipe_Scope')[i],
+  })).filter(r => r.Recipe_Name);
+}
+
+function renderLinkStatus() {
+  const wrap = document.getElementById('currentLinkWrap');
+  const recipeId = getRefId(currentPhoto.Recipe);
+  if (recipeId) {
+    const recipe = allRecipes.find(r => r.id === recipeId);
+    wrap.innerHTML = `
+      <div class="current-link linked">
+        Currently linked to
+        <strong>${recipe ? recipe.Recipe_Name : `Recipe #${recipeId}`}</strong>
+        <button class="unlink-btn" onclick="unlinkRecipe()">Unlink</button>
+      </div>`;
+  } else {
+    wrap.innerHTML = `<div class="current-link unlinked">Not linked to a recipe yet</div>`;
+  }
+}
+
+async function loadEverything(record) {
+  currentPhoto = {
+    id: record.id,
+    Colorway_Name: record.Colorway_Name,
+    Source_Filename: record.Source_Filename,
+    Nextcloud_URL: record.Nextcloud_URL,
+    Recipe: record.Recipe,
+  };
+
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+  document.getElementById('previewImg').src = currentPhoto.Nextcloud_URL || '';
+  document.getElementById('previewName').textContent = currentPhoto.Colorway_Name || 'Untitled';
+  document.getElementById('previewFile').textContent = currentPhoto.Source_Filename || '';
+  document.getElementById('searchBox').value = '';
+  document.getElementById('suggestions').style.display = 'none';
+
+  if (!allRecipes.length) await loadRecipes();
+  renderLinkStatus();
+}
+
+function searchRecipes(query) {
+  const box = document.getElementById('suggestions');
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allRecipes.filter(r => normalize(r.Recipe_Name).includes(q)).slice(0, 10);
+
+  if (!matches.length) {
+    box.innerHTML = `<div class="suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`;
+    box.style.display = 'block';
+    return;
+  }
+
+  box.innerHTML = matches.map(r => `
+    <div class="suggestion-row" onclick="assignRecipe(${r.id})">
+      <div class="sr-name">${r.Recipe_Name}</div>
+      <div class="sr-meta">${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+async function assignRecipe(recipeId) {
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Product_Photos', currentPhoto.id, { Recipe: recipeId }]
+    ]);
+    currentPhoto.Recipe = recipeId;
+    document.getElementById('searchBox').value = '';
+    document.getElementById('suggestions').style.display = 'none';
+    renderLinkStatus();
+    const recipe = allRecipes.find(r => r.id === recipeId);
+    showToast(`Linked to ${recipe ? recipe.Recipe_Name : 'recipe'}`);
+  } catch (e) {
+    console.error('Failed to assign recipe:', e);
+    showToast('Could not assign — check widget access level');
+  }
+}
+
+async function unlinkRecipe() {
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Product_Photos', currentPhoto.id, { Recipe: null }]
+    ]);
+    currentPhoto.Recipe = null;
+    renderLinkStatus();
+    showToast('Unlinked');
+  } catch (e) {
+    console.error('Failed to unlink:', e);
+    showToast('Could not unlink — check widget access level');
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+grist.onRecord(async (record) => {
+  if (!record) {
+    document.getElementById('emptyState').style.display = 'flex';
+    document.getElementById('content').style.display = 'none';
+    return;
+  }
+  await loadEverything(record);
+});
+</script>
+</body>
+</html>
