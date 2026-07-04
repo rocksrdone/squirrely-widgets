@@ -669,7 +669,7 @@ function setCustomYardage(val) {
 
 function renderLeft() {
   const r = currentRecipe;
-  const comps = [...currentComponents].sort((a,b) => (a.Step_Order||99) - (b.Step_Order||99));
+  const comps = [...currentComponents].sort((a,b) => (a.Step_Number||99) - (b.Step_Number||99));
 
   const tags = [
     r.Dye_Method ? `<span class="meta-tag tag-method">${r.Dye_Method}</span>` : '',
@@ -772,10 +772,10 @@ function renderLeft() {
 
     ${hasPhotos ? `<div class="slabel">Reference photos</div><div id="photoViewerWrap"></div>` : ''}
 
-    ${r.General_Notes ? `
+    ${r.Notes ? `
     <div class="notes-box">
       <div class="notes-title">Recipe notes</div>
-      ${r.General_Notes}
+      ${r.Notes}
     </div>` : ''}
   `;
 
