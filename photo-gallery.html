@@ -306,7 +306,7 @@ function matchPhotos(colorwayGuess) {
     })
     .sort((a, b) => {
       if (!!b.Is_Favorite !== !!a.Is_Favorite) return (b.Is_Favorite ? 1 : 0) - (a.Is_Favorite ? 1 : 0);
-      return (b.Lot_Date || '').localeCompare(a.Lot_Date || '');
+      return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
     });
 }
 
@@ -367,7 +367,7 @@ function renderSearch(query) {
 
   const matches = allPhotos
     .filter(p => normalize(p.Colorway_Name).includes(q))
-    .sort((a, b) => (b.Lot_Date || '').localeCompare(a.Lot_Date || ''));
+    .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0));
 
   results.innerHTML = `
     <div class="slabel">Search results</div>
