@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recipe Builder</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 18px;
+  }
+
+  .top-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px; flex-wrap: wrap; gap: 10px;
+  }
+  .name-input {
+    font-family: 'Libre Baskerville', serif; font-size: 24px; font-weight: 700;
+    border: none; background: transparent; outline: none; color: var(--ink);
+    border-bottom: 2px solid transparent; padding: 2px 0; flex: 1; min-width: 200px;
+  }
+  .name-input:focus { border-bottom-color: var(--accent); }
+  .top-actions { display: flex; gap: 8px; }
+  .btn {
+    font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule); background: white; color: var(--ink);
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-primary.unsaved::after { content: ' •'; }
+  .btn-danger { color: var(--accent); }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 70vh; color: #8B7D72; text-align: center; gap: 14px;
+  }
+
+  .section {
+    background: white; border: 1px solid var(--rule); border-radius: 10px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: #8B7D72; margin-bottom: 12px;
+  }
+
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .field-wrap { display: flex; flex-direction: column; gap: 4px; }
+  .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .field-input, .field-select, .field-textarea {
+    padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-family: 'Inter', sans-serif; font-size: 13px; outline: none; background: white; color: var(--ink);
+  }
+  .field-input:focus, .field-select:focus, .field-textarea:focus { border-color: var(--accent); }
+  .field-textarea { resize: vertical; min-height: 60px; }
+  .field-wrap.wide { grid-column: 1 / -1; }
+
+  .dye-row {
+    border: 1px solid var(--rule); border-radius: 8px; padding: 10px; margin-bottom: 8px;
+    background: var(--paper);
+  }
+  .dye-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .dye-step-num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--warm);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0;
+  }
+  .dye-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+  .dye-name-input { flex: 1; font-weight: 500; }
+  .dye-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .icon-btn {
+    width: 24px; height: 24px; border-radius: 4px; border: 1px solid var(--rule); background: white;
+    cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { border-color: var(--accent); }
+  .icon-btn:disabled { opacity: .3; cursor: default; }
+
+  .dye-row-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+  .dye-suggestions {
+    position: absolute; z-index: 30; background: white; border: 1px solid var(--rule); border-top: none;
+    border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto; width: 260px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.08);
+  }
+  .dye-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+  .dye-suggestion-row:hover { background: var(--warm); }
+
+  .add-dye-btn {
+    width: 100%; padding: 10px; border-radius: 6px; border: 1.5px dashed var(--rule);
+    background: transparent; color: #6B5E52; cursor: pointer; font-size: 12px; font-weight: 500;
+  }
+  .add-dye-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .no-dyes { text-align: center; color: #8B7D72; font-style: italic; padding: 16px; }
+
+  .layout-preview { margin-top: 10px; }
+  .skein-bars { display: flex; gap: 2px; height: 14px; border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+  .skein-bar { flex: 1; height: 100%; }
+  .layout-preview-label { font-size: 9px; color: #8B7D72; text-transform: uppercase; letter-spacing: .04em; }
+
+  .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .photo-slot { border: 1px solid var(--rule); border-radius: 8px; padding: 10px; background: var(--paper); }
+  .photo-slot-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; margin-bottom: 6px; }
+  .photo-thumb { width: 100%; height: 110px; border-radius: 6px; background: var(--warm); overflow: hidden; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; }
+  .photo-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .photo-thumb.empty { color: #8B7D72; font-size: 11px; font-style: italic; }
+  .photo-hint { font-size: 10px; color: #8B7D72; margin-top: 8px; font-style: italic; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="empty-state" id="emptyState">
+  <div>Click a row in Recipes to edit it here.</div>
+  <button class="btn btn-primary" onclick="createNewRecipe()">+ New Recipe</button>
+</div>
+
+<div id="content" style="display:none">
+  <div class="top-bar">
+    <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved()">
+    <div class="top-actions">
+      <button class="btn" onclick="createNewRecipe()">+ New Recipe</button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Basics</div>
+    <div class="field-grid">
+      <div class="field-wrap">
+        <span class="field-label">Fiber Type</span>
+        <select class="field-select" id="fiberType" onchange="markUnsaved()">
+          <option value="">—</option>
+          <option>FF Nylon</option>
+          <option>E Nylon</option>
+          <option>FF Cotton</option>
+          <option>Blackwing</option>
+        </select>
+      </div>
+      <div class="field-wrap">
+        <span class="field-label">Dye Method</span>
+        <select class="field-select" id="dyeMethod" onchange="markUnsaved()">
+          <option value="">—</option>
+          <option>Hand-Dye</option>
+          <option>Kettle Dye</option>
+        </select>
+      </div>
+      <div class="field-wrap">
+        <span class="field-label">Recipe Scope</span>
+        <select class="field-select" id="recipeScope" onchange="markUnsaved()">
+          <option value="">—</option>
+          <option>General</option>
+          <option>Customer Reserved</option>
+        </select>
+      </div>
+      <div class="field-wrap">
+        <span class="field-label">SKU Base</span>
+        <input class="field-input" id="skuBase" oninput="markUnsaved()">
+      </div>
+      <div class="field-wrap wide">
+        <span class="field-label">General Notes</span>
+        <textarea class="field-textarea" id="generalNotes" oninput="markUnsaved()"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Dye Steps</div>
+    <div id="dyeRowsWrap"></div>
+    <button class="add-dye-btn" onclick="addDyeRow()">+ Add dye step</button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Layout</div>
+    <div class="field-wrap wide">
+      <span class="field-label">Layout Description</span>
+      <textarea class="field-textarea" id="layoutDescription" oninput="markUnsaved(); renderLayoutPreview();"></textarea>
+    </div>
+    <div class="layout-preview">
+      <div class="layout-preview-label">Preview (based on dye step order)</div>
+      <div class="skein-bars" id="layoutBars"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Photos</div>
+    <div class="photo-grid">
+      <div class="photo-slot">
+        <div class="photo-slot-label">Step 1</div>
+        <div class="photo-thumb" id="thumbP1"><span>No photo</span></div>
+        <input class="field-input" id="photoP1" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <input class="field-input" id="noteP1" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
+      </div>
+      <div class="photo-slot">
+        <div class="photo-slot-label">Step 2</div>
+        <div class="photo-thumb" id="thumbP2"><span>No photo</span></div>
+        <input class="field-input" id="photoP2" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <input class="field-input" id="noteP2" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
+      </div>
+      <div class="photo-slot">
+        <div class="photo-slot-label">Finished</div>
+        <div class="photo-thumb" id="thumbPF"><span>No photo</span></div>
+        <input class="field-input" id="photoPF" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <input class="field-input" id="notePF" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
+      </div>
+    </div>
+    <div class="photo-hint">Tip: photos are usually easier to attach through the Photo Inbox widget, which files and renames them automatically. These fields are here for direct edits or corrections.</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) {
+    if (l.includes(k)) return v;
+  }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function normalize(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+let currentRecipeId = null;
+let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder, water, dilution, position, technique, notes}
+let deletedDyeIds = [];
+let allDyes = [];        // for autocomplete: {name, brand, powder, water}
+let unsavedChanges = false;
+let nextClientKey = 1;
+
+function markUnsaved() {
+  unsavedChanges = true;
+  document.getElementById('saveBtn').classList.add('unsaved');
+}
+
+function clearUnsaved() {
+  unsavedChanges = false;
+  document.getElementById('saveBtn').classList.remove('unsaved');
+}
+
+async function loadDyesList() {
+  if (allDyes.length) return;
+  try {
+    const dyesTable = await grist.docApi.fetchTable('Dyes');
+    const nameCol = findColumn(dyesTable, ['Dye_Name', 'Name']) || 'Dye_Name';
+    const brandCol = findColumn(dyesTable, ['Brand']);
+    const powderCol = findColumn(dyesTable, ['Std_Powder_(tsp)', 'Powder', 'Standard_Powder']);
+    const waterCol = findColumn(dyesTable, ['Std_Water_(mL)', 'Water', 'Standard_Water']);
+    const ids = dyesTable.id || [];
+    allDyes = ids.map((id, i) => ({
+      name: columnAsArray(dyesTable, nameCol)[i],
+      brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
+      powder: powderCol ? columnAsArray(dyesTable, powderCol)[i] : '',
+      water: waterCol ? columnAsArray(dyesTable, waterCol)[i] : '',
+    })).filter(d => d.name);
+  } catch (e) {
+    console.error('Could not load Dyes table for autocomplete:', e);
+    allDyes = [];
+  }
+}
+
+async function loadRecipe(record) {
+  currentRecipeId = record.id;
+
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  document.getElementById('nameInput').value = record.Recipe_Name || '';
+  document.getElementById('fiberType').value = record.Fiber_Type || '';
+  document.getElementById('dyeMethod').value = record.Dye_Method || '';
+  document.getElementById('recipeScope').value = record.Recipe_Scope || '';
+  document.getElementById('skuBase').value = record.SKU_Base || '';
+  document.getElementById('generalNotes').value = record.General_Notes || '';
+  document.getElementById('layoutDescription').value = record.Layout_Description || '';
+  document.getElementById('photoP1').value = record.Photo_Process_1 || '';
+  document.getElementById('photoP2').value = record.Photo_Process_2 || '';
+  document.getElementById('photoPF').value = record.Photo_Finished || '';
+  document.getElementById('noteP1').value = record.Photo_Process_1_Note || '';
+  document.getElementById('noteP2').value = record.Photo_Process_2_Note || '';
+  document.getElementById('notePF').value = record.Photo_Finished_Note || '';
+  updatePhotoThumbs();
+
+  deletedDyeIds = [];
+  dyeRows = [];
+
+  await loadDyesList();
+
+  try {
+    const compTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const ids = compTable.id || [];
+    const refs = compTable.Recipe || [];
+    const rows = [];
+    for (let i = 0; i < ids.length; i++) {
+      if (getRefId(refs[i]) !== currentRecipeId) continue;
+      rows.push({
+        rowId: ids[i],
+        clientKey: nextClientKey++,
+        Dye_Name: columnAsArray(compTable, 'Dye_Name')[i] || '',
+        Dye_Full: columnAsArray(compTable, 'Dye_Full')[i] || '',
+        powder: columnAsArray(compTable, 'Std_Powder_(tsp)')[i] ?? '',
+        water: columnAsArray(compTable, 'Std_Water_(mL)')[i] ?? '',
+        dilution: columnAsArray(compTable, 'Dilution_Ratio')[i] || '',
+        technique: columnAsArray(compTable, 'Technique')[i] || '',
+        notes: columnAsArray(compTable, 'Application_Notes')[i] || '',
+        stepOrder: columnAsArray(compTable, 'Step_Number')[i] ?? 999,
+      });
+    }
+    rows.sort((a, b) => (Number(a.stepOrder) || 999) - (Number(b.stepOrder) || 999));
+    dyeRows = rows;
+  } catch (e) {
+    console.error('Failed to load dye components:', e);
+    dyeRows = [];
+  }
+
+  renderDyeRows();
+  renderLayoutPreview();
+  clearUnsaved();
+}
+
+function addDyeRow() {
+  dyeRows.push({
+    rowId: null,
+    clientKey: nextClientKey++,
+    Dye_Name: '', Dye_Full: '', powder: '', water: '', dilution: '', technique: '', notes: '',
+  });
+  markUnsaved();
+  renderDyeRows();
+  renderLayoutPreview();
+}
+
+function removeDyeRow(clientKey) {
+  const row = dyeRows.find(r => r.clientKey === clientKey);
+  if (row && row.rowId) deletedDyeIds.push(row.rowId);
+  dyeRows = dyeRows.filter(r => r.clientKey !== clientKey);
+  markUnsaved();
+  renderDyeRows();
+  renderLayoutPreview();
+}
+
+function moveDyeRow(clientKey, direction) {
+  const idx = dyeRows.findIndex(r => r.clientKey === clientKey);
+  const newIdx = idx + direction;
+  if (newIdx < 0 || newIdx >= dyeRows.length) return;
+  [dyeRows[idx], dyeRows[newIdx]] = [dyeRows[newIdx], dyeRows[idx]];
+  markUnsaved();
+  renderDyeRows();
+  renderLayoutPreview();
+}
+
+function updateDyeField(clientKey, field, value) {
+  const row = dyeRows.find(r => r.clientKey === clientKey);
+  if (!row) return;
+  row[field] = value;
+  markUnsaved();
+  if (field === 'Dye_Name') renderLayoutPreview();
+}
+
+function searchDyeSuggestions(clientKey, query) {
+  const box = document.getElementById(`dye-suggestions-${clientKey}`);
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allDyes.filter(d => normalize(d.name).includes(q)).slice(0, 8);
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(d => `
+    <div class="dye-suggestion-row" onclick='pickDyeSuggestion(${clientKey}, ${JSON.stringify(d).replace(/'/g, "&apos;")})'>
+      <strong>${d.name}</strong>${d.brand ? ` <span style="color:#8B7D72">(${d.brand})</span>` : ''}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function pickDyeSuggestion(clientKey, dye) {
+  const row = dyeRows.find(r => r.clientKey === clientKey);
+  if (!row) return;
+  row.Dye_Name = dye.name;
+  row.Dye_Full = dye.brand ? `${dye.name} (${dye.brand})` : dye.name;
+  if (dye.powder !== '' && dye.powder != null) row.powder = dye.powder;
+  if (dye.water !== '' && dye.water != null) row.water = dye.water;
+  markUnsaved();
+  renderDyeRows();
+  renderLayoutPreview();
+}
+
+function renderDyeRows() {
+  const wrap = document.getElementById('dyeRowsWrap');
+  if (!dyeRows.length) {
+    wrap.innerHTML = `<div class="no-dyes">No dye steps yet — click "+ Add dye step" below.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = dyeRows.map((row, i) => `
+    <div class="dye-row">
+      <div class="dye-row-head" style="position:relative;">
+        <div class="dye-step-num">${i + 1}</div>
+        <div class="dye-swatch" style="background:${guessColor(row.Dye_Name)}"></div>
+        <input class="field-input dye-name-input" placeholder="Dye name..." value="${(row.Dye_Name || '').replace(/"/g, '&quot;')}"
+          oninput="updateDyeField(${row.clientKey}, 'Dye_Name', this.value); searchDyeSuggestions(${row.clientKey}, this.value)"
+          onfocus="searchDyeSuggestions(${row.clientKey}, this.value)"
+          onblur="setTimeout(() => { const b = document.getElementById('dye-suggestions-${row.clientKey}'); if (b) b.style.display='none'; }, 150)">
+        <div class="dye-suggestions" id="dye-suggestions-${row.clientKey}" style="display:none; top:100%; left:38px;"></div>
+        <div class="dye-row-actions">
+          <button class="icon-btn" onclick="moveDyeRow(${row.clientKey}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button>
+          <button class="icon-btn" onclick="moveDyeRow(${row.clientKey}, 1)" ${i === dyeRows.length - 1 ? 'disabled' : ''} title="Move down">↓</button>
+          <button class="icon-btn btn-danger" onclick="removeDyeRow(${row.clientKey})" title="Remove">✕</button>
+        </div>
+      </div>
+      <div class="dye-row-fields">
+        <div class="field-wrap">
+          <span class="field-label">Powder (tsp)</span>
+          <input class="field-input" value="${row.powder ?? ''}" oninput="updateDyeField(${row.clientKey}, 'powder', this.value)">
+        </div>
+        <div class="field-wrap">
+          <span class="field-label">Water (mL)</span>
+          <input class="field-input" value="${row.water ?? ''}" oninput="updateDyeField(${row.clientKey}, 'water', this.value)">
+        </div>
+        <div class="field-wrap">
+          <span class="field-label">Dilution</span>
+          <input class="field-input" value="${row.dilution || ''}" oninput="updateDyeField(${row.clientKey}, 'dilution', this.value)">
+        </div>
+        <div class="field-wrap">
+          <span class="field-label">Technique</span>
+          <input class="field-input" value="${row.technique || ''}" oninput="updateDyeField(${row.clientKey}, 'technique', this.value)">
+        </div>
+        <div class="field-wrap wide">
+          <span class="field-label">Application Notes</span>
+          <input class="field-input" value="${(row.notes || '').replace(/"/g, '&quot;')}" oninput="updateDyeField(${row.clientKey}, 'notes', this.value)">
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderLayoutPreview() {
+  const bars = document.getElementById('layoutBars');
+  const colors = dyeRows.map(r => guessColor(r.Dye_Name));
+  bars.innerHTML = colors.length
+    ? colors.map(c => `<div class="skein-bar" style="background:${c}"></div>`).join('')
+    : `<div style="font-size:11px;color:#8B7D72;font-style:italic;">Add dye steps to see a color preview</div>`;
+}
+
+function updatePhotoThumbs() {
+  [['photoP1', 'thumbP1'], ['photoP2', 'thumbP2'], ['photoPF', 'thumbPF']].forEach(([inputId, thumbId]) => {
+    const url = document.getElementById(inputId).value.trim();
+    const thumb = document.getElementById(thumbId);
+    if (url) {
+      thumb.classList.remove('empty');
+      thumb.innerHTML = `<img src="${url}" onerror="this.parentElement.classList.add('empty'); this.parentElement.innerHTML='<span>Could not load image</span>'">`;
+    } else {
+      thumb.classList.add('empty');
+      thumb.innerHTML = `<span>No photo</span>`;
+    }
+  });
+}
+
+async function createNewRecipe() {
+  try {
+    const result = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipes', null, { Recipe_Name: 'New Recipe' }]
+    ]);
+    const newId = result && result.retValues && result.retValues[0];
+    showToast('New recipe created — click it in the Recipes grid to keep editing');
+    if (newId) {
+      try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
+    }
+  } catch (e) {
+    console.error('Failed to create new recipe:', e);
+    showToast('Could not create new recipe — check widget access level');
+  }
+}
+
+async function saveRecipe() {
+  if (!currentRecipeId) return;
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+
+  try {
+    const recipeFields = {
+      Recipe_Name: document.getElementById('nameInput').value,
+      Fiber_Type: document.getElementById('fiberType').value,
+      Dye_Method: document.getElementById('dyeMethod').value,
+      Recipe_Scope: document.getElementById('recipeScope').value,
+      SKU_Base: document.getElementById('skuBase').value,
+      General_Notes: document.getElementById('generalNotes').value,
+      Layout_Description: document.getElementById('layoutDescription').value,
+      Photo_Process_1: document.getElementById('photoP1').value,
+      Photo_Process_2: document.getElementById('photoP2').value,
+      Photo_Finished: document.getElementById('photoPF').value,
+      Photo_Process_1_Note: document.getElementById('noteP1').value,
+      Photo_Process_2_Note: document.getElementById('noteP2').value,
+      Photo_Finished_Note: document.getElementById('notePF').value,
+    };
+
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Recipes', currentRecipeId, recipeFields]
+    ]);
+
+    const dyeActions = [];
+    dyeRows.forEach((row, i) => {
+      const fields = {
+        Recipe: currentRecipeId,
+        Dye_Name: row.Dye_Name,
+        Dye_Full: row.Dye_Full || row.Dye_Name,
+        'Std_Powder_(tsp)': row.powder === '' ? null : Number(row.powder),
+        'Std_Water_(mL)': row.water === '' ? null : Number(row.water),
+        Dilution_Ratio: row.dilution,
+        Technique: row.technique,
+        Application_Notes: row.notes,
+        Step_Number: i + 1,
+      };
+      if (row.rowId) {
+        dyeActions.push(['UpdateRecord', 'Recipe_Dye_Components', row.rowId, fields]);
+      } else {
+        dyeActions.push(['AddRecord', 'Recipe_Dye_Components', null, fields]);
+      }
+    });
+
+    deletedDyeIds.forEach(id => {
+      dyeActions.push(['RemoveRecord', 'Recipe_Dye_Components', id]);
+    });
+
+    if (dyeActions.length) {
+      await grist.docApi.applyUserActions(dyeActions);
+    }
+
+    deletedDyeIds = [];
+    clearUnsaved();
+    showToast('Recipe saved ✓');
+  } catch (e) {
+    console.error('Failed to save recipe:', e);
+    showToast('Save failed — check widget access level and column names');
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = '💾 Save';
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+grist.onRecord(async (record) => {
+  if (!record || !record.Recipe_Name) {
+    if (!currentRecipeId) {
+      document.getElementById('emptyState').style.display = 'flex';
+      document.getElementById('content').style.display = 'none';
+    }
+    return;
+  }
+  await loadRecipe(record);
+});
+</script>
+</body>
+</html>
