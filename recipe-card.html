@@ -170,13 +170,21 @@
   /* ── PHOTOS ── */
   .process-strip {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
   }
+  .process-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+  .process-item.hero-item { flex: 1 1 160px; align-items: stretch; }
   .process-thumb {
     position: relative;
-    flex: 0 0 auto;
     width: 76px;
     height: 76px;
     border-radius: 8px;
@@ -184,7 +192,7 @@
     border: 1.5px solid var(--rule);
     background: var(--warm);
     cursor: pointer;
-    transition: transform .15s ease, border-color .15s ease;
+    transition: transform .15s ease, border-color .15s ease, width .15s ease, height .15s ease;
   }
   .process-thumb:hover { transform: scale(1.04); border-color: var(--accent); }
   .process-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -199,10 +207,11 @@
     flex: 0 0 auto;
     font-size: 16px;
     color: var(--rule);
+    align-self: center;
+    margin-top: 30px;
   }
   .process-hero {
     position: relative;
-    flex: 1 1 auto;
     height: 108px;
     min-width: 0;
     border-radius: 8px;
@@ -210,7 +219,7 @@
     border: 1.5px solid var(--rule);
     background: var(--warm);
     cursor: pointer;
-    transition: transform .15s ease, border-color .15s ease;
+    transition: transform .15s ease, border-color .15s ease, height .15s ease;
   }
   .process-hero:hover { transform: scale(1.02); border-color: var(--accent); }
   .process-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -221,16 +230,15 @@
     color: white;
     background: linear-gradient(to top, rgba(26,22,20,.75), rgba(26,22,20,0));
   }
-  .process-captions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 14px;
+  .process-caption { text-align: center; max-width: 140px; }
+  .process-caption .cap-label {
+    font-size: 9px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #6B5E52;
+    display: block;
   }
-  .process-captions span {
-    font-size: 9px;
-    color: #8B7D72;
-    font-style: italic;
-    text-align: center;
+  .photo-note {
+    display: block;
+    font-size: 9px; color: #8B7D72; font-style: italic;
+    margin-top: 1px;
   }
   .photo-single-hero {
     height: 190px;
@@ -239,8 +247,7 @@
     border: 1.5px solid var(--rule);
     background: var(--warm);
     cursor: pointer;
-    margin-bottom: 6px;
-    transition: transform .15s ease, border-color .15s ease;
+    transition: transform .15s ease, border-color .15s ease, height .15s ease;
   }
   .photo-single-hero:hover { transform: scale(1.01); border-color: var(--accent); }
   .photo-single-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -281,6 +288,58 @@
     letter-spacing: .04em;
     text-transform: uppercase;
   }
+
+  /* ── BIG VIEW MODE ── */
+  .big-toggle-btn {
+    position: fixed;
+    top: 12px; right: 12px;
+    z-index: 500;
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1.5px solid var(--accent);
+    background: white;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  }
+  body.big-mode .big-toggle-btn { background: var(--accent); color: white; }
+
+  body.big-mode .card { display: block; }
+  body.big-mode .panel { border-right: none; padding: 20px 28px; max-width: 900px; margin: 0 auto; }
+  body.big-mode #rightPanel { border-top: 2px solid var(--rule); margin-top: 8px; padding-top: 20px; }
+
+  body.big-mode .recipe-name { font-size: 32px; }
+  body.big-mode .meta-tag { font-size: 13px; padding: 4px 12px; }
+
+  body.big-mode .process-thumb { width: 160px; height: 160px; }
+  body.big-mode .process-hero { height: 280px; }
+  body.big-mode .photo-single-hero { height: 380px; }
+  body.big-mode .process-item.hero-item { flex: 1 1 260px; }
+  body.big-mode .process-arrow { font-size: 26px; margin-top: 62px; }
+  body.big-mode .process-caption { max-width: 220px; }
+  body.big-mode .process-caption .cap-label { font-size: 13px; }
+  body.big-mode .photo-note { font-size: 13px; }
+  body.big-mode .hero-caption { font-size: 14px; padding: 8px 14px; }
+  body.big-mode .step-badge { width: 22px; height: 22px; font-size: 12px; }
+
+  body.big-mode .slabel { font-size: 12px; }
+  body.big-mode .dye-table { font-size: 18px; }
+  body.big-mode .dye-table th { font-size: 12px; }
+  body.big-mode .swatch { width: 16px; height: 16px; margin-right: 10px; }
+  body.big-mode .amt { font-size: 18px; }
+  body.big-mode .dil { font-size: 14px; }
+  body.big-mode .brand { font-size: 12px; padding: 2px 7px; }
+
+  body.big-mode .notes-box { font-size: 16px; padding: 16px 18px; }
+  body.big-mode .notes-title { font-size: 12px; }
+
+  body.big-mode .step-item { padding: 16px; }
+  body.big-mode .step-num { width: 30px; height: 30px; font-size: 15px; }
+  body.big-mode .step-dye { font-size: 13px; }
+  body.big-mode .step-text { font-size: 16px; }
+  body.big-mode .step-pos { font-size: 13px; }
 
   /* ── NOTES ── */
   .notes-box {
@@ -347,6 +406,8 @@
 </head>
 <body>
 
+<button class="big-toggle-btn" id="bigViewToggle" onclick="toggleBigView()">⤢ Big View</button>
+
 <div class="empty" id="emptyState">
   <div class="empty-icon">🧵</div>
   <div class="empty-title">No recipe selected</div>
@@ -386,6 +447,12 @@ function guessColor(name) {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
   return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6,'0');
+}
+
+function toggleBigView() {
+  document.body.classList.toggle('big-mode');
+  const btn = document.getElementById('bigViewToggle');
+  btn.textContent = document.body.classList.contains('big-mode') ? '⤡ Normal View' : '⤢ Big View';
 }
 
 function openLightbox(url, caption) {
@@ -475,13 +542,16 @@ function renderLeft() {
   const p1 = r.Photo_Process_1;
   const p2 = r.Photo_Process_2;
   const pf = r.Photo_Finished;
+  const n1 = r.Photo_Process_1_Note;
+  const n2 = r.Photo_Process_2_Note;
+  const nf = r.Photo_Finished_Note;
 
   const escAttr = (s) => (s || '').toString().replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
   if (p1 || p2 || pf) {
     const processShots = [];
-    if (p1) processShots.push({ url: p1, label: 'Step 1' });
-    if (p2) processShots.push({ url: p2, label: 'Step 2' });
+    if (p1) processShots.push({ url: p1, label: 'Step 1', note: n1 });
+    if (p2) processShots.push({ url: p2, label: 'Step 2', note: n2 });
 
     const onlyFinished = pf && processShots.length === 0;
 
@@ -491,26 +561,32 @@ function renderLeft() {
         <div class="photo-single-hero" onclick="openLightbox('${escAttr(pf)}','Finished')">
           <img src="${pf}" alt="Finished" onerror="this.parentElement.style.display='none'">
         </div>
+        ${nf ? `<div class="process-caption"><span class="photo-note">${nf}</span></div>` : ''}
       `;
     } else {
       const thumbsHTML = processShots.map((s, i) => `
-        <div class="process-thumb" onclick="openLightbox('${escAttr(s.url)}','${escAttr(s.label)}')">
-          <span class="step-badge">${i + 1}</span>
-          <img src="${s.url}" alt="${s.label}" onerror="this.parentElement.style.display='none'">
+        <div class="process-item">
+          <div class="process-thumb" onclick="openLightbox('${escAttr(s.url)}','${escAttr(s.label)}')">
+            <span class="step-badge">${i + 1}</span>
+            <img src="${s.url}" alt="${s.label}" onerror="this.parentElement.style.display='none'">
+          </div>
+          <div class="process-caption">
+            <span class="cap-label">${s.label}</span>
+            ${s.note ? `<span class="photo-note">${s.note}</span>` : ''}
+          </div>
         </div>
-        ${(i < processShots.length - 1 || pf) ? '<span class="process-arrow">→</span>' : ''}
+        <span class="process-arrow">→</span>
       `).join('');
 
       const heroHTML = pf ? `
-        <div class="process-hero" onclick="openLightbox('${escAttr(pf)}','Finished')">
-          <img src="${pf}" alt="Finished" onerror="this.parentElement.style.display='none'">
-          <div class="hero-caption">Finished</div>
+        <div class="process-item hero-item">
+          <div class="process-hero" onclick="openLightbox('${escAttr(pf)}','Finished')">
+            <img src="${pf}" alt="Finished" onerror="this.parentElement.style.display='none'">
+            <div class="hero-caption">Finished</div>
+          </div>
+          ${nf ? `<div class="process-caption"><span class="photo-note">${nf}</span></div>` : ''}
         </div>
       ` : '';
-
-      const captionSpans = processShots.map(s => `<span style="width:76px">${s.label}</span>`).join(
-        processShots.length ? '<span style="width:16px"></span>' : ''
-      );
 
       photosHTML = `
         <div class="slabel">Process → finished</div>
@@ -518,7 +594,6 @@ function renderLeft() {
           ${thumbsHTML}
           ${heroHTML}
         </div>
-        ${processShots.length ? `<div class="process-captions">${captionSpans}</div>` : ''}
       `;
     }
   }
