@@ -60,6 +60,7 @@
   .candidate-card img { width: 100%; height: 90px; object-fit: cover; background: var(--warm); display: block; }
   .candidate-body { padding: 6px; }
   .candidate-name { font-family: 'DM Mono', monospace; font-size: 9px; color: #6B5E52; word-break: break-all; margin-bottom: 4px; }
+  .candidate-date { font-size: 9px; color: #8B7D72; margin-bottom: 4px; }
   .assign-btn {
     width: 100%; font-size: 10px; padding: 4px; border-radius: 4px;
     border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer;
@@ -156,13 +157,16 @@ async function loadEverything() {
       Colorway_Name: columnAsArray(photosData, 'Colorway_Name')[i],
       Nextcloud_URL: columnAsArray(photosData, 'Nextcloud_URL')[i],
       Source_Filename: columnAsArray(photosData, 'Source_Filename')[i],
+      Lot_Date: columnAsArray(photosData, 'Lot_Date')[i],
     }));
 
     const linkedRecipeIds = new Set(
       allPhotos.map(p => getRefId(p.Recipe)).filter(id => id !== null)
     );
 
-    missingRecipes = allRecipes.filter(r => !linkedRecipeIds.has(r.id));
+    missingRecipes = allRecipes
+      .filter(r => !linkedRecipeIds.has(r.id))
+      .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
     unlinkedPhotos = allPhotos.filter(p => getRefId(p.Recipe) === null);
 
     document.getElementById('headerSub').textContent =
@@ -177,10 +181,12 @@ async function loadEverything() {
 
 function matchCandidates(recipeName) {
   const g = normalize(recipeName);
-  return unlinkedPhotos.filter(p => {
-    const n = normalize(p.Colorway_Name);
-    return n && (n.includes(g) || g.includes(n));
-  });
+  return unlinkedPhotos
+    .filter(p => {
+      const n = normalize(p.Colorway_Name);
+      return n && (n.includes(g) || g.includes(n));
+    })
+    .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0));
 }
 
 function renderList() {
@@ -213,6 +219,7 @@ function renderList() {
                     <img src="${p.Nextcloud_URL || ''}" alt="${p.Source_Filename || ''}" onerror="this.style.opacity=0.2">
                     <div class="candidate-body">
                       <div class="candidate-name">${p.Source_Filename || 'untitled'}</div>
+                      <div class="candidate-date">${p.Lot_Date ? new Date(Number(p.Lot_Date) * 1000).toLocaleDateString() : ''}</div>
                       <button class="assign-btn" onclick="assignPhoto(${r.id}, ${p.id})">Assign</button>
                     </div>
                   </div>
@@ -242,7 +249,10 @@ function searchUnlinked(recipeId, query) {
   const q = normalize(query);
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
-  const matches = unlinkedPhotos.filter(p => normalize(p.Colorway_Name).includes(q)).slice(0, 10);
+  const matches = unlinkedPhotos
+    .filter(p => normalize(p.Colorway_Name).includes(q))
+    .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0))
+    .slice(0, 10);
 
   if (!matches.length) {
     box.innerHTML = `<div class="manual-row" style="color:#8B7D72;font-style:italic">No matches</div>`;
