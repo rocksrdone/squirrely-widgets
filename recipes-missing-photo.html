@@ -43,6 +43,13 @@
 
   .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
 
+  .section-label {
+    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--teal); margin: 16px 0 8px;
+  }
+  .section-label:first-child { margin-top: 0; }
+  .section-label-warn { color: var(--accent); }
+
   .recipe-card { border: 1.5px solid var(--rule); border-radius: 8px; background: white; margin-bottom: 8px; overflow: hidden; }
   .recipe-card-head {
     display: flex; align-items: center; justify-content: space-between;
@@ -169,14 +176,32 @@ async function loadEverything() {
       .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
     unlinkedPhotos = allPhotos.filter(p => !getRefId(p.Recipe));
 
-    document.getElementById('headerSub').textContent =
-      `${missingRecipes.length} recipe${missingRecipes.length === 1 ? '' : 's'} missing a photo · ${unlinkedPhotos.length} unlinked photo${unlinkedPhotos.length === 1 ? '' : 's'} available`;
+    updateHeaderSub();
 
     renderList();
   } catch (e) {
     console.error('Failed to load:', e);
     document.getElementById('headerSub').textContent = 'Failed to load data';
   }
+}
+
+function getBuckets() {
+  const readyToAssign = [];
+  const needsPhoto = [];
+  missingRecipes.forEach(r => {
+    if (matchCandidates(r.Recipe_Name).length > 0) {
+      readyToAssign.push(r);
+    } else {
+      needsPhoto.push(r);
+    }
+  });
+  return { readyToAssign, needsPhoto };
+}
+
+function updateHeaderSub() {
+  const { readyToAssign, needsPhoto } = getBuckets();
+  document.getElementById('headerSub').textContent =
+    `${readyToAssign.length} ready to assign · ${needsPhoto.length} need a photo taken`;
 }
 
 function matchCandidates(recipeName) {
@@ -189,6 +214,47 @@ function matchCandidates(recipeName) {
     .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0));
 }
 
+function renderRecipeCard(r) {
+  const isOpen = expandedRecipeId === r.id;
+  const candidates = isOpen ? matchCandidates(r.Recipe_Name) : [];
+
+  return `
+    <div class="recipe-card">
+      <div class="recipe-card-head" onclick="toggleExpand(${r.id})">
+        <div>
+          <div class="rc-name">${r.Recipe_Name}</div>
+          <div class="rc-meta">${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
+        </div>
+        <div class="rc-chevron">${isOpen ? '▲' : '▼'}</div>
+      </div>
+      ${isOpen ? `
+        <div class="recipe-card-body">
+          ${candidates.length ? `
+            <div class="candidates-grid">
+              ${candidates.map(p => `
+                <div class="candidate-card">
+                  <img src="${p.Nextcloud_URL || ''}" alt="${p.Source_Filename || ''}" onerror="this.style.opacity=0.2">
+                  <div class="candidate-body">
+                    <div class="candidate-name">${p.Source_Filename || 'untitled'}</div>
+                    <div class="candidate-date">${p.Lot_Date ? new Date(Number(p.Lot_Date) * 1000).toLocaleDateString() : ''}</div>
+                    <button class="assign-btn" onclick="assignPhoto(${r.id}, ${p.id})">Assign</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          ` : `<div class="no-candidates">No photos found for this colorway yet — take one, or search manually below in case the name doesn't quite match.</div>`}
+
+          <div class="manual-search-wrap">
+            <input class="manual-search-input" placeholder="Search all unlinked photos..."
+              oninput="searchUnlinked(${r.id}, this.value)" id="manual-search-${r.id}">
+            <div class="manual-suggestions" id="manual-suggestions-${r.id}" style="display:none"></div>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
 function renderList() {
   const content = document.getElementById('content');
 
@@ -197,46 +263,20 @@ function renderList() {
     return;
   }
 
-  content.innerHTML = missingRecipes.map(r => {
-    const isOpen = expandedRecipeId === r.id;
-    const candidates = isOpen ? matchCandidates(r.Recipe_Name) : [];
+  const { readyToAssign, needsPhoto } = getBuckets();
+  let html = '';
 
-    return `
-      <div class="recipe-card">
-        <div class="recipe-card-head" onclick="toggleExpand(${r.id})">
-          <div>
-            <div class="rc-name">${r.Recipe_Name}</div>
-            <div class="rc-meta">${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
-          </div>
-          <div class="rc-chevron">${isOpen ? '▲' : '▼'}</div>
-        </div>
-        ${isOpen ? `
-          <div class="recipe-card-body">
-            ${candidates.length ? `
-              <div class="candidates-grid">
-                ${candidates.map(p => `
-                  <div class="candidate-card">
-                    <img src="${p.Nextcloud_URL || ''}" alt="${p.Source_Filename || ''}" onerror="this.style.opacity=0.2">
-                    <div class="candidate-body">
-                      <div class="candidate-name">${p.Source_Filename || 'untitled'}</div>
-                      <div class="candidate-date">${p.Lot_Date ? new Date(Number(p.Lot_Date) * 1000).toLocaleDateString() : ''}</div>
-                      <button class="assign-btn" onclick="assignPhoto(${r.id}, ${p.id})">Assign</button>
-                    </div>
-                  </div>
-                `).join('')}
-              </div>
-            ` : `<div class="no-candidates">No auto-matched photos — search manually below.</div>`}
+  if (readyToAssign.length) {
+    html += `<div class="section-label">Ready to assign — photo already exists</div>`;
+    html += readyToAssign.map(renderRecipeCard).join('');
+  }
 
-            <div class="manual-search-wrap">
-              <input class="manual-search-input" placeholder="Search all unlinked photos..."
-                oninput="searchUnlinked(${r.id}, this.value)" id="manual-search-${r.id}">
-              <div class="manual-suggestions" id="manual-suggestions-${r.id}" style="display:none"></div>
-            </div>
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }).join('');
+  if (needsPhoto.length) {
+    html += `<div class="section-label section-label-warn">No photo taken yet</div>`;
+    html += needsPhoto.map(renderRecipeCard).join('');
+  }
+
+  content.innerHTML = html;
 }
 
 function toggleExpand(recipeId) {
@@ -279,8 +319,7 @@ async function assignPhoto(recipeId, photoId) {
     missingRecipes = missingRecipes.filter(r => r.id !== recipeId);
     expandedRecipeId = null;
 
-    document.getElementById('headerSub').textContent =
-      `${missingRecipes.length} recipe${missingRecipes.length === 1 ? '' : 's'} missing a photo · ${unlinkedPhotos.length} unlinked photo${unlinkedPhotos.length === 1 ? '' : 's'} available`;
+    updateHeaderSub();
 
     renderList();
     showToast('Linked ✓');
