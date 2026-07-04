@@ -686,8 +686,8 @@ function renderLeft() {
         ${c.Dye_Name || '—'}
         ${brand ? `<span class="brand">${brand[1]}</span>` : ''}
       </div></td>
-      <td><span class="amt">${calcTsp(c['Std_Powder_(tsp)'])}</span></td>
-      <td><span class="amt">${calcMl(c['Std_Water_(mL)'])}</span></td>
+      <td><span class="amt">${calcTsp(c['Std_Powder_tsp_'])}</span></td>
+      <td><span class="amt">${calcMl(c['Std_Water_mL_'])}</span></td>
       <td><span class="amt">${calcMl(c['Effective_mL_per_100_yd'] || c['Default_mL_per_100_yds'])}</span></td>
       <td>${c.Dilution_Ratio ? `<span class="dil">${c.Dilution_Ratio}</span>` : ''}</td>
     </tr>`;
@@ -924,8 +924,8 @@ grist.onRecord(async (record) => {
         Recipe: get('Recipe'),
         Dye_Name: get('Dye_Name'),
         Dye_Full: get('Dye_Full'),
-        'Std_Powder_(tsp)': get('Std_Powder_(tsp)'),
-        'Std_Water_(mL)': get('Std_Water_(mL)'),
+        'Std_Powder_tsp_': get('Std_Powder_tsp_'),
+        'Std_Water_mL_': get('Std_Water_mL_'),
         'Default_mL_per_100_yds': get('Default_mL_per_100_yds'),
         'Effective_mL_per_100_yd': get('Effective_mL_per_100_yd'),
         Dilution_Ratio: get('Dilution_Ratio'),

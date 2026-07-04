@@ -318,8 +318,8 @@ async function loadDyesList() {
     const dyesTable = await grist.docApi.fetchTable('Dyes');
     const nameCol = findColumn(dyesTable, ['Dye_Name', 'Name']) || 'Dye_Name';
     const brandCol = findColumn(dyesTable, ['Brand']);
-    const powderCol = findColumn(dyesTable, ['Std_Powder_(tsp)', 'Powder', 'Standard_Powder']);
-    const waterCol = findColumn(dyesTable, ['Std_Water_(mL)', 'Water', 'Standard_Water']);
+    const powderCol = findColumn(dyesTable, ['Std_Powder_tsp_', 'Powder', 'Standard_Powder']);
+    const waterCol = findColumn(dyesTable, ['Std_Water_mL_', 'Water', 'Standard_Water']);
     const ids = dyesTable.id || [];
     allDyes = ids.map((id, i) => ({
       name: columnAsArray(dyesTable, nameCol)[i],
@@ -371,8 +371,8 @@ async function loadRecipe(record) {
         clientKey: nextClientKey++,
         Dye_Name: columnAsArray(compTable, 'Dye_Name')[i] || '',
         Dye_Full: columnAsArray(compTable, 'Dye_Full')[i] || '',
-        powder: columnAsArray(compTable, 'Std_Powder_(tsp)')[i] ?? '',
-        water: columnAsArray(compTable, 'Std_Water_(mL)')[i] ?? '',
+        powder: columnAsArray(compTable, 'Std_Powder_tsp_')[i] ?? '',
+        water: columnAsArray(compTable, 'Std_Water_mL_')[i] ?? '',
         dilution: columnAsArray(compTable, 'Dilution_Ratio')[i] || '',
         technique: columnAsArray(compTable, 'Technique')[i] || '',
         notes: columnAsArray(compTable, 'Application_Notes')[i] || '',
@@ -577,8 +577,8 @@ async function saveRecipe() {
         Recipe: currentRecipeId,
         Dye_Name: row.Dye_Name,
         Dye_Full: row.Dye_Full || row.Dye_Name,
-        'Std_Powder_(tsp)': row.powder === '' ? null : Number(row.powder),
-        'Std_Water_(mL)': row.water === '' ? null : Number(row.water),
+        'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
+        'Std_Water_mL_': row.water === '' ? null : Number(row.water),
         Dilution_Ratio: row.dilution,
         Technique: row.technique,
         Application_Notes: row.notes,
