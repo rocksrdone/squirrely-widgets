@@ -102,6 +102,14 @@
     display: flex; align-items: center; justify-content: center;
   }
   .preview-edit-btn:hover { border-color: var(--accent); }
+  .preview-refresh-btn {
+    position: absolute; top: -8px; right: -8px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: white; border: 1.5px solid var(--rule);
+    font-size: 11px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .preview-refresh-btn:hover { border-color: var(--accent); }
   .preview-picker-dropdown {
     position: absolute; top: calc(100% + 10px); right: 0; z-index: 50;
     width: 220px; max-height: 260px; overflow-y: auto;
@@ -721,6 +729,7 @@ function renderLeft() {
             <div class="product-preview-thumb empty" onclick="togglePreviewPicker()" title="Choose a preview photo">+</div>
           `}
           <button class="preview-edit-btn" onclick="togglePreviewPicker()" title="Change preview photo">✎</button>
+          <button class="preview-refresh-btn" onclick="refreshPreviewAndRerender()" title="Re-check for preview changes made elsewhere">↻</button>
           ${previewPickerHTML}
         </div>
       ` : ''}
@@ -830,6 +839,62 @@ grist.ready({
   requiredAccess: 'full'
 });
 
+async function refreshPreviewPhotos() {
+  if (!currentRecipe) return;
+  const recipeRowId = currentRecipe.id;
+
+  try {
+    const photoTable = await grist.docApi.fetchTable('Product_Photos');
+    const ids = photoTable.id || [];
+    const refs = photoTable.Recipe || [];
+    const previews = photoTable.Is_Preview || [];
+    const urls = photoTable.Nextcloud_URL || [];
+    const filenames = photoTable.Source_Filename || [];
+    const lotDates = photoTable.Lot_Date || [];
+
+    const candidates = [];
+    let matchUrl = null;
+    let matchId = null;
+
+    for (let i = 0; i < ids.length; i++) {
+      const ref = refs[i];
+      const refId = typeof ref === 'number' ? ref
+        : Array.isArray(ref) ? ref[1]
+        : (ref && typeof ref === 'object' && 'rowId' in ref) ? ref.rowId
+        : null;
+      if (refId !== recipeRowId) continue;
+
+      candidates.push({
+        id: ids[i],
+        url: urls[i],
+        filename: filenames[i],
+        lotDate: lotDates[i],
+        isPreview: !!previews[i],
+      });
+
+      if (previews[i]) {
+        matchUrl = urls[i];
+        matchId = ids[i];
+      }
+    }
+
+    candidates.sort((a, b) => (Number(b.lotDate) || 0) - (Number(a.lotDate) || 0));
+    currentProductPhotos = candidates;
+    currentPreviewUrl = matchUrl;
+    currentPreviewId = matchId;
+  } catch (e) {
+    console.error('Failed to fetch preview photo:', e);
+    currentProductPhotos = [];
+    currentPreviewUrl = null;
+    currentPreviewId = null;
+  }
+}
+
+async function refreshPreviewAndRerender() {
+  await refreshPreviewPhotos();
+  renderLeft();
+}
+
 grist.onRecord(async (record) => {
   if (!record || !record.Recipe_Name) {
     document.getElementById('emptyState').style.display = 'flex';
@@ -887,51 +952,7 @@ grist.onRecord(async (record) => {
     currentComponents = [];
   }
 
-  try {
-    const photoTable = await grist.docApi.fetchTable('Product_Photos');
-    const ids = photoTable.id || [];
-    const refs = photoTable.Recipe || [];
-    const previews = photoTable.Is_Preview || [];
-    const urls = photoTable.Nextcloud_URL || [];
-    const filenames = photoTable.Source_Filename || [];
-    const lotDates = photoTable.Lot_Date || [];
-
-    const candidates = [];
-    let matchUrl = null;
-    let matchId = null;
-
-    for (let i = 0; i < ids.length; i++) {
-      const ref = refs[i];
-      const refId = typeof ref === 'number' ? ref
-        : Array.isArray(ref) ? ref[1]
-        : (ref && typeof ref === 'object' && 'rowId' in ref) ? ref.rowId
-        : null;
-      if (refId !== recipeRowId) continue;
-
-      candidates.push({
-        id: ids[i],
-        url: urls[i],
-        filename: filenames[i],
-        lotDate: lotDates[i],
-        isPreview: !!previews[i],
-      });
-
-      if (previews[i]) {
-        matchUrl = urls[i];
-        matchId = ids[i];
-      }
-    }
-
-    candidates.sort((a, b) => (Number(b.lotDate) || 0) - (Number(a.lotDate) || 0));
-    currentProductPhotos = candidates;
-    currentPreviewUrl = matchUrl;
-    currentPreviewId = matchId;
-  } catch (e) {
-    console.error('Failed to fetch preview photo:', e);
-    currentProductPhotos = [];
-    currentPreviewUrl = null;
-    currentPreviewId = null;
-  }
+  await refreshPreviewPhotos();
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('cardView').style.display = 'grid';
