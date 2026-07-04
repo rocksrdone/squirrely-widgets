@@ -374,7 +374,7 @@ async function loadAllSkus() {
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
       id,
-      sku: columnAsArray(recipesTable, 'SKU_Base')[i],
+      sku: columnAsArray(recipesTable, 'SKU_Base')[i] || columnAsArray(recipesTable, 'Shopify_SKU')[i],
       recipeName: columnAsArray(recipesTable, 'Recipe_Name')[i],
     }));
   } catch (e) {
@@ -390,7 +390,7 @@ function onScopeChange() {
 }
 
 function slugifyForSku(name) {
-  return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function computeSuggestedSku() {
@@ -461,7 +461,7 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = record.Fiber_Type || '';
   document.getElementById('dyeMethod').value = record.Dye_Method || '';
   document.getElementById('recipeScope').value = record.Recipe_Scope || '';
-  document.getElementById('skuBase').value = record.SKU_Base || '';
+  document.getElementById('skuBase').value = record.SKU_Base || record.Shopify_SKU || '';
   document.getElementById('generalNotes').value = record.Notes || '';
   document.getElementById('layoutDescription').value = record.Layout_Description || '';
   document.getElementById('photoP1').value = record.Photo_Process_1 || '';
@@ -475,7 +475,7 @@ async function loadRecipe(record) {
   await loadVendorsList();
   await loadAllSkus();
   onScopeChange();
-  const existingVendor = vendorCodeFromExistingSku(record.SKU_Base);
+  const existingVendor = vendorCodeFromExistingSku(record.SKU_Base || record.Shopify_SKU);
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();
 
@@ -682,6 +682,7 @@ async function saveRecipe() {
       Dye_Method: document.getElementById('dyeMethod').value,
       Recipe_Scope: document.getElementById('recipeScope').value,
       SKU_Base: document.getElementById('skuBase').value,
+      Shopify_SKU: document.getElementById('skuBase').value,
       Notes: document.getElementById('generalNotes').value,
       Layout_Description: document.getElementById('layoutDescription').value,
       Photo_Process_1: document.getElementById('photoP1').value,
