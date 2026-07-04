@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photo Inbox</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .empty-state {
+    text-align: center; color: #8B7D72; padding: 60px 20px; font-style: italic;
+  }
+
+  .inbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+  }
+
+  .photo-card {
+    border: 1.5px solid var(--rule); border-radius: 8px; background: white; overflow: hidden;
+  }
+  .photo-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
+  .photo-card-body { padding: 10px; }
+  .photo-filename { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; }
+  .source-tag {
+    display: inline-block; margin-top: 3px; font-size: 9px; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+  }
+  .source-camera { background: var(--teal-light); color: var(--teal); }
+  .source-dslr { background: var(--gold-light); color: var(--gold); }
+
+  .recipe-search-wrap { position: relative; margin-top: 8px; }
+  .recipe-search-input {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-size: 12px; font-family: 'Inter', sans-serif; outline: none;
+  }
+  .recipe-search-input:focus { border-color: var(--accent); }
+  .recipe-suggestions {
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+    background: white; border: 1px solid var(--rule); border-top: none;
+    border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto;
+    box-shadow: 0 4px 10px rgba(0,0,0,.08);
+  }
+  .recipe-suggestion { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+  .recipe-suggestion:hover { background: var(--warm); }
+  .recipe-suggestion .rs-name { font-weight: 500; }
+  .recipe-suggestion .rs-meta { font-size: 10px; color: #8B7D72; }
+
+  .recipe-chip {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 8px; padding: 6px 8px; border-radius: 5px;
+    background: var(--done-bg); border: 1px solid var(--done-border);
+    font-size: 12px;
+  }
+  .recipe-chip .change-link { font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+  .slot-row { display: flex; gap: 4px; margin-top: 8px; }
+  .slot-btn {
+    flex: 1; font-size: 10px; padding: 5px 4px; border-radius: 4px;
+    border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer;
+    text-transform: uppercase; letter-spacing: .03em; font-weight: 600;
+  }
+  .slot-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+  .note-input {
+    width: 100%; margin-top: 8px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: none;
+  }
+  .note-input:focus { border-color: var(--accent); }
+
+  .file-btn {
+    width: 100%; margin-top: 8px; padding: 8px; border-radius: 6px;
+    border: 1px solid var(--accent); background: var(--accent); color: white;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .file-btn:disabled { opacity: .4; cursor: default; background: white; color: #8B7D72; border-color: var(--rule); }
+  .file-btn.filed { background: var(--done-bg); border-color: var(--done-border); color: var(--done-text); }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <div class="header-title">Photo Inbox</div>
+    <div class="header-sub" id="headerSub">Loading...</div>
+  </div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const LIST_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/inbox-photos';
+const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
+
+const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+  'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+
+const SLOTS = {
+  step1: { label: 'Step 1', photoField: 'Photo_Process_1', noteField: 'Photo_Process_1_Note', filenameBase: 'step1' },
+  step2: { label: 'Step 2', photoField: 'Photo_Process_2', noteField: 'Photo_Process_2_Note', filenameBase: 'step2' },
+  finished: { label: 'Finished', photoField: 'Photo_Finished', noteField: 'Photo_Finished_Note', filenameBase: 'finished' },
+};
+
+let inboxPhotos = [];
+let allRecipes = [];
+// Per-photo UI state, keyed by photo path
+let cardState = {};
+
+function slugify(name) {
+  return (name || '').toString().toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function fiberCode(fiberType) {
+  if (FIBER_NAME_TO_CODE[fiberType]) return FIBER_NAME_TO_CODE[fiberType];
+  return (fiberType || '').toString().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'GEN';
+}
+
+function vendorCodeFromSku(skuBase, recipeScope) {
+  if (!skuBase || !/reserv/i.test(recipeScope || '')) return null;
+  const parts = skuBase.toString().split('_');
+  const last = (parts[parts.length - 1] || '').toUpperCase();
+  return VENDOR_CODES.includes(last) ? last : null;
+}
+
+function recipeFolderName(recipe) {
+  const slug = slugify(recipe.Recipe_Name);
+  const fc = fiberCode(recipe.Fiber_Type);
+  const vendor = vendorCodeFromSku(recipe.SKU_Base, recipe.Recipe_Scope);
+  return vendor ? `${slug}_${fc}_${vendor}` : `${slug}_${fc}`;
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+  try {
+    const [inboxRes, recipesData] = await Promise.all([
+      fetch(LIST_WEBHOOK_URL).then(r => r.json()),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+
+    inboxPhotos = (inboxRes.photos || []);
+
+    const nameCol = 'Recipe_Name';
+    const fiberCol = findColumn(recipesData, ['Fiber_Type']) || 'Fiber_Type';
+    const scopeCol = findColumn(recipesData, ['Recipe_Scope']) || 'Recipe_Scope';
+    const skuCol = findColumn(recipesData, ['SKU_Base', 'SKUBase']) || 'SKU_Base';
+
+    const ids = recipesData.id || [];
+    allRecipes = ids.map((id, i) => ({
+      id,
+      Recipe_Name: columnAsArray(recipesData, nameCol)[i],
+      Fiber_Type: columnAsArray(recipesData, fiberCol)[i],
+      Recipe_Scope: columnAsArray(recipesData, scopeCol)[i],
+      SKU_Base: columnAsArray(recipesData, skuCol)[i],
+    })).filter(r => r.Recipe_Name);
+
+    cardState = {};
+    inboxPhotos.forEach(p => {
+      cardState[p.path] = { recipe: null, slot: p.default_slot || null, note: '' };
+    });
+
+    document.getElementById('headerSub').textContent =
+      `${inboxPhotos.length} unfiled photo${inboxPhotos.length === 1 ? '' : 's'} · ${allRecipes.length} recipes loaded`;
+
+    renderGrid();
+  } catch (e) {
+    console.error('Failed to load inbox:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check webhooks are active';
+  }
+}
+
+function renderGrid() {
+  const content = document.getElementById('content');
+  if (!inboxPhotos.length) {
+    content.innerHTML = `<div class="empty-state">Inbox is empty — nothing waiting to be filed 🎉</div>`;
+    return;
+  }
+
+  content.innerHTML = `<div class="inbox-grid">${inboxPhotos.map(photoCardHTML).join('')}</div>`;
+}
+
+function photoCardHTML(p) {
+  const state = cardState[p.path] || { recipe: null, slot: null, note: '' };
+  const key = btoa(p.path).replace(/=/g, '');
+
+  const recipeSection = state.recipe
+    ? `<div class="recipe-chip">
+         <span>${state.recipe.Recipe_Name} <span style="color:#8B7D72">(${state.recipe.Fiber_Type || '—'})</span></span>
+         <span class="change-link" onclick="clearRecipe('${key}')">change</span>
+       </div>`
+    : `<div class="recipe-search-wrap">
+         <input class="recipe-search-input" placeholder="Type recipe name..." oninput="searchRecipes('${key}', this.value)" id="search-${key}">
+         <div class="recipe-suggestions" id="suggestions-${key}" style="display:none"></div>
+       </div>`;
+
+  const slotButtons = Object.entries(SLOTS).map(([slotKey, s]) => `
+    <button class="slot-btn ${state.slot === slotKey ? 'active' : ''}" onclick="setSlot('${key}','${slotKey}')">${s.label}</button>
+  `).join('');
+
+  const canFile = !!(state.recipe && state.slot);
+
+  return `
+    <div class="photo-card" id="card-${key}">
+      <img src="${p.preview_url}" alt="${p.filename}" onerror="this.style.opacity=0.2">
+      <div class="photo-card-body">
+        <div class="photo-filename">${p.filename}</div>
+        <span class="source-tag source-${p.source}">${p.source === 'dslr' ? 'DSLR' : 'Phone'}</span>
+
+        ${recipeSection}
+
+        <div class="slot-row">${slotButtons}</div>
+
+        <textarea class="note-input" rows="2" placeholder="Optional note (what did you do differently?)"
+          oninput="setNote('${key}', this.value)">${state.note || ''}</textarea>
+
+        <button class="file-btn" id="file-btn-${key}" ${canFile ? '' : 'disabled'} onclick="fileThisPhoto('${key}')">
+          File this photo
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function keyToPath(key) {
+  return atob(key);
+}
+
+function searchRecipes(key, query) {
+  const box = document.getElementById(`suggestions-${key}`);
+  const q = query.trim().toLowerCase();
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allRecipes
+    .filter(r => r.Recipe_Name.toLowerCase().includes(q))
+    .slice(0, 8);
+
+  if (!matches.length) {
+    box.innerHTML = `<div class="recipe-suggestion" style="color:#8B7D72;font-style:italic">No matches</div>`;
+    box.style.display = 'block';
+    return;
+  }
+
+  box.innerHTML = matches.map(r => `
+    <div class="recipe-suggestion" onclick='selectRecipe("${key}", ${r.id})'>
+      <div class="rs-name">${r.Recipe_Name}</div>
+      <div class="rs-meta">${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function selectRecipe(key, recipeId) {
+  const recipe = allRecipes.find(r => r.id === recipeId);
+  if (!recipe) return;
+  cardState[keyToPath(key)] = { ...(cardState[keyToPath(key)] || {}), recipe };
+  refreshCard(key);
+}
+
+function clearRecipe(key) {
+  cardState[keyToPath(key)] = { ...(cardState[keyToPath(key)] || {}), recipe: null };
+  refreshCard(key);
+}
+
+function setSlot(key, slotKey) {
+  const path = keyToPath(key);
+  const current = cardState[path] || {};
+  cardState[path] = { ...current, slot: current.slot === slotKey ? null : slotKey };
+  refreshCard(key);
+}
+
+function setNote(key, value) {
+  const path = keyToPath(key);
+  cardState[path] = { ...(cardState[path] || {}), note: value };
+  // No re-render needed here — just keep state in sync, avoid disrupting typing focus.
+}
+
+function refreshCard(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+  const cardEl = document.getElementById(`card-${key}`);
+  if (cardEl) cardEl.outerHTML = photoCardHTML(p);
+}
+
+async function fileThisPhoto(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  const state = cardState[path];
+  if (!p || !state || !state.recipe || !state.slot) return;
+
+  const btn = document.getElementById(`file-btn-${key}`);
+  btn.disabled = true;
+  btn.textContent = 'Filing...';
+
+  const slotInfo = SLOTS[state.slot];
+  const folder = recipeFolderName(state.recipe);
+  const destFolder = `Squirrely Stash/recipes/photos/${folder}/`;
+  const extMatch = p.filename.match(/\.[^.]+$/);
+  const ext = extMatch ? extMatch[0] : '.jpg';
+  const destPath = `${destFolder}${slotInfo.filenameBase}${ext}`;
+
+  const payload = {
+    source_path: p.path,
+    dest_folder: destFolder,
+    dest_path: destPath,
+    recipe_id: state.recipe.id,
+    photo_field: slotInfo.photoField,
+    note_field: slotInfo.noteField,
+    note_text: state.note || '',
+  };
+
+  try {
+    const res = await fetch(FILE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    btn.textContent = 'Filed ✓';
+    btn.classList.add('filed');
+    showToast(`Filed to ${state.recipe.Recipe_Name} — ${slotInfo.label}`);
+
+    inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
+    delete cardState[path];
+    setTimeout(renderGrid, 500);
+    document.getElementById('headerSub').textContent =
+      `${inboxPhotos.length} unfiled photo${inboxPhotos.length === 1 ? '' : 's'} · ${allRecipes.length} recipes loaded`;
+  } catch (e) {
+    console.error('Filing failed:', e);
+    btn.disabled = false;
+    btn.textContent = 'File this photo';
+    showToast('Filing failed — is the n8n webhook live?');
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
