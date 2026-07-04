@@ -215,6 +215,15 @@
     transition: all .15s ease;
   }
   .viewer-dot.active { background: var(--accent); width: 20px; border-radius: 4px; }
+  .viewer-undo-btn {
+    position: absolute; top: 6px; right: 6px;
+    font-size: 9px; padding: 3px 7px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,.4);
+    background: rgba(26,22,20,.55);
+    color: white;
+    cursor: pointer;
+  }
+  .viewer-undo-btn:hover { background: rgba(26,22,20,.8); }
 
   .lightbox-overlay {
     display: none;
@@ -442,6 +451,12 @@ function getPhotoList(r) {
   return list;
 }
 
+const PHOTO_SLOT_MAP = {
+  'Step 1': { photoField: 'Photo_Process_1', noteField: 'Photo_Process_1_Note' },
+  'Step 2': { photoField: 'Photo_Process_2', noteField: 'Photo_Process_2_Note' },
+  'Finished': { photoField: 'Photo_Finished', noteField: 'Photo_Finished_Note' },
+};
+
 function renderPhotoViewer() {
   const wrap = document.getElementById('photoViewerWrap');
   if (!wrap || !currentRecipe) return;
@@ -464,6 +479,7 @@ function renderPhotoViewer() {
         <span class="viewer-label">${p.label}${photos.length > 1 ? ` · ${currentPhotoIndex + 1}/${photos.length}` : ''}</span>
         ${p.note ? `<span class="photo-note">${p.note}</span>` : ''}
       </div>
+      <button class="viewer-undo-btn" onclick="event.stopPropagation(); sendPhotoToReview('${p.label}')" title="Send this photo back to the inbox for re-review">↩ Redo</button>
     </div>
     ${dotsHTML}
   `;
@@ -479,6 +495,49 @@ function nextPhoto() {
 function jumpToPhoto(i) {
   currentPhotoIndex = i;
   renderPhotoViewer();
+}
+
+const UNFILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/unfile-photo';
+
+async function sendPhotoToReview(label) {
+  const slot = PHOTO_SLOT_MAP[label];
+  if (!slot || !currentRecipe) return;
+
+  const url = currentRecipe[slot.photoField];
+  if (!url) return;
+
+  let sourcePath;
+  try {
+    sourcePath = decodeURIComponent(new URL(url).searchParams.get('path'));
+  } catch (e) {
+    console.error('Could not parse source path from URL:', url);
+    alert('Could not determine the file location for this photo — it may not use the standard proxy URL format.');
+    return;
+  }
+
+  if (!confirm(`Send this "${label}" photo back to the inbox for re-review? It will be removed from this recipe until you re-file it.`)) return;
+
+  try {
+    const res = await fetch(UNFILE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_path: sourcePath,
+        recipe_id: currentRecipe.id,
+        photo_field: slot.photoField,
+        note_field: slot.noteField,
+      }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    currentRecipe[slot.photoField] = '';
+    currentRecipe[slot.noteField] = '';
+    currentPhotoIndex = 0;
+    renderLeft();
+  } catch (e) {
+    console.error('Send to review failed:', e);
+    alert('Could not send this photo back for review — is the n8n webhook live?');
+  }
 }
 
 function calcTsp(base) {
