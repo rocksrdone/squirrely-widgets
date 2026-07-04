@@ -88,6 +88,38 @@
   .product-preview-thumb:hover { transform: scale(1.05); border-color: var(--accent); }
   .product-preview-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   body.big-mode .product-preview-thumb { width: 90px; height: 90px; }
+
+  .preview-wrap { position: relative; flex: 0 0 auto; }
+  .product-preview-thumb.empty {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #8B7D72; border-style: dashed;
+  }
+  .preview-edit-btn {
+    position: absolute; bottom: -8px; right: -8px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: white; border: 1.5px solid var(--rule);
+    font-size: 10px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .preview-edit-btn:hover { border-color: var(--accent); }
+  .preview-picker-dropdown {
+    position: absolute; top: calc(100% + 10px); right: 0; z-index: 50;
+    width: 220px; max-height: 260px; overflow-y: auto;
+    background: white; border: 1px solid var(--rule); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    padding: 6px;
+  }
+  .preview-picker-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px; border-radius: 6px; cursor: pointer;
+  }
+  .preview-picker-row:hover { background: var(--warm); }
+  .preview-picker-row.selected { background: var(--done-bg); }
+  .preview-picker-row img { width: 36px; height: 36px; border-radius: 4px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+  .preview-picker-info { min-width: 0; }
+  .ppr-name { font-size: 11px; font-family: 'DM Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ppr-current { font-size: 9px; color: var(--done-text); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .preview-picker-empty { font-size: 11px; color: #8B7D72; font-style: italic; padding: 10px; text-align: center; }
   .meta-tag {
     font-size: 10px;
     padding: 2px 7px;
@@ -434,6 +466,39 @@ function guessColor(name) {
   return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6,'0');
 }
 
+function togglePreviewPicker() {
+  previewPickerOpen = !previewPickerOpen;
+  renderLeft();
+}
+
+async function selectPreviewPhoto(photoId) {
+  const previousId = currentPreviewId;
+  const actions = [];
+  if (previousId && previousId !== photoId) {
+    actions.push(['UpdateRecord', 'Product_Photos', previousId, { Is_Preview: false }]);
+  }
+  if (previousId !== photoId) {
+    actions.push(['UpdateRecord', 'Product_Photos', photoId, { Is_Preview: true }]);
+  }
+
+  if (actions.length) {
+    try {
+      await grist.docApi.applyUserActions(actions);
+    } catch (e) {
+      console.error('Failed to update preview photo:', e);
+      alert('Could not update the preview photo — check the widget has full document access.');
+      return;
+    }
+  }
+
+  currentProductPhotos = currentProductPhotos.map(p => ({ ...p, isPreview: p.id === photoId }));
+  const selected = currentProductPhotos.find(p => p.id === photoId);
+  currentPreviewUrl = selected ? selected.url : null;
+  currentPreviewId = photoId;
+  previewPickerOpen = false;
+  renderLeft();
+}
+
 function toggleBigView() {
   document.body.classList.toggle('big-mode');
   const btn = document.getElementById('bigViewToggle');
@@ -456,6 +521,9 @@ let currentRecipe = null;
 let currentComponents = [];
 let currentPhotoIndex = 0;
 let currentPreviewUrl = null;
+let currentPreviewId = null;
+let currentProductPhotos = [];
+let previewPickerOpen = false;
 
 function getPhotoList(r) {
   const list = [];
@@ -623,15 +691,37 @@ function renderLeft() {
 
   const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
 
+  const previewPickerHTML = previewPickerOpen ? `
+    <div class="preview-picker-dropdown">
+      ${currentProductPhotos.length ? currentProductPhotos.map(p => `
+        <div class="preview-picker-row ${p.isPreview ? 'selected' : ''}" onclick="selectPreviewPhoto(${p.id})">
+          <img src="${p.url}" alt="${p.filename || ''}" onerror="this.style.opacity=0.2">
+          <div class="preview-picker-info">
+            <div class="ppr-name">${p.filename || 'Untitled'}</div>
+            ${p.isPreview ? '<div class="ppr-current">current preview</div>' : ''}
+          </div>
+        </div>
+      `).join('') : `<div class="preview-picker-empty">No product photos filed for this recipe yet</div>`}
+    </div>
+  ` : '';
+
   document.getElementById('leftPanel').innerHTML = `
     <div class="recipe-header-row">
       <div>
         <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
         <div class="recipe-meta">${tags}</div>
       </div>
-      ${currentPreviewUrl ? `
-        <div class="product-preview-thumb" onclick="openLightbox('${currentPreviewUrl.replace(/'/g, "\\'")}','Product photo')" title="Product photo preview">
-          <img src="${currentPreviewUrl}" alt="Product preview" onerror="this.parentElement.style.display='none'">
+      ${currentProductPhotos.length ? `
+        <div class="preview-wrap">
+          ${currentPreviewUrl ? `
+            <div class="product-preview-thumb" onclick="openLightbox('${currentPreviewUrl.replace(/'/g, "\\'")}','Product photo')" title="Product photo preview — click to enlarge">
+              <img src="${currentPreviewUrl}" alt="Product preview" onerror="this.parentElement.style.display='none'">
+            </div>
+          ` : `
+            <div class="product-preview-thumb empty" onclick="togglePreviewPicker()" title="Choose a preview photo">+</div>
+          `}
+          <button class="preview-edit-btn" onclick="togglePreviewPicker()" title="Change preview photo">✎</button>
+          ${previewPickerHTML}
         </div>
       ` : ''}
     </div>
@@ -749,6 +839,7 @@ grist.onRecord(async (record) => {
 
   currentRecipe = record;
   currentPhotoIndex = 0;
+  previewPickerOpen = false;
   const recipeRowId = record.id;
   console.log('Selected recipe row ID:', recipeRowId, 'Name:', record.Recipe_Name);
 
@@ -802,23 +893,44 @@ grist.onRecord(async (record) => {
     const refs = photoTable.Recipe || [];
     const previews = photoTable.Is_Preview || [];
     const urls = photoTable.Nextcloud_URL || [];
+    const filenames = photoTable.Source_Filename || [];
+    const lotDates = photoTable.Lot_Date || [];
 
+    const candidates = [];
     let matchUrl = null;
+    let matchId = null;
+
     for (let i = 0; i < ids.length; i++) {
       const ref = refs[i];
       const refId = typeof ref === 'number' ? ref
         : Array.isArray(ref) ? ref[1]
         : (ref && typeof ref === 'object' && 'rowId' in ref) ? ref.rowId
         : null;
-      if (refId === recipeRowId && previews[i]) {
+      if (refId !== recipeRowId) continue;
+
+      candidates.push({
+        id: ids[i],
+        url: urls[i],
+        filename: filenames[i],
+        lotDate: lotDates[i],
+        isPreview: !!previews[i],
+      });
+
+      if (previews[i]) {
         matchUrl = urls[i];
-        break;
+        matchId = ids[i];
       }
     }
+
+    candidates.sort((a, b) => (Number(b.lotDate) || 0) - (Number(a.lotDate) || 0));
+    currentProductPhotos = candidates;
     currentPreviewUrl = matchUrl;
+    currentPreviewId = matchId;
   } catch (e) {
     console.error('Failed to fetch preview photo:', e);
+    currentProductPhotos = [];
     currentPreviewUrl = null;
+    currentPreviewId = null;
   }
 
   document.getElementById('emptyState').style.display = 'none';
