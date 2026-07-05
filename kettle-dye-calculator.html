@@ -46,10 +46,11 @@
   }
   .panel-title {
     font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-    color: #8B7D72; margin-bottom: 10px;
+    color: #8B7D72; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
   }
+  .panel-title-link { font-size: 10px; color: var(--teal); cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 600; }
 
-  .field-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; position: relative; }
   .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .field-input, .field-select {
     padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
@@ -57,6 +58,22 @@
   }
   .field-input:focus, .field-select:focus { border-color: var(--accent); }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+  .dye-suggestions {
+    position: absolute; z-index: 40; background: white; border: 1px solid var(--rule); border-top: none;
+    border-radius: 0 0 6px 6px; max-height: 200px; overflow-y: auto; width: 100%; top: 100%;
+    box-shadow: 0 6px 16px rgba(0,0,0,.08);
+  }
+  .dye-suggestion-row { padding: 7px 9px; cursor: pointer; font-size: 12px; }
+  .dye-suggestion-row:hover { background: var(--warm); }
+  .dye-suggestion-row .status-flag { color: var(--accent); font-weight: 700; font-size: 10px; margin-left: 6px; }
+
+  .selected-dye-banner {
+    background: var(--teal-light); border: 1px solid #9ACFC7; border-radius: 6px; padding: 8px 10px;
+    font-size: 12px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .selected-dye-banner.warn { background: var(--accent-light); border-color: #D4A49A; }
 
   .result-row {
     display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0;
@@ -79,6 +96,19 @@
   .btn:hover { border-color: var(--accent); }
   .btn-primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
   .btn-primary:hover { opacity: .9; }
+  .btn-teal { background: var(--teal); border-color: var(--teal); color: white; font-weight: 600; }
+  .btn-teal:hover { opacity: .9; }
+  .btn-small { font-size: 11px; padding: 6px 10px; width: auto; }
+
+  .defaults-panel { display: none; }
+  .defaults-panel.open { display: block; }
+
+  .custom-blend-form { display: none; background: var(--paper); border: 1px dashed var(--rule); border-radius: 8px; padding: 10px; margin-top: 8px; }
+  .custom-blend-form.open { display: block; }
+
+  .sku-suggest-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6B5E52; margin-top: 4px; }
+  .sku-suggest-row code { font-family: 'DM Mono', monospace; background: var(--warm); padding: 2px 6px; border-radius: 4px; }
+  .sku-warning { margin-top: 4px; font-size: 11px; color: var(--accent); font-weight: 600; }
 
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -91,18 +121,84 @@
 <body>
 
 <div class="title">Kettle Dye Calculator</div>
-<div class="subtitle">Nylon immersion dyeing — same math as the old spreadsheet, now saving straight to Grist</div>
+<div class="subtitle">Nylon immersion dyeing — standard ratios pulled from your Dyes table</div>
+
+<div class="panel">
+  <div class="panel-title">
+    <span>Dye</span>
+    <span class="panel-title-link" onclick="toggleCustomBlendForm()">+ New Custom Blend</span>
+  </div>
+  <div class="field-row">
+    <input class="field-input" id="dyeSearchInput" placeholder="Search dyes..."
+      oninput="onDyeSearchInput(this.value)" onfocus="onDyeSearchInput(this.value)"
+      onblur="setTimeout(() => { document.getElementById('dyeSuggestions').style.display='none'; }, 150)">
+    <div class="dye-suggestions" id="dyeSuggestions" style="display:none"></div>
+  </div>
+  <div id="selectedDyeBanner"></div>
+
+  <div class="custom-blend-form" id="customBlendForm">
+    <div class="two-col">
+      <div class="field-row">
+        <span class="field-label">Blend name</span>
+        <input class="field-input" id="blendName" placeholder="e.g. Midnight Teal Mix">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Std dry weight (g per unit)</span>
+        <input class="field-input" type="number" step="0.001" id="blendDryWeight" placeholder="e.g. 4.757">
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="field-row">
+        <span class="field-label">Std powder measure</span>
+        <input class="field-input" id="blendMeasure" placeholder="e.g. 1tsp">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Std water volume (mL)</span>
+        <input class="field-input" type="number" id="blendWater" placeholder="e.g. 80">
+      </div>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Blend description</span>
+      <input class="field-input" id="blendDescription" placeholder="e.g. 2 parts Rhodamine Red WF : 1 part Sky Blue Pro">
+    </div>
+    <button class="btn btn-teal btn-small" onclick="createCustomBlend()">Create & use this blend</button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title">
+    <span>Defaults (rarely change)</span>
+    <span class="panel-title-link" onclick="toggleDefaults()">Show / hide</span>
+  </div>
+  <div class="defaults-panel" id="defaultsPanel">
+    <div class="three-col">
+      <div class="field-row">
+        <span class="field-label">Yarn ties weight (g)</span>
+        <input class="field-input" type="number" step="0.01" id="tiesWeight" oninput="recalc()">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Large burner gauge</span>
+        <input class="field-input" type="number" step="0.5" id="largeBurner" oninput="recalc()">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Pot type</span>
+        <input class="field-input" id="potType" oninput="recalc()">
+      </div>
+    </div>
+    <button class="btn btn-small" onclick="saveDefaults()">Save as new defaults</button>
+  </div>
+</div>
 
 <div class="grid">
   <div>
     <div class="panel">
-      <div class="panel-title">Input values</div>
+      <div class="panel-title">This batch</div>
       <div class="field-row">
         <span class="field-label">Weight of dye powder (g)</span>
         <input class="field-input" type="number" step="0.001" id="dyeWeight" value="4.757" oninput="recalc()">
       </div>
       <div class="field-row">
-        <span class="field-label">Dye powder measurement (e.g. 1tsp)</span>
+        <span class="field-label">Dye powder measurement</span>
         <input class="field-input" id="dyeMeasure" value="1tsp" oninput="recalc()">
       </div>
       <div class="field-row">
@@ -113,16 +209,6 @@
         <div class="field-row">
           <span class="field-label">Thread weight w/ ties (g)</span>
           <input class="field-input" type="number" step="0.01" id="threadWeight" value="1642" oninput="recalc()">
-        </div>
-        <div class="field-row">
-          <span class="field-label">Yarn ties weight (g)</span>
-          <input class="field-input" type="number" step="0.01" id="tiesWeight" value="2.1" oninput="recalc()">
-        </div>
-      </div>
-      <div class="two-col">
-        <div class="field-row">
-          <span class="field-label">Large burner gauge</span>
-          <input class="field-input" type="number" step="0.5" id="largeBurner" value="3" oninput="recalc()">
         </div>
         <div class="field-row">
           <span class="field-label">Pot temp (°F)</span>
@@ -138,10 +224,6 @@
           <span class="field-label">Heat time (min)</span>
           <input class="field-input" type="number" id="heatTime" value="70" oninput="recalc()">
         </div>
-      </div>
-      <div class="field-row">
-        <span class="field-label">Pot type</span>
-        <input class="field-input" id="potType" value="Anchor Glass" oninput="recalc()">
       </div>
     </div>
   </div>
@@ -175,31 +257,11 @@
 </div>
 
 <div class="panel">
-  <div class="panel-title">Save to Kettle Dye Recipes</div>
+  <div class="panel-title">Log this test</div>
   <div class="two-col">
     <div class="field-row">
       <span class="field-label">Colorway name</span>
       <input class="field-input" id="logNames" placeholder="e.g. Plastic Flamingo">
-    </div>
-    <div class="field-row">
-      <span class="field-label">Dye name</span>
-      <input class="field-input" id="logDyeName" placeholder="e.g. Rhodamine Red">
-    </div>
-  </div>
-  <div class="two-col">
-    <div class="field-row">
-      <span class="field-label">Dye brand</span>
-      <input class="field-input" id="logDyeBrand" placeholder="e.g. Dharma">
-    </div>
-    <div class="field-row">
-      <span class="field-label">Attributes</span>
-      <input class="field-input" id="logAttributes" placeholder="e.g. WF Acid Dye">
-    </div>
-  </div>
-  <div class="two-col">
-    <div class="field-row">
-      <span class="field-label">Serial</span>
-      <input class="field-input" id="logSerial" placeholder="optional">
     </div>
     <div class="field-row">
       <span class="field-label">Reserved (vendor code)</span>
@@ -234,7 +296,43 @@
     <span class="field-label">Notes</span>
     <input class="field-input" id="logNotes" placeholder="optional">
   </div>
-  <button class="btn btn-primary" onclick="saveToKettleRecipes()">💾 Save this result to Kettle Dye Recipes</button>
+  <button class="btn btn-primary" onclick="saveToKettleRecipes()">💾 Save this test to Kettle Dye Recipes</button>
+</div>
+
+<div class="panel">
+  <div class="panel-title">Promote to sellable Recipe</div>
+  <div class="two-col">
+    <div class="field-row">
+      <span class="field-label">Fiber type</span>
+      <select class="field-select" id="promoteFiber" onchange="renderSkuSuggestion()">
+        <option value="">—</option>
+        <option>FF Nylon</option>
+        <option>E Nylon</option>
+        <option>FF Cotton</option>
+        <option>Blackwing</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Recipe scope</span>
+      <select class="field-select" id="promoteScope" onchange="onScopeChange(); renderSkuSuggestion();">
+        <option value="">—</option>
+        <option>General</option>
+        <option>Customer Reserved</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row" id="promoteVendorWrap" style="display:none">
+    <span class="field-label">Reserved for</span>
+    <select class="field-select" id="promoteVendor" onchange="renderSkuSuggestion()">
+      <option value="">— pick vendor —</option>
+    </select>
+  </div>
+  <div class="field-row">
+    <span class="field-label">SKU base</span>
+    <input class="field-input" id="promoteSku" oninput="renderSkuSuggestion()">
+  </div>
+  <div id="skuSuggestionWrap"></div>
+  <button class="btn btn-teal" style="margin-top:10px" onclick="promoteToRecipe()">🏷️ Create sellable Recipe from this batch</button>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -255,11 +353,193 @@ function findColumn(tableData, candidates) {
   }
   return null;
 }
-
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, ''); }
 function n(id) { return Number(document.getElementById(id).value) || 0; }
 function s(id) { return document.getElementById(id).value; }
 
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+  'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+
+let allDyes = [];
+let allSkus = [];
+let selectedDye = null;
 let lastComputed = null;
+
+async function loadDyes() {
+  try {
+    const table = await grist.docApi.fetchTable('Dyes');
+    const nameCol = findColumn(table, ['Dye_Name', 'Name']);
+    const brandCol = findColumn(table, ['Brand']);
+    const powderCol = findColumn(table, ['Std_Powder_tsp_', 'Std Powder (tsp)']);
+    const waterCol = findColumn(table, ['Std_Water_mL_', 'Std Water (mL)']);
+    const dryWeightCol = findColumn(table, ['Std_Dry_Weight_g', 'Std Dry Weight (g)']);
+    const dyeTypeCol = findColumn(table, ['Dye_Type', 'Dye Type']);
+    const statusCol = findColumn(table, ['Status']);
+    const statusNotesCol = findColumn(table, ['Status_Notes', 'Status Notes']);
+
+    const ids = table.id || [];
+    allDyes = ids.map((id, i) => ({
+      id,
+      name: nameCol ? columnAsArray(table, nameCol)[i] : '',
+      brand: brandCol ? columnAsArray(table, brandCol)[i] : '',
+      stdPowder: powderCol ? columnAsArray(table, powderCol)[i] : '',
+      stdWater: waterCol ? columnAsArray(table, waterCol)[i] : '',
+      stdDryWeight: dryWeightCol ? columnAsArray(table, dryWeightCol)[i] : '',
+      dyeType: dyeTypeCol ? columnAsArray(table, dyeTypeCol)[i] : '',
+      status: statusCol ? columnAsArray(table, statusCol)[i] : '',
+      statusNotes: statusNotesCol ? columnAsArray(table, statusNotesCol)[i] : '',
+    })).filter(d => d.name);
+  } catch (e) {
+    console.error('Failed to load Dyes:', e);
+  }
+}
+
+function onDyeSearchInput(query) {
+  const box = document.getElementById('dyeSuggestions');
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allDyes.filter(d => normalize(d.name).includes(q)).slice(0, 10);
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(d => `
+    <div class="dye-suggestion-row" onmousedown="event.preventDefault(); pickDye(${d.id})">
+      <strong>${d.name}</strong> ${d.brand ? `<span style="color:#8B7D72">(${d.brand})</span>` : ''}
+      ${d.status && d.status !== 'Active' ? `<span class="status-flag">${d.status}</span>` : ''}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function pickDye(dyeId) {
+  const dye = allDyes.find(d => d.id === dyeId);
+  if (!dye) return;
+  selectedDye = dye;
+  document.getElementById('dyeSearchInput').value = dye.name;
+  document.getElementById('dyeSuggestions').style.display = 'none';
+
+  if (dye.stdDryWeight) document.getElementById('dyeWeight').value = dye.stdDryWeight;
+  if (dye.stdPowder) document.getElementById('dyeMeasure').value = dye.stdPowder;
+  if (dye.stdWater) document.getElementById('stockVol').value = dye.stdWater;
+
+  renderSelectedDyeBanner();
+  recalc();
+}
+
+function renderSelectedDyeBanner() {
+  const wrap = document.getElementById('selectedDyeBanner');
+  if (!selectedDye) { wrap.innerHTML = ''; return; }
+
+  const isFlagged = selectedDye.status && selectedDye.status !== 'Active';
+  wrap.innerHTML = `
+    <div class="selected-dye-banner ${isFlagged ? 'warn' : ''}">
+      <span>Using <strong>${selectedDye.name}</strong>${selectedDye.brand ? ` (${selectedDye.brand})` : ''} — standard ratio autofilled</span>
+      ${isFlagged ? `<span>⚠ ${selectedDye.status}${selectedDye.statusNotes ? ': ' + selectedDye.statusNotes : ''}</span>` : ''}
+    </div>
+  `;
+}
+
+function toggleCustomBlendForm() {
+  document.getElementById('customBlendForm').classList.toggle('open');
+}
+
+async function createCustomBlend() {
+  const name = s('blendName');
+  if (!name) { showToast('Enter a name for this blend'); return; }
+
+  const fields = {
+    Dye_Name: name,
+    Brand: 'Custom',
+    Dye_Type: 'Custom Mix',
+    Blend_Description: s('blendDescription'),
+  };
+  const dryWeight = n('blendDryWeight');
+  const water = n('blendWater');
+  const measure = s('blendMeasure');
+
+  try {
+    const table = await grist.docApi.fetchTable('Dyes');
+    const powderCol = findColumn(table, ['Std_Powder_tsp_', 'Std Powder (tsp)']) || 'Std_Powder_tsp_';
+    const waterCol = findColumn(table, ['Std_Water_mL_', 'Std Water (mL)']) || 'Std_Water_mL_';
+    const dryWeightCol = findColumn(table, ['Std_Dry_Weight_g', 'Std Dry Weight (g)']) || 'Std_Dry_Weight_g';
+
+    fields[powderCol] = measure;
+    fields[waterCol] = water;
+    fields[dryWeightCol] = dryWeight;
+
+    const result = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Dyes', null, fields]
+    ]);
+    const newId = result.retValues[0];
+
+    showToast('Custom blend created ✓');
+    await loadDyes();
+    pickDye(newId);
+    document.getElementById('customBlendForm').classList.remove('open');
+  } catch (e) {
+    console.error('Failed to create custom blend:', e);
+    showToast('Failed to create blend — check the Dyes table columns');
+  }
+}
+
+function toggleDefaults() {
+  document.getElementById('defaultsPanel').classList.toggle('open');
+}
+
+async function loadDefaults() {
+  try {
+    const table = await grist.docApi.fetchTable('Kettle_Dye_Defaults');
+    const tiesCol = findColumn(table, ['Yarn_Ties_Weight']);
+    const burnerCol = findColumn(table, ['Large_Burner_Gauge']);
+    const potCol = findColumn(table, ['Pot_Type']);
+
+    if (table.id && table.id.length) {
+      if (tiesCol) document.getElementById('tiesWeight').value = columnAsArray(table, tiesCol)[0] ?? 2.1;
+      if (burnerCol) document.getElementById('largeBurner').value = columnAsArray(table, burnerCol)[0] ?? 3;
+      if (potCol) document.getElementById('potType').value = columnAsArray(table, potCol)[0] ?? 'Anchor Glass';
+    } else {
+      document.getElementById('tiesWeight').value = 2.1;
+      document.getElementById('largeBurner').value = 3;
+      document.getElementById('potType').value = 'Anchor Glass';
+    }
+  } catch (e) {
+    console.error('Failed to load defaults:', e);
+    document.getElementById('tiesWeight').value = 2.1;
+    document.getElementById('largeBurner').value = 3;
+    document.getElementById('potType').value = 'Anchor Glass';
+  }
+}
+
+async function saveDefaults() {
+  try {
+    const table = await grist.docApi.fetchTable('Kettle_Dye_Defaults');
+    const tiesCol = findColumn(table, ['Yarn_Ties_Weight']) || 'Yarn_Ties_Weight';
+    const burnerCol = findColumn(table, ['Large_Burner_Gauge']) || 'Large_Burner_Gauge';
+    const potCol = findColumn(table, ['Pot_Type']) || 'Pot_Type';
+
+    const fields = {
+      [tiesCol]: n('tiesWeight'),
+      [burnerCol]: n('largeBurner'),
+      [potCol]: s('potType'),
+    };
+
+    if (table.id && table.id.length) {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Kettle_Dye_Defaults', table.id[0], fields]
+      ]);
+    } else {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Kettle_Dye_Defaults', null, fields]
+      ]);
+    }
+    showToast('Defaults saved ✓');
+  } catch (e) {
+    console.error('Failed to save defaults:', e);
+    showToast('Failed to save defaults — check the Kettle_Dye_Defaults table');
+  }
+}
 
 function recalc() {
   const dyeWeight = n('dyeWeight');
@@ -276,16 +556,14 @@ function recalc() {
   const threadNet = threadWeight - tiesWeight;
   const smallBurner = largeBurner + 0.5;
 
-  // Stock dye solution: 1:10 vinegar:water dilution, applied as 10%/90% of total stock volume
   const stockVinegarRatio = 0.1;
   const stockVinegar = stockVol * stockVinegarRatio;
   const stockWater = stockVol - stockVinegar;
 
-  // Immersion pot math: 7mL total liquid per gram of net thread weight
   const dyeH2oStockRatio = 1 / 7;
   const addedVinegarRatio = 0.01;
 
-  const addWater = threadNet / dyeH2oStockRatio; // = threadNet * 7
+  const addWater = threadNet / dyeH2oStockRatio;
   const addVinegar = addWater * stockVinegarRatio;
   const addStock = addWater * addedVinegarRatio * dos;
   const totalPot = addWater + addVinegar + addStock;
@@ -295,17 +573,14 @@ function recalc() {
   document.getElementById('rStockVol').textContent = `${stockVol.toFixed(2)} mL`;
   document.getElementById('rStockWater').textContent = `${stockWater.toFixed(2)} mL`;
   document.getElementById('rStockVinegar').textContent = `${stockVinegar.toFixed(2)} mL`;
-
   document.getElementById('rAddWater').textContent = `${addWater.toFixed(2)} mL`;
   document.getElementById('rAddVinegar').textContent = `${addVinegar.toFixed(2)} mL`;
   document.getElementById('rAddStock').textContent = `${addStock.toFixed(2)} mL`;
   document.getElementById('rTotalPot').textContent = `${totalPot.toFixed(2)} mL`;
-
   document.getElementById('rHeatUntil').textContent = `${potTemp}°F`;
   document.getElementById('rSmallBurner').textContent = smallBurner.toFixed(1);
   document.getElementById('rLargeBurner').textContent = largeBurner.toFixed(1);
   document.getElementById('rHeatTotal').textContent = `${heatTime} min`;
-
   document.getElementById('rThreadNet').textContent = `${threadNet.toFixed(2)} g`;
   document.getElementById('rStdRatio').textContent = stdRatio;
 
@@ -318,17 +593,10 @@ function recalc() {
 
 async function saveToKettleRecipes() {
   if (!lastComputed) recalc();
-
-  const names = s('logNames');
-  const dyeName = s('logDyeName');
-  if (!dyeName) {
-    showToast('Enter at least a Dye Name before saving');
-    return;
-  }
+  if (!selectedDye) { showToast('Pick a dye first'); return; }
 
   try {
     const table = await grist.docApi.fetchTable('Kettle_Dye_Recipes');
-
     const colNames = findColumn(table, ['Names']) || 'Names';
     const colDyeName = findColumn(table, ['Dye_Name']) || 'Dye_Name';
     const colDyeBrand = findColumn(table, ['Dye_Brand']) || 'Dye_Brand';
@@ -336,24 +604,24 @@ async function saveToKettleRecipes() {
     const colAttributes = findColumn(table, ['Attributes']) || 'Attributes';
     const colSerial = findColumn(table, ['Serial']) || 'Serial';
     const colStdRatio = findColumn(table, ['Standard_Ratio']) || 'Standard_Ratio';
-    const colDryWeight = findColumn(table, ['Dry_Weight_g', 'Dry Weight (g)', 'DryWeightg']) || 'Dry_Weight_g_';
+    const colDryWeight = findColumn(table, ['Dry_Weight_g']) || 'Dry_Weight_g_';
     const colDryRef = findColumn(table, ['Dry_Ref']) || 'Dry_Ref';
     const colDOS = findColumn(table, ['DOS']) || 'DOS';
-    const colTempNum = findColumn(table, ['Temp', 'Temp #', 'TempNum']) || 'Temp';
+    const colTempNum = findColumn(table, ['Temp']) || 'Temp_';
     const colTempF = findColumn(table, ['Temp_F']) || 'Temp_F';
-    const colMixTime = findColumn(table, ['Mix_Time_min', 'Mix Time (min)', 'MixTimemin']) || 'Mix_Time_min_';
+    const colMixTime = findColumn(table, ['Mix_Time_min']) || 'Mix_Time_min_';
     const colPot = findColumn(table, ['Pot']) || 'Pot';
     const colExhausts = findColumn(table, ['Exhausts']) || 'Exhausts';
     const colSolidness = findColumn(table, ['Solidness']) || 'Solidness';
     const colNotes = findColumn(table, ['Notes']) || 'Notes';
 
     const fields = {
-      [colNames]: names,
-      [colDyeName]: dyeName,
-      [colDyeBrand]: s('logDyeBrand'),
+      [colNames]: s('logNames'),
+      [colDyeName]: selectedDye.name,
+      [colDyeBrand]: selectedDye.brand,
       [colReserved]: s('logReserved'),
-      [colAttributes]: s('logAttributes'),
-      [colSerial]: s('logSerial'),
+      [colAttributes]: selectedDye.dyeType,
+      [colSerial]: '',
       [colStdRatio]: lastComputed.stdRatio,
       [colDryWeight]: lastComputed.dyeWeight,
       [colDryRef]: lastComputed.dyeMeasure,
@@ -370,20 +638,147 @@ async function saveToKettleRecipes() {
     await grist.docApi.applyUserActions([
       ['AddRecord', 'Kettle_Dye_Recipes', null, fields]
     ]);
-
     showToast('Saved to Kettle Dye Recipes ✓');
   } catch (e) {
     console.error('Failed to save:', e);
-    showToast('Save failed — check the Kettle_Dye_Recipes table and column names');
+    showToast('Save failed — check the Kettle_Dye_Recipes table');
   }
 }
 
-// ── GRIST INTEGRATION ──
+let allVendors = [];
+
+async function loadVendors() {
+  if (allVendors.length) return;
+  try {
+    const table = await grist.docApi.fetchTable('Customers');
+    const nameCol = findColumn(table, ['Name', 'Customer_Name', 'Vendor_Name']);
+    const codeCol = findColumn(table, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+    if (!nameCol || !codeCol) return;
+    const ids = table.id || [];
+    allVendors = ids.map((id, i) => ({
+      name: columnAsArray(table, nameCol)[i],
+      code: columnAsArray(table, codeCol)[i],
+    })).filter(v => v.name && v.code);
+    const select = document.getElementById('promoteVendor');
+    select.innerHTML = '<option value="">— pick vendor —</option>' +
+      allVendors.map(v => `<option value="${v.code}">${v.name} (${v.code})</option>`).join('');
+  } catch (e) {
+    console.error('Failed to load vendors:', e);
+  }
+}
+
+async function loadAllSkus() {
+  try {
+    const table = await grist.docApi.fetchTable('Recipes');
+    const ids = table.id || [];
+    allSkus = ids.map((id, i) => ({
+      sku: columnAsArray(table, 'SKU_Base')[i],
+      recipeName: columnAsArray(table, 'Recipe_Name')[i],
+    }));
+  } catch (e) {
+    console.error('Failed to load existing SKUs:', e);
+  }
+}
+
+function onScopeChange() {
+  const scope = s('promoteScope');
+  document.getElementById('promoteVendorWrap').style.display = /reserv/i.test(scope) ? 'flex' : 'none';
+}
+
+function slugifyForSku(name) {
+  return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function computeSuggestedSku() {
+  const fiberType = s('promoteFiber');
+  const name = s('logNames');
+  const scope = s('promoteScope');
+  const vendor = s('promoteVendor');
+  const fc = FIBER_NAME_TO_CODE[fiberType] || 'GEN';
+  const namePart = slugifyForSku(name) || 'UNNAMED';
+  let sku = `${fc}_${namePart}`;
+  if (/reserv/i.test(scope) && vendor) sku += `_${vendor}`;
+  return sku;
+}
+
+function renderSkuSuggestion() {
+  const wrap = document.getElementById('skuSuggestionWrap');
+  const suggestion = computeSuggestedSku();
+  const currentVal = s('promoteSku').trim().toUpperCase();
+  const dup = allSkus.find(sk => sk.sku && sk.sku.toUpperCase() === currentVal && currentVal !== '');
+
+  wrap.innerHTML = `
+    <div class="sku-suggest-row">
+      <span>Suggested: <code>${suggestion}</code></span>
+      <button type="button" class="btn btn-small" onclick="document.getElementById('promoteSku').value=computeSuggestedSku(); renderSkuSuggestion();">Use this</button>
+    </div>
+    ${dup ? `<div class="sku-warning">⚠ "${currentVal}" is already used by "${dup.recipeName}"</div>` : ''}
+  `;
+}
+
+async function promoteToRecipe() {
+  if (!lastComputed) recalc();
+  if (!selectedDye) { showToast('Pick a dye first'); return; }
+
+  const name = s('logNames');
+  const fiber = s('promoteFiber');
+  const scope = s('promoteScope');
+  const sku = s('promoteSku');
+
+  if (!name) { showToast('Enter a colorway name in the Log section first'); return; }
+  if (!fiber) { showToast('Pick a fiber type'); return; }
+  if (!sku) { showToast('Enter or generate a SKU'); return; }
+
+  try {
+    const recipeFields = {
+      Recipe_Name: name,
+      Fiber_Type: fiber,
+      Dye_Method: 'Kettle Dye',
+      Recipe_Scope: scope || 'General',
+      SKU_Base: sku,
+      Shopify_SKU: sku,
+      Notes: `Kettle dye: ${lastComputed.potTemp}°F, ${lastComputed.heatTime}min, DOS ${lastComputed.dos}, ${lastComputed.potType}`,
+    };
+
+    const recipeResult = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipes', null, recipeFields]
+    ]);
+    const newRecipeId = recipeResult.retValues[0];
+
+    const compTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const powderCol = findColumn(compTable, ['Std_Powder_tsp_']) || 'Std_Powder_tsp_';
+    const waterCol = findColumn(compTable, ['Std_Water_mL_']) || 'Std_Water_mL_';
+
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipe_Dye_Components', null, {
+        Recipe: newRecipeId,
+        Dye_Name: selectedDye.name,
+        Dye_Full: selectedDye.brand ? `${selectedDye.name} (${selectedDye.brand})` : selectedDye.name,
+        [powderCol]: lastComputed.dyeMeasure,
+        [waterCol]: lastComputed.stockVol,
+        Measure_Mode: 'Dry Powder',
+        Step_Number: 1,
+        Application_Notes: `Kettle immersion dye, DOS ${lastComputed.dos}`,
+      }]
+    ]);
+
+    showToast(`Recipe "${name}" created ✓`);
+    await loadAllSkus();
+  } catch (e) {
+    console.error('Failed to promote to recipe:', e);
+    showToast('Failed — check Recipes and Recipe_Dye_Components columns');
+  }
+}
+
 grist.ready({
   requiredAccess: 'full'
 });
 
-recalc();
+async function init() {
+  await Promise.all([loadDyes(), loadDefaults(), loadVendors(), loadAllSkus()]);
+  recalc();
+}
+init();
 </script>
 </body>
 </html>
