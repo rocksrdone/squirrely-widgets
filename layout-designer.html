@@ -128,6 +128,15 @@
 
     <div>
       <div class="panel-section">
+        <div class="panel-title">Quick start</div>
+        <div class="repeat-row">
+          <input class="field-input" type="number" id="sectionCount" value="4" min="1" max="24">
+          <button class="btn" onclick="createEqualSections()">Start with this many equal sections</button>
+        </div>
+        <div style="font-size:10px;color:#8B7D72;margin-top:6px;">Replaces the current layout with evenly-sized blank sections — fill in dye names after.</div>
+      </div>
+
+      <div class="panel-section">
         <div class="panel-title">Base layer — repeat pattern</div>
         <div class="repeat-row">
           <input class="field-input" type="number" id="repeatCount" value="1" min="1" max="12">
@@ -721,6 +730,34 @@ function removeSegment(key) {
   baseSegments[prevIdx].endPct = baseSegments[idx].endPct;
   baseSegments.splice(idx, 1);
   selectedSegmentKey = null;
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+function createEqualSections() {
+  const n = Math.max(1, Math.min(24, parseInt(document.getElementById('sectionCount').value) || 1));
+  const hasRealContent = baseSegments.some(s => s.dyeName) || baseSegments.length > 1;
+  if (hasRealContent && !confirm(`Replace the current layout with ${n} equal section${n === 1 ? '' : 's'}? This clears what's there now.`)) return;
+
+  baseSegments.forEach(s => { if (s.rowId) deletedIds.push(s.rowId); });
+
+  const width = 100 / n;
+  baseSegments = [];
+  for (let i = 0; i < n; i++) {
+    baseSegments.push({
+      rowId: null,
+      clientKey: nextClientKey++,
+      dyeName: '',
+      startPct: i * width,
+      endPct: (i + 1) * width,
+      type: 'Solid',
+      blendRatio: 50,
+      notes: '',
+    });
+  }
+  selectedSegmentKey = null;
+  selectedOverlayKey = null;
   markUnsaved();
   renderRing();
   renderSegmentEditor();
