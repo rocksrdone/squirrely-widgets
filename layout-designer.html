@@ -53,12 +53,12 @@
   @media (max-width: 800px) { .layout-grid { grid-template-columns: 1fr; } }
 
   .ring-wrap { display: flex; flex-direction: column; align-items: center; }
-  .ring-wrap svg { max-width: 100%; touch-action: none; }
+  .ring-wrap svg { width: 100%; height: auto; display: block; touch-action: none; }
 
   .legend { display: flex; gap: 10px; margin-top: 6px; font-size: 11px; color: #6B5E52; }
   .legend-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 4px; vertical-align: middle; }
 
-  .step-photos-row { display: flex; gap: 6px; margin-top: 7px; width: 100%; max-width: 400px; }
+  .step-photos-row { display: flex; gap: 6px; margin-top: 7px; width: 100%; }
   .step-photo { flex: 1; min-width: 0; text-align: center; }
   .step-photo img {
     width: 100%; height: 90px; object-fit: contain; border-radius: 6px;
@@ -451,13 +451,6 @@ function renderStepPhotos(photoItems) {
       `).join('')}
     </div>
   `;
-
-  const svg = document.getElementById('ringSvg');
-  const row = wrap.querySelector('.step-photos-row');
-  if (svg && row) {
-    row.style.width = svg.getBoundingClientRect().width + 'px';
-    row.style.maxWidth = 'none';
-  }
 }
 
 function renderSummary() {
