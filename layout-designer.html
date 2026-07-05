@@ -176,6 +176,18 @@ function guessColor(name) {
   return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
 }
 
+function mixColors(hex1, hex2, ratioTo2) {
+  const c1 = parseInt(hex1.replace('#', ''), 16);
+  const c2 = parseInt(hex2.replace('#', ''), 16);
+  const r1 = (c1 >> 16) & 255, g1 = (c1 >> 8) & 255, b1 = c1 & 255;
+  const r2 = (c2 >> 16) & 255, g2 = (c2 >> 8) & 255, b2 = c2 & 255;
+  const t = Math.max(0, Math.min(100, ratioTo2)) / 100;
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
 function getRefId(ref) {
   if (typeof ref === 'number') return ref || null;
   if (Array.isArray(ref)) return ref[1];
@@ -331,6 +343,8 @@ async function loadLayout(record) {
         type: columnAsArray(table, 'Segment_Type')[i] || 'Solid',
         order: columnAsArray(table, 'Segment_Order')[i] || 0,
         notes: columnAsArray(table, 'Notes')[i] || '',
+        blendRatio: Number(columnAsArray(table, 'Blend_Ratio')[i]) || 50,
+        applicationType: columnAsArray(table, 'Application_Type')[i] || 'Dye',
       };
       if (layer === 'Overlay') overlayMarks.push(row);
       else baseSegments.push(row);
@@ -354,19 +368,31 @@ function renderRing() {
   const svg = document.getElementById('ringSvg');
   let html = '';
 
-  baseSegments.forEach(seg => {
+  baseSegments.forEach((seg, idx) => {
     const path = describeAnnulusSector(BASE_R_OUT, BASE_R_IN, seg.startPct, seg.endPct);
-    const fill = seg.type === 'Space' ? '#F0EDE8' : guessColor(seg.dyeName);
+    let fill;
+    if (seg.type === 'Space') {
+      fill = '#F0EDE8';
+    } else if (seg.type === 'Blend') {
+      const n = baseSegments.length;
+      const prevColor = guessColor(baseSegments[(idx - 1 + n) % n].dyeName);
+      const nextColor = guessColor(baseSegments[(idx + 1) % n].dyeName);
+      fill = mixColors(prevColor, nextColor, seg.blendRatio ?? 50);
+    } else {
+      fill = guessColor(seg.dyeName);
+    }
     const strokeW = seg.clientKey === selectedSegmentKey ? 3 : 1;
     const strokeColor = seg.clientKey === selectedSegmentKey ? '#1A1614' : 'white';
-    const opacity = seg.type === 'Blend' ? 0.6 : 1;
-    html += `<path d="${path}" fill="${fill}" fill-opacity="${opacity}" stroke="${strokeColor}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectSegment(${seg.clientKey})"></path>`;
+    html += `<path d="${path}" fill="${fill}" stroke="${strokeColor}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectSegment(${seg.clientKey})"></path>`;
   });
 
   overlayMarks.forEach(mark => {
     const path = describeAnnulusSector(OVERLAY_R_OUT, OVERLAY_R_IN, mark.startPct, mark.endPct);
     const strokeW = mark.clientKey === selectedOverlayKey ? 3 : 1;
-    html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+    const isPowder = mark.applicationType === 'Powder';
+    const dash = isPowder ? 'stroke-dasharray="3,2"' : '';
+    const opacity = isPowder ? 0.55 : 1;
+    html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" fill-opacity="${opacity}" ${dash} stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
   });
 
   // Draggable handle at the center of each overlay dab
@@ -497,12 +523,20 @@ function renderSegmentEditor() {
       </div>
       <div class="field-row">
         <span class="field-label">Type</span>
-        <select class="field-select" onchange="updateSegment(${seg.clientKey}, 'type', this.value)">
+        <select class="field-select" onchange="updateSegment(${seg.clientKey}, 'type', this.value); renderSegmentEditor();">
           <option ${seg.type === 'Solid' ? 'selected' : ''}>Solid</option>
           <option ${seg.type === 'Blend' ? 'selected' : ''}>Blend</option>
           <option ${seg.type === 'Space' ? 'selected' : ''}>Space</option>
         </select>
       </div>
+      ${seg.type === 'Blend' ? `
+      <div class="field-row">
+        <span class="field-label">Mix % (toward next segment)</span>
+        <input class="field-input" type="range" min="0" max="100" value="${seg.blendRatio ?? 50}"
+          oninput="updateSegment(${seg.clientKey}, 'blendRatio', this.value); document.getElementById('mixPctLabel_${seg.clientKey}').textContent = this.value + '%'">
+        <div style="font-size:10px;color:#8B7D72;">0% = matches the previous segment's dye, 100% = matches the next one — <span id="mixPctLabel_${seg.clientKey}">${seg.blendRatio ?? 50}%</span></div>
+      </div>
+      ` : ''}
       <div class="field-row">
         <span class="field-label">Position</span>
         <span style="font-size:12px;color:#6B5E52;">Starts at ${seg.startPct.toFixed(1)}% around the circle, spans ${(() => { let w = seg.endPct - seg.startPct; if (w <= 0) w += 100; return w.toFixed(1); })()}% of it</span>
@@ -527,9 +561,21 @@ function renderSegmentEditor() {
         </div>
       </div>
       <div class="field-row">
+        <span class="field-label">Application</span>
+        <select class="field-select" onchange="updateOverlay(${mark.clientKey}, 'applicationType', this.value)">
+          <option ${!mark.applicationType || mark.applicationType === 'Dye' ? 'selected' : ''}>Dye</option>
+          <option ${mark.applicationType === 'Powder' ? 'selected' : ''}>Powder</option>
+        </select>
+      </div>
+      <div class="field-row">
         <span class="field-label">Position (center %)</span>
         <input class="field-input" type="number" min="0" max="100" value="${((mark.startPct + mark.endPct) / 2).toFixed(0)}"
           oninput="repositionOverlay(${mark.clientKey}, this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Width %</span>
+        <input class="field-input" type="number" min="1" max="100" value="${(() => { let w = mark.endPct - mark.startPct; if (w <= 0) w += 100; return w.toFixed(0); })()}"
+          oninput="resizeOverlayWidth(${mark.clientKey}, this.value)">
       </div>
       <div class="field-row">
         <span class="field-label">Notes</span>
@@ -621,7 +667,7 @@ function applyRepeat() {
 }
 
 function addOverlayMark() {
-  overlayMarks.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 45, endPct: 55, notes: '' });
+  overlayMarks.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 45, endPct: 55, notes: '', applicationType: 'Dye' });
   markUnsaved();
   renderRing();
   renderOverlayList();
@@ -643,6 +689,18 @@ function repositionOverlay(key, centerValue) {
   const center = Math.max(0, Math.min(100, Number(centerValue) || 0));
   mark.startPct = center - width / 2;
   mark.endPct = center + width / 2;
+  markUnsaved();
+  renderRing();
+}
+
+function resizeOverlayWidth(key, widthValue) {
+  const mark = overlayMarks.find(m => m.clientKey === key);
+  if (!mark) return;
+  let center = (mark.startPct + mark.endPct) / 2;
+  if (mark.endPct <= mark.startPct) center = ((mark.startPct + (mark.endPct + 100)) / 2) % 100;
+  const width = Math.max(1, Math.min(100, Number(widthValue) || 10));
+  mark.startPct = ((center - width / 2) % 100 + 100) % 100;
+  mark.endPct = ((center + width / 2) % 100 + 100) % 100;
   markUnsaved();
   renderRing();
 }
@@ -693,6 +751,7 @@ async function saveLayout() {
         Layer: 'Base',
         Segment_Order: i + 1,
         Notes: seg.notes || '',
+        Blend_Ratio: Number(seg.blendRatio) || 50,
       };
       actions.push(seg.rowId
         ? ['UpdateRecord', 'Recipe_Layout_Segments', seg.rowId, fields]
@@ -709,6 +768,7 @@ async function saveLayout() {
         Layer: 'Overlay',
         Segment_Order: i + 1,
         Notes: mark.notes || '',
+        Application_Type: mark.applicationType || 'Dye',
       };
       actions.push(mark.rowId
         ? ['UpdateRecord', 'Recipe_Layout_Segments', mark.rowId, fields]
