@@ -171,6 +171,16 @@
       </div>
 
       <div class="panel-section">
+        <div class="panel-title">Rotate whole layout</div>
+        <div class="repeat-row">
+          <button class="btn" onclick="rotateLayout(-Number(document.getElementById('rotateStep').value))" style="flex:1">↺ Rotate left</button>
+          <input class="field-input" type="number" id="rotateStep" value="15" min="1" max="180" style="width:70px">
+          <button class="btn" onclick="rotateLayout(Number(document.getElementById('rotateStep').value))" style="flex:1">Rotate right ↻</button>
+        </div>
+        <div style="font-size:10px;color:#8B7D72;margin-top:6px;">Spins everything — base segments and overlay dabs — without changing their order or widths. Click repeatedly to fine-tune.</div>
+      </div>
+
+      <div class="panel-section">
         <div class="panel-title">Base layer — repeat pattern</div>
         <div class="repeat-row">
           <input class="field-input" type="number" id="repeatCount" value="1" min="1" max="12">
@@ -887,6 +897,24 @@ function fillFromRecipe() {
   markUnsaved();
   renderRing();
   renderSegmentEditor();
+}
+
+function rotateLayout(deltaDeg) {
+  const deltaPct = (deltaDeg / 360) * 100;
+
+  baseSegments.forEach(seg => {
+    seg.startPct = ((seg.startPct + deltaPct) % 100 + 100) % 100;
+    seg.endPct = ((seg.endPct + deltaPct) % 100 + 100) % 100;
+  });
+  baseSegments.sort((a, b) => a.startPct - b.startPct);
+
+  overlayMarks.forEach(mark => {
+    mark.startPct = ((mark.startPct + deltaPct) % 100 + 100) % 100;
+    mark.endPct = ((mark.endPct + deltaPct) % 100 + 100) % 100;
+  });
+
+  markUnsaved();
+  renderRing();
 }
 
 function createEqualSections() {
