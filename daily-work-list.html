@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Work List</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+    --urgent: #A01830;
+    --urgent-light: #F5E0E4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .controls-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .search-input {
+    flex: 1; min-width: 160px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px;
+    font-size: 13px; outline: none; background: white; color: var(--ink);
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .filter-select {
+    padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px;
+    font-size: 12px; background: white; color: var(--ink); outline: none;
+  }
+
+  .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
+
+  .work-card {
+    background: white; border: 1px solid var(--rule); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 10px;
+  }
+  .work-card.priority-urgent { border-left: 4px solid var(--urgent); }
+  .work-card.priority-high { border-left: 4px solid var(--gold); }
+
+  .work-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .work-colorway { font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700; }
+  .work-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+  .work-order-info { font-size: 11px; color: #6B5E52; text-align: right; }
+  .priority-badge {
+    display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 3px; margin-top: 3px;
+  }
+  .priority-badge.urgent { background: var(--urgent-light); color: var(--urgent); }
+  .priority-badge.high { background: var(--gold-light); color: var(--gold); }
+  .priority-badge.normal { background: var(--warm); color: #6B5E52; }
+  .priority-badge.low { background: var(--warm); color: #8B7D72; }
+
+  .stages-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stage-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; }
+  .stage-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; margin-bottom: 4px; }
+  .stage-track { height: 5px; background: var(--warm); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+  .stage-fill { height: 100%; background: var(--done-border); border-radius: 3px; }
+  .stage-nums { display: flex; align-items: center; justify-content: space-between; }
+  .stage-count { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+  .stage-btns { display: flex; gap: 3px; }
+  .stage-btn {
+    width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--rule); background: white;
+    cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center;
+  }
+  .stage-btn:hover { border-color: var(--accent); }
+  .stage-btn:disabled { opacity: .3; cursor: default; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <div class="header-title">Daily Work List</div>
+    <div class="header-sub" id="headerSub">Loading...</div>
+  </div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+
+<div class="controls-row">
+  <input class="search-input" id="searchBox" placeholder="Search colorway, SKU, or customer..." oninput="renderList()">
+  <select class="filter-select" id="priorityFilter" onchange="renderList()">
+    <option value="">All priorities</option>
+    <option value="Urgent">Urgent only</option>
+    <option value="High">High only</option>
+    <option value="Normal">Normal only</option>
+    <option value="Low">Low only</option>
+  </select>
+</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) {
+    if (l.includes(k)) return v;
+  }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+const PRIORITY_RANK = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 };
+function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function normalize(s) {
+  return (s || '').toString().trim().toUpperCase();
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+let workItems = []; // {lineId, sku, colorwayName, productName, qtyNeeded, qtyDyed, qtyWound, qtyPacked, priority, orderNumber, customerName, dueDate}
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+
+  try {
+    const [woTable, wolTable, recipesTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+
+    // Build SKU -> colorway name lookup from Recipes
+    const rIds = recipesTable.id || [];
+    const skuToName = {};
+    rIds.forEach((id, i) => {
+      const name = columnAsArray(recipesTable, 'Recipe_Name')[i];
+      const skuBase = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
+      const shopifySku = normalize(columnAsArray(recipesTable, 'Shopify_SKU')[i]);
+      if (skuBase) skuToName[skuBase] = name;
+      if (shopifySku) skuToName[shopifySku] = name;
+    });
+
+    // Active work orders only
+    const woIds = woTable.id || [];
+    const woActive = {};
+    woIds.forEach((id, i) => {
+      const status = columnAsArray(woTable, 'Status')[i];
+      woActive[id] = {
+        active: (status || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+        dueDate: columnAsArray(woTable, 'Due_Date')[i],
+      };
+    });
+
+    const lIds = wolTable.id || [];
+    const items = [];
+    for (let i = 0; i < lIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woInfo = woActive[woId];
+      if (!woInfo || !woInfo.active) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const qtyWound = Number(columnAsArray(wolTable, 'Qty_Wound')[i]) || 0;
+      const qtyPacked = Number(columnAsArray(wolTable, 'Qty_Packed')[i]) || 0;
+
+      if (qtyPacked >= qtyNeeded && qtyNeeded > 0) continue; // fully complete, hide
+
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      items.push({
+        lineId: lIds[i],
+        sku,
+        colorwayName: skuToName[normalize(sku)] || null,
+        productName: columnAsArray(wolTable, 'Product_Name')[i] || '',
+        qtyNeeded, qtyDyed, qtyWound, qtyPacked,
+        priority: columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal',
+        orderNumber: woInfo.orderNumber,
+        customerName: woInfo.customerName,
+        dueDate: woInfo.dueDate,
+      });
+    }
+
+    items.sort((a, b) => {
+      const pr = priorityRank(a.priority) - priorityRank(b.priority);
+      if (pr !== 0) return pr;
+      const ad = a.dueDate ? Number(a.dueDate) : Infinity;
+      const bd = b.dueDate ? Number(b.dueDate) : Infinity;
+      if (ad !== bd) return ad - bd;
+      return (a.orderNumber || '').toString().localeCompare((b.orderNumber || '').toString());
+    });
+
+    workItems = items;
+    document.getElementById('headerSub').textContent = `${items.length} line${items.length === 1 ? '' : 's'} still in progress`;
+    renderList();
+  } catch (e) {
+    console.error('Failed to load work list:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+  }
+}
+
+function renderList() {
+  const content = document.getElementById('content');
+  const q = normalize(document.getElementById('searchBox').value);
+  const priorityFilterVal = document.getElementById('priorityFilter').value;
+
+  const filtered = workItems.filter(item => {
+    if (priorityFilterVal && item.priority !== priorityFilterVal) return false;
+    if (!q) return true;
+    return normalize(item.colorwayName).includes(q) ||
+           normalize(item.sku).includes(q) ||
+           normalize(item.customerName).includes(q) ||
+           normalize(item.orderNumber).includes(q);
+  });
+
+  if (!filtered.length) {
+    content.innerHTML = `<div class="empty-state">${workItems.length ? 'Nothing matches that search/filter.' : '🎉 Nothing left in the queue right now.'}</div>`;
+    return;
+  }
+
+  content.innerHTML = filtered.map(item => {
+    const priorityClass = (item.priority || 'normal').toLowerCase();
+    const cardPriorityClass = priorityClass === 'urgent' ? 'priority-urgent' : priorityClass === 'high' ? 'priority-high' : '';
+
+    const dueLabel = item.dueDate ? new Date(Number(item.dueDate) * 1000).toLocaleDateString() : 'No due date';
+
+    const stage = (label, current, cap, field) => `
+      <div class="stage-box">
+        <div class="stage-label">${label}</div>
+        <div class="stage-track"><div class="stage-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
+        <div class="stage-nums">
+          <span class="stage-count">${current}/${cap}</span>
+          <div class="stage-btns">
+            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>−</button>
+            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', 1)" ${current >= cap ? 'disabled' : ''}>+</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return `
+      <div class="work-card ${cardPriorityClass}">
+        <div class="work-card-top">
+          <div>
+            <div class="work-colorway" style="color:${guessColor(item.colorwayName || item.sku)}">${item.colorwayName || item.productName || 'Unknown colorway'}</div>
+            <div class="work-sku">${item.sku}</div>
+          </div>
+          <div class="work-order-info">
+            <div>#${item.orderNumber || '—'} · ${item.customerName || '—'}</div>
+            <div>${dueLabel}</div>
+            <div class="priority-badge ${priorityClass}">${item.priority}</div>
+          </div>
+        </div>
+        <div class="stages-row">
+          ${stage('Dye', item.qtyDyed, item.qtyNeeded, 'Qty_Dyed')}
+          ${stage('Wind', item.qtyWound, item.qtyDyed, 'Qty_Wound')}
+          ${stage('Pack', item.qtyPacked, item.qtyWound, 'Qty_Packed')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function adjustStage(lineId, field, delta) {
+  const item = workItems.find(i => i.lineId === lineId);
+  if (!item) return;
+
+  const fieldMap = { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' };
+  const capMap = { Qty_Dyed: item.qtyNeeded, Qty_Wound: item.qtyDyed, Qty_Packed: item.qtyWound };
+  const key = fieldMap[field];
+  const cap = capMap[field];
+  const newVal = Math.max(0, Math.min(cap, item[key] + delta));
+  if (newVal === item[key]) return;
+
+  item[key] = newVal;
+  renderList();
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [field]: newVal }]
+    ]);
+  } catch (e) {
+    console.error('Failed to update:', e);
+    showToast('Update failed — check widget access level');
+    item[key] = item[key] - delta; // revert optimistic update
+    renderList();
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
