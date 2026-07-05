@@ -67,8 +67,13 @@
   }
   .section-title {
     font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
-    color: #8B7D72; margin-bottom: 12px;
+    color: #8B7D72; margin-bottom: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+    user-select: none;
   }
+  .section-title:hover { color: var(--accent); }
+  .section-chevron { transition: transform .15s; font-size: 12px; }
+  .section-chevron.collapsed { transform: rotate(-90deg); }
+  .section-body.collapsed { display: none; }
 
   .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
   .field-wrap { display: flex; flex-direction: column; gap: 4px; }
@@ -182,7 +187,8 @@
   </div>
 
   <div class="section">
-    <div class="section-title">Basics</div>
+    <div class="section-title" onclick="toggleSection('basics')"><span>Basics</span><span class="section-chevron" id="chevron-basics">▾</span></div>
+    <div class="section-body" id="body-basics">
     <div class="field-grid">
       <div class="field-wrap">
         <span class="field-label">Fiber Type</span>
@@ -244,23 +250,29 @@
         <textarea class="field-textarea" id="draftNotes" placeholder="Jot down thoughts as you figure this one out..." oninput="markUnsaved()"></textarea>
       </div>
     </div>
+    </div>
   </div>
 
   <div class="section" id="finalizeSection" style="display:none">
-    <div class="section-title">Finalize</div>
+    <div class="section-title" onclick="toggleSection('finalize')"><span>Finalize</span><span class="section-chevron" id="chevron-finalize">▾</span></div>
+    <div class="section-body" id="body-finalize">
     <div style="font-size:12px; color:#6B5E52; margin-bottom:8px;">Once this is ready to become a real, sellable recipe:</div>
     <button class="btn btn-teal" id="finalizeBtn" onclick="finalizeRecipe()" disabled style="width:100%;">✓ Finalize — mark as Active</button>
     <div id="finalizeGateMsg" style="font-size:11px; color:#8B7D72; margin-top:6px;"></div>
+    </div>
   </div>
 
   <div class="section">
-    <div class="section-title">Dye Steps</div>
+    <div class="section-title" onclick="toggleSection('dyesteps')"><span>Dye Steps</span><span class="section-chevron" id="chevron-dyesteps">▾</span></div>
+    <div class="section-body" id="body-dyesteps">
     <div id="dyeRowsWrap"></div>
     <button class="add-dye-btn" onclick="addDyeRow()">+ Add dye step</button>
+    </div>
   </div>
 
   <div class="section">
-    <div class="section-title">Layout</div>
+    <div class="section-title" onclick="toggleSection('layout')"><span>Layout</span><span class="section-chevron" id="chevron-layout">▾</span></div>
+    <div class="section-body" id="body-layout">
     <div class="field-wrap wide">
       <span class="field-label">Layout Description</span>
       <textarea class="field-textarea" id="layoutDescription" oninput="markUnsaved(); renderLayoutPreview();"></textarea>
@@ -269,10 +281,12 @@
       <div class="layout-preview-label">Preview (based on dye step order)</div>
       <div class="skein-bars" id="layoutBars"></div>
     </div>
+    </div>
   </div>
 
   <div class="section">
-    <div class="section-title">Photos</div>
+    <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron" id="chevron-photos">▾</span></div>
+    <div class="section-body" id="body-photos">
     <div class="photo-grid">
       <div class="photo-slot">
         <div class="photo-slot-label">Step 1</div>
@@ -294,6 +308,7 @@
       </div>
     </div>
     <div class="photo-hint">Tip: photos are usually easier to attach through the Photo Inbox widget, which files and renames them automatically. These fields are here for direct edits or corrections.</div>
+    </div>
   </div>
 </div>
 
@@ -341,6 +356,14 @@ function findColumn(tableData, candidates) {
     if (hit) return hit;
   }
   return null;
+}
+
+function toggleSection(id) {
+  const body = document.getElementById('body-' + id);
+  const chevron = document.getElementById('chevron-' + id);
+  if (!body || !chevron) return;
+  body.classList.toggle('collapsed');
+  chevron.classList.toggle('collapsed');
 }
 
 function normalize(s) {
