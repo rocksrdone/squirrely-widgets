@@ -396,10 +396,25 @@ function onDrag(evt) {
 
   const i = draggingBoundaryIndex;
   const n = baseSegments.length;
+  if (n < 2) return;
   const prevIdx = (i - 1 + n) % n;
 
-  baseSegments[prevIdx].endPct = pct;
-  baseSegments[i].startPct = pct;
+  // Clamp so this boundary can never cross past its neighboring segments'
+  // own edges — otherwise the segment inverts and wraps the wrong way around.
+  const lowerAnchor = baseSegments[prevIdx].startPct;
+  const upperAnchor = baseSegments[i].endPct;
+
+  let unwrappedPct = pct;
+  while (unwrappedPct < lowerAnchor) unwrappedPct += 100;
+  let unwrappedUpper = upperAnchor;
+  while (unwrappedUpper < lowerAnchor) unwrappedUpper += 100;
+
+  const minGap = 1;
+  const clamped = Math.max(lowerAnchor + minGap, Math.min(unwrappedUpper - minGap, unwrappedPct));
+  const finalPct = ((clamped % 100) + 100) % 100;
+
+  baseSegments[prevIdx].endPct = finalPct;
+  baseSegments[i].startPct = finalPct;
   markUnsaved();
   renderRing();
 }
