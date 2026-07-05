@@ -78,6 +78,7 @@
     font-family: 'Inter', sans-serif; font-size: 13px; outline: none; background: white; color: var(--ink);
   }
   .field-input:focus, .field-select:focus, .field-textarea:focus { border-color: var(--accent); }
+  .field-select:disabled { background: var(--warm); color: #8B7D72; cursor: not-allowed; }
   .field-textarea { resize: vertical; min-height: 60px; }
   .field-wrap.wide { grid-column: 1 / -1; }
 
@@ -417,7 +418,12 @@ async function loadAllSkus() {
 function onScopeChange() {
   const scope = document.getElementById('recipeScope').value;
   const wrap = document.getElementById('reservedForWrap');
-  wrap.style.display = /reserv/i.test(scope) ? 'flex' : 'none';
+  const isReserved = /reserv/i.test(scope);
+  wrap.style.display = isReserved ? 'flex' : 'none';
+
+  const linkedSelect = document.getElementById('linkedCustomer');
+  linkedSelect.disabled = isReserved;
+  linkedSelect.title = isReserved ? 'Following the vendor picked in Reserved For — change that instead' : '';
 }
 
 function slugifyForSku(name) {
