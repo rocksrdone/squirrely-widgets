@@ -374,7 +374,7 @@ async function loadAllSkus() {
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
       id,
-      sku: columnAsArray(recipesTable, 'SKU_Base')[i] || columnAsArray(recipesTable, 'Shopify_SKU')[i],
+      sku: columnAsArray(recipesTable, 'SKU_Base')[i],
       recipeName: columnAsArray(recipesTable, 'Recipe_Name')[i],
     }));
   } catch (e) {
@@ -682,7 +682,6 @@ async function saveRecipe() {
       Dye_Method: document.getElementById('dyeMethod').value,
       Recipe_Scope: document.getElementById('recipeScope').value,
       SKU_Base: document.getElementById('skuBase').value,
-      Shopify_SKU: document.getElementById('skuBase').value,
       Notes: document.getElementById('generalNotes').value,
       Layout_Description: document.getElementById('layoutDescription').value,
       Photo_Process_1: document.getElementById('photoP1').value,
