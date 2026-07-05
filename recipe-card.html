@@ -778,7 +778,8 @@ function buildLayoutRingSvg(baseSegs, overlays) {
 
   inner += `<circle cx="${CX}" cy="${CY}" r="${BASE_R_IN - 10}" fill="#F7F3EE"></circle>`;
 
-  return `<svg viewBox="0 0 400 400" width="200" height="200">${inner}</svg>`;
+  const displaySize = document.body.classList.contains('big-mode') ? 380 : 280;
+  return `<svg viewBox="0 0 400 400" width="${displaySize}" height="${displaySize}">${inner}</svg>`;
 }
 
 function renderLeft() {
