@@ -146,6 +146,11 @@
 
   .no-dyes { text-align: center; color: #8B7D72; font-style: italic; padding: 16px; }
 
+  .history-entry { padding: 8px 0; border-bottom: 1px solid var(--warm); font-size: 12px; }
+  .history-entry:last-child { border-bottom: none; }
+  .history-date { font-size: 10px; color: #8B7D72; font-weight: 600; margin-bottom: 2px; }
+  .history-empty { font-size: 12px; color: #8B7D72; font-style: italic; padding: 8px 0; }
+
   .layout-preview { margin-top: 10px; }
   .skein-bars { display: flex; gap: 2px; height: 14px; border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
   .skein-bar { flex: 1; height: 100%; }
@@ -179,6 +184,8 @@
     <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:200px;">
       <span id="draftBadge" style="display:none; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:3px 9px; border-radius:10px; background:var(--gold-light); color:var(--gold); border:1px solid #D4B07A;">Draft</span>
       <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();" style="flex:1;">
+      <span id="createdDateLabel" style="font-size:10px; color:#8B7D72; white-space:nowrap;"></span>
+      <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
     </div>
     <div class="top-actions">
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
@@ -310,6 +317,18 @@
     <div class="photo-hint">Tip: photos are usually easier to attach through the Photo Inbox widget, which files and renames them automatically. These fields are here for direct edits or corrections.</div>
     </div>
   </div>
+
+  <div class="section" id="historySection">
+    <div class="section-title" onclick="toggleSection('history')"><span>History / Changelog</span><span class="section-chevron collapsed" id="chevron-history">▾</span></div>
+    <div class="section-body collapsed" id="body-history">
+      <div id="historyList" style="margin-bottom:10px;"></div>
+      <div class="field-wrap">
+        <span class="field-label">Add a note about a change</span>
+        <textarea class="field-textarea" id="newHistoryNote" placeholder="e.g. Adjusted dilution slightly darker per customer request" style="min-height:44px;"></textarea>
+      </div>
+      <button class="btn btn-small" onclick="addHistoryNote()" style="width:100%;">+ Add dated note</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -356,6 +375,78 @@ function findColumn(tableData, candidates) {
     if (hit) return hit;
   }
   return null;
+}
+
+let currentHistoryEntries = [];
+
+async function loadHistory(recipeId) {
+  try {
+    const table = await grist.docApi.fetchTable('Recipe_Change_Log');
+    const ids = table.id || [];
+    const refs = table.Recipe || [];
+    const entries = [];
+    for (let i = 0; i < ids.length; i++) {
+      if (getRefId(refs[i]) !== recipeId) continue;
+      entries.push({
+        date: columnAsArray(table, 'Change_Date')[i],
+        note: columnAsArray(table, 'Change_Note')[i] || '',
+      });
+    }
+    entries.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+    currentHistoryEntries = entries;
+  } catch (e) {
+    console.error('Could not load history:', e);
+    currentHistoryEntries = [];
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const badge = document.getElementById('historyBadge');
+
+  if (!currentHistoryEntries.length) {
+    list.innerHTML = `<div class="history-empty">No change notes yet.</div>`;
+    badge.style.display = 'none';
+  } else {
+    list.innerHTML = currentHistoryEntries.map(e => {
+      const d = e.date ? new Date(Number(e.date) * 1000).toLocaleDateString() : 'Unknown date';
+      return `<div class="history-entry"><div class="history-date">${d}</div>${e.note}</div>`;
+    }).join('');
+    badge.textContent = `📝 ${currentHistoryEntries.length}`;
+    badge.style.display = 'inline-block';
+  }
+}
+
+async function addHistoryNote() {
+  if (!currentRecipeId) return;
+  const noteEl = document.getElementById('newHistoryNote');
+  const note = noteEl.value.trim();
+  if (!note) { showToast('Write a note first'); return; }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipe_Change_Log', null, {
+        Recipe: currentRecipeId,
+        Change_Date: Math.floor(Date.now() / 1000),
+        Change_Note: note,
+      }]
+    ]);
+    noteEl.value = '';
+    showToast('Note added ✓');
+    await loadHistory(currentRecipeId);
+  } catch (e) {
+    console.error('Failed to add history note:', e);
+    showToast('Failed — check the Recipe_Change_Log table');
+  }
+}
+
+function jumpToHistory() {
+  const body = document.getElementById('body-history');
+  const chevron = document.getElementById('chevron-history');
+  body.classList.remove('collapsed');
+  chevron.classList.remove('collapsed');
+  document.getElementById('historySection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function toggleSection(id) {
@@ -635,6 +726,16 @@ async function loadRecipe(record) {
   document.getElementById('content').style.display = 'block';
 
   document.getElementById('nameInput').value = record.Recipe_Name || '';
+
+  const createdLabel = document.getElementById('createdDateLabel');
+  if (record.Created_Date) {
+    const d = new Date(Number(record.Created_Date) * 1000);
+    createdLabel.textContent = `Created ${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+  } else {
+    createdLabel.textContent = '';
+  }
+  await loadHistory(record.id);
+
   document.getElementById('fiberType').value = record.Fiber_Type || '';
   document.getElementById('dyeMethod').value = record.Dye_Method || '';
   document.getElementById('recipeScope').value = record.Recipe_Scope || '';
@@ -895,7 +996,7 @@ async function finalizeRecipe() {
 async function createNewRecipe() {
   try {
     const result = await grist.docApi.applyUserActions([
-      ['AddRecord', 'Recipes', null, { Recipe_Name: 'Untitled Draft', Status: 'Researching' }]
+      ['AddRecord', 'Recipes', null, { Recipe_Name: 'Untitled Draft', Status: 'Researching', Created_Date: Math.floor(Date.now() / 1000) }]
     ]);
     const newId = result && result.retValues && result.retValues[0];
     showToast('New draft created — click it in the Recipes grid to keep editing');
