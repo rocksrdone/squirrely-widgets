@@ -98,6 +98,7 @@
   .btn-primary:hover { opacity: .9; }
   .btn-teal { background: var(--teal); border-color: var(--teal); color: white; font-weight: 600; }
   .btn-teal:hover { opacity: .9; }
+  .btn-teal:disabled { background: var(--rule); border-color: var(--rule); color: #8B7D72; cursor: not-allowed; opacity: 1; }
   .btn-small { font-size: 11px; padding: 6px 10px; width: auto; }
 
   .defaults-panel { display: none; }
@@ -261,7 +262,7 @@
   <div class="two-col">
     <div class="field-row">
       <span class="field-label">Colorway name</span>
-      <input class="field-input" id="logNames" placeholder="e.g. Plastic Flamingo">
+      <input class="field-input" id="logNames" placeholder="e.g. Plastic Flamingo" oninput="renderSkuSuggestion(); updatePromoteGate();">
     </div>
     <div class="field-row">
       <span class="field-label">Reserved (vendor code)</span>
@@ -304,7 +305,7 @@
   <div class="two-col">
     <div class="field-row">
       <span class="field-label">Fiber type</span>
-      <select class="field-select" id="promoteFiber" onchange="renderSkuSuggestion()">
+      <select class="field-select" id="promoteFiber" onchange="renderSkuSuggestion(); updatePromoteGate();">
         <option value="">—</option>
         <option>FF Nylon</option>
         <option>E Nylon</option>
@@ -314,7 +315,7 @@
     </div>
     <div class="field-row">
       <span class="field-label">Recipe scope</span>
-      <select class="field-select" id="promoteScope" onchange="onScopeChange(); renderSkuSuggestion();">
+      <select class="field-select" id="promoteScope" onchange="onScopeChange(); renderSkuSuggestion(); updatePromoteGate();">
         <option value="">—</option>
         <option>General</option>
         <option>Customer Reserved</option>
@@ -329,10 +330,11 @@
   </div>
   <div class="field-row">
     <span class="field-label">SKU base</span>
-    <input class="field-input" id="promoteSku" oninput="renderSkuSuggestion()">
+    <input class="field-input" id="promoteSku" oninput="renderSkuSuggestion(); updatePromoteGate();">
   </div>
   <div id="skuSuggestionWrap"></div>
-  <button class="btn btn-teal" style="margin-top:10px" onclick="promoteToRecipe()">🏷️ Create sellable Recipe from this batch</button>
+  <button class="btn btn-teal" id="promoteBtn" style="margin-top:10px" onclick="promoteToRecipe()" disabled>🏷️ Create sellable Recipe from this batch</button>
+  <div id="promoteGateMsg" style="font-size:11px;color:#8B7D72;margin-top:6px;"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -366,6 +368,7 @@ let allDyes = [];
 let allSkus = [];
 let selectedDye = null;
 let lastComputed = null;
+let hasLoggedThisBatch = false;
 
 async function loadDyes() {
   try {
@@ -425,6 +428,8 @@ function pickDye(dyeId) {
   if (dye.stdWater) document.getElementById('stockVol').value = dye.stdWater;
 
   renderSelectedDyeBanner();
+  hasLoggedThisBatch = false;
+  updatePromoteGate();
   recalc();
 }
 
@@ -639,9 +644,31 @@ async function saveToKettleRecipes() {
       ['AddRecord', 'Kettle_Dye_Recipes', null, fields]
     ]);
     showToast('Saved to Kettle Dye Recipes ✓');
+    hasLoggedThisBatch = true;
+    updatePromoteGate();
   } catch (e) {
     console.error('Failed to save:', e);
     showToast('Save failed — check the Kettle_Dye_Recipes table');
+  }
+}
+
+function updatePromoteGate() {
+  const btn = document.getElementById('promoteBtn');
+  const msg = document.getElementById('promoteGateMsg');
+
+  const missing = [];
+  if (!hasLoggedThisBatch) missing.push('log this test first');
+  if (!s('logNames').trim()) missing.push('colorway name');
+  if (!s('promoteFiber')) missing.push('fiber type');
+  if (!s('promoteScope')) missing.push('recipe scope');
+  if (!s('promoteSku').trim()) missing.push('SKU base');
+
+  if (missing.length) {
+    btn.disabled = true;
+    msg.textContent = `Still needed: ${missing.join(', ')}`;
+  } else {
+    btn.disabled = false;
+    msg.textContent = '';
   }
 }
 
@@ -719,6 +746,7 @@ function renderSkuSuggestion() {
 async function promoteToRecipe() {
   if (!lastComputed) recalc();
   if (!selectedDye) { showToast('Pick a dye first'); return; }
+  if (!hasLoggedThisBatch) { showToast('Log this test to Kettle Dye Recipes first'); return; }
 
   const name = s('logNames');
   const fiber = s('promoteFiber');
@@ -776,6 +804,7 @@ grist.ready({
 async function init() {
   await Promise.all([loadDyes(), loadDefaults(), loadVendors(), loadAllSkus()]);
   recalc();
+  updatePromoteGate();
 }
 init();
 </script>
