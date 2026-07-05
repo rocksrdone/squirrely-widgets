@@ -206,7 +206,7 @@
       </div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
         <span class="field-label">Reserved For</span>
-        <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion();">
+        <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor();">
           <option value="">— pick vendor —</option>
         </select>
       </div>
@@ -379,6 +379,7 @@ async function loadVendorsList() {
     if (!nameCol || !codeCol) return;
     const ids = customersTable.id || [];
     allVendors = ids.map((id, i) => ({
+      id,
       name: columnAsArray(customersTable, nameCol)[i],
       code: columnAsArray(customersTable, codeCol)[i],
     })).filter(v => v.name && v.code);
@@ -695,6 +696,16 @@ function updatePhotoThumbs() {
       thumb.innerHTML = `<span>No photo</span>`;
     }
   });
+}
+
+function syncLinkedCustomerFromVendor() {
+  const vendorCode = document.getElementById('reservedFor').value;
+  if (!vendorCode) return;
+  const vendor = allVendors.find(v => v.code === vendorCode);
+  if (vendor) {
+    document.getElementById('linkedCustomer').value = vendor.id;
+    markUnsaved();
+  }
 }
 
 function updateFinalizeGate() {
