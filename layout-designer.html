@@ -451,6 +451,13 @@ function renderStepPhotos(photoItems) {
       `).join('')}
     </div>
   `;
+
+  const svg = document.getElementById('ringSvg');
+  const row = wrap.querySelector('.step-photos-row');
+  if (svg && row) {
+    row.style.width = svg.getBoundingClientRect().width + 'px';
+    row.style.maxWidth = 'none';
+  }
 }
 
 function renderSummary() {
