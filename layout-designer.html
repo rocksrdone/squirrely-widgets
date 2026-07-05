@@ -94,6 +94,14 @@
   }
   .summary-empty { font-size: 11px; color: #8B7D72; font-style: italic; }
 
+  .summary-photos { display: flex; gap: 6px; margin-bottom: 10px; }
+  .summary-photo { flex: 1; text-align: center; }
+  .summary-photo img {
+    width: 100%; height: 60px; object-fit: cover; border-radius: 6px;
+    border: 1px solid var(--rule); background: var(--warm); display: block; cursor: pointer;
+  }
+  .summary-photo-label { font-size: 9px; color: #8B7D72; margin-top: 3px; text-transform: uppercase; letter-spacing: .03em; }
+
   .dye-input-wrap { position: relative; }
   .dye-suggestions {
     position: absolute; z-index: 40; background: white; border: 1px solid var(--rule); border-top: none;
@@ -453,6 +461,22 @@ function renderSummary() {
     r.Recipe_Scope ? `<span class="summary-tag">${r.Recipe_Scope}</span>` : '',
   ].filter(Boolean).join('');
 
+  const photoItems = [];
+  if (r.Photo_Process_1) photoItems.push({ url: r.Photo_Process_1, label: 'Step 1' });
+  if (r.Photo_Process_2) photoItems.push({ url: r.Photo_Process_2, label: 'Step 2' });
+  if (r.Photo_Finished) photoItems.push({ url: r.Photo_Finished, label: 'Finished' });
+
+  const photosHTML = photoItems.length ? `
+    <div class="summary-photos">
+      ${photoItems.map(p => `
+        <div class="summary-photo">
+          <img src="${p.url}" alt="${p.label}" onclick="window.open('${p.url}', '_blank')" onerror="this.parentElement.style.display='none'">
+          <div class="summary-photo-label">${p.label}</div>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
   const dyePills = currentDyeComponents.length
     ? currentDyeComponents.map(c => `
         <span class="summary-dye-pill">
@@ -470,6 +494,7 @@ function renderSummary() {
 
   wrap.innerHTML = `
     ${tags ? `<div class="summary-tags">${tags}</div>` : ''}
+    ${photosHTML}
     <div class="summary-dyes">${dyePills}</div>
     ${notesText ? `<div class="summary-notes">${notesText}</div>` : ''}
     ${stepNotes ? `<div class="summary-notes" style="margin-top:6px;">${stepNotes}</div>` : ''}
