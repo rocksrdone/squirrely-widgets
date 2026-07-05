@@ -84,7 +84,14 @@
   .stage-track { height: 5px; background: var(--warm); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
   .stage-fill { height: 100%; background: var(--done-border); border-radius: 3px; }
   .stage-nums { display: flex; align-items: center; justify-content: space-between; }
-  .stage-count { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+  .stage-count-wrap { display: flex; align-items: baseline; gap: 2px; }
+  .stage-input {
+    width: 32px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--rule); border-radius: 4px; padding: 2px 3px; text-align: center;
+    background: white; color: var(--ink); outline: none;
+  }
+  .stage-input:focus { border-color: var(--accent); }
+  .stage-cap { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
   .stage-btns { display: flex; gap: 3px; }
   .stage-btn {
     width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--rule); background: white;
@@ -287,9 +294,13 @@ function renderList() {
         <div class="stage-label">${label}</div>
         <div class="stage-track"><div class="stage-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
         <div class="stage-nums">
-          <span class="stage-count">${current}/${cap}</span>
+          <div class="stage-count-wrap">
+            <input class="stage-input" type="number" min="0" max="${cap}" value="${current}"
+              onchange="setStage(${item.lineId}, '${field}', this.value, ${cap})">
+            <span class="stage-cap">/${cap}</span>
+          </div>
           <div class="stage-btns">
-            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>−</button>
+            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>-</button>
             <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', 1)" ${current >= cap ? 'disabled' : ''}>+</button>
           </div>
         </div>
@@ -317,6 +328,33 @@ function renderList() {
       </div>
     `;
   }).join('');
+}
+
+async function setStage(lineId, field, rawValue, cap) {
+  const item = workItems.find(i => i.lineId === lineId);
+  if (!item) return;
+
+  const fieldMap = { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' };
+  const key = fieldMap[field];
+  const oldVal = item[key];
+  const newVal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
+
+  if (newVal === oldVal) { renderList(); return; }
+
+  item[key] = newVal;
+  renderList();
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [field]: newVal }]
+    ]);
+    showToast(`${field.replace('Qty_', '')} set to ${newVal}`);
+  } catch (e) {
+    console.error('Failed to update:', e);
+    showToast('Update failed — check widget access level');
+    item[key] = oldVal;
+    renderList();
+  }
 }
 
 async function adjustStage(lineId, field, delta) {
