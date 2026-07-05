@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time Clock</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 20px;
+  }
+
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .header-sub { font-size: 12px; color: #8B7D72; margin-bottom: 20px; }
+
+  .worker-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .worker-btn {
+    padding: 20px 12px; border-radius: 12px; border: 2px solid var(--rule); background: white;
+    cursor: pointer; text-align: center; transition: border-color .15s ease, transform .1s ease;
+  }
+  .worker-btn:hover { border-color: var(--accent); transform: scale(1.02); }
+  .worker-btn .w-name { font-family: 'Libre Baskerville', serif; font-size: 16px; font-weight: 700; }
+  .worker-btn .w-status { font-size: 11px; color: #8B7D72; margin-top: 4px; }
+  .worker-btn.clocked-in { background: var(--done-bg); border-color: var(--done-border); }
+  .worker-btn.clocked-in .w-status { color: var(--done-text); font-weight: 600; }
+
+  .active-view { max-width: 460px; margin: 0 auto; }
+  .back-btn {
+    font-size: 12px; color: var(--teal); cursor: pointer; margin-bottom: 16px; display: inline-block;
+  }
+  .back-btn:hover { text-decoration: underline; }
+
+  .worker-card {
+    background: white; border: 1px solid var(--rule); border-radius: 14px; padding: 24px; text-align: center;
+  }
+  .active-name { font-family: 'Libre Baskerville', serif; font-size: 26px; font-weight: 700; margin-bottom: 6px; }
+  .active-status {
+    font-size: 13px; padding: 6px 14px; border-radius: 20px; display: inline-block; margin-bottom: 20px;
+  }
+  .active-status.in { background: var(--done-bg); color: var(--done-text); border: 1px solid var(--done-border); }
+  .active-status.out { background: var(--warm); color: #6B5E52; border: 1px solid var(--rule); }
+
+  .clock-btn {
+    width: 100%; padding: 22px; border-radius: 14px; border: none; cursor: pointer;
+    font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; color: white;
+    margin-bottom: 20px;
+  }
+  .clock-btn.in { background: var(--done-border); }
+  .clock-btn.out { background: var(--accent); }
+  .clock-btn:disabled { opacity: .5; cursor: default; }
+
+  .today-summary {
+    display: flex; justify-content: space-around; padding: 14px; background: var(--paper);
+    border-radius: 10px; margin-bottom: 20px;
+  }
+  .summary-stat .stat-num { font-family: 'DM Mono', monospace; font-size: 20px; font-weight: 500; }
+  .summary-stat .stat-label { font-size: 10px; color: #8B7D72; text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+
+  .recent-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #8B7D72; margin-bottom: 8px; text-align: left; }
+  .recent-row {
+    display: flex; justify-content: space-between; font-size: 12px; padding: 8px 0;
+    border-bottom: 1px solid var(--warm); text-align: left;
+  }
+  .recent-row:last-child { border-bottom: none; }
+  .recent-date { color: #6B5E52; }
+  .recent-times { font-family: 'DM Mono', monospace; color: var(--ink); }
+  .recent-open { color: var(--done-border); font-weight: 600; }
+
+  .no-data { color: #8B7D72; font-style: italic; font-size: 12px; padding: 10px 0; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="pickerView">
+  <div class="header-title">Time Clock</div>
+  <div class="header-sub" id="headerSub">Loading...</div>
+  <div class="worker-picker" id="workerPicker"></div>
+</div>
+
+<div id="activeView" class="active-view" style="display:none">
+  <div class="back-btn" onclick="showPicker()">← All workers</div>
+  <div class="worker-card">
+    <div class="active-name" id="activeName"></div>
+    <div id="activeStatus"></div>
+    <button class="clock-btn" id="clockBtn"></button>
+    <div class="today-summary">
+      <div class="summary-stat">
+        <div class="stat-num" id="todayHours">0.0</div>
+        <div class="stat-label">Hours today</div>
+      </div>
+      <div class="summary-stat">
+        <div class="stat-num" id="weekHours">0.0</div>
+        <div class="stat-label">Hours this week</div>
+      </div>
+    </div>
+    <div class="recent-title">Recent punches</div>
+    <div id="recentLog"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function startOfDay(epochSec) {
+  const d = new Date(epochSec * 1000);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+function startOfWeek(epochSec) {
+  const d = new Date(epochSec * 1000);
+  const day = d.getDay(); // 0 = Sunday
+  d.setDate(d.getDate() - day);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+let workers = [];       // {id, name}
+let allPunches = [];    // {id, workerId, clockIn, clockOut}
+let currentWorker = null;
+let nowTimer = null;
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+  try {
+    const [workersTable, clockTable] = await Promise.all([
+      grist.docApi.fetchTable('Workers'),
+      grist.docApi.fetchTable('Time_Clock'),
+    ]);
+
+    const nameCol = findColumn(workersTable, ['Name', 'Worker_Name']) || 'Name';
+    const wIds = workersTable.id || [];
+    workers = wIds.map((id, i) => ({
+      id,
+      name: columnAsArray(workersTable, nameCol)[i],
+    })).filter(w => w.name);
+
+    const cIds = clockTable.id || [];
+    allPunches = cIds.map((id, i) => ({
+      id,
+      workerId: getRefId(columnAsArray(clockTable, 'Worker')[i]),
+      clockIn: Number(columnAsArray(clockTable, 'Clock_In')[i]) || null,
+      clockOut: columnAsArray(clockTable, 'Clock_Out')[i] ? Number(columnAsArray(clockTable, 'Clock_Out')[i]) : null,
+    }));
+
+    document.getElementById('headerSub').textContent = `${workers.length} worker${workers.length === 1 ? '' : 's'} — tap your name to clock in or out`;
+    renderPicker();
+  } catch (e) {
+    console.error('Failed to load:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check Workers/Time_Clock tables exist';
+  }
+}
+
+function openPunchFor(workerId) {
+  return allPunches.find(p => p.workerId === workerId && p.clockIn && !p.clockOut) || null;
+}
+
+function renderPicker() {
+  const wrap = document.getElementById('workerPicker');
+  wrap.innerHTML = workers.map(w => {
+    const open = openPunchFor(w.id);
+    return `
+      <div class="worker-btn ${open ? 'clocked-in' : ''}" onclick="selectWorker(${w.id})">
+        <div class="w-name">${w.name}</div>
+        <div class="w-status">${open ? '● Clocked in' : 'Clocked out'}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectWorker(workerId) {
+  currentWorker = workers.find(w => w.id === workerId);
+  if (!currentWorker) return;
+  document.getElementById('pickerView').style.display = 'none';
+  document.getElementById('activeView').style.display = 'block';
+  renderActive();
+  if (nowTimer) clearInterval(nowTimer);
+  nowTimer = setInterval(renderActive, 30000);
+}
+
+function showPicker() {
+  document.getElementById('pickerView').style.display = 'block';
+  document.getElementById('activeView').style.display = 'none';
+  currentWorker = null;
+  if (nowTimer) { clearInterval(nowTimer); nowTimer = null; }
+  renderPicker();
+}
+
+function renderActive() {
+  if (!currentWorker) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const open = openPunchFor(currentWorker.id);
+
+  document.getElementById('activeName').textContent = currentWorker.name;
+  document.getElementById('activeStatus').innerHTML = open
+    ? `<div class="active-status in">● Clocked in since ${new Date(open.clockIn * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</div>`
+    : `<div class="active-status out">Clocked out</div>`;
+
+  const btn = document.getElementById('clockBtn');
+  btn.textContent = open ? 'Clock Out' : 'Clock In';
+  btn.className = 'clock-btn ' + (open ? 'out' : 'in');
+  btn.onclick = () => toggleClock(open);
+
+  const myPunches = allPunches.filter(p => p.workerId === currentWorker.id);
+  const todayStart = startOfDay(nowSec);
+  const weekStart = startOfWeek(nowSec);
+
+  const durationOf = (p) => {
+    const end = p.clockOut ?? nowSec;
+    return Math.max(0, end - p.clockIn);
+  };
+
+  const todaySeconds = myPunches
+    .filter(p => p.clockIn >= todayStart)
+    .reduce((sum, p) => sum + durationOf(p), 0);
+  const weekSeconds = myPunches
+    .filter(p => p.clockIn >= weekStart)
+    .reduce((sum, p) => sum + durationOf(p), 0);
+
+  document.getElementById('todayHours').textContent = (todaySeconds / 3600).toFixed(1);
+  document.getElementById('weekHours').textContent = (weekSeconds / 3600).toFixed(1);
+
+  const recent = [...myPunches].sort((a, b) => b.clockIn - a.clockIn).slice(0, 8);
+  const logWrap = document.getElementById('recentLog');
+  logWrap.innerHTML = recent.length ? recent.map(p => {
+    const dateLabel = new Date(p.clockIn * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const inLabel = new Date(p.clockIn * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const outLabel = p.clockOut ? new Date(p.clockOut * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+    return `
+      <div class="recent-row">
+        <span class="recent-date">${dateLabel}</span>
+        <span class="recent-times">${inLabel} – ${outLabel || ''}</span>
+        ${outLabel ? '' : '<span class="recent-open">open</span>'}
+      </div>
+    `;
+  }).join('') : `<div class="no-data">No punches yet.</div>`;
+}
+
+async function toggleClock(openPunch) {
+  if (!currentWorker) return;
+  const btn = document.getElementById('clockBtn');
+  btn.disabled = true;
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  try {
+    if (openPunch) {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Time_Clock', openPunch.id, { Clock_Out: nowSec }]
+      ]);
+      openPunch.clockOut = nowSec;
+      showToast(`${currentWorker.name} clocked out`);
+    } else {
+      const result = await grist.docApi.applyUserActions([
+        ['AddRecord', 'Time_Clock', null, { Worker: currentWorker.id, Clock_In: nowSec }]
+      ]);
+      const newId = result && result.retValues && result.retValues[0];
+      allPunches.push({ id: newId, workerId: currentWorker.id, clockIn: nowSec, clockOut: null });
+      showToast(`${currentWorker.name} clocked in`);
+    }
+  } catch (e) {
+    console.error('Failed to update time clock:', e);
+    showToast('Update failed — check widget access level and Time_Clock columns');
+  } finally {
+    btn.disabled = false;
+    renderActive();
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
