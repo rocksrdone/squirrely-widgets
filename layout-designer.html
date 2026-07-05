@@ -257,6 +257,19 @@ const CX = 200, CY = 200;
 const BASE_R_OUT = 160, BASE_R_IN = 100;
 const OVERLAY_R_OUT = 185, OVERLAY_R_IN = 165;
 
+function getMidPct(startPct, endPct) {
+  let end = endPct;
+  if (end <= startPct) end += 100;
+  return ((startPct + end) / 2) % 100;
+}
+
+function abbreviateLabel(name, widthDeg) {
+  if (!name) return '';
+  const maxChars = widthDeg < 18 ? 3 : widthDeg < 32 ? 6 : widthDeg < 55 ? 10 : 16;
+  if (name.length <= maxChars) return name;
+  return name.slice(0, Math.max(1, maxChars - 1)) + '…';
+}
+
 function polarToCartesian(r, angleDeg) {
   const rad = angleDeg * Math.PI / 180;
   return { x: CX + r * Math.sin(rad), y: CY - r * Math.cos(rad) };
@@ -393,6 +406,29 @@ function renderRing() {
     const dash = isPowder ? 'stroke-dasharray="3,2"' : '';
     const opacity = isPowder ? 0.55 : 1;
     html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" fill-opacity="${opacity}" ${dash} stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+  });
+
+  // Labels on each base segment
+  baseSegments.forEach(seg => {
+    const midPct = getMidPct(seg.startPct, seg.endPct);
+    let widthPct = seg.endPct - seg.startPct;
+    if (widthPct <= 0) widthPct += 100;
+    const widthDeg = (widthPct / 100) * 360;
+    const label = abbreviateLabel(seg.dyeName, widthDeg);
+    if (label) {
+      const pt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (midPct / 100) * 360);
+      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${label}</text>`;
+    }
+  });
+
+  // Labels near each overlay dab
+  overlayMarks.forEach(mark => {
+    const midPct = getMidPct(mark.startPct, mark.endPct);
+    const label = abbreviateLabel(mark.dyeName, 22);
+    if (label) {
+      const pt = polarToCartesian(OVERLAY_R_OUT + 9, (midPct / 100) * 360);
+      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="Inter, sans-serif" font-weight="600" fill="#6B5E52" style="pointer-events:none">${label}</text>`;
+    }
   });
 
   // Draggable handle at the center of each overlay dab
