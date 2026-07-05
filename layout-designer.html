@@ -379,7 +379,7 @@ async function loadLayout(record) {
 
 function renderRing() {
   const svg = document.getElementById('ringSvg');
-  let html = '';
+  let html = '<defs><pattern id="blendHatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="rgba(255,255,255,0.6)" stroke-width="2.5"></line></pattern></defs>';
 
   baseSegments.forEach((seg, idx) => {
     const path = describeAnnulusSector(BASE_R_OUT, BASE_R_IN, seg.startPct, seg.endPct);
@@ -397,6 +397,9 @@ function renderRing() {
     const strokeW = seg.clientKey === selectedSegmentKey ? 3 : 1;
     const strokeColor = seg.clientKey === selectedSegmentKey ? '#1A1614' : 'white';
     html += `<path d="${path}" fill="${fill}" stroke="${strokeColor}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectSegment(${seg.clientKey})"></path>`;
+    if (seg.type === 'Blend') {
+      html += `<path d="${path}" fill="url(#blendHatch)" style="pointer-events:none"></path>`;
+    }
   });
 
   overlayMarks.forEach(mark => {
@@ -414,7 +417,9 @@ function renderRing() {
     let widthPct = seg.endPct - seg.startPct;
     if (widthPct <= 0) widthPct += 100;
     const widthDeg = (widthPct / 100) * 360;
-    const label = abbreviateLabel(seg.dyeName, widthDeg);
+    const label = seg.type === 'Blend'
+      ? (widthDeg < 22 ? '⇄' : `⇄ ${Math.round(seg.blendRatio ?? 50)}%`)
+      : abbreviateLabel(seg.dyeName, widthDeg);
     if (label) {
       const pt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (midPct / 100) * 360);
       html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${label}</text>`;
