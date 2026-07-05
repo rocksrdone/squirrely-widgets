@@ -442,7 +442,7 @@ function onDrag(evt) {
   let unwrappedPct = pct;
   while (unwrappedPct < lowerAnchor) unwrappedPct += 100;
   let unwrappedUpper = upperAnchor;
-  while (unwrappedUpper < lowerAnchor) unwrappedUpper += 100;
+  while (unwrappedUpper <= lowerAnchor) unwrappedUpper += 100;
 
   const minGap = 1;
   const clamped = Math.max(lowerAnchor + minGap, Math.min(unwrappedUpper - minGap, unwrappedPct));
