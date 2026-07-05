@@ -96,6 +96,10 @@
     border-radius: 12px; background: var(--paper); border: 1px solid var(--rule);
   }
   .summary-dye-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .summary-dye-brand {
+    font-family: 'DM Mono', monospace; font-size: 9px; background: var(--warm); color: #6B5E52;
+    border-radius: 2px; padding: 0px 3px; margin-left: 2px;
+  }
   .summary-notes {
     font-size: 11px; color: #6B5E52; background: var(--gold-light); border: 1px solid #D4B07A;
     border-radius: 6px; padding: 8px 10px; line-height: 1.5;
@@ -406,6 +410,7 @@ async function loadLayout(record) {
       const get = (col) => Array.isArray(compTable[col]) ? compTable[col][i] : undefined;
       comps.push({
         dyeName: get('Dye_Name') || '',
+        dyeFull: get('Dye_Full') || '',
         stepNumber: get('Step_Number') || 0,
         applicationNotes: get('Application_Notes') || '',
         technique: get('Technique') || '',
@@ -495,12 +500,16 @@ function renderSummary() {
   renderStepPhotos(photoItems);
 
   const dyePills = currentDyeComponents.length
-    ? currentDyeComponents.map(c => `
+    ? currentDyeComponents.map(c => {
+        const brandMatch = (c.dyeFull || '').match(/\(([A-Za-z]+)\)/);
+        return `
         <span class="summary-dye-pill">
           <span class="summary-dye-swatch" style="background:${guessColor(c.dyeName)}"></span>
           ${c.dyeName || 'Unnamed'}
+          ${brandMatch ? `<span class="summary-dye-brand">${brandMatch[1]}</span>` : ''}
         </span>
-      `).join('')
+      `;
+      }).join('')
     : `<div class="summary-empty">No dye components on file for this recipe yet.</div>`;
 
   const notesText = r.Notes || '';

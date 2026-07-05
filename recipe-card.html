@@ -807,12 +807,6 @@ function renderLeft() {
     </tr>`;
   }).join('');
 
-  const colors = comps.map(c => guessColor(c.Dye_Name || ''));
-  const bars = colors.map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
-  const barsRev = [...colors].reverse().map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
-
-  const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
-
   const previewPickerHTML = previewPickerOpen ? `
     <div class="preview-picker-dropdown">
       ${currentProductPhotos.length ? currentProductPhotos.map(p => `
@@ -826,6 +820,24 @@ function renderLeft() {
       `).join('') : `<div class="preview-picker-empty">No product photos filed for this recipe yet</div>`}
     </div>
   ` : '';
+
+  const stepComps = [...currentComponents]
+    .filter(c => c.Application_Notes || c.Step_Number)
+    .sort((a,b) => (a.Step_Order || a.Step_Number || 99) - (b.Step_Order || b.Step_Number || 99));
+
+  const stepsHTML = stepComps.map((c, i) => {
+    const col = guessColor(c.Dye_Name || '');
+    return `
+      <div class="step-item" onclick="toggleStep(this)">
+        <div class="step-num">${i+1}</div>
+        <div class="step-content">
+          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}</div>` : ''}
+          <div class="step-text">${c.Application_Notes || ''}</div>
+          ${c.Position ? `<div class="step-pos">📍 ${c.Position}</div>` : ''}
+          ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
 
   document.getElementById('leftPanel').innerHTML = `
     <div class="recipe-header-row">
@@ -870,6 +882,34 @@ function renderLeft() {
       <tbody>${dyeRows || '<tr><td colspan="5" class="no-data">No dye components — add in Recipe Dye Components table</td></tr>'}</tbody>
     </table>
 
+    <div class="slabel" style="margin-top:20px;">Application steps</div>
+    <div class="steps-list" id="stepsList">
+      ${stepsHTML || '<div class="no-data">No steps yet — add Application_Notes to dye components in Grist</div>'}
+    </div>
+    ${stepComps.length ? `
+    <div class="progress-row">
+      <span class="prog-label" id="progLabel">0 of ${stepComps.length} done</span>
+      <div class="prog-track"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+      <button class="reset-btn" onclick="resetSteps()">Reset</button>
+    </div>` : ''}
+
+    ${r.Notes ? `
+    <div class="notes-box">
+      <div class="notes-title">Recipe notes</div>
+      ${r.Notes}
+    </div>` : ''}
+  `;
+}
+
+function renderRight() {
+  const r = currentRecipe;
+  const comps = [...currentComponents].sort((a,b) => (a.Step_Number||99) - (b.Step_Number||99));
+  const colors = comps.map(c => guessColor(c.Dye_Name || ''));
+  const bars = colors.map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
+  const barsRev = [...colors].reverse().map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
+  const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
+
+  document.getElementById('rightPanel').innerHTML = `
     ${currentBaseSegments.length ? `
     <div class="slabel">Color layout</div>
     <div class="layout-ring-wrap">${buildLayoutRingSvg(currentBaseSegments, currentOverlayMarks)}</div>
@@ -889,48 +929,9 @@ function renderLeft() {
     </div>` : ''}
 
     ${hasPhotos ? `<div class="slabel">Reference photos</div><div id="photoViewerWrap"></div>` : ''}
-
-    ${r.Notes ? `
-    <div class="notes-box">
-      <div class="notes-title">Recipe notes</div>
-      ${r.Notes}
-    </div>` : ''}
   `;
 
   renderPhotoViewer();
-}
-
-function renderRight() {
-  const comps = [...currentComponents]
-    .filter(c => c.Application_Notes || c.Step_Number)
-    .sort((a,b) => (a.Step_Order || a.Step_Number || 99) - (b.Step_Order || b.Step_Number || 99));
-
-  const steps = comps.map((c, i) => {
-    const col = guessColor(c.Dye_Name || '');
-    return `
-      <div class="step-item" onclick="toggleStep(this)">
-        <div class="step-num">${i+1}</div>
-        <div class="step-content">
-          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}</div>` : ''}
-          <div class="step-text">${c.Application_Notes || ''}</div>
-          ${c.Position ? `<div class="step-pos">📍 ${c.Position}</div>` : ''}
-          ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
-        </div>
-      </div>`;
-  }).join('');
-
-  document.getElementById('rightPanel').innerHTML = `
-    <div class="recipe-name" style="font-size:16px;margin-bottom:14px">Application steps</div>
-    <div class="steps-list" id="stepsList">
-      ${steps || '<div class="no-data">No steps yet — add Application_Notes to dye components in Grist</div>'}
-    </div>
-    ${comps.length ? `
-    <div class="progress-row">
-      <span class="prog-label" id="progLabel">0 of ${comps.length} done</span>
-      <div class="prog-track"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
-      <button class="reset-btn" onclick="resetSteps()">Reset</button>
-    </div>` : ''}
-  `;
 }
 
 function toggleStep(el) {
