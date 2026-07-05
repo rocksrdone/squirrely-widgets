@@ -78,7 +78,7 @@
   .priority-badge.normal { background: var(--warm); color: #6B5E52; }
   .priority-badge.low { background: var(--warm); color: #8B7D72; }
 
-  .stages-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .stages-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
   .stage-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 4px 6px; }
   .stage-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; margin-bottom: 2px; }
   .stage-track { height: 3px; background: var(--warm); border-radius: 2px; overflow: hidden; margin-bottom: 3px; }
@@ -104,6 +104,20 @@
     display: flex; justify-content: space-between; font-size: 11px; color: #6B5E52;
     padding: 2px 0;
   }
+
+  .order-row-block { padding: 4px 0; border-bottom: 1px solid var(--warm); }
+  .order-row-block:last-child { border-bottom: none; }
+  .line-pack-row { display: flex; align-items: center; gap: 5px; margin-top: 3px; }
+  .line-pack-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; flex-shrink: 0; width: 26px; }
+  .line-pack-track { flex: 1; height: 3px; background: var(--warm); border-radius: 2px; overflow: hidden; }
+  .line-pack-fill { height: 100%; background: var(--done-border); border-radius: 2px; }
+  .line-pack-input {
+    width: 28px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
+    border: 1px solid var(--rule); border-radius: 3px; padding: 1px 2px; text-align: center;
+    background: white; color: var(--ink); outline: none; flex-shrink: 0;
+  }
+  .line-pack-input:focus { border-color: var(--accent); }
+  .line-pack-cap { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; flex-shrink: 0; white-space: nowrap; }
 
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -354,7 +368,22 @@ function renderList() {
 
     const ordersRows = batch.lines.map(l => {
       const lDue = l.dueDate ? new Date(Number(l.dueDate) * 1000).toLocaleDateString() : '—';
-      return `<div class="order-row"><span>#${l.orderNumber || '—'} · ${l.customerName || '—'}</span><span>${l.qtyNeeded} needed · due ${lDue}</span></div>`;
+      const packPct = l.qtyWound > 0 ? Math.min(100, (l.qtyPacked / l.qtyWound) * 100) : 0;
+      return `
+        <div class="order-row-block">
+          <div class="order-row">
+            <span>#${l.orderNumber || '—'} · ${l.customerName || '—'}</span>
+            <span>${l.qtyNeeded} needed · due ${lDue}</span>
+          </div>
+          <div class="line-pack-row">
+            <span class="line-pack-label">Pack</span>
+            <div class="line-pack-track"><div class="line-pack-fill" style="width:${packPct}%"></div></div>
+            <input class="line-pack-input" type="number" min="0" max="${l.qtyWound}" value="${l.qtyPacked}"
+              onchange="setLinePack(${l.lineId}, this.value, ${l.qtyWound})">
+            <span class="line-pack-cap">/${l.qtyWound} wound</span>
+          </div>
+        </div>
+      `;
     }).join('');
 
     return `
@@ -372,9 +401,8 @@ function renderList() {
         <div class="stages-row">
           ${stage('Dye', batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}
           ${stage('Wind', batch.totalWound, batch.totalDyed, 'Qty_Wound')}
-          ${stage('Pack', batch.totalPacked, batch.totalWound, 'Qty_Packed')}
         </div>
-        <div class="orders-toggle" onclick="this.nextElementSibling.classList.toggle('open')">▾ Orders needing this (${orderCount})</div>
+        <div class="orders-toggle" onclick="this.nextElementSibling.classList.toggle('open')">▾ Orders needing this (${orderCount}) — ${batch.totalPacked}/${batch.totalNeeded} packed overall</div>
         <div class="orders-list">${ordersRows}</div>
       </div>
     `;
@@ -449,6 +477,33 @@ async function adjustBatchStage(batchIdx, field, delta) {
     showToast('Update failed — check widget access level');
     distributeDelta(batch, field, -delta);
     recomputeBatchTotals(batch);
+    renderList();
+  }
+}
+
+async function setLinePack(lineId, rawValue, cap) {
+  const line = allLines.find(l => l.lineId === lineId);
+  if (!line) return;
+
+  const oldVal = line.qtyPacked;
+  const newVal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
+  if (newVal === oldVal) { renderList(); return; }
+
+  line.qtyPacked = newVal;
+  const batch = batches.find(b => b.lines.includes(line));
+  if (batch) recomputeBatchTotals(batch);
+  renderList();
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Packed: newVal }]
+    ]);
+    showToast(`Packed set to ${newVal} for order #${line.orderNumber || ''}`);
+  } catch (e) {
+    console.error('Failed to update:', e);
+    showToast('Update failed — check widget access level');
+    line.qtyPacked = oldVal;
+    if (batch) recomputeBatchTotals(batch);
     renderList();
   }
 }
