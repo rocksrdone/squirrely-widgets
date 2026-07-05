@@ -99,6 +99,11 @@
   .sku-warning {
     margin-top: 4px; font-size: 11px; color: var(--accent); font-weight: 600;
   }
+  .linked-order-banner {
+    display: flex; justify-content: space-between; align-items: center; margin-top: 6px;
+    background: var(--teal-light); border: 1px solid #9ACFC7; border-radius: 6px; padding: 7px 10px; font-size: 12px;
+  }
+  .linked-order-unlink { font-size: 11px; color: var(--accent); cursor: pointer; font-weight: 600; }
 
   .dye-row {
     border: 1px solid var(--rule); border-radius: 8px; padding: 10px; margin-bottom: 8px;
@@ -225,6 +230,14 @@
         <select class="field-select" id="linkedCustomer" onchange="markUnsaved()">
           <option value="">— none —</option>
         </select>
+      </div>
+      <div class="field-wrap wide" style="position:relative;">
+        <span class="field-label">Linked Invoice Item (optional — for one-off customs)</span>
+        <input class="field-input" id="orderLineSearch" placeholder="Search by order #, customer, or item description..."
+          oninput="onOrderLineSearchInput(this.value)" onfocus="onOrderLineSearchInput(this.value)"
+          onblur="setTimeout(() => { document.getElementById('orderLineSuggestions').style.display='none'; }, 150)">
+        <div class="dye-suggestions" id="orderLineSuggestions" style="display:none"></div>
+        <div id="linkedOrderLineBanner"></div>
       </div>
       <div class="field-wrap wide">
         <span class="field-label">Working / Scratch Notes</span>
@@ -400,6 +413,96 @@ async function loadVendorsList() {
   }
 }
 
+let allOrderLines = []; // {lineId, orderNumber, customerName, productName, sku, qtyNeeded, orderDate}
+let selectedOrderLine = null;
+
+async function loadOrderLinesList() {
+  try {
+    const [woTable, wolTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+        orderDate: columnAsArray(woTable, 'Order_Date')[i],
+      };
+    });
+
+    const lIds = wolTable.id || [];
+    allOrderLines = lIds.map((id, i) => {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId] || {};
+      return {
+        lineId: id,
+        orderNumber: info.orderNumber || '',
+        customerName: info.customerName || '',
+        orderDate: info.orderDate || '',
+        productName: columnAsArray(wolTable, 'Product_Name')[i] || '',
+        sku: columnAsArray(wolTable, 'SKU')[i] || '',
+        qtyNeeded: columnAsArray(wolTable, 'Qty_Needed')[i] || '',
+      };
+    });
+  } catch (e) {
+    console.error('Could not load order lines:', e);
+    allOrderLines = [];
+  }
+}
+
+function onOrderLineSearchInput(query) {
+  const box = document.getElementById('orderLineSuggestions');
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allOrderLines.filter(l =>
+    normalize(l.orderNumber).includes(q) ||
+    normalize(l.customerName).includes(q) ||
+    normalize(l.productName).includes(q) ||
+    normalize(l.sku).includes(q)
+  ).slice(0, 10);
+
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(l => `
+    <div class="dye-suggestion-row" onmousedown="event.preventDefault(); pickOrderLine(${l.lineId})">
+      <strong>#${l.orderNumber || '—'}</strong> · ${l.customerName || '—'} — ${l.productName || l.sku || 'untitled item'} (qty ${l.qtyNeeded || '?'})
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function pickOrderLine(lineId) {
+  const line = allOrderLines.find(l => l.lineId === lineId);
+  if (!line) return;
+  selectedOrderLine = line;
+  document.getElementById('orderLineSearch').value = '';
+  document.getElementById('orderLineSuggestions').style.display = 'none';
+  renderLinkedOrderBanner();
+  markUnsaved();
+}
+
+function unlinkOrderLine() {
+  selectedOrderLine = null;
+  renderLinkedOrderBanner();
+  markUnsaved();
+}
+
+function renderLinkedOrderBanner() {
+  const wrap = document.getElementById('linkedOrderLineBanner');
+  if (!selectedOrderLine) { wrap.innerHTML = ''; return; }
+  const l = selectedOrderLine;
+  wrap.innerHTML = `
+    <div class="linked-order-banner">
+      <span>#${l.orderNumber || '—'} · ${l.customerName || '—'} — ${l.productName || l.sku || 'untitled item'}</span>
+      <span class="linked-order-unlink" onclick="unlinkOrderLine()">Unlink</span>
+    </div>
+  `;
+}
+
 async function loadAllSkus() {
   try {
     const recipesTable = await grist.docApi.fetchTable('Recipes');
@@ -522,6 +625,10 @@ async function loadRecipe(record) {
 
   await loadVendorsList();
   await loadAllSkus();
+  await loadOrderLinesList();
+  const linkedOrderLineId = getRefId(record.Linked_Order_Line);
+  selectedOrderLine = linkedOrderLineId ? allOrderLines.find(l => l.lineId === linkedOrderLineId) || null : null;
+  renderLinkedOrderBanner();
   const linkedCustomerId = getRefId(record.Linked_Customer);
   document.getElementById('linkedCustomer').value = linkedCustomerId || '';
   onScopeChange();
@@ -780,6 +887,7 @@ async function saveRecipe() {
       Notes: document.getElementById('generalNotes').value,
       Draft_Notes: document.getElementById('draftNotes').value,
       Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,
+      Linked_Order_Line: selectedOrderLine ? selectedOrderLine.lineId : null,
       Layout_Description: document.getElementById('layoutDescription').value,
       Photo_Process_1: document.getElementById('photoP1').value,
       Photo_Process_2: document.getElementById('photoP2').value,
