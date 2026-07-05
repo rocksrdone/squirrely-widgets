@@ -469,8 +469,8 @@ function renderSegmentEditor() {
         </select>
       </div>
       <div class="field-row">
-        <span class="field-label">Span</span>
-        <span style="font-size:12px;color:#6B5E52;">${seg.startPct.toFixed(1)}% – ${seg.endPct.toFixed(1)}%</span>
+        <span class="field-label">Position</span>
+        <span style="font-size:12px;color:#6B5E52;">Starts at ${seg.startPct.toFixed(1)}% around the circle, spans ${(() => { let w = seg.endPct - seg.startPct; if (w <= 0) w += 100; return w.toFixed(1); })()}% of it</span>
       </div>
       <div style="display:flex; gap:6px;">
         <button class="btn" onclick="splitSegment(${seg.clientKey})" style="flex:1">+ Split</button>
@@ -532,7 +532,9 @@ function splitSegment(key) {
   const idx = baseSegments.findIndex(s => s.clientKey === key);
   if (idx === -1) return;
   const seg = baseSegments[idx];
-  const mid = (seg.startPct + seg.endPct) / 2;
+  let unwrappedEnd = seg.endPct;
+  if (unwrappedEnd <= seg.startPct) unwrappedEnd += 100; // handle wraparound segments correctly
+  const mid = ((seg.startPct + unwrappedEnd) / 2) % 100;
   const newSeg = { rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: mid, endPct: seg.endPct, type: 'Solid', notes: '' };
   seg.endPct = mid;
   baseSegments.splice(idx + 1, 0, newSeg);
