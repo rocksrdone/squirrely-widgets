@@ -18,6 +18,7 @@
     --teal: #3A8B7A;
     --teal-light: #E5F2EF;
     --gold: #B07D2A;
+    --gold-light: #F5EDD8;
     --done-bg: #EAF3DE;
     --done-border: #639922;
   }
@@ -75,6 +76,24 @@
 
   .no-selection { color: #8B7D72; font-style: italic; font-size: 12px; padding: 8px 0; }
 
+  .summary-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; }
+  .summary-tag {
+    font-size: 9px; padding: 2px 7px; border-radius: 3px; font-weight: 600;
+    letter-spacing: .03em; text-transform: uppercase;
+    background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7;
+  }
+  .summary-dyes { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+  .summary-dye-pill {
+    display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 8px;
+    border-radius: 12px; background: var(--paper); border: 1px solid var(--rule);
+  }
+  .summary-dye-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .summary-notes {
+    font-size: 11px; color: #6B5E52; background: var(--gold-light); border: 1px solid #D4B07A;
+    border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+  }
+  .summary-empty { font-size: 11px; color: #8B7D72; font-style: italic; }
+
   .dye-input-wrap { position: relative; }
   .dye-suggestions {
     position: absolute; z-index: 40; background: white; border: 1px solid var(--rule); border-top: none;
@@ -128,7 +147,13 @@
 
     <div>
       <div class="panel-section">
+        <div class="panel-title">Recipe summary</div>
+        <div id="recipeSummary"></div>
+      </div>
+
+      <div class="panel-section">
         <div class="panel-title">Quick start</div>
+        <button class="btn" onclick="fillFromRecipe()" style="width:100%;margin-bottom:8px;">Fill one section per dye in this recipe</button>
         <div class="repeat-row">
           <input class="field-input" type="number" id="sectionCount" value="4" min="1" max="24">
           <button class="btn" onclick="createEqualSections()">Start with this many equal sections</button>
@@ -315,6 +340,8 @@ function angleFromEvent(evt) {
 
 // ── STATE ──
 let currentRecipeId = null;
+let currentRecipeRecord = null;
+let currentDyeComponents = [];
 let allDyes = [];
 let baseSegments = [];    // {rowId, clientKey, dyeName, startPct, endPct, type}
 let overlayMarks = [];    // {rowId, clientKey, dyeName, startPct, endPct, notes}
@@ -337,6 +364,7 @@ function clearUnsaved() {
 
 async function loadLayout(record) {
   currentRecipeId = record.id;
+  currentRecipeRecord = record;
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('content').style.display = 'block';
   document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
@@ -348,6 +376,28 @@ async function loadLayout(record) {
   selectedOverlayKey = null;
 
   await loadDyesList();
+
+  try {
+    const compTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const cIds = compTable.id || [];
+    const cRefs = compTable.Recipe || [];
+    const comps = [];
+    for (let i = 0; i < cIds.length; i++) {
+      if (getRefId(cRefs[i]) !== currentRecipeId) continue;
+      const get = (col) => Array.isArray(compTable[col]) ? compTable[col][i] : undefined;
+      comps.push({
+        dyeName: get('Dye_Name') || '',
+        stepNumber: get('Step_Number') || 0,
+        applicationNotes: get('Application_Notes') || '',
+        technique: get('Technique') || '',
+      });
+    }
+    comps.sort((a, b) => (Number(a.stepNumber) || 99) - (Number(b.stepNumber) || 99));
+    currentDyeComponents = comps;
+  } catch (e) {
+    console.error('Failed to fetch dye components:', e);
+    currentDyeComponents = [];
+  }
 
   try {
     const table = await grist.docApi.fetchTable('Recipe_Layout_Segments');
@@ -377,13 +427,53 @@ async function loadLayout(record) {
   }
 
   if (!baseSegments.length) {
-    baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '' }];
+    const autoFilled = buildSegmentsFromDyeComponents();
+    if (autoFilled) {
+      baseSegments = autoFilled;
+      markUnsaved();
+    } else {
+      baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '' }];
+    }
   }
 
   renderRing();
   renderOverlayList();
   renderSegmentEditor();
+  renderSummary();
   clearUnsaved();
+}
+
+function renderSummary() {
+  const wrap = document.getElementById('recipeSummary');
+  const r = currentRecipeRecord || {};
+
+  const tags = [
+    r.Dye_Method ? `<span class="summary-tag">${r.Dye_Method}</span>` : '',
+    r.Fiber_Type ? `<span class="summary-tag">${r.Fiber_Type}</span>` : '',
+    r.Recipe_Scope ? `<span class="summary-tag">${r.Recipe_Scope}</span>` : '',
+  ].filter(Boolean).join('');
+
+  const dyePills = currentDyeComponents.length
+    ? currentDyeComponents.map(c => `
+        <span class="summary-dye-pill">
+          <span class="summary-dye-swatch" style="background:${guessColor(c.dyeName)}"></span>
+          ${c.dyeName || 'Unnamed'}
+        </span>
+      `).join('')
+    : `<div class="summary-empty">No dye components on file for this recipe yet.</div>`;
+
+  const notesText = r.Notes || '';
+  const stepNotes = currentDyeComponents
+    .filter(c => c.applicationNotes)
+    .map(c => `${c.dyeName || 'Step'}: ${c.applicationNotes}`)
+    .join(' · ');
+
+  wrap.innerHTML = `
+    ${tags ? `<div class="summary-tags">${tags}</div>` : ''}
+    <div class="summary-dyes">${dyePills}</div>
+    ${notesText ? `<div class="summary-notes">${notesText}</div>` : ''}
+    ${stepNotes ? `<div class="summary-notes" style="margin-top:6px;">${stepNotes}</div>` : ''}
+  `;
 }
 
 function renderRing() {
@@ -729,6 +819,39 @@ function removeSegment(key) {
   const prevIdx = (idx - 1 + baseSegments.length) % baseSegments.length;
   baseSegments[prevIdx].endPct = baseSegments[idx].endPct;
   baseSegments.splice(idx, 1);
+  selectedSegmentKey = null;
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+function buildSegmentsFromDyeComponents() {
+  if (!currentDyeComponents.length) return null;
+  const n = currentDyeComponents.length;
+  const width = 100 / n;
+  return currentDyeComponents.map((c, i) => ({
+    rowId: null,
+    clientKey: nextClientKey++,
+    dyeName: c.dyeName,
+    startPct: i * width,
+    endPct: (i + 1) * width,
+    type: 'Solid',
+    blendRatio: 50,
+    notes: '',
+  }));
+}
+
+function fillFromRecipe() {
+  const filled = buildSegmentsFromDyeComponents();
+  if (!filled) {
+    alert('No dye components found for this recipe yet — add them in Recipe Dye Components first.');
+    return;
+  }
+  const hasRealContent = baseSegments.some(s => s.dyeName) || baseSegments.length > 1;
+  if (hasRealContent && !confirm('Replace the current layout with one section per dye in this recipe? This clears what\'s there now.')) return;
+
+  baseSegments.forEach(s => { if (s.rowId) deletedIds.push(s.rowId); });
+  baseSegments = filled;
   selectedSegmentKey = null;
   markUnsaved();
   renderRing();
