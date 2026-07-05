@@ -541,6 +541,7 @@ let currentPreviewUrl = null;
 let currentBaseSegments = [];
 let currentOverlayMarks = [];
 let currentSpoolStats = { needed: 0, made: 0 };
+let currentHistoryEntries = [];
 let currentPreviewId = null;
 let currentProductPhotos = [];
 let previewPickerOpen = false;
@@ -861,6 +862,7 @@ function renderLeft() {
             🧵 ${currentSpoolStats.made}/${currentSpoolStats.needed} dyed
           </div>
         ` : ''}
+        ${r.Created_Date ? `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${new Date(Number(r.Created_Date)*1000).toLocaleString('default',{month:'long'})} ${new Date(Number(r.Created_Date)*1000).getFullYear()}</div>` : ''}
       </div>
       ${currentProductPhotos.length ? `
         <div class="preview-wrap">
@@ -914,6 +916,15 @@ function renderLeft() {
     <div class="notes-box">
       <div class="notes-title">Recipe notes</div>
       ${r.Notes}
+    </div>` : ''}
+
+    ${currentHistoryEntries.length ? `
+    <div class="notes-box" style="margin-top:8px;">
+      <div class="notes-title">History</div>
+      ${currentHistoryEntries.map(e => {
+        const d = e.date ? new Date(Number(e.date) * 1000).toLocaleDateString() : 'Unknown date';
+        return `<div style="font-size:12px;margin-top:4px;"><span style="color:#8B7D72;font-weight:600;">${d}:</span> ${e.note}</div>`;
+      }).join('')}
     </div>` : ''}
   `;
 }
@@ -1167,6 +1178,31 @@ grist.onRecord(async (record) => {
   } catch (e) {
     console.error('Failed to compute spool stats:', e);
     currentSpoolStats = { needed: 0, made: 0 };
+  }
+
+  try {
+    const historyTable = await grist.docApi.fetchTable('Recipe_Change_Log');
+    const hIds = historyTable.id || [];
+    const hRefs = historyTable.Recipe || [];
+    const getRefIdLocal = (ref) => {
+      if (typeof ref === 'number') return ref;
+      if (Array.isArray(ref)) return ref[1];
+      if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+      return null;
+    };
+    const entries = [];
+    for (let i = 0; i < hIds.length; i++) {
+      if (getRefIdLocal(hRefs[i]) !== recipeRowId) continue;
+      entries.push({
+        date: Array.isArray(historyTable.Change_Date) ? historyTable.Change_Date[i] : null,
+        note: Array.isArray(historyTable.Change_Note) ? historyTable.Change_Note[i] : '',
+      });
+    }
+    entries.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+    currentHistoryEntries = entries;
+  } catch (e) {
+    console.error('Failed to load history log:', e);
+    currentHistoryEntries = [];
   }
 
   await refreshPreviewPhotos();
