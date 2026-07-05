@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kettle Dye Calculator</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 18px;
+  }
+
+  .title { font-family: 'Libre Baskerville', serif; font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 11px; color: #8B7D72; margin-bottom: 16px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: white; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; margin-bottom: 14px;
+  }
+  .panel-title {
+    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: #8B7D72; margin-bottom: 10px;
+  }
+
+  .field-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .field-input, .field-select {
+    padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-family: 'Inter', sans-serif; font-size: 13px; outline: none; background: white; color: var(--ink);
+  }
+  .field-input:focus, .field-select:focus { border-color: var(--accent); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .result-row {
+    display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0;
+    border-bottom: 1px solid var(--warm); font-size: 12px;
+  }
+  .result-row:last-child { border-bottom: none; }
+  .result-label { color: #6B5E52; }
+  .result-value { font-family: 'DM Mono', monospace; font-weight: 600; }
+
+  .result-section-title {
+    font-size: 10px; font-weight: 700; color: var(--teal); text-transform: uppercase; letter-spacing: .04em;
+    margin: 12px 0 4px; padding-top: 8px; border-top: 1px dashed var(--rule);
+  }
+  .result-section-title:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+
+  .btn {
+    font-size: 13px; padding: 10px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--rule); background: white; color: var(--ink); width: 100%;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+  .btn-primary:hover { opacity: .9; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="title">Kettle Dye Calculator</div>
+<div class="subtitle">Nylon immersion dyeing — same math as the old spreadsheet, now saving straight to Grist</div>
+
+<div class="grid">
+  <div>
+    <div class="panel">
+      <div class="panel-title">Input values</div>
+      <div class="field-row">
+        <span class="field-label">Weight of dye powder (g)</span>
+        <input class="field-input" type="number" step="0.001" id="dyeWeight" value="4.757" oninput="recalc()">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Dye powder measurement (e.g. 1tsp)</span>
+        <input class="field-input" id="dyeMeasure" value="1tsp" oninput="recalc()">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Stock vinegar-H2O volume (mL)</span>
+        <input class="field-input" type="number" id="stockVol" value="80" oninput="recalc()">
+      </div>
+      <div class="two-col">
+        <div class="field-row">
+          <span class="field-label">Thread weight w/ ties (g)</span>
+          <input class="field-input" type="number" step="0.01" id="threadWeight" value="1642" oninput="recalc()">
+        </div>
+        <div class="field-row">
+          <span class="field-label">Yarn ties weight (g)</span>
+          <input class="field-input" type="number" step="0.01" id="tiesWeight" value="2.1" oninput="recalc()">
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="field-row">
+          <span class="field-label">Large burner gauge</span>
+          <input class="field-input" type="number" step="0.5" id="largeBurner" value="3" oninput="recalc()">
+        </div>
+        <div class="field-row">
+          <span class="field-label">Pot temp (°F)</span>
+          <input class="field-input" type="number" id="potTemp" value="170" oninput="recalc()">
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="field-row">
+          <span class="field-label">Depth of shade (DOS)</span>
+          <input class="field-input" type="number" step="0.1" id="dos" value="1" oninput="recalc()">
+        </div>
+        <div class="field-row">
+          <span class="field-label">Heat time (min)</span>
+          <input class="field-input" type="number" id="heatTime" value="70" oninput="recalc()">
+        </div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Pot type</span>
+        <input class="field-input" id="potType" value="Anchor Glass" oninput="recalc()">
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <div class="panel-title">Results</div>
+
+      <div class="result-section-title">Stock dye solution</div>
+      <div class="result-row"><span class="result-label">Total stock dye vol</span><span class="result-value" id="rStockVol">—</span></div>
+      <div class="result-row"><span class="result-label">Water volume</span><span class="result-value" id="rStockWater">—</span></div>
+      <div class="result-row"><span class="result-label">Vinegar volume</span><span class="result-value" id="rStockVinegar">—</span></div>
+
+      <div class="result-section-title">Immersion dye procedure</div>
+      <div class="result-row"><span class="result-label">Add water</span><span class="result-value" id="rAddWater">—</span></div>
+      <div class="result-row"><span class="result-label">Add vinegar</span><span class="result-value" id="rAddVinegar">—</span></div>
+      <div class="result-row"><span class="result-label">Add stock dye sol</span><span class="result-value" id="rAddStock">—</span></div>
+      <div class="result-row"><span class="result-label">Total pot volume</span><span class="result-value" id="rTotalPot">—</span></div>
+
+      <div class="result-section-title">Burner / heat</div>
+      <div class="result-row"><span class="result-label">Set heat to 5 until</span><span class="result-value" id="rHeatUntil">—</span></div>
+      <div class="result-row"><span class="result-label">Set small burner</span><span class="result-value" id="rSmallBurner">—</span></div>
+      <div class="result-row"><span class="result-label">Set large burner</span><span class="result-value" id="rLargeBurner">—</span></div>
+      <div class="result-row"><span class="result-label">Heat for total</span><span class="result-value" id="rHeatTotal">—</span></div>
+
+      <div class="result-section-title">Summary</div>
+      <div class="result-row"><span class="result-label">Thread weight (net)</span><span class="result-value" id="rThreadNet">—</span></div>
+      <div class="result-row"><span class="result-label">Standard ratio</span><span class="result-value" id="rStdRatio">—</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title">Save to Kettle Dye Recipes</div>
+  <div class="two-col">
+    <div class="field-row">
+      <span class="field-label">Colorway name</span>
+      <input class="field-input" id="logNames" placeholder="e.g. Plastic Flamingo">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Dye name</span>
+      <input class="field-input" id="logDyeName" placeholder="e.g. Rhodamine Red">
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="field-row">
+      <span class="field-label">Dye brand</span>
+      <input class="field-input" id="logDyeBrand" placeholder="e.g. Dharma">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Attributes</span>
+      <input class="field-input" id="logAttributes" placeholder="e.g. WF Acid Dye">
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="field-row">
+      <span class="field-label">Serial</span>
+      <input class="field-input" id="logSerial" placeholder="optional">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Reserved (vendor code)</span>
+      <input class="field-input" id="logReserved" placeholder="optional">
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="field-row">
+      <span class="field-label">Exhausts</span>
+      <select class="field-select" id="logExhausts">
+        <option value="">—</option>
+        <option>Completely</option>
+        <option>Complete Exhaust</option>
+        <option>Mostly</option>
+        <option>Near Complete</option>
+        <option>Partial</option>
+        <option>Partly</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Solidness</span>
+      <select class="field-select" id="logSolidness">
+        <option value="">—</option>
+        <option>Full</option>
+        <option>Nearly Full</option>
+        <option>Slightly Inconsistent</option>
+        <option>Very spotty</option>
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <span class="field-label">Notes</span>
+    <input class="field-input" id="logNotes" placeholder="optional">
+  </div>
+  <button class="btn btn-primary" onclick="saveToKettleRecipes()">💾 Save this result to Kettle Dye Recipes</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function n(id) { return Number(document.getElementById(id).value) || 0; }
+function s(id) { return document.getElementById(id).value; }
+
+let lastComputed = null;
+
+function recalc() {
+  const dyeWeight = n('dyeWeight');
+  const dyeMeasure = s('dyeMeasure');
+  const stockVol = n('stockVol');
+  const threadWeight = n('threadWeight');
+  const tiesWeight = n('tiesWeight');
+  const largeBurner = n('largeBurner');
+  const potTemp = n('potTemp');
+  const dos = n('dos');
+  const heatTime = n('heatTime');
+  const potType = s('potType');
+
+  const threadNet = threadWeight - tiesWeight;
+  const smallBurner = largeBurner + 0.5;
+
+  // Stock dye solution: 1:10 vinegar:water dilution, applied as 10%/90% of total stock volume
+  const stockVinegarRatio = 0.1;
+  const stockVinegar = stockVol * stockVinegarRatio;
+  const stockWater = stockVol - stockVinegar;
+
+  // Immersion pot math: 7mL total liquid per gram of net thread weight
+  const dyeH2oStockRatio = 1 / 7;
+  const addedVinegarRatio = 0.01;
+
+  const addWater = threadNet / dyeH2oStockRatio; // = threadNet * 7
+  const addVinegar = addWater * stockVinegarRatio;
+  const addStock = addWater * addedVinegarRatio * dos;
+  const totalPot = addWater + addVinegar + addStock;
+
+  const stdRatio = `${dyeMeasure} - ${stockVol}mL`;
+
+  document.getElementById('rStockVol').textContent = `${stockVol.toFixed(2)} mL`;
+  document.getElementById('rStockWater').textContent = `${stockWater.toFixed(2)} mL`;
+  document.getElementById('rStockVinegar').textContent = `${stockVinegar.toFixed(2)} mL`;
+
+  document.getElementById('rAddWater').textContent = `${addWater.toFixed(2)} mL`;
+  document.getElementById('rAddVinegar').textContent = `${addVinegar.toFixed(2)} mL`;
+  document.getElementById('rAddStock').textContent = `${addStock.toFixed(2)} mL`;
+  document.getElementById('rTotalPot').textContent = `${totalPot.toFixed(2)} mL`;
+
+  document.getElementById('rHeatUntil').textContent = `${potTemp}°F`;
+  document.getElementById('rSmallBurner').textContent = smallBurner.toFixed(1);
+  document.getElementById('rLargeBurner').textContent = largeBurner.toFixed(1);
+  document.getElementById('rHeatTotal').textContent = `${heatTime} min`;
+
+  document.getElementById('rThreadNet').textContent = `${threadNet.toFixed(2)} g`;
+  document.getElementById('rStdRatio').textContent = stdRatio;
+
+  lastComputed = {
+    dyeWeight, dyeMeasure, stockVol, threadWeight, tiesWeight, largeBurner, smallBurner,
+    potTemp, dos, heatTime, potType, stdRatio, threadNet,
+    addWater, addVinegar, addStock, totalPot, stockWater, stockVinegar,
+  };
+}
+
+async function saveToKettleRecipes() {
+  if (!lastComputed) recalc();
+
+  const names = s('logNames');
+  const dyeName = s('logDyeName');
+  if (!dyeName) {
+    showToast('Enter at least a Dye Name before saving');
+    return;
+  }
+
+  try {
+    const table = await grist.docApi.fetchTable('Kettle_Dye_Recipes');
+
+    const colNames = findColumn(table, ['Names']) || 'Names';
+    const colDyeName = findColumn(table, ['Dye_Name']) || 'Dye_Name';
+    const colDyeBrand = findColumn(table, ['Dye_Brand']) || 'Dye_Brand';
+    const colReserved = findColumn(table, ['Reserved']) || 'Reserved';
+    const colAttributes = findColumn(table, ['Attributes']) || 'Attributes';
+    const colSerial = findColumn(table, ['Serial']) || 'Serial';
+    const colStdRatio = findColumn(table, ['Standard_Ratio']) || 'Standard_Ratio';
+    const colDryWeight = findColumn(table, ['Dry_Weight_g', 'Dry Weight (g)', 'DryWeightg']) || 'Dry_Weight_g_';
+    const colDryRef = findColumn(table, ['Dry_Ref']) || 'Dry_Ref';
+    const colDOS = findColumn(table, ['DOS']) || 'DOS';
+    const colTempNum = findColumn(table, ['Temp', 'Temp #', 'TempNum']) || 'Temp';
+    const colTempF = findColumn(table, ['Temp_F']) || 'Temp_F';
+    const colMixTime = findColumn(table, ['Mix_Time_min', 'Mix Time (min)', 'MixTimemin']) || 'Mix_Time_min_';
+    const colPot = findColumn(table, ['Pot']) || 'Pot';
+    const colExhausts = findColumn(table, ['Exhausts']) || 'Exhausts';
+    const colSolidness = findColumn(table, ['Solidness']) || 'Solidness';
+    const colNotes = findColumn(table, ['Notes']) || 'Notes';
+
+    const fields = {
+      [colNames]: names,
+      [colDyeName]: dyeName,
+      [colDyeBrand]: s('logDyeBrand'),
+      [colReserved]: s('logReserved'),
+      [colAttributes]: s('logAttributes'),
+      [colSerial]: s('logSerial'),
+      [colStdRatio]: lastComputed.stdRatio,
+      [colDryWeight]: lastComputed.dyeWeight,
+      [colDryRef]: lastComputed.dyeMeasure,
+      [colDOS]: lastComputed.dos,
+      [colTempNum]: lastComputed.largeBurner,
+      [colTempF]: lastComputed.potTemp,
+      [colMixTime]: lastComputed.heatTime,
+      [colPot]: lastComputed.potType,
+      [colExhausts]: s('logExhausts'),
+      [colSolidness]: s('logSolidness'),
+      [colNotes]: s('logNotes'),
+    };
+
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Kettle_Dye_Recipes', null, fields]
+    ]);
+
+    showToast('Saved to Kettle Dye Recipes ✓');
+  } catch (e) {
+    console.error('Failed to save:', e);
+    showToast('Save failed — check the Kettle_Dye_Recipes table and column names');
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+recalc();
+</script>
+</body>
+</html>
