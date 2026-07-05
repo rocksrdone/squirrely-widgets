@@ -93,7 +93,7 @@
   }
   .overlay-list-item.selected { border-color: var(--accent); background: var(--accent-light); }
   .overlay-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-  .overlay-list-item span { font-size: 12px; flex: 1; }
+  .overlay-item-label { font-size: 12px; flex: 1; }
   .icon-btn {
     width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--rule); background: white;
     cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -290,6 +290,7 @@ let selectedOverlayKey = null;
 let unsavedChanges = false;
 let nextClientKey = 1;
 let draggingBoundaryIndex = null;
+let draggingOverlayKey = null;
 
 function markUnsaved() {
   unsavedChanges = true;
@@ -368,6 +369,14 @@ function renderRing() {
     html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
   });
 
+  // Draggable handle at the center of each overlay dab
+  overlayMarks.forEach(mark => {
+    let center = (mark.startPct + mark.endPct) / 2;
+    if (mark.endPct <= mark.startPct) center = ((mark.startPct + (mark.endPct + 100)) / 2) % 100;
+    const handlePt = polarToCartesian((OVERLAY_R_OUT + OVERLAY_R_IN) / 2, (center / 100) * 360);
+    html += `<circle cx="${handlePt.x}" cy="${handlePt.y}" r="6" fill="#C8A020" stroke="white" stroke-width="2" style="cursor:grab" onmousedown="event.stopPropagation(); selectOverlay(${mark.clientKey}); startOverlayDrag(event, ${mark.clientKey})" ontouchstart="event.stopPropagation(); selectOverlay(${mark.clientKey}); startOverlayDrag(event, ${mark.clientKey})"></circle>`;
+  });
+
   // Drag handles at each base-segment boundary
   baseSegments.forEach((seg, i) => {
     const handlePt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (seg.startPct / 100) * 360);
@@ -425,6 +434,32 @@ function endDrag() {
   document.removeEventListener('mouseup', endDrag);
   document.removeEventListener('touchmove', onDrag);
   document.removeEventListener('touchend', endDrag);
+}
+
+function startOverlayDrag(evt, key) {
+  evt.preventDefault();
+  draggingOverlayKey = key;
+  document.addEventListener('mousemove', onOverlayDrag);
+  document.addEventListener('mouseup', endOverlayDrag);
+  document.addEventListener('touchmove', onOverlayDrag, { passive: false });
+  document.addEventListener('touchend', endOverlayDrag);
+}
+
+function onOverlayDrag(evt) {
+  if (draggingOverlayKey === null) return;
+  evt.preventDefault();
+  const point = evt.touches ? evt.touches[0] : evt;
+  const pct = (angleFromEvent(point) / 360) * 100;
+  repositionOverlay(draggingOverlayKey, pct);
+  renderSegmentEditor();
+}
+
+function endOverlayDrag() {
+  draggingOverlayKey = null;
+  document.removeEventListener('mousemove', onOverlayDrag);
+  document.removeEventListener('mouseup', endOverlayDrag);
+  document.removeEventListener('touchmove', onOverlayDrag);
+  document.removeEventListener('touchend', endOverlayDrag);
 }
 
 function selectSegment(key) {
@@ -633,7 +668,7 @@ function renderOverlayList() {
   wrap.innerHTML = overlayMarks.map(m => `
     <div class="overlay-list-item ${m.clientKey === selectedOverlayKey ? 'selected' : ''}" onclick="selectOverlay(${m.clientKey})">
       <span class="overlay-swatch" style="background:${guessColor(m.dyeName)}"></span>
-      <span>${m.dyeName || 'Unnamed'} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
+      <span class="overlay-item-label">${m.dyeName || 'Unnamed'} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
       <button class="icon-btn" onclick="event.stopPropagation(); removeOverlay(${m.clientKey})">✕</button>
     </div>
   `).join('');
