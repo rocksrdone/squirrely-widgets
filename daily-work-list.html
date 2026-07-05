@@ -58,61 +58,62 @@
 
   .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
 
-  .work-card {
-    background: white; border: 1px solid var(--rule); border-radius: 8px;
-    padding: 8px 10px; margin-bottom: 6px;
+  .work-table { width: 100%; border-collapse: collapse; }
+  .work-table thead th {
+    text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; padding: 6px 8px; border-bottom: 2px solid var(--rule);
+    position: sticky; top: 0; background: var(--paper); z-index: 2;
   }
-  .work-card.priority-urgent { border-left: 3px solid var(--urgent); }
-  .work-card.priority-high { border-left: 3px solid var(--gold); }
+  .work-table td { padding: 7px 8px; border-bottom: 1px solid var(--warm); vertical-align: middle; font-size: 12px; }
+  .batch-row { cursor: pointer; background: white; }
+  .batch-row:hover { background: var(--warm); }
+  .batch-row.priority-urgent td:first-child { border-left: 3px solid var(--urgent); }
+  .batch-row.priority-high td:first-child { border-left: 3px solid var(--gold); }
+  .batch-row:not(.priority-urgent):not(.priority-high) td:first-child { border-left: 3px solid transparent; }
 
-  .work-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 5px; }
-  .work-colorway { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
-  .work-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
-  .work-order-info { font-size: 11px; color: #6B5E52; text-align: right; display: flex; align-items: center; gap: 6px; }
+  .colorway-name { font-family: 'Libre Baskerville', serif; font-size: 13px; font-weight: 700; }
+  .colorway-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+
   .priority-badge {
     display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
-    padding: 1px 6px; border-radius: 3px;
+    padding: 1px 6px; border-radius: 3px; white-space: nowrap;
   }
   .priority-badge.urgent { background: var(--urgent-light); color: var(--urgent); }
   .priority-badge.high { background: var(--gold-light); color: var(--gold); }
   .priority-badge.normal { background: var(--warm); color: #6B5E52; }
   .priority-badge.low { background: var(--warm); color: #8B7D72; }
 
-  .stages-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
-  .stage-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 4px 6px; }
-  .stage-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; margin-bottom: 2px; }
-  .stage-track { height: 3px; background: var(--warm); border-radius: 2px; overflow: hidden; margin-bottom: 3px; }
-  .stage-fill { height: 100%; background: var(--done-border); border-radius: 2px; }
-  .stage-count-wrap { display: flex; align-items: baseline; justify-content: center; gap: 1px; }
-  .stage-input {
-    width: 32px; font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500;
-    border: 1px solid var(--rule); border-radius: 3px; padding: 1px 2px; text-align: center;
-    background: white; color: var(--ink); outline: none;
-  }
-  .stage-input:focus { border-color: var(--accent); }
-  .stage-cap { font-family: 'DM Mono', monospace; font-size: 12px; color: #8B7D72; }
+  .due-cell { font-size: 11px; white-space: nowrap; color: #6B5E52; }
 
-  .orders-toggle {
-    margin-top: 5px; font-size: 11px; color: var(--teal); cursor: pointer; font-weight: 600;
+  .stage-cell { white-space: nowrap; }
+  .mini-track { display: inline-block; width: 42px; height: 5px; background: var(--warm); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+  .mini-fill { height: 100%; background: var(--done-border); }
+  .stage-input-table {
+    width: 32px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; text-align: center;
+    border: 1px solid var(--rule); border-radius: 3px; padding: 2px; background: white; color: var(--ink); outline: none;
   }
-  .orders-toggle:hover { text-decoration: underline; }
-  .orders-list {
-    display: none; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--warm);
-  }
-  .orders-list.open { display: block; }
+  .stage-input-table:focus { border-color: var(--accent); }
+  .cap-text { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; margin-left: 3px; }
+
+  .orders-cell { text-align: right; font-size: 11px; color: var(--teal); font-weight: 600; white-space: nowrap; }
+
+  .detail-row { display: none; }
+  .detail-row.open { display: table-row; }
+  .detail-row td { padding: 0; border-bottom: 1px solid var(--rule); }
+  .detail-wrap { padding: 8px 14px; background: var(--warm); }
+  .pack-summary { font-size: 11px; color: #6B5E52; margin-bottom: 6px; font-weight: 600; }
+
+  .order-row-block { padding: 5px 0; border-bottom: 1px solid var(--rule); }
+  .order-row-block:last-child { border-bottom: none; }
   .order-row {
     display: flex; justify-content: space-between; font-size: 11px; color: #6B5E52;
-    padding: 2px 0;
   }
-
-  .order-row-block { padding: 4px 0; border-bottom: 1px solid var(--warm); }
-  .order-row-block:last-child { border-bottom: none; }
-  .line-pack-row { display: flex; align-items: center; gap: 5px; margin-top: 3px; }
-  .line-pack-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; flex-shrink: 0; width: 26px; }
-  .line-pack-track { flex: 1; height: 3px; background: var(--warm); border-radius: 2px; overflow: hidden; }
-  .line-pack-fill { height: 100%; background: var(--done-border); border-radius: 2px; }
+  .line-pack-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .line-pack-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; flex-shrink: 0; width: 28px; }
+  .line-pack-track { flex: 1; height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; max-width: 120px; }
+  .line-pack-fill { height: 100%; background: var(--done-border); }
   .line-pack-input {
-    width: 28px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
+    width: 30px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
     border: 1px solid var(--rule); border-radius: 3px; padding: 1px 2px; text-align: center;
     background: white; color: var(--ink); outline: none; flex-shrink: 0;
   }
@@ -348,23 +349,19 @@ function renderList() {
     return;
   }
 
-  content.innerHTML = filtered.map(({ b: batch, idx }) => {
-    const priorityClass = (batch.priority || 'normal').toLowerCase();
-    const cardPriorityClass = priorityClass === 'urgent' ? 'priority-urgent' : priorityClass === 'high' ? 'priority-high' : '';
-    const dueLabel = batch.dueDate ? new Date(batch.dueDate * 1000).toLocaleDateString() : 'No due date';
-    const orderCount = batch.lines.length;
+  const miniStage = (idx, current, cap, field) => `
+    <div class="mini-track"><div class="mini-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
+    <input class="stage-input-table" type="number" min="0" max="${cap}" value="${current}"
+      onclick="event.stopPropagation()" onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
+    <span class="cap-text">/${cap}</span>
+  `;
 
-    const stage = (label, current, cap, field) => `
-      <div class="stage-box">
-        <div class="stage-label">${label}</div>
-        <div class="stage-track"><div class="stage-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
-        <div class="stage-count-wrap">
-          <input class="stage-input" type="number" min="0" max="${cap}" value="${current}"
-            onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
-          <span class="stage-cap">/${cap}</span>
-        </div>
-      </div>
-    `;
+  const rows = filtered.map(({ b: batch, idx }) => {
+    const priorityClass = (batch.priority || 'normal').toLowerCase();
+    const rowPriorityClass = priorityClass === 'urgent' ? 'priority-urgent' : priorityClass === 'high' ? 'priority-high' : '';
+    const dueLabel = batch.dueDate ? new Date(batch.dueDate * 1000).toLocaleDateString() : '—';
+    const orderCount = batch.lines.length;
+    const rowId = `batch-detail-${idx}`;
 
     const ordersRows = batch.lines.map(l => {
       const lDue = l.dueDate ? new Date(Number(l.dueDate) * 1000).toLocaleDateString() : '—';
@@ -379,7 +376,7 @@ function renderList() {
             <span class="line-pack-label">Pack</span>
             <div class="line-pack-track"><div class="line-pack-fill" style="width:${packPct}%"></div></div>
             <input class="line-pack-input" type="number" min="0" max="${l.qtyWound}" value="${l.qtyPacked}"
-              onchange="setLinePack(${l.lineId}, this.value, ${l.qtyWound})">
+              onclick="event.stopPropagation()" onchange="setLinePack(${l.lineId}, this.value, ${l.qtyWound})">
             <span class="line-pack-cap">/${l.qtyWound} wound</span>
           </div>
         </div>
@@ -387,26 +384,43 @@ function renderList() {
     }).join('');
 
     return `
-      <div class="work-card ${cardPriorityClass}">
-        <div class="work-card-top">
-          <div>
-            <div class="work-colorway" style="color:${guessColor(batch.colorwayName || batch.sku)}">${batch.colorwayName || batch.sku}</div>
-            <div class="work-sku">${batch.sku} · ${orderCount} order${orderCount === 1 ? '' : 's'}</div>
+      <tr class="batch-row ${rowPriorityClass}" onclick="document.getElementById('${rowId}').classList.toggle('open')">
+        <td>
+          <div class="colorway-name" style="color:${guessColor(batch.colorwayName || batch.sku)}">${batch.colorwayName || batch.sku}</div>
+          <div class="colorway-sku">${batch.sku}</div>
+        </td>
+        <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
+        <td class="due-cell">${dueLabel}</td>
+        <td class="stage-cell">${miniStage(idx, batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}</td>
+        <td class="stage-cell">${miniStage(idx, batch.totalWound, batch.totalDyed, 'Qty_Wound')}</td>
+        <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'} · ${batch.totalPacked}/${batch.totalNeeded} packed</td>
+      </tr>
+      <tr class="detail-row" id="${rowId}">
+        <td colspan="6">
+          <div class="detail-wrap">
+            <div class="pack-summary">Pack progress per order:</div>
+            ${ordersRows}
           </div>
-          <div class="work-order-info">
-            <div>Due ${dueLabel}</div>
-            <div class="priority-badge ${priorityClass}">${batch.priority}</div>
-          </div>
-        </div>
-        <div class="stages-row">
-          ${stage('Dye', batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}
-          ${stage('Wind', batch.totalWound, batch.totalDyed, 'Qty_Wound')}
-        </div>
-        <div class="orders-toggle" onclick="this.nextElementSibling.classList.toggle('open')">▾ Orders needing this (${orderCount}) — ${batch.totalPacked}/${batch.totalNeeded} packed overall</div>
-        <div class="orders-list">${ordersRows}</div>
-      </div>
+        </td>
+      </tr>
     `;
   }).join('');
+
+  content.innerHTML = `
+    <table class="work-table">
+      <thead>
+        <tr>
+          <th>Colorway</th>
+          <th>Priority</th>
+          <th>Due</th>
+          <th>Dye</th>
+          <th>Wind</th>
+          <th style="text-align:right">Orders / Pack</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
 
 function stageFieldKey(field) {
