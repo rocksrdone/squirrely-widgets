@@ -92,6 +92,9 @@
     background: var(--teal-light); color: var(--teal); cursor: pointer;
   }
   .btn-small:hover { background: var(--teal); color: white; }
+  .btn-teal { background: var(--teal); border-color: var(--teal); color: white; font-weight: 600; }
+  .btn-teal:hover { opacity: .9; }
+  .btn-teal:disabled { background: var(--rule); border-color: var(--rule); color: #8B7D72; cursor: not-allowed; opacity: 1; }
   .sku-warning {
     margin-top: 4px; font-size: 11px; color: var(--accent); font-weight: 600;
   }
@@ -162,9 +165,12 @@
 
 <div id="content" style="display:none">
   <div class="top-bar">
-    <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion();">
+    <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:200px;">
+      <span id="draftBadge" style="display:none; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:3px 9px; border-radius:10px; background:var(--gold-light); color:var(--gold); border:1px solid #D4B07A;">Draft</span>
+      <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();" style="flex:1;">
+    </div>
     <div class="top-actions">
-      <button class="btn" onclick="createNewRecipe()">+ New Recipe</button>
+      <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
   </div>
@@ -174,7 +180,7 @@
     <div class="field-grid">
       <div class="field-wrap">
         <span class="field-label">Fiber Type</span>
-        <select class="field-select" id="fiberType" onchange="markUnsaved(); renderSkuSuggestion();">
+        <select class="field-select" id="fiberType" onchange="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();">
           <option value="">—</option>
           <option>FF Nylon</option>
           <option>E Nylon</option>
@@ -206,14 +212,31 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
-        <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion();">
+        <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();">
       </div>
       <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
         <span class="field-label">Notes</span>
         <textarea class="field-textarea" id="generalNotes" oninput="markUnsaved()"></textarea>
       </div>
+      <div class="field-wrap">
+        <span class="field-label">Linked Customer (optional)</span>
+        <select class="field-select" id="linkedCustomer" onchange="markUnsaved()">
+          <option value="">— none —</option>
+        </select>
+      </div>
+      <div class="field-wrap wide">
+        <span class="field-label">Working / Scratch Notes</span>
+        <textarea class="field-textarea" id="draftNotes" placeholder="Jot down thoughts as you figure this one out..." oninput="markUnsaved()"></textarea>
+      </div>
     </div>
+  </div>
+
+  <div class="section" id="finalizeSection" style="display:none">
+    <div class="section-title">Finalize</div>
+    <div style="font-size:12px; color:#6B5E52; margin-bottom:8px;">Once this is ready to become a real, sellable recipe:</div>
+    <button class="btn btn-teal" id="finalizeBtn" onclick="finalizeRecipe()" disabled style="width:100%;">✓ Finalize — mark as Active</button>
+    <div id="finalizeGateMsg" style="font-size:11px; color:#8B7D72; margin-top:6px;"></div>
   </div>
 
   <div class="section">
@@ -363,6 +386,13 @@ async function loadVendorsList() {
     const select = document.getElementById('reservedFor');
     select.innerHTML = '<option value="">— pick vendor —</option>' +
       allVendors.map(v => `<option value="${v.code}">${v.name} (${v.code})</option>`).join('');
+
+    const linkedSelect = document.getElementById('linkedCustomer');
+    linkedSelect.innerHTML = '<option value="">— none —</option>' +
+      ids.map((id, i) => {
+        const nm = columnAsArray(customersTable, nameCol)[i];
+        return nm ? `<option value="${id}">${nm}</option>` : '';
+      }).join('');
   } catch (e) {
     console.error('Could not load vendor list:', e);
   }
@@ -470,14 +500,28 @@ async function loadRecipe(record) {
   document.getElementById('noteP1').value = record.Photo_Process_1_Note || '';
   document.getElementById('noteP2').value = record.Photo_Process_2_Note || '';
   document.getElementById('notePF').value = record.Photo_Finished_Note || '';
+  document.getElementById('draftNotes').value = record.Draft_Notes || '';
   updatePhotoThumbs();
+
+  const status = record.Status || 'Active';
+  const badge = document.getElementById('draftBadge');
+  if (status !== 'Active') {
+    badge.textContent = status;
+    badge.style.display = 'inline-block';
+  } else {
+    badge.style.display = 'none';
+  }
+  document.getElementById('finalizeSection').style.display = (status === 'Researching' || status === 'Working') ? 'block' : 'none';
 
   await loadVendorsList();
   await loadAllSkus();
+  const linkedCustomerId = getRefId(record.Linked_Customer);
+  document.getElementById('linkedCustomer').value = linkedCustomerId || '';
   onScopeChange();
   const existingVendor = vendorCodeFromExistingSku(record.SKU_Base || record.Shopify_SKU);
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();
+  updateFinalizeGate();
 
   deletedDyeIds = [];
   dyeRows = [];
@@ -653,13 +697,47 @@ function updatePhotoThumbs() {
   });
 }
 
+function updateFinalizeGate() {
+  const btn = document.getElementById('finalizeBtn');
+  const msg = document.getElementById('finalizeGateMsg');
+  if (!btn) return;
+
+  const missing = [];
+  if (!document.getElementById('nameInput').value.trim() || document.getElementById('nameInput').value.trim() === 'Untitled Draft') missing.push('a real recipe name');
+  if (!document.getElementById('fiberType').value) missing.push('fiber type');
+  if (!document.getElementById('skuBase').value.trim()) missing.push('SKU base');
+
+  if (missing.length) {
+    btn.disabled = true;
+    msg.textContent = `Still needed: ${missing.join(', ')}`;
+  } else {
+    btn.disabled = false;
+    msg.textContent = '';
+  }
+}
+
+async function finalizeRecipe() {
+  if (!currentRecipeId) return;
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Recipes', currentRecipeId, { Status: 'Active' }]
+    ]);
+    document.getElementById('draftBadge').style.display = 'none';
+    document.getElementById('finalizeSection').style.display = 'none';
+    showToast('Finalized — now Active ✓');
+  } catch (e) {
+    console.error('Failed to finalize:', e);
+    showToast('Failed to finalize — check the Status column');
+  }
+}
+
 async function createNewRecipe() {
   try {
     const result = await grist.docApi.applyUserActions([
-      ['AddRecord', 'Recipes', null, { Recipe_Name: 'New Recipe' }]
+      ['AddRecord', 'Recipes', null, { Recipe_Name: 'Untitled Draft', Status: 'Researching' }]
     ]);
     const newId = result && result.retValues && result.retValues[0];
-    showToast('New recipe created — click it in the Recipes grid to keep editing');
+    showToast('New draft created — click it in the Recipes grid to keep editing');
     if (newId) {
       try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
     }
@@ -683,6 +761,8 @@ async function saveRecipe() {
       Recipe_Scope: document.getElementById('recipeScope').value,
       SKU_Base: document.getElementById('skuBase').value,
       Notes: document.getElementById('generalNotes').value,
+      Draft_Notes: document.getElementById('draftNotes').value,
+      Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,
       Layout_Description: document.getElementById('layoutDescription').value,
       Photo_Process_1: document.getElementById('photoP1').value,
       Photo_Process_2: document.getElementById('photoP2').value,
