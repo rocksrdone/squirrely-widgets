@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Layout Designer</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 70vh; color: #8B7D72; text-align: center;
+  }
+
+  .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .recipe-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  .btn {
+    font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule); background: white; color: var(--ink);
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn-primary.unsaved::after { content: ' •'; }
+
+  .layout-grid { display: grid; grid-template-columns: 420px 1fr; gap: 20px; }
+  @media (max-width: 800px) { .layout-grid { grid-template-columns: 1fr; } }
+
+  .ring-wrap { display: flex; flex-direction: column; align-items: center; }
+  .ring-wrap svg { max-width: 100%; touch-action: none; }
+
+  .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 11px; color: #6B5E52; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+  .panel-section {
+    background: white; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; margin-bottom: 12px;
+  }
+  .panel-title {
+    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: #8B7D72; margin-bottom: 10px;
+  }
+
+  .field-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .field-input, .field-select {
+    padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-family: 'Inter', sans-serif; font-size: 13px; outline: none;
+  }
+  .field-input:focus, .field-select:focus { border-color: var(--accent); }
+
+  .no-selection { color: #8B7D72; font-style: italic; font-size: 12px; padding: 8px 0; }
+
+  .repeat-row { display: flex; align-items: center; gap: 8px; }
+  .repeat-row input { width: 60px; }
+
+  .overlay-list-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--rule);
+    border-radius: 6px; margin-bottom: 6px; cursor: pointer; background: var(--paper);
+  }
+  .overlay-list-item.selected { border-color: var(--accent); background: var(--accent-light); }
+  .overlay-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .overlay-list-item span { font-size: 12px; flex: 1; }
+  .icon-btn {
+    width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--rule); background: white;
+    cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="empty-state" id="emptyState">Click a row in Recipes to design its layout here.</div>
+
+<div id="content" style="display:none">
+  <div class="top-bar">
+    <div class="recipe-title" id="recipeTitle"></div>
+    <button class="btn btn-primary" id="saveBtn" onclick="saveLayout()">💾 Save</button>
+  </div>
+
+  <div class="layout-grid">
+    <div class="ring-wrap">
+      <svg id="ringSvg" viewBox="0 0 400 400" width="400" height="400"></svg>
+      <div class="legend">
+        <span><span class="legend-dot" style="background:#C8A020"></span>Overlay layer (outer ring)</span>
+        <span><span class="legend-dot" style="background:#888780"></span>Base layer</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-section">
+        <div class="panel-title">Base layer — repeat pattern</div>
+        <div class="repeat-row">
+          <input class="field-input" type="number" id="repeatCount" value="1" min="1" max="12">
+          <button class="btn" onclick="applyRepeat()">Repeat current pattern this many times</button>
+        </div>
+        <div style="font-size:10px;color:#8B7D72;margin-top:6px;">Build one repeat spanning the full circle, then use this to tile it — matches "repeat 3 times" thinking.</div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">Selected segment</div>
+        <div id="segmentEditor"><div class="no-selection">Click a segment on the ring to edit it.</div></div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">Overlay dabs / overdye</div>
+        <div id="overlayList"></div>
+        <button class="btn" onclick="addOverlayMark()" style="width:100%;margin-top:6px;">+ Add overlay dab</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) {
+    if (l.includes(k)) return v;
+  }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// ── GEOMETRY ──
+const CX = 200, CY = 200;
+const BASE_R_OUT = 160, BASE_R_IN = 100;
+const OVERLAY_R_OUT = 185, OVERLAY_R_IN = 165;
+
+function polarToCartesian(r, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  return { x: CX + r * Math.sin(rad), y: CY - r * Math.cos(rad) };
+}
+
+function describeAnnulusSector(rOuter, rInner, startPct, endPct) {
+  let startAngle = (startPct / 100) * 360;
+  let endAngle = (endPct / 100) * 360;
+  if (endAngle <= startAngle) endAngle += 360;
+  if (endAngle - startAngle > 359.9) endAngle = startAngle + 359.9;
+  const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+  const outerStart = polarToCartesian(rOuter, startAngle);
+  const outerEnd = polarToCartesian(rOuter, endAngle);
+  const innerEnd = polarToCartesian(rInner, endAngle);
+  const innerStart = polarToCartesian(rInner, startAngle);
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerEnd.x} ${innerEnd.y}`,
+    `A ${rInner} ${rInner} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
+    'Z'
+  ].join(' ');
+}
+
+function angleFromEvent(evt) {
+  const svg = document.getElementById('ringSvg');
+  const rect = svg.getBoundingClientRect();
+  const x = (evt.clientX - rect.left) / rect.width * 400;
+  const y = (evt.clientY - rect.top) / rect.height * 400;
+  let angle = Math.atan2(x - CX, CY - y) * 180 / Math.PI;
+  if (angle < 0) angle += 360;
+  return angle;
+}
+
+// ── STATE ──
+let currentRecipeId = null;
+let baseSegments = [];    // {rowId, clientKey, dyeName, startPct, endPct, type}
+let overlayMarks = [];    // {rowId, clientKey, dyeName, startPct, endPct, notes}
+let deletedIds = [];
+let selectedSegmentKey = null;
+let selectedOverlayKey = null;
+let unsavedChanges = false;
+let nextClientKey = 1;
+let draggingBoundaryIndex = null;
+
+function markUnsaved() {
+  unsavedChanges = true;
+  document.getElementById('saveBtn').classList.add('unsaved');
+}
+function clearUnsaved() {
+  unsavedChanges = false;
+  document.getElementById('saveBtn').classList.remove('unsaved');
+}
+
+async function loadLayout(record) {
+  currentRecipeId = record.id;
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+  document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
+
+  baseSegments = [];
+  overlayMarks = [];
+  deletedIds = [];
+  selectedSegmentKey = null;
+  selectedOverlayKey = null;
+
+  try {
+    const table = await grist.docApi.fetchTable('Recipe_Layout_Segments');
+    const ids = table.id || [];
+    const refs = table.Recipe || [];
+    for (let i = 0; i < ids.length; i++) {
+      if (getRefId(refs[i]) !== currentRecipeId) continue;
+      const layer = columnAsArray(table, 'Layer')[i];
+      const row = {
+        rowId: ids[i],
+        clientKey: nextClientKey++,
+        dyeName: columnAsArray(table, 'Dye_Name')[i] || '',
+        startPct: Number(columnAsArray(table, 'Start_Pct')[i]) || 0,
+        endPct: Number(columnAsArray(table, 'End_Pct')[i]) || 0,
+        type: columnAsArray(table, 'Segment_Type')[i] || 'Solid',
+        order: columnAsArray(table, 'Segment_Order')[i] || 0,
+        notes: columnAsArray(table, 'Notes')[i] || '',
+      };
+      if (layer === 'Overlay') overlayMarks.push(row);
+      else baseSegments.push(row);
+    }
+    baseSegments.sort((a, b) => a.startPct - b.startPct);
+  } catch (e) {
+    console.error('Failed to load layout:', e);
+  }
+
+  if (!baseSegments.length) {
+    baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '' }];
+  }
+
+  renderRing();
+  renderOverlayList();
+  renderSegmentEditor();
+  clearUnsaved();
+}
+
+function renderRing() {
+  const svg = document.getElementById('ringSvg');
+  let html = '';
+
+  baseSegments.forEach(seg => {
+    const path = describeAnnulusSector(BASE_R_OUT, BASE_R_IN, seg.startPct, seg.endPct);
+    const fill = seg.type === 'Space' ? '#F0EDE8' : guessColor(seg.dyeName);
+    const strokeW = seg.clientKey === selectedSegmentKey ? 3 : 1;
+    const strokeColor = seg.clientKey === selectedSegmentKey ? '#1A1614' : 'white';
+    const opacity = seg.type === 'Blend' ? 0.6 : 1;
+    html += `<path d="${path}" fill="${fill}" fill-opacity="${opacity}" stroke="${strokeColor}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectSegment(${seg.clientKey})"></path>`;
+  });
+
+  overlayMarks.forEach(mark => {
+    const path = describeAnnulusSector(OVERLAY_R_OUT, OVERLAY_R_IN, mark.startPct, mark.endPct);
+    const strokeW = mark.clientKey === selectedOverlayKey ? 3 : 1;
+    html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+  });
+
+  // Drag handles at each base-segment boundary
+  baseSegments.forEach((seg, i) => {
+    const handlePt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (seg.startPct / 100) * 360);
+    html += `<circle cx="${handlePt.x}" cy="${handlePt.y}" r="7" fill="white" stroke="#8B3A2A" stroke-width="2" style="cursor:ew-resize" onmousedown="startDrag(event, ${i})" ontouchstart="startDrag(event, ${i})"></circle>`;
+  });
+
+  html += `<circle cx="${CX}" cy="${CY}" r="${BASE_R_IN - 10}" fill="var(--paper, #F7F3EE)"></circle>`;
+
+  svg.innerHTML = html;
+}
+
+function startDrag(evt, boundaryIndex) {
+  evt.preventDefault();
+  draggingBoundaryIndex = boundaryIndex;
+  document.addEventListener('mousemove', onDrag);
+  document.addEventListener('mouseup', endDrag);
+  document.addEventListener('touchmove', onDrag, { passive: false });
+  document.addEventListener('touchend', endDrag);
+}
+
+function onDrag(evt) {
+  if (draggingBoundaryIndex === null) return;
+  evt.preventDefault();
+  const point = evt.touches ? evt.touches[0] : evt;
+  let pct = (angleFromEvent(point) / 360) * 100;
+
+  const i = draggingBoundaryIndex;
+  const n = baseSegments.length;
+  const prevIdx = (i - 1 + n) % n;
+
+  baseSegments[prevIdx].endPct = pct;
+  baseSegments[i].startPct = pct;
+  markUnsaved();
+  renderRing();
+}
+
+function endDrag() {
+  draggingBoundaryIndex = null;
+  document.removeEventListener('mousemove', onDrag);
+  document.removeEventListener('mouseup', endDrag);
+  document.removeEventListener('touchmove', onDrag);
+  document.removeEventListener('touchend', endDrag);
+}
+
+function selectSegment(key) {
+  selectedSegmentKey = key;
+  selectedOverlayKey = null;
+  renderRing();
+  renderSegmentEditor();
+  renderOverlayList();
+}
+
+function selectOverlay(key) {
+  selectedOverlayKey = key;
+  selectedSegmentKey = null;
+  renderRing();
+  renderSegmentEditor();
+  renderOverlayList();
+}
+
+function renderSegmentEditor() {
+  const wrap = document.getElementById('segmentEditor');
+
+  if (selectedSegmentKey) {
+    const seg = baseSegments.find(s => s.clientKey === selectedSegmentKey);
+    if (!seg) { wrap.innerHTML = `<div class="no-selection">Click a segment on the ring to edit it.</div>`; return; }
+    wrap.innerHTML = `
+      <div class="field-row">
+        <span class="field-label">Dye Name</span>
+        <input class="field-input" value="${(seg.dyeName || '').replace(/"/g, '&quot;')}" oninput="updateSegment(${seg.clientKey}, 'dyeName', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Type</span>
+        <select class="field-select" onchange="updateSegment(${seg.clientKey}, 'type', this.value)">
+          <option ${seg.type === 'Solid' ? 'selected' : ''}>Solid</option>
+          <option ${seg.type === 'Blend' ? 'selected' : ''}>Blend</option>
+          <option ${seg.type === 'Space' ? 'selected' : ''}>Space</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Span</span>
+        <span style="font-size:12px;color:#6B5E52;">${seg.startPct.toFixed(1)}% – ${seg.endPct.toFixed(1)}%</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn" onclick="splitSegment(${seg.clientKey})" style="flex:1">+ Split</button>
+        <button class="btn" onclick="removeSegment(${seg.clientKey})" style="flex:1" ${baseSegments.length <= 1 ? 'disabled' : ''}>✕ Remove</button>
+      </div>
+    `;
+  } else if (selectedOverlayKey) {
+    const mark = overlayMarks.find(m => m.clientKey === selectedOverlayKey);
+    if (!mark) { wrap.innerHTML = `<div class="no-selection">Click a segment on the ring to edit it.</div>`; return; }
+    wrap.innerHTML = `
+      <div class="field-row">
+        <span class="field-label">Dye / substance</span>
+        <input class="field-input" value="${(mark.dyeName || '').replace(/"/g, '&quot;')}" oninput="updateOverlay(${mark.clientKey}, 'dyeName', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Position (center %)</span>
+        <input class="field-input" type="number" min="0" max="100" value="${((mark.startPct + mark.endPct) / 2).toFixed(0)}"
+          oninput="repositionOverlay(${mark.clientKey}, this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Notes</span>
+        <input class="field-input" value="${(mark.notes || '').replace(/"/g, '&quot;')}" oninput="updateOverlay(${mark.clientKey}, 'notes', this.value)">
+      </div>
+    `;
+  } else {
+    wrap.innerHTML = `<div class="no-selection">Click a segment on the ring to edit it.</div>`;
+  }
+}
+
+function updateSegment(key, field, value) {
+  const seg = baseSegments.find(s => s.clientKey === key);
+  if (!seg) return;
+  seg[field] = value;
+  markUnsaved();
+  renderRing();
+}
+
+function splitSegment(key) {
+  const idx = baseSegments.findIndex(s => s.clientKey === key);
+  if (idx === -1) return;
+  const seg = baseSegments[idx];
+  const mid = (seg.startPct + seg.endPct) / 2;
+  const newSeg = { rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: mid, endPct: seg.endPct, type: 'Solid', notes: '' };
+  seg.endPct = mid;
+  baseSegments.splice(idx + 1, 0, newSeg);
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+function removeSegment(key) {
+  if (baseSegments.length <= 1) return;
+  const idx = baseSegments.findIndex(s => s.clientKey === key);
+  if (idx === -1) return;
+  if (baseSegments[idx].rowId) deletedIds.push(baseSegments[idx].rowId);
+  const prevIdx = (idx - 1 + baseSegments.length) % baseSegments.length;
+  baseSegments[prevIdx].endPct = baseSegments[idx].endPct;
+  baseSegments.splice(idx, 1);
+  selectedSegmentKey = null;
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+function applyRepeat() {
+  const factor = Math.max(1, parseInt(document.getElementById('repeatCount').value) || 1);
+  if (factor === 1) return;
+  if (!confirm(`Repeat the current pattern ${factor} times around the circle? This replaces the current layout.`)) return;
+
+  const original = baseSegments.map(s => ({ ...s, rowId: null }));
+  const newSegments = [];
+  for (let rep = 0; rep < factor; rep++) {
+    original.forEach(seg => {
+      newSegments.push({
+        rowId: null,
+        clientKey: nextClientKey++,
+        dyeName: seg.dyeName,
+        type: seg.type,
+        notes: seg.notes,
+        startPct: rep * (100 / factor) + seg.startPct / factor,
+        endPct: rep * (100 / factor) + seg.endPct / factor,
+      });
+    });
+  }
+  baseSegments.forEach(s => { if (s.rowId) deletedIds.push(s.rowId); });
+  baseSegments = newSegments;
+  selectedSegmentKey = null;
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+function addOverlayMark() {
+  overlayMarks.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 45, endPct: 55, notes: '' });
+  markUnsaved();
+  renderRing();
+  renderOverlayList();
+}
+
+function updateOverlay(key, field, value) {
+  const mark = overlayMarks.find(m => m.clientKey === key);
+  if (!mark) return;
+  mark[field] = value;
+  markUnsaved();
+  renderRing();
+  renderOverlayList();
+}
+
+function repositionOverlay(key, centerValue) {
+  const mark = overlayMarks.find(m => m.clientKey === key);
+  if (!mark) return;
+  const width = mark.endPct - mark.startPct;
+  const center = Math.max(0, Math.min(100, Number(centerValue) || 0));
+  mark.startPct = center - width / 2;
+  mark.endPct = center + width / 2;
+  markUnsaved();
+  renderRing();
+}
+
+function removeOverlay(key) {
+  const idx = overlayMarks.findIndex(m => m.clientKey === key);
+  if (idx === -1) return;
+  if (overlayMarks[idx].rowId) deletedIds.push(overlayMarks[idx].rowId);
+  overlayMarks.splice(idx, 1);
+  if (selectedOverlayKey === key) selectedOverlayKey = null;
+  markUnsaved();
+  renderRing();
+  renderOverlayList();
+  renderSegmentEditor();
+}
+
+function renderOverlayList() {
+  const wrap = document.getElementById('overlayList');
+  if (!overlayMarks.length) {
+    wrap.innerHTML = `<div class="no-selection">No overlay dabs yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = overlayMarks.map(m => `
+    <div class="overlay-list-item ${m.clientKey === selectedOverlayKey ? 'selected' : ''}" onclick="selectOverlay(${m.clientKey})">
+      <span class="overlay-swatch" style="background:${guessColor(m.dyeName)}"></span>
+      <span>${m.dyeName || 'Unnamed'} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
+      <button class="icon-btn" onclick="event.stopPropagation(); removeOverlay(${m.clientKey})">✕</button>
+    </div>
+  `).join('');
+}
+
+async function saveLayout() {
+  if (!currentRecipeId) return;
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const actions = [];
+
+    baseSegments.forEach((seg, i) => {
+      const fields = {
+        Recipe: currentRecipeId,
+        Dye_Name: seg.dyeName,
+        Start_Pct: seg.startPct,
+        End_Pct: seg.endPct,
+        Segment_Type: seg.type,
+        Layer: 'Base',
+        Segment_Order: i + 1,
+        Notes: seg.notes || '',
+      };
+      actions.push(seg.rowId
+        ? ['UpdateRecord', 'Recipe_Layout_Segments', seg.rowId, fields]
+        : ['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+    });
+
+    overlayMarks.forEach((mark, i) => {
+      const fields = {
+        Recipe: currentRecipeId,
+        Dye_Name: mark.dyeName,
+        Start_Pct: mark.startPct,
+        End_Pct: mark.endPct,
+        Segment_Type: 'Solid',
+        Layer: 'Overlay',
+        Segment_Order: i + 1,
+        Notes: mark.notes || '',
+      };
+      actions.push(mark.rowId
+        ? ['UpdateRecord', 'Recipe_Layout_Segments', mark.rowId, fields]
+        : ['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+    });
+
+    deletedIds.forEach(id => actions.push(['RemoveRecord', 'Recipe_Layout_Segments', id]));
+
+    if (actions.length) await grist.docApi.applyUserActions(actions);
+
+    deletedIds = [];
+    clearUnsaved();
+    showToast('Layout saved ✓');
+  } catch (e) {
+    console.error('Failed to save layout:', e);
+    showToast('Save failed — check the Recipe_Layout_Segments table exists with the right columns');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Save';
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({
+  requiredAccess: 'full'
+});
+
+grist.onRecord(async (record) => {
+  if (!record || !record.Recipe_Name) {
+    document.getElementById('emptyState').style.display = 'flex';
+    document.getElementById('content').style.display = 'none';
+    return;
+  }
+  await loadLayout(record);
+});
+</script>
+</body>
+</html>
