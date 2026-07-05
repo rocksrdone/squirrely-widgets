@@ -83,8 +83,7 @@
   .stage-label { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #8B7D72; margin-bottom: 2px; }
   .stage-track { height: 3px; background: var(--warm); border-radius: 2px; overflow: hidden; margin-bottom: 3px; }
   .stage-fill { height: 100%; background: var(--done-border); border-radius: 2px; }
-  .stage-nums { display: flex; align-items: center; justify-content: space-between; }
-  .stage-count-wrap { display: flex; align-items: baseline; gap: 1px; }
+  .stage-count-wrap { display: flex; align-items: baseline; justify-content: center; gap: 1px; }
   .stage-input {
     width: 28px; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500;
     border: 1px solid var(--rule); border-radius: 3px; padding: 1px 2px; text-align: center;
@@ -92,13 +91,6 @@
   }
   .stage-input:focus { border-color: var(--accent); }
   .stage-cap { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
-  .stage-btns { display: flex; gap: 2px; }
-  .stage-btn {
-    width: 17px; height: 17px; border-radius: 3px; border: 1px solid var(--rule); background: white;
-    cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center;
-  }
-  .stage-btn:hover { border-color: var(--accent); }
-  .stage-btn:disabled { opacity: .3; cursor: default; }
 
   .orders-toggle {
     margin-top: 5px; font-size: 10px; color: var(--teal); cursor: pointer; font-weight: 600;
@@ -352,16 +344,10 @@ function renderList() {
       <div class="stage-box">
         <div class="stage-label">${label}</div>
         <div class="stage-track"><div class="stage-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
-        <div class="stage-nums">
-          <div class="stage-count-wrap">
-            <input class="stage-input" type="number" min="0" max="${cap}" value="${current}"
-              onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
-            <span class="stage-cap">/${cap}</span>
-          </div>
-          <div class="stage-btns">
-            <button class="stage-btn" onclick="adjustBatchStage(${idx}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>-</button>
-            <button class="stage-btn" onclick="adjustBatchStage(${idx}, '${field}', 1)" ${current >= cap ? 'disabled' : ''}>+</button>
-          </div>
+        <div class="stage-count-wrap">
+          <input class="stage-input" type="number" min="0" max="${cap}" value="${current}"
+            onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
+          <span class="stage-cap">/${cap}</span>
         </div>
       </div>
     `;
