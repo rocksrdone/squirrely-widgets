@@ -579,6 +579,7 @@ function renderSegmentEditor() {
       </div>
       <div style="display:flex; gap:6px;">
         <button class="btn" onclick="splitSegment(${seg.clientKey})" style="flex:1">+ Split</button>
+        <button class="btn" onclick="addBlendAt(${seg.clientKey})" style="flex:1" ${baseSegments.length <= 1 ? 'disabled' : ''} title="Insert a blend transition to the next segment">+ Add Blend</button>
         <button class="btn" onclick="removeSegment(${seg.clientKey})" style="flex:1" ${baseSegments.length <= 1 ? 'disabled' : ''}>✕ Remove</button>
       </div>
     `;
@@ -642,6 +643,52 @@ function pickOverlayDye(name) {
   if (!selectedOverlayKey) return;
   updateOverlay(selectedOverlayKey, 'dyeName', name);
   document.getElementById('overlayDyeSuggestions').style.display = 'none';
+  renderSegmentEditor();
+}
+
+function addBlendAt(key) {
+  const idx = baseSegments.findIndex(s => s.clientKey === key);
+  if (idx === -1) return;
+  const n = baseSegments.length;
+  if (n < 2) {
+    alert('Add at least one more segment first — a blend needs two neighbors to sit between.');
+    return;
+  }
+  const nextIdx = (idx + 1) % n;
+  const seg = baseSegments[idx];
+  const nextSeg = baseSegments[nextIdx];
+
+  let segWidth = seg.endPct - seg.startPct; if (segWidth <= 0) segWidth += 100;
+  let nextWidth = nextSeg.endPct - nextSeg.startPct; if (nextWidth <= 0) nextWidth += 100;
+
+  const takeFraction = 0.15; // take 15% of each neighbor's own width, proportional to its size
+  const takeFromSeg = segWidth * takeFraction;
+  const takeFromNext = nextWidth * takeFraction;
+
+  let boundary = seg.endPct;
+  if (boundary <= seg.startPct) boundary += 100;
+
+  const newSegEnd = ((boundary - takeFromSeg) % 100 + 100) % 100;
+  const newBlendEnd = ((boundary + takeFromNext) % 100 + 100) % 100;
+
+  seg.endPct = newSegEnd;
+  nextSeg.startPct = newBlendEnd;
+
+  const blendSeg = {
+    rowId: null,
+    clientKey: nextClientKey++,
+    dyeName: '',
+    startPct: newSegEnd,
+    endPct: newBlendEnd,
+    type: 'Blend',
+    blendRatio: 50,
+    notes: '',
+  };
+
+  baseSegments.splice(idx + 1, 0, blendSeg);
+  selectedSegmentKey = blendSeg.clientKey;
+  markUnsaved();
+  renderRing();
   renderSegmentEditor();
 }
 
