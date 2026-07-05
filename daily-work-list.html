@@ -100,6 +100,19 @@
   .stage-btn:hover { border-color: var(--accent); }
   .stage-btn:disabled { opacity: .3; cursor: default; }
 
+  .orders-toggle {
+    margin-top: 10px; font-size: 11px; color: var(--teal); cursor: pointer; font-weight: 600;
+  }
+  .orders-toggle:hover { text-decoration: underline; }
+  .orders-list {
+    display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--warm);
+  }
+  .orders-list.open { display: block; }
+  .order-row {
+    display: flex; justify-content: space-between; font-size: 11px; color: #6B5E52;
+    padding: 3px 0;
+  }
+
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
@@ -182,7 +195,8 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-let workItems = []; // {lineId, sku, colorwayName, productName, qtyNeeded, qtyDyed, qtyWound, qtyPacked, priority, orderNumber, customerName, dueDate}
+let allLines = []; // flat per-line data: {lineId, sku, colorwayName, productName, qtyNeeded, qtyDyed, qtyWound, qtyPacked, priority, orderNumber, customerName, dueDate}
+let batches = [];   // grouped by SKU: {sku, colorwayName, lines[], totalNeeded, totalDyed, totalWound, totalPacked, priority, dueDate}
 
 async function loadEverything() {
   document.getElementById('headerSub').textContent = 'Loading...';
@@ -246,17 +260,11 @@ async function loadEverything() {
       });
     }
 
-    items.sort((a, b) => {
-      const pr = priorityRank(a.priority) - priorityRank(b.priority);
-      if (pr !== 0) return pr;
-      const ad = a.dueDate ? Number(a.dueDate) : Infinity;
-      const bd = b.dueDate ? Number(b.dueDate) : Infinity;
-      if (ad !== bd) return ad - bd;
-      return (a.orderNumber || '').toString().localeCompare((b.orderNumber || '').toString());
-    });
+    allLines = items;
+    buildBatches();
 
-    workItems = items;
-    document.getElementById('headerSub').textContent = `${items.length} line${items.length === 1 ? '' : 's'} still in progress`;
+    document.getElementById('headerSub').textContent =
+      `${batches.length} colorway${batches.length === 1 ? '' : 's'} to work on · ${items.length} order line${items.length === 1 ? '' : 's'} total`;
     renderList();
   } catch (e) {
     console.error('Failed to load work list:', e);
@@ -264,30 +272,81 @@ async function loadEverything() {
   }
 }
 
+function buildBatches() {
+  const groups = {};
+  allLines.forEach(line => {
+    const key = normalize(line.sku);
+    if (!groups[key]) groups[key] = { sku: line.sku, colorwayName: line.colorwayName, lines: [] };
+    groups[key].lines.push(line);
+  });
+
+  batches = Object.values(groups).map(g => {
+    // Fill order within a batch: most urgent, soonest-due order first
+    g.lines.sort((a, b) => {
+      const pr = priorityRank(a.priority) - priorityRank(b.priority);
+      if (pr !== 0) return pr;
+      const ad = a.dueDate ? Number(a.dueDate) : Infinity;
+      const bd = b.dueDate ? Number(b.dueDate) : Infinity;
+      return ad - bd;
+    });
+
+    const totalNeeded = g.lines.reduce((s, l) => s + l.qtyNeeded, 0);
+    const totalDyed = g.lines.reduce((s, l) => s + l.qtyDyed, 0);
+    const totalWound = g.lines.reduce((s, l) => s + l.qtyWound, 0);
+    const totalPacked = g.lines.reduce((s, l) => s + l.qtyPacked, 0);
+
+    let bestPriority = g.lines[0].priority;
+    g.lines.forEach(l => { if (priorityRank(l.priority) < priorityRank(bestPriority)) bestPriority = l.priority; });
+
+    let earliestDue = null;
+    g.lines.forEach(l => {
+      if (!l.dueDate) return;
+      const d = Number(l.dueDate);
+      if (earliestDue === null || d < earliestDue) earliestDue = d;
+    });
+
+    return {
+      sku: g.sku, colorwayName: g.colorwayName, lines: g.lines,
+      totalNeeded, totalDyed, totalWound, totalPacked,
+      priority: bestPriority, dueDate: earliestDue,
+    };
+  });
+
+  batches.sort((a, b) => {
+    const pr = priorityRank(a.priority) - priorityRank(b.priority);
+    if (pr !== 0) return pr;
+    const ad = a.dueDate ?? Infinity;
+    const bd = b.dueDate ?? Infinity;
+    if (ad !== bd) return ad - bd;
+    return (a.colorwayName || a.sku || '').localeCompare(b.colorwayName || b.sku || '');
+  });
+}
+
 function renderList() {
   const content = document.getElementById('content');
   const q = normalize(document.getElementById('searchBox').value);
   const priorityFilterVal = document.getElementById('priorityFilter').value;
 
-  const filtered = workItems.filter(item => {
-    if (priorityFilterVal && item.priority !== priorityFilterVal) return false;
-    if (!q) return true;
-    return normalize(item.colorwayName).includes(q) ||
-           normalize(item.sku).includes(q) ||
-           normalize(item.customerName).includes(q) ||
-           normalize(item.orderNumber).includes(q);
-  });
+  const filtered = batches
+    .map((b, idx) => ({ b, idx }))
+    .filter(({ b }) => {
+      if (priorityFilterVal && b.priority !== priorityFilterVal) return false;
+      if (!q) return true;
+      return normalize(b.colorwayName).includes(q) ||
+             normalize(b.sku).includes(q) ||
+             b.lines.some(l => normalize(l.customerName).includes(q) || normalize(l.orderNumber).includes(q));
+    });
 
   if (!filtered.length) {
-    content.innerHTML = `<div class="empty-state">${workItems.length ? 'Nothing matches that search/filter.' : '🎉 Nothing left in the queue right now.'}</div>`;
+    content.innerHTML = `<div class="empty-state">${batches.length ? 'Nothing matches that search/filter.' : '🎉 Nothing left in the queue right now.'}</div>`;
     return;
   }
 
-  content.innerHTML = filtered.map(item => {
-    const priorityClass = (item.priority || 'normal').toLowerCase();
+  content.innerHTML = filtered.map(({ b: batch, idx }) => {
+    const priorityClass = (batch.priority || 'normal').toLowerCase();
     const cardPriorityClass = priorityClass === 'urgent' ? 'priority-urgent' : priorityClass === 'high' ? 'priority-high' : '';
-
-    const dueLabel = item.dueDate ? new Date(Number(item.dueDate) * 1000).toLocaleDateString() : 'No due date';
+    const dueLabel = batch.dueDate ? new Date(batch.dueDate * 1000).toLocaleDateString() : 'No due date';
+    const orderCount = batch.lines.length;
 
     const stage = (label, current, cap, field) => `
       <div class="stage-box">
@@ -296,91 +355,130 @@ function renderList() {
         <div class="stage-nums">
           <div class="stage-count-wrap">
             <input class="stage-input" type="number" min="0" max="${cap}" value="${current}"
-              onchange="setStage(${item.lineId}, '${field}', this.value, ${cap})">
+              onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
             <span class="stage-cap">/${cap}</span>
           </div>
           <div class="stage-btns">
-            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>-</button>
-            <button class="stage-btn" onclick="adjustStage(${item.lineId}, '${field}', 1)" ${current >= cap ? 'disabled' : ''}>+</button>
+            <button class="stage-btn" onclick="adjustBatchStage(${idx}, '${field}', -1)" ${current <= 0 ? 'disabled' : ''}>-</button>
+            <button class="stage-btn" onclick="adjustBatchStage(${idx}, '${field}', 1)" ${current >= cap ? 'disabled' : ''}>+</button>
           </div>
         </div>
       </div>
     `;
+
+    const ordersRows = batch.lines.map(l => {
+      const lDue = l.dueDate ? new Date(Number(l.dueDate) * 1000).toLocaleDateString() : '—';
+      return `<div class="order-row"><span>#${l.orderNumber || '—'} · ${l.customerName || '—'}</span><span>${l.qtyNeeded} needed · due ${lDue}</span></div>`;
+    }).join('');
 
     return `
       <div class="work-card ${cardPriorityClass}">
         <div class="work-card-top">
           <div>
-            <div class="work-colorway" style="color:${guessColor(item.colorwayName || item.sku)}">${item.colorwayName || item.productName || 'Unknown colorway'}</div>
-            <div class="work-sku">${item.sku}</div>
+            <div class="work-colorway" style="color:${guessColor(batch.colorwayName || batch.sku)}">${batch.colorwayName || batch.sku}</div>
+            <div class="work-sku">${batch.sku} · ${orderCount} order${orderCount === 1 ? '' : 's'}</div>
           </div>
           <div class="work-order-info">
-            <div>#${item.orderNumber || '—'} · ${item.customerName || '—'}</div>
-            <div>${dueLabel}</div>
-            <div class="priority-badge ${priorityClass}">${item.priority}</div>
+            <div>Due ${dueLabel}</div>
+            <div class="priority-badge ${priorityClass}">${batch.priority}</div>
           </div>
         </div>
         <div class="stages-row">
-          ${stage('Dye', item.qtyDyed, item.qtyNeeded, 'Qty_Dyed')}
-          ${stage('Wind', item.qtyWound, item.qtyDyed, 'Qty_Wound')}
-          ${stage('Pack', item.qtyPacked, item.qtyWound, 'Qty_Packed')}
+          ${stage('Dye', batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}
+          ${stage('Wind', batch.totalWound, batch.totalDyed, 'Qty_Wound')}
+          ${stage('Pack', batch.totalPacked, batch.totalWound, 'Qty_Packed')}
         </div>
+        <div class="orders-toggle" onclick="this.nextElementSibling.classList.toggle('open')">▾ Orders needing this (${orderCount})</div>
+        <div class="orders-list">${ordersRows}</div>
       </div>
     `;
   }).join('');
 }
 
-async function setStage(lineId, field, rawValue, cap) {
-  const item = workItems.find(i => i.lineId === lineId);
-  if (!item) return;
+function stageFieldKey(field) {
+  return { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' }[field];
+}
+function stageCapForLine(line, field) {
+  if (field === 'Qty_Dyed') return line.qtyNeeded;
+  if (field === 'Qty_Wound') return line.qtyDyed;
+  if (field === 'Qty_Packed') return line.qtyWound;
+  return 0;
+}
+function batchTotalKey(field) {
+  return { Qty_Dyed: 'totalDyed', Qty_Wound: 'totalWound', Qty_Packed: 'totalPacked' }[field];
+}
 
-  const fieldMap = { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' };
-  const key = fieldMap[field];
-  const oldVal = item[key];
-  const newVal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
+function distributeDelta(batch, field, delta) {
+  const key = stageFieldKey(field);
+  const changes = [];
+  let remaining = delta;
 
-  if (newVal === oldVal) { renderList(); return; }
+  if (delta > 0) {
+    for (const line of batch.lines) {
+      if (remaining <= 0) break;
+      const cap = stageCapForLine(line, field);
+      const room = cap - line[key];
+      if (room <= 0) continue;
+      const take = Math.min(room, remaining);
+      line[key] += take;
+      remaining -= take;
+      changes.push({ lineId: line.lineId, field, newVal: line[key] });
+    }
+  } else if (delta < 0) {
+    let toRemove = -delta;
+    for (let i = batch.lines.length - 1; i >= 0 && toRemove > 0; i--) {
+      const line = batch.lines[i];
+      const take = Math.min(line[key], toRemove);
+      if (take <= 0) continue;
+      line[key] -= take;
+      toRemove -= take;
+      changes.push({ lineId: line.lineId, field, newVal: line[key] });
+    }
+  }
+  return changes;
+}
 
-  item[key] = newVal;
+function recomputeBatchTotals(batch) {
+  batch.totalDyed = batch.lines.reduce((s, l) => s + l.qtyDyed, 0);
+  batch.totalWound = batch.lines.reduce((s, l) => s + l.qtyWound, 0);
+  batch.totalPacked = batch.lines.reduce((s, l) => s + l.qtyPacked, 0);
+}
+
+async function adjustBatchStage(batchIdx, field, delta) {
+  const batch = batches[batchIdx];
+  if (!batch) return;
+
+  const changes = distributeDelta(batch, field, delta);
+  if (!changes.length) return;
+
+  recomputeBatchTotals(batch);
   renderList();
 
   try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Work_Order_Lines', lineId, { [field]: newVal }]
-    ]);
-    showToast(`${field.replace('Qty_', '')} set to ${newVal}`);
+    await grist.docApi.applyUserActions(
+      changes.map(c => ['UpdateRecord', 'Work_Order_Lines', c.lineId, { [c.field]: c.newVal }])
+    );
   } catch (e) {
     console.error('Failed to update:', e);
     showToast('Update failed — check widget access level');
-    item[key] = oldVal;
+    distributeDelta(batch, field, -delta);
+    recomputeBatchTotals(batch);
     renderList();
   }
 }
 
-async function adjustStage(lineId, field, delta) {
-  const item = workItems.find(i => i.lineId === lineId);
-  if (!item) return;
+async function setBatchStage(batchIdx, field, rawValue, cap) {
+  const batch = batches[batchIdx];
+  if (!batch) return;
 
-  const fieldMap = { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' };
-  const capMap = { Qty_Dyed: item.qtyNeeded, Qty_Wound: item.qtyDyed, Qty_Packed: item.qtyWound };
-  const key = fieldMap[field];
-  const cap = capMap[field];
-  const newVal = Math.max(0, Math.min(cap, item[key] + delta));
-  if (newVal === item[key]) return;
+  const totalKey = batchTotalKey(field);
+  const currentTotal = batch[totalKey];
+  const newTotal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
+  const delta = newTotal - currentTotal;
 
-  item[key] = newVal;
-  renderList();
-
-  try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Work_Order_Lines', lineId, { [field]: newVal }]
-    ]);
-  } catch (e) {
-    console.error('Failed to update:', e);
-    showToast('Update failed — check widget access level');
-    item[key] = item[key] - delta; // revert optimistic update
-    renderList();
-  }
+  if (delta === 0) { renderList(); return; }
+  await adjustBatchStage(batchIdx, field, delta);
+  showToast(`${field.replace('Qty_', '')} set to ${newTotal}`);
 }
 
 // ── GRIST INTEGRATION ──
