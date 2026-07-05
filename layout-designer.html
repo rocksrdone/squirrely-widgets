@@ -75,6 +75,15 @@
 
   .no-selection { color: #8B7D72; font-style: italic; font-size: 12px; padding: 8px 0; }
 
+  .dye-input-wrap { position: relative; }
+  .dye-suggestions {
+    position: absolute; z-index: 40; background: white; border: 1px solid var(--rule); border-top: none;
+    border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto; width: 100%;
+    box-shadow: 0 6px 16px rgba(0,0,0,.08);
+  }
+  .dye-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+  .dye-suggestion-row:hover { background: var(--warm); }
+
   .repeat-row { display: flex; align-items: center; gap: 8px; }
   .repeat-row input { width: 60px; }
 
@@ -178,6 +187,52 @@ function columnAsArray(tableData, col) {
   return Array.isArray(tableData[col]) ? tableData[col] : [];
 }
 
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function normalize(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+async function loadDyesList() {
+  if (allDyes.length) return;
+  try {
+    const dyesTable = await grist.docApi.fetchTable('Dyes');
+    const nameCol = findColumn(dyesTable, ['Dye_Name', 'Name']) || 'Dye_Name';
+    const brandCol = findColumn(dyesTable, ['Brand']);
+    const ids = dyesTable.id || [];
+    allDyes = ids.map((id, i) => ({
+      name: columnAsArray(dyesTable, nameCol)[i],
+      brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
+    })).filter(d => d.name);
+  } catch (e) {
+    console.error('Could not load Dyes table for autocomplete:', e);
+    allDyes = [];
+  }
+}
+
+function searchDyeSuggestions(boxId, query, onPick) {
+  const box = document.getElementById(boxId);
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const matches = allDyes.filter(d => normalize(d.name).includes(q)).slice(0, 8);
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = matches.map(d => `
+    <div class="dye-suggestion-row" onmousedown="event.preventDefault(); ${onPick}('${d.name.replace(/'/g, "\\'")}')">
+      <strong>${d.name}</strong>${d.brand ? ` <span style="color:#8B7D72">(${d.brand})</span>` : ''}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -226,6 +281,7 @@ function angleFromEvent(evt) {
 
 // ── STATE ──
 let currentRecipeId = null;
+let allDyes = [];
 let baseSegments = [];    // {rowId, clientKey, dyeName, startPct, endPct, type}
 let overlayMarks = [];    // {rowId, clientKey, dyeName, startPct, endPct, notes}
 let deletedIds = [];
@@ -255,6 +311,8 @@ async function loadLayout(record) {
   deletedIds = [];
   selectedSegmentKey = null;
   selectedOverlayKey = null;
+
+  await loadDyesList();
 
   try {
     const table = await grist.docApi.fetchTable('Recipe_Layout_Segments');
@@ -379,7 +437,13 @@ function renderSegmentEditor() {
     wrap.innerHTML = `
       <div class="field-row">
         <span class="field-label">Dye Name</span>
-        <input class="field-input" value="${(seg.dyeName || '').replace(/"/g, '&quot;')}" oninput="updateSegment(${seg.clientKey}, 'dyeName', this.value)">
+        <div class="dye-input-wrap">
+          <input class="field-input" value="${(seg.dyeName || '').replace(/"/g, '&quot;')}"
+            oninput="updateSegment(${seg.clientKey}, 'dyeName', this.value); searchDyeSuggestions('segDyeSuggestions', this.value, 'pickSegmentDye')"
+            onfocus="searchDyeSuggestions('segDyeSuggestions', this.value, 'pickSegmentDye')"
+            onblur="setTimeout(() => { const b = document.getElementById('segDyeSuggestions'); if (b) b.style.display='none'; }, 150)">
+          <div class="dye-suggestions" id="segDyeSuggestions" style="display:none"></div>
+        </div>
       </div>
       <div class="field-row">
         <span class="field-label">Type</span>
@@ -404,7 +468,13 @@ function renderSegmentEditor() {
     wrap.innerHTML = `
       <div class="field-row">
         <span class="field-label">Dye / substance</span>
-        <input class="field-input" value="${(mark.dyeName || '').replace(/"/g, '&quot;')}" oninput="updateOverlay(${mark.clientKey}, 'dyeName', this.value)">
+        <div class="dye-input-wrap">
+          <input class="field-input" value="${(mark.dyeName || '').replace(/"/g, '&quot;')}"
+            oninput="updateOverlay(${mark.clientKey}, 'dyeName', this.value); searchDyeSuggestions('overlayDyeSuggestions', this.value, 'pickOverlayDye')"
+            onfocus="searchDyeSuggestions('overlayDyeSuggestions', this.value, 'pickOverlayDye')"
+            onblur="setTimeout(() => { const b = document.getElementById('overlayDyeSuggestions'); if (b) b.style.display='none'; }, 150)">
+          <div class="dye-suggestions" id="overlayDyeSuggestions" style="display:none"></div>
+        </div>
       </div>
       <div class="field-row">
         <span class="field-label">Position (center %)</span>
@@ -427,6 +497,20 @@ function updateSegment(key, field, value) {
   seg[field] = value;
   markUnsaved();
   renderRing();
+}
+
+function pickSegmentDye(name) {
+  if (!selectedSegmentKey) return;
+  updateSegment(selectedSegmentKey, 'dyeName', name);
+  document.getElementById('segDyeSuggestions').style.display = 'none';
+  renderSegmentEditor();
+}
+
+function pickOverlayDye(name) {
+  if (!selectedOverlayKey) return;
+  updateOverlay(selectedOverlayKey, 'dyeName', name);
+  document.getElementById('overlayDyeSuggestions').style.display = 'none';
+  renderSegmentEditor();
 }
 
 function splitSegment(key) {
