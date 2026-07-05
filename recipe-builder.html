@@ -227,7 +227,7 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Linked Customer (optional)</span>
-        <select class="field-select" id="linkedCustomer" onchange="markUnsaved()">
+        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner();">
           <option value="">— none —</option>
         </select>
       </div>
@@ -495,11 +495,25 @@ function renderLinkedOrderBanner() {
   const wrap = document.getElementById('linkedOrderLineBanner');
   if (!selectedOrderLine) { wrap.innerHTML = ''; return; }
   const l = selectedOrderLine;
+
+  let mismatchWarning = '';
+  const linkedCustomerSelect = document.getElementById('linkedCustomer');
+  const linkedCustomerId = linkedCustomerSelect.value;
+  if (linkedCustomerId) {
+    const linkedName = linkedCustomerSelect.options[linkedCustomerSelect.selectedIndex].textContent;
+    const a = normalize(linkedName);
+    const b = normalize(l.customerName);
+    if (a && b && !a.includes(b) && !b.includes(a)) {
+      mismatchWarning = `<div class="sku-warning">⚠ This order is for "${l.customerName}" but Linked Customer is set to "${linkedName}" — double check these match.</div>`;
+    }
+  }
+
   wrap.innerHTML = `
     <div class="linked-order-banner">
       <span>#${l.orderNumber || '—'} · ${l.customerName || '—'} — ${l.productName || l.sku || 'untitled item'}</span>
       <span class="linked-order-unlink" onclick="unlinkOrderLine()">Unlink</span>
     </div>
+    ${mismatchWarning}
   `;
 }
 
