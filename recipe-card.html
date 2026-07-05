@@ -75,6 +75,14 @@
     margin-bottom: 6px;
   }
   .recipe-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+
+  .spool-badge {
+    display: inline-block; margin-bottom: 10px; font-size: 10px; font-weight: 600;
+    padding: 3px 9px; border-radius: 10px; letter-spacing: .02em;
+  }
+  .spool-done { background: var(--done-bg); color: var(--done-text); border: 1px solid var(--done-border); }
+  .spool-partial { background: var(--gold-light); color: var(--gold); border: 1px solid #D4B07A; }
+  .spool-none { background: var(--accent-light); color: var(--accent); border: 1px solid #D4A49A; }
   .recipe-header-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .product-preview-thumb {
     flex: 0 0 auto;
@@ -532,6 +540,7 @@ let currentPhotoIndex = 0;
 let currentPreviewUrl = null;
 let currentBaseSegments = [];
 let currentOverlayMarks = [];
+let currentSpoolStats = { needed: 0, made: 0 };
 let currentPreviewId = null;
 let currentProductPhotos = [];
 let previewPickerOpen = false;
@@ -828,11 +837,12 @@ function renderLeft() {
 
   const stepsHTML = stepComps.map((c, i) => {
     const col = guessColor(c.Dye_Name || '');
+    const stepBrandMatch = (c.Dye_Full || '').match(/\(([A-Za-z]+)\)/);
     return `
       <div class="step-item" onclick="toggleStep(this)">
         <div class="step-num">${i+1}</div>
         <div class="step-content">
-          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}</div>` : ''}
+          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>` : ''}
           <div class="step-text">${c.Application_Notes || ''}</div>
           ${c.Position ? `<div class="step-pos">📍 ${c.Position}</div>` : ''}
           ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
@@ -845,6 +855,12 @@ function renderLeft() {
       <div>
         <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
         <div class="recipe-meta">${tags}</div>
+        ${currentSpoolStats.needed > 0 ? `
+          <div class="spool-badge ${currentSpoolStats.made >= currentSpoolStats.needed ? 'spool-done' : currentSpoolStats.made > 0 ? 'spool-partial' : 'spool-none'}"
+            title="${currentSpoolStats.made} of ${currentSpoolStats.needed} spools dyed across active orders">
+            🧵 ${currentSpoolStats.made}/${currentSpoolStats.needed} dyed
+          </div>
+        ` : ''}
       </div>
       ${currentProductPhotos.length ? `
         <div class="preview-wrap">
@@ -1106,6 +1122,51 @@ grist.onRecord(async (record) => {
     console.error('Failed to fetch layout segments:', e);
     currentBaseSegments = [];
     currentOverlayMarks = [];
+  }
+
+  try {
+    const recipeSku = (currentRecipe.SKU_Base || currentRecipe.Shopify_SKU || '').toString().trim().toUpperCase();
+    currentSpoolStats = { needed: 0, made: 0 };
+
+    if (recipeSku) {
+      const [woTable, wolTable] = await Promise.all([
+        grist.docApi.fetchTable('Work_Orders'),
+        grist.docApi.fetchTable('Work_Order_Lines'),
+      ]);
+
+      const woIds = woTable.id || [];
+      const woStatus = woTable.Status || [];
+      const activeWoIds = new Set();
+      for (let i = 0; i < woIds.length; i++) {
+        if ((woStatus[i] || '').toString() === 'Active') activeWoIds.add(woIds[i]);
+      }
+
+      const getRefIdLocal = (ref) => {
+        if (typeof ref === 'number') return ref;
+        if (Array.isArray(ref)) return ref[1];
+        if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+        return null;
+      };
+
+      const lIds = wolTable.id || [];
+      const lSku = wolTable.SKU || [];
+      const lWo = wolTable.Work_Order || [];
+      const lNeeded = wolTable.Qty_Needed || [];
+      const lDyed = wolTable.Qty_Dyed || [];
+
+      let needed = 0, made = 0;
+      for (let i = 0; i < lIds.length; i++) {
+        const sku = (lSku[i] || '').toString().trim().toUpperCase();
+        if (sku !== recipeSku) continue;
+        if (!activeWoIds.has(getRefIdLocal(lWo[i]))) continue;
+        needed += Number(lNeeded[i]) || 0;
+        made += Number(lDyed[i]) || 0;
+      }
+      currentSpoolStats = { needed, made };
+    }
+  } catch (e) {
+    console.error('Failed to compute spool stats:', e);
+    currentSpoolStats = { needed: 0, made: 0 };
   }
 
   await refreshPreviewPhotos();
