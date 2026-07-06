@@ -504,13 +504,15 @@ async function loadVendorsList() {
     const customersTable = await grist.docApi.fetchTable('Customers');
     const nameCol = findColumn(customersTable, ['Name', 'Customer_Name', 'Vendor_Name']);
     const codeCol = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+    const typeCol = findColumn(customersTable, ['Type', 'Customer_Type']);
     if (!nameCol || !codeCol) return;
     const ids = customersTable.id || [];
     allVendors = ids.map((id, i) => ({
       id,
       name: columnAsArray(customersTable, nameCol)[i],
       code: columnAsArray(customersTable, codeCol)[i],
-    })).filter(v => v.name && v.code);
+      type: typeCol ? columnAsArray(customersTable, typeCol)[i] : '',
+    })).filter(v => v.name && v.code && (!v.type || v.type === 'Wholesale Vendor'));
 
     const select = document.getElementById('reservedFor');
     select.innerHTML = '<option value="">— pick vendor —</option>' +
