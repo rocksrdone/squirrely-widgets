@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recipe Make Sequence</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; flex-wrap: wrap; gap: 8px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 12px; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
+
+  .seq-list { display: flex; flex-direction: column; gap: 6px; }
+  .seq-row {
+    display: flex; align-items: center; gap: 10px; background: white; border: 1px solid var(--rule);
+    border-radius: 8px; padding: 9px 12px; cursor: pointer;
+  }
+  .seq-row:hover { border-color: var(--teal); }
+  .seq-num {
+    font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; color: #8B7D72;
+    width: 26px; text-align: right; flex-shrink: 0;
+  }
+  .seq-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .seq-name { font-family: 'Libre Baskerville', serif; font-size: 13px; font-weight: 700; flex: 1; }
+  .seq-reason { font-size: 11px; color: #8B7D72; flex-shrink: 0; text-align: right; max-width: 260px; }
+
+  .seq-group-divider {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--teal); margin: 14px 0 4px; padding-top: 10px; border-top: 1px dashed var(--rule);
+  }
+  .seq-group-divider:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+
+  .detail-wrap {
+    display: none; background: var(--warm); border-radius: 6px; padding: 8px 12px; margin-top: 4px; font-size: 11px; color: #6B5E52;
+  }
+  .detail-wrap.open { display: block; }
+  .detail-line { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--rule); }
+  .detail-line:last-child { border-bottom: none; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <div class="header-title">Recipe Make Sequence</div>
+  </div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+<div class="header-sub" id="headerSub">Loading...</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) if (l.includes(k)) return v;
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+let sequenceGroups = [];
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+
+  try {
+    const [woTable, wolTable, recipesTable, compTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+      };
+    });
+
+    const rIds = recipesTable.id || [];
+    const recipeById = {};
+    const recipeBySku = {};
+    rIds.forEach((id, i) => {
+      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i] };
+      recipeById[id] = rec;
+      const sku = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
+      if (sku) recipeBySku[sku] = rec;
+    });
+
+    const cIds = compTable.id || [];
+    const dyesByRecipe = {};
+    cIds.forEach((id, i) => {
+      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      if (!recipeRef || !dyeName) return;
+      if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = new Set();
+      dyesByRecipe[recipeRef].add(dyeName);
+    });
+
+    // Determine which recipes are actually pending (active order, qty remaining)
+    const wolIds = wolTable.id || [];
+    const pendingRecipes = {}; // recipeId -> { recipe, orders: [{orderNumber, customerName, qty}] }
+
+    for (let i = 0; i < wolIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const remaining = qtyNeeded - qtyDyed;
+      if (remaining <= 0) continue;
+
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      let recipe = null;
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
+      else recipe = recipeBySku[normalize(sku)] || null;
+      if (!recipe) continue;
+
+      if (!pendingRecipes[recipe.id]) {
+        pendingRecipes[recipe.id] = {
+          recipe,
+          dyes: dyesByRecipe[recipe.id] ? Array.from(dyesByRecipe[recipe.id]) : [],
+          orders: [],
+        };
+      }
+      pendingRecipes[recipe.id].orders.push({
+        orderNumber: info.orderNumber,
+        customerName: info.customerName,
+        qty: remaining,
+      });
+    }
+
+    // Only sequence recipes that actually have known dye components
+    let remaining = Object.values(pendingRecipes).filter(r => r.dyes.length > 0);
+
+    const groups = []; // [{ label, items: [recipeEntry] }]
+
+    while (remaining.length > 0) {
+      // Recompute dye demand counts among remaining recipes
+      const dyeDemand = {};
+      remaining.forEach(r => {
+        r.dyes.forEach(d => {
+          const key = normalize(d);
+          dyeDemand[key] = (dyeDemand[key] || 0) + 1;
+        });
+      });
+
+      // Isolated: every dye this recipe uses is needed by no other remaining recipe
+      const isolated = remaining.filter(r =>
+        r.dyes.every(d => dyeDemand[normalize(d)] === 1)
+      );
+
+      if (isolated.length > 0) {
+        isolated.sort((a, b) => a.dyes.length - b.dyes.length);
+        groups.push({
+          label: groups.length === 0 ? 'One-offs (unique dye, no sharing benefit)' : 'More one-offs',
+          items: isolated,
+        });
+        const isolatedIds = new Set(isolated.map(r => r.recipe.id));
+        remaining = remaining.filter(r => !isolatedIds.has(r.recipe.id));
+        continue;
+      }
+
+      // No isolated recipes left — pick the dye with the smallest remaining demand
+      let smallestDye = null;
+      let smallestCount = Infinity;
+      Object.entries(dyeDemand).forEach(([dye, count]) => {
+        if (count < smallestCount) { smallestCount = count; smallestDye = dye; }
+      });
+
+      const cluster = remaining.filter(r => r.dyes.some(d => normalize(d) === smallestDye));
+      cluster.sort((a, b) => a.dyes.length - b.dyes.length);
+      groups.push({
+        label: `Cluster: ${cluster[0].dyes.find(d => normalize(d) === smallestDye) || smallestDye} (shared by ${cluster.length})`,
+        items: cluster,
+      });
+      const clusterIds = new Set(cluster.map(r => r.recipe.id));
+      remaining = remaining.filter(r => !clusterIds.has(r.recipe.id));
+    }
+
+    sequenceGroups = groups;
+    const totalCount = groups.reduce((sum, g) => sum + g.items.length, 0);
+    document.getElementById('headerSub').textContent =
+      `${totalCount} recipe${totalCount === 1 ? '' : 's'} to make, sequenced to minimize dye changeovers`;
+    render();
+  } catch (e) {
+    console.error('Failed to load recipe make sequence:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+  }
+}
+
+function render() {
+  const content = document.getElementById('content');
+
+  if (!sequenceGroups.length) {
+    content.innerHTML = `<div class="empty-state">🎉 Nothing needs making right now.</div>`;
+    return;
+  }
+
+  let counter = 0;
+  const html = sequenceGroups.map(group => {
+    const rows = group.items.map(item => {
+      counter++;
+      const idx = counter;
+      const dyeList = item.dyes.join(', ');
+      const swatchColor = guessColor(item.dyes[0] || '');
+      const ordersHtml = item.orders.map(o =>
+        `<div class="detail-line"><span>#${o.orderNumber || '—'} · ${o.customerName || '—'}</span><span>${o.qty} needed</span></div>`
+      ).join('');
+
+      return `
+        <div class="seq-row" onclick="document.getElementById('detail-${idx}').classList.toggle('open')">
+          <div class="seq-num">${idx}.</div>
+          <div class="seq-swatch" style="background:${swatchColor}"></div>
+          <div class="seq-name">${item.recipe.name}</div>
+          <div class="seq-reason">${dyeList}</div>
+        </div>
+        <div class="detail-wrap" id="detail-${idx}">${ordersHtml}</div>
+      `;
+    }).join('');
+
+    return `<div class="seq-group-divider">${group.label}</div><div class="seq-list">${rows}</div>`;
+  }).join('');
+
+  content.innerHTML = html;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
