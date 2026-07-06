@@ -140,6 +140,11 @@
     opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
   }
   .toast.show { opacity: 1; }
+  .btn {
+    font-size: 13px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--rule); background: white; color: var(--ink);
+  }
+  .btn:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -174,6 +179,7 @@ const SLOTS = {
 };
 
 let inboxPhotos = [];
+let visibleCount = 30;
 let allRecipes = [];
 // Per-photo UI state, keyed by photo path
 let cardState = {};
@@ -232,6 +238,7 @@ async function loadEverything() {
     ]);
 
     inboxPhotos = (inboxRes.photos || []);
+    visibleCount = 30;
 
     const nameCol = 'Recipe_Name';
     const fiberCol = findColumn(recipesData, ['Fiber_Type']) || 'Fiber_Type';
@@ -269,7 +276,22 @@ function renderGrid() {
     return;
   }
 
-  content.innerHTML = `<div class="inbox-grid">${inboxPhotos.map(photoCardHTML).join('')}</div>`;
+  const visible = inboxPhotos.slice(0, visibleCount);
+  const remaining = inboxPhotos.length - visible.length;
+
+  content.innerHTML = `
+    <div class="inbox-grid">${visible.map(photoCardHTML).join('')}</div>
+    ${remaining > 0 ? `
+      <div style="text-align:center; margin-top:14px;">
+        <button class="btn" onclick="loadMorePhotos()">Load ${Math.min(30, remaining)} more (${remaining} left)</button>
+      </div>
+    ` : ''}
+  `;
+}
+
+function loadMorePhotos() {
+  visibleCount += 30;
+  renderGrid();
 }
 
 function photoCardHTML(p) {
