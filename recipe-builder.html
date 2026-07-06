@@ -235,14 +235,6 @@
       </div>
       <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
-        <span class="field-label">Shopify Product Link (optional)</span>
-        <div style="display:flex; gap:6px;">
-          <input class="field-input" id="shopifyProductUrl" placeholder="https://..." oninput="markUnsaved()" style="flex:1;">
-          <button class="btn btn-small" onclick="lookupShopifyUrl()" style="white-space:nowrap;">🔍 Look up by SKU</button>
-        </div>
-        <div id="shopifyLookupMsg" style="font-size:11px; color:#8B7D72; margin-top:4px;"></div>
-      </div>
-      <div class="field-wrap wide">
         <span class="field-label">Notes</span>
         <textarea class="field-textarea" id="generalNotes" oninput="markUnsaved()"></textarea>
       </div>
@@ -335,6 +327,20 @@
         <textarea class="field-textarea" id="newHistoryNote" placeholder="e.g. Adjusted dilution slightly darker per customer request" style="min-height:44px;"></textarea>
       </div>
       <button class="btn btn-small" onclick="addHistoryNote()" style="width:100%;">+ Add dated note</button>
+    </div>
+  </div>
+
+  <div class="section" id="shopifySection">
+    <div class="section-title" onclick="toggleSection('shopify')"><span>Shopify Link</span><span class="section-chevron collapsed" id="chevron-shopify">▾</span></div>
+    <div class="section-body collapsed" id="body-shopify">
+      <div class="field-wrap wide">
+        <span class="field-label">Shopify Product Link (optional)</span>
+        <div style="display:flex; gap:6px;">
+          <input class="field-input" id="shopifyProductUrl" placeholder="https://..." oninput="markUnsaved()" style="flex:1;">
+          <button class="btn btn-small" onclick="lookupShopifyUrl()" style="white-space:nowrap;">🔍 Look up by SKU</button>
+        </div>
+        <div id="shopifyLookupMsg" style="font-size:11px; color:#8B7D72; margin-top:4px;"></div>
+      </div>
     </div>
   </div>
 </div>
