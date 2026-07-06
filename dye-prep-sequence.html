@@ -226,6 +226,7 @@ async function loadEverything() {
 
     const wolIds = wolTable.id || [];
     const groups = {};
+    const recipeDyeSets = {}; // recipeId -> Set of dye names, for clustering
 
     for (let i = 0; i < wolIds.length; i++) {
       const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
@@ -244,6 +245,11 @@ async function loadEverything() {
       else recipe = recipeBySku[normalize(sku)] || null;
 
       if (!recipe || !compsByRecipe[recipe.id]) continue;
+
+      if (!recipeDyeSets[recipe.id]) recipeDyeSets[recipe.id] = new Set();
+      compsByRecipe[recipe.id].forEach(comp => {
+        if (comp.dyeName) recipeDyeSets[recipe.id].add(comp.dyeName);
+      });
 
       const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
 
@@ -290,6 +296,44 @@ async function loadEverything() {
       });
     }
 
+    // Run the same isolation/clustering algorithm as Recipe Make Sequence, so both
+    // tools agree on baseline ordering. Derive a per-dye "efficiency rank" (the round
+    // at which that dye gets addressed) to use as Dye Prep Sequence's tiebreaker,
+    // below the genuinely urgent signals (expiring stock, priority/due date).
+    let clusterRemaining = Object.entries(recipeDyeSets).map(([recipeId, dyeSet]) => ({
+      recipeId, dyes: Array.from(dyeSet),
+    }));
+    const dyeEfficiencyRank = {};
+    let round = 0;
+    while (clusterRemaining.length > 0) {
+      const dyeDemand = {};
+      clusterRemaining.forEach(r => r.dyes.forEach(d => {
+        const key = normalize(d);
+        dyeDemand[key] = (dyeDemand[key] || 0) + 1;
+      }));
+
+      const isolated = clusterRemaining.filter(r => r.dyes.every(d => dyeDemand[normalize(d)] === 1));
+      let thisRoundIds;
+      if (isolated.length > 0) {
+        thisRoundIds = new Set(isolated.map(r => r.recipeId));
+        isolated.forEach(r => r.dyes.forEach(d => {
+          const key = normalize(d);
+          if (!(key in dyeEfficiencyRank)) dyeEfficiencyRank[key] = round;
+        }));
+      } else {
+        let smallestDye = null, smallestCount = Infinity;
+        Object.entries(dyeDemand).forEach(([d, c]) => { if (c < smallestCount) { smallestCount = c; smallestDye = d; } });
+        const cluster = clusterRemaining.filter(r => r.dyes.some(d => normalize(d) === smallestDye));
+        thisRoundIds = new Set(cluster.map(r => r.recipeId));
+        cluster.forEach(r => r.dyes.forEach(d => {
+          const key = normalize(d);
+          if (!(key in dyeEfficiencyRank)) dyeEfficiencyRank[key] = round;
+        }));
+      }
+      clusterRemaining = clusterRemaining.filter(r => !thisRoundIds.has(r.recipeId));
+      round++;
+    }
+
     Object.values(groups).forEach(g => {
       const stockRows = g.dyeId ? (stockByDyeId[g.dyeId] || []) : [];
       let totalStock = 0;
@@ -308,6 +352,7 @@ async function loadEverything() {
       g.stockMl = totalStock;
       g.expiryDaysLeft = soonestExpiryDays;
       g.mlToMix = Math.max(0, g.totalMlNeeded - totalStock);
+      g.efficiencyRank = dyeEfficiencyRank[normalize(g.dyeName)] ?? 999;
     });
 
     dyeGroups = Object.values(groups).sort((a, b) => {
@@ -323,7 +368,7 @@ async function loadEverything() {
       const bd = b.earliestDue ? Number(b.earliestDue) : Infinity;
       if (ad !== bd) return ad - bd;
 
-      return a.cleanupOrder - b.cleanupOrder;
+      return a.efficiencyRank - b.efficiencyRank;
     });
 
     document.getElementById('headerSub').textContent =
