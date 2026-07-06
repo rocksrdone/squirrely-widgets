@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dye Prep Sequence</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-bg: #EAF3DE;
+    --done-border: #639922;
+    --done-text: #27500A;
+    --urgent: #A01830;
+    --urgent-light: #F5E0E4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
+
+  .work-table { width: 100%; border-collapse: collapse; }
+  .work-table thead th {
+    text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; padding: 6px 8px; border-bottom: 2px solid var(--rule);
+    position: sticky; top: 0; background: var(--paper); z-index: 2;
+  }
+  .work-table td { padding: 7px 8px; border-bottom: 1px solid var(--warm); vertical-align: middle; font-size: 12px; }
+  .dye-row { cursor: pointer; background: white; }
+  .dye-row:hover { background: var(--warm); }
+  .dye-row.urgent-expiry td:first-child { border-left: 3px solid var(--urgent); }
+  .dye-row.urgent-priority td:first-child { border-left: 3px solid var(--gold); }
+  .dye-row:not(.urgent-expiry):not(.urgent-priority) td:first-child { border-left: 3px solid transparent; }
+
+  .dye-name { font-family: 'Libre Baskerville', serif; font-size: 13px; font-weight: 700; }
+  .dye-brand { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+
+  .expiry-flag {
+    display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+    padding: 1px 6px; border-radius: 3px; background: var(--urgent-light); color: var(--urgent); white-space: nowrap;
+  }
+  .stock-ok { color: var(--done-text); font-size: 11px; }
+  .stock-none { color: #8B7D72; font-size: 11px; font-style: italic; }
+
+  .mix-amount { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 13px; }
+  .mix-amount.zero { color: var(--done-text); font-weight: 500; }
+
+  .orders-cell { text-align: right; font-size: 11px; color: var(--teal); font-weight: 600; white-space: nowrap; }
+
+  .detail-row { display: none; }
+  .detail-row.open { display: table-row; }
+  .detail-row td { padding: 0; border-bottom: 1px solid var(--rule); }
+  .detail-wrap { padding: 10px 14px; background: var(--warm); }
+
+  .order-line {
+    display: flex; justify-content: space-between; font-size: 11px; color: #6B5E52;
+    padding: 4px 0; border-bottom: 1px solid var(--rule);
+  }
+  .order-line:last-child { border-bottom: none; }
+
+  .log-stock-row { display: flex; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule); }
+  .log-stock-row input {
+    width: 90px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px;
+  }
+  .log-stock-row button {
+    font-size: 11px; padding: 6px 10px; border-radius: 5px; border: 1px solid var(--teal);
+    background: var(--teal-light); color: var(--teal); cursor: pointer;
+  }
+  .log-stock-row button:hover { background: var(--teal); color: white; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <div class="header-title">Dye Prep Sequence</div>
+    <div class="header-sub" id="headerSub">Loading...</div>
+  </div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) if (l.includes(k)) return v;
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+const PRIORITY_RANK = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 };
+function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+let dyeGroups = [];
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+
+  try {
+    const [woTable, wolTable, recipesTable, compTable, dyesTable, stockTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+        dueDate: columnAsArray(woTable, 'Due_Date')[i],
+      };
+    });
+
+    const rIds = recipesTable.id || [];
+    const recipeById = {};
+    const recipeBySku = {};
+    rIds.forEach((id, i) => {
+      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i] };
+      recipeById[id] = rec;
+      const sku = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
+      if (sku) recipeBySku[sku] = rec;
+    });
+
+    const cIds = compTable.id || [];
+    const compsByRecipe = {};
+    cIds.forEach((id, i) => {
+      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      if (!recipeRef) return;
+      const rate = Number(columnAsArray(compTable, 'Effective_mL_per_100_yd')[i]) ||
+                   Number(columnAsArray(compTable, 'Default_mL_per_100_yds')[i]) || 0;
+      const entry = { dyeName: columnAsArray(compTable, 'Dye_Name')[i] || '', rate };
+      if (!compsByRecipe[recipeRef]) compsByRecipe[recipeRef] = [];
+      compsByRecipe[recipeRef].push(entry);
+    });
+
+    const dIds = dyesTable.id || [];
+    const dyeByName = {};
+    dIds.forEach((id, i) => {
+      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
+      if (!name) return;
+      dyeByName[name] = {
+        id,
+        name: columnAsArray(dyesTable, 'Dye_Name')[i],
+        brand: columnAsArray(dyesTable, 'Brand')[i],
+        cleanupOrder: Number(columnAsArray(dyesTable, 'Cleanup_Order')[i]) || 999,
+        shelfLifeDays: Number(columnAsArray(dyesTable, 'Shelf_Life_days_')[i]) || null,
+      };
+    });
+
+    const sIds = stockTable.id || [];
+    const stockByDyeId = {};
+    sIds.forEach((id, i) => {
+      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      if (!dyeRef) return;
+      const qty = Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0;
+      const mixedDate = columnAsArray(stockTable, 'Mixed_Date')[i];
+      if (!stockByDyeId[dyeRef]) stockByDyeId[dyeRef] = [];
+      stockByDyeId[dyeRef].push({ id, qty, mixedDate });
+    });
+
+    const wolIds = wolTable.id || [];
+    const groups = {};
+
+    for (let i = 0; i < wolIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const remaining = qtyNeeded - qtyDyed;
+      if (remaining <= 0) continue;
+
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      let recipe = null;
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
+      else recipe = recipeBySku[normalize(sku)] || null;
+
+      if (!recipe || !compsByRecipe[recipe.id]) continue;
+
+      const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
+
+      compsByRecipe[recipe.id].forEach(comp => {
+        if (!comp.dyeName || comp.rate <= 0) return;
+        const key = normalize(comp.dyeName);
+        const mlNeeded = comp.rate * remaining;
+
+        if (!groups[key]) {
+          const dyeInfo = dyeByName[key] || { id: null, name: comp.dyeName, brand: '', cleanupOrder: 999, shelfLifeDays: null };
+          groups[key] = {
+            dyeName: dyeInfo.name,
+            brand: dyeInfo.brand,
+            dyeId: dyeInfo.id,
+            cleanupOrder: dyeInfo.cleanupOrder,
+            shelfLifeDays: dyeInfo.shelfLifeDays,
+            totalMlNeeded: 0,
+            bestPriority: priority,
+            earliestDue: info.dueDate || null,
+            orders: [],
+          };
+        }
+        const g = groups[key];
+        g.totalMlNeeded += mlNeeded;
+        if (priorityRank(priority) < priorityRank(g.bestPriority)) g.bestPriority = priority;
+        if (info.dueDate && (!g.earliestDue || Number(info.dueDate) < Number(g.earliestDue))) g.earliestDue = info.dueDate;
+        g.orders.push({
+          orderNumber: info.orderNumber,
+          customerName: info.customerName,
+          dueDate: info.dueDate,
+          priority,
+          recipeName: recipe.name,
+          mlNeeded,
+          qty: remaining,
+        });
+      });
+    }
+
+    Object.values(groups).forEach(g => {
+      const stockRows = g.dyeId ? (stockByDyeId[g.dyeId] || []) : [];
+      let totalStock = 0;
+      let soonestExpiryDays = null;
+      const nowSeconds = Date.now() / 1000;
+
+      stockRows.forEach(s => {
+        totalStock += s.qty;
+        if (g.shelfLifeDays && s.mixedDate) {
+          const ageDays = (nowSeconds - Number(s.mixedDate)) / 86400;
+          const daysLeft = g.shelfLifeDays - ageDays;
+          if (soonestExpiryDays === null || daysLeft < soonestExpiryDays) soonestExpiryDays = daysLeft;
+        }
+      });
+
+      g.stockMl = totalStock;
+      g.expiryDaysLeft = soonestExpiryDays;
+      g.mlToMix = Math.max(0, g.totalMlNeeded - totalStock);
+    });
+
+    dyeGroups = Object.values(groups).sort((a, b) => {
+      const aExpiring = a.expiryDaysLeft !== null && a.expiryDaysLeft <= 3;
+      const bExpiring = b.expiryDaysLeft !== null && b.expiryDaysLeft <= 3;
+      if (aExpiring !== bExpiring) return aExpiring ? -1 : 1;
+      if (aExpiring && bExpiring) return a.expiryDaysLeft - b.expiryDaysLeft;
+
+      const pr = priorityRank(a.bestPriority) - priorityRank(b.bestPriority);
+      if (pr !== 0) return pr;
+
+      const ad = a.earliestDue ? Number(a.earliestDue) : Infinity;
+      const bd = b.earliestDue ? Number(b.earliestDue) : Infinity;
+      if (ad !== bd) return ad - bd;
+
+      return a.cleanupOrder - b.cleanupOrder;
+    });
+
+    document.getElementById('headerSub').textContent =
+      `${dyeGroups.length} dye${dyeGroups.length === 1 ? '' : 's'} needed across active orders`;
+    renderList();
+  } catch (e) {
+    console.error('Failed to load dye prep sequence:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+  }
+}
+
+function renderList() {
+  const content = document.getElementById('content');
+
+  if (!dyeGroups.length) {
+    content.innerHTML = `<div class="empty-state">🎉 Nothing needs dyeing right now.</div>`;
+    return;
+  }
+
+  const rows = dyeGroups.map((g, idx) => {
+    const isExpiring = g.expiryDaysLeft !== null && g.expiryDaysLeft <= 3;
+    const isUrgentPriority = g.bestPriority === 'Urgent' || g.bestPriority === 'High';
+    const rowClass = isExpiring ? 'urgent-expiry' : isUrgentPriority ? 'urgent-priority' : '';
+    const rowId = `dye-detail-${idx}`;
+
+    const stockHtml = g.stockMl > 0
+      ? `<span class="${isExpiring ? '' : 'stock-ok'}">${g.stockMl.toFixed(0)}mL on hand${isExpiring ? ` <span class="expiry-flag">${Math.max(0, Math.round(g.expiryDaysLeft))}d left</span>` : ''}</span>`
+      : `<span class="stock-none">none on hand</span>`;
+
+    const ordersHtml = g.orders.map(o => {
+      const due = o.dueDate ? new Date(Number(o.dueDate) * 1000).toLocaleDateString() : '—';
+      return `<div class="order-line"><span>#${o.orderNumber || '—'} · ${o.customerName || '—'} · ${o.recipeName}</span><span>${o.qty} needed · ${o.mlNeeded.toFixed(0)}mL · due ${due}</span></div>`;
+    }).join('');
+
+    return `
+      <tr class="dye-row ${rowClass}" onclick="document.getElementById('${rowId}').classList.toggle('open')">
+        <td>
+          <div class="dye-name" style="color:${guessColor(g.dyeName)}">${g.dyeName}</div>
+          <div class="dye-brand">${g.brand || ''}</div>
+        </td>
+        <td>${stockHtml}</td>
+        <td><span class="mix-amount ${g.mlToMix <= 0 ? 'zero' : ''}">${g.mlToMix <= 0 ? 'Covered by stock' : g.mlToMix.toFixed(0) + 'mL'}</span></td>
+        <td class="orders-cell">▾ ${g.orders.length} batch${g.orders.length === 1 ? '' : 'es'} · ${g.totalMlNeeded.toFixed(0)}mL total</td>
+      </tr>
+      <tr class="detail-row" id="${rowId}">
+        <td colspan="4">
+          <div class="detail-wrap">
+            ${ordersHtml}
+            <div class="log-stock-row">
+              <span style="font-size:11px;color:#6B5E52;">Just mixed a batch?</span>
+              <input type="number" id="logAmount-${idx}" placeholder="mL">
+              <button onclick="logMixedStock(${idx})">+ Log to stock</button>
+            </div>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  content.innerHTML = `
+    <table class="work-table">
+      <thead>
+        <tr>
+          <th>Dye</th>
+          <th>Stock on hand</th>
+          <th>Need to mix</th>
+          <th style="text-align:right">Batches</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function logMixedStock(idx) {
+  const g = dyeGroups[idx];
+  const input = document.getElementById(`logAmount-${idx}`);
+  const amount = Number(input.value);
+  if (!amount || amount <= 0) { showToast('Enter a valid mL amount'); return; }
+  if (!g.dyeId) { showToast('This dye isn\'t linked to a Dyes row — cannot log stock'); return; }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Dye_Stock', null, {
+        Dye: g.dyeId,
+        Quantity_mL: amount,
+        Mixed_Date: Math.floor(Date.now() / 1000),
+      }]
+    ]);
+    showToast(`Logged ${amount}mL of ${g.dyeName} ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to log stock:', e);
+    showToast('Failed — check the Dye_Stock table exists with the right columns');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
