@@ -235,6 +235,10 @@
       </div>
       <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
+        <span class="field-label">Shopify Product Link (optional)</span>
+        <input class="field-input" id="shopifyProductUrl" placeholder="https://..." oninput="markUnsaved()">
+      </div>
+      <div class="field-wrap wide">
         <span class="field-label">Notes</span>
         <textarea class="field-textarea" id="generalNotes" oninput="markUnsaved()"></textarea>
       </div>
@@ -728,6 +732,7 @@ async function loadRecipe(record) {
   document.getElementById('content').style.display = 'block';
 
   document.getElementById('nameInput').value = record.Recipe_Name || '';
+  document.getElementById('shopifyProductUrl').value = record.Shopify_URL || '';
 
   const createdLabel = document.getElementById('createdDateLabel');
   if (record.Created_Date) {
@@ -1024,6 +1029,7 @@ async function saveRecipe() {
       Dye_Method: document.getElementById('dyeMethod').value,
       Recipe_Scope: document.getElementById('recipeScope').value,
       SKU_Base: document.getElementById('skuBase').value,
+      Shopify_URL: document.getElementById('shopifyProductUrl').value.trim(),
       Notes: document.getElementById('generalNotes').value,
       Draft_Notes: document.getElementById('draftNotes').value,
       Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,

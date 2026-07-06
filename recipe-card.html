@@ -541,6 +541,7 @@ let currentPreviewUrl = null;
 let currentBaseSegments = [];
 let currentOverlayMarks = [];
 let currentSpoolStats = { needed: 0, made: 0 };
+let currentShopifyUrl = '';
 let currentHistoryEntries = [];
 let currentPreviewId = null;
 let currentProductPhotos = [];
@@ -863,6 +864,7 @@ function renderLeft() {
           </div>
         ` : ''}
         ${r.Created_Date ? `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${new Date(Number(r.Created_Date)*1000).toLocaleString('default',{month:'long'})} ${new Date(Number(r.Created_Date)*1000).getFullYear()}</div>` : ''}
+        ${currentShopifyUrl ? `<div style="margin-top:4px;"><a href="${currentShopifyUrl}" target="_blank" style="font-size:11px;color:var(--teal);text-decoration:none;font-weight:600;">🛍️ View on Shopify ↗</a></div>` : ''}
       </div>
       ${currentProductPhotos.length ? `
         <div class="preview-wrap">
@@ -1179,6 +1181,8 @@ grist.onRecord(async (record) => {
     console.error('Failed to compute spool stats:', e);
     currentSpoolStats = { needed: 0, made: 0 };
   }
+
+  currentShopifyUrl = record.Shopify_URL || '';
 
   try {
     const historyTable = await grist.docApi.fetchTable('Recipe_Change_Log');
