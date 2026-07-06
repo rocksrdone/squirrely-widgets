@@ -232,10 +232,25 @@ function showToast(msg) {
 async function loadEverything() {
   document.getElementById('headerSub').textContent = 'Loading...';
   try {
-    const [inboxRes, recipesData] = await Promise.all([
-      fetch(LIST_WEBHOOK_URL).then(r => r.json()),
-      grist.docApi.fetchTable('Recipes'),
-    ]);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    let inboxRes;
+    try {
+      const r = await fetch(LIST_WEBHOOK_URL, { signal: controller.signal });
+      inboxRes = await r.json();
+      clearTimeout(timeoutId);
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        document.getElementById('headerSub').textContent = '⚠ Too many files to scan in time — showing what loaded before, if anything.';
+        renderGrid();
+        return;
+      }
+      throw fetchErr;
+    }
+
+    const recipesData = await grist.docApi.fetchTable('Recipes');
 
     inboxPhotos = (inboxRes.photos || []);
     visibleCount = 30;
