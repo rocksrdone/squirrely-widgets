@@ -248,9 +248,10 @@ async function loadEverything() {
       const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
 
       compsByRecipe[recipe.id].forEach(comp => {
-        if (!comp.dyeName || comp.rate <= 0) return;
+        if (!comp.dyeName) return;
         const key = normalize(comp.dyeName);
-        const mlNeeded = comp.rate * remaining;
+        const hasRate = comp.rate > 0;
+        const mlNeeded = hasRate ? comp.rate * remaining : 0;
 
         if (!groups[key]) {
           const dyeInfo = dyeByName[key] || { id: null, name: comp.dyeName, brand: '', cleanupOrder: 999, shelfLifeDays: null };
@@ -261,6 +262,9 @@ async function loadEverything() {
             cleanupOrder: dyeInfo.cleanupOrder,
             shelfLifeDays: dyeInfo.shelfLifeDays,
             totalMlNeeded: 0,
+            totalQtyNeeded: 0,
+            hasAnyRate: false,
+            missingRateCount: 0,
             bestPriority: priority,
             earliestDue: info.dueDate || null,
             orders: [],
@@ -268,6 +272,9 @@ async function loadEverything() {
         }
         const g = groups[key];
         g.totalMlNeeded += mlNeeded;
+        g.totalQtyNeeded += remaining;
+        if (hasRate) g.hasAnyRate = true;
+        else g.missingRateCount += 1;
         if (priorityRank(priority) < priorityRank(g.bestPriority)) g.bestPriority = priority;
         if (info.dueDate && (!g.earliestDue || Number(info.dueDate) < Number(g.earliestDue))) g.earliestDue = info.dueDate;
         g.orders.push({
@@ -277,6 +284,7 @@ async function loadEverything() {
           priority,
           recipeName: recipe.name,
           mlNeeded,
+          hasRate,
           qty: remaining,
         });
       });
@@ -347,8 +355,17 @@ function renderList() {
 
     const ordersHtml = g.orders.map(o => {
       const due = o.dueDate ? new Date(Number(o.dueDate) * 1000).toLocaleDateString() : '—';
-      return `<div class="order-line"><span>#${o.orderNumber || '—'} · ${o.customerName || '—'} · ${o.recipeName}</span><span>${o.qty} needed · ${o.mlNeeded.toFixed(0)}mL · due ${due}</span></div>`;
+      const amount = o.hasRate ? `${o.mlNeeded.toFixed(0)}mL` : `${o.qty} spools (no rate yet)`;
+      return `<div class="order-line"><span>#${o.orderNumber || '—'} · ${o.customerName || '—'} · ${o.recipeName}</span><span>${amount} · due ${due}</span></div>`;
     }).join('');
+
+    const mixCellHtml = g.hasAnyRate
+      ? `<span class="mix-amount ${g.mlToMix <= 0 ? 'zero' : ''}">${g.mlToMix <= 0 ? 'Covered by stock' : g.mlToMix.toFixed(0) + 'mL'}</span>`
+      : `<span class="mix-amount">${g.totalQtyNeeded} spools <span style="font-size:10px;color:#8B7D72;font-weight:500;">(no rate yet)</span></span>`;
+
+    const totalCellHtml = g.hasAnyRate
+      ? `${g.totalMlNeeded.toFixed(0)}mL total`
+      : `${g.totalQtyNeeded} spools total`;
 
     return `
       <tr class="dye-row ${rowClass}" onclick="document.getElementById('${rowId}').classList.toggle('open')">
@@ -357,8 +374,8 @@ function renderList() {
           <div class="dye-brand">${g.brand || ''}</div>
         </td>
         <td>${stockHtml}</td>
-        <td><span class="mix-amount ${g.mlToMix <= 0 ? 'zero' : ''}">${g.mlToMix <= 0 ? 'Covered by stock' : g.mlToMix.toFixed(0) + 'mL'}</span></td>
-        <td class="orders-cell">▾ ${g.orders.length} batch${g.orders.length === 1 ? '' : 'es'} · ${g.totalMlNeeded.toFixed(0)}mL total</td>
+        <td>${mixCellHtml}</td>
+        <td class="orders-cell">▾ ${g.orders.length} batch${g.orders.length === 1 ? '' : 'es'} · ${totalCellHtml}</td>
       </tr>
       <tr class="detail-row" id="${rowId}">
         <td colspan="4">
