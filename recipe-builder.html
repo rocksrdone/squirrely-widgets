@@ -236,7 +236,11 @@
       <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
         <span class="field-label">Shopify Product Link (optional)</span>
-        <input class="field-input" id="shopifyProductUrl" placeholder="https://..." oninput="markUnsaved()">
+        <div style="display:flex; gap:6px;">
+          <input class="field-input" id="shopifyProductUrl" placeholder="https://..." oninput="markUnsaved()" style="flex:1;">
+          <button class="btn btn-small" onclick="lookupShopifyUrl()" style="white-space:nowrap;">🔍 Look up by SKU</button>
+        </div>
+        <div id="shopifyLookupMsg" style="font-size:11px; color:#8B7D72; margin-top:4px;"></div>
       </div>
       <div class="field-wrap wide">
         <span class="field-label">Notes</span>
@@ -678,6 +682,32 @@ function computeSuggestedSku() {
   let sku = `${fc}_${namePart}`;
   if (/reserv/i.test(scope) && vendor) sku += `_${vendor}`;
   return sku;
+}
+
+async function lookupShopifyUrl() {
+  const sku = document.getElementById('skuBase').value.trim();
+  const msg = document.getElementById('shopifyLookupMsg');
+  if (!sku) { msg.textContent = 'Enter a SKU Base first'; return; }
+
+  msg.textContent = 'Looking up...';
+  try {
+    const resp = await fetch('https://squirrelystash.app.n8n.cloud/webhook/lookup-shopify-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku }),
+    });
+    const data = await resp.json();
+    if (data.found && data.url) {
+      document.getElementById('shopifyProductUrl').value = data.url;
+      markUnsaved();
+      msg.textContent = `Found: ${data.title || 'product'} ✓`;
+    } else {
+      msg.textContent = data.error || 'No matching product found for that SKU';
+    }
+  } catch (e) {
+    console.error('Shopify lookup failed:', e);
+    msg.textContent = 'Lookup failed — check the n8n workflow is active';
+  }
 }
 
 function renderSkuSuggestion() {
