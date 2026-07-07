@@ -158,7 +158,7 @@ function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
 function jumpToRecipe(recipeId) {
   try {
-    grist.setCursorPos({ rowId: recipeId, tableId: 'Recipes' });
+    grist.setCursorPos({ rowId: recipeId });
     showToast('Jumped to recipe — check Recipe Card if it\'s on this page');
   } catch (e) {
     console.error('Could not jump to recipe:', e);
