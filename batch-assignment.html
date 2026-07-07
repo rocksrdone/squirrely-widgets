@@ -52,6 +52,14 @@
   }
   .log-btn:hover { background: var(--teal); color: white; }
 
+  .cleanup-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
+  }
+  .cleanup-row { font-size: 11px; padding: 4px 6px; border-radius: 5px; margin-bottom: 3px; }
+  .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
+  .cleanup-keep { background: var(--teal-light); color: var(--teal); }
+
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
@@ -130,10 +138,11 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
-    const [woTable, wolTable, compTable] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Recipe'),
     ]);
 
     const woIds = woTable.id || [];
@@ -146,33 +155,52 @@ async function loadForRecipe(record) {
       };
     });
 
+    const rIds = recipesTable.id || [];
+    const recipeNameById = {};
+    const recipeSkuById = {};
+    rIds.forEach((id, i) => {
+      recipeNameById[id] = columnAsArray(recipesTable, 'Recipe_Name')[i];
+      recipeSkuById[id] = normalize(columnAsArray(recipesTable, 'SKU_Base')[i] || '');
+    });
+    const recipeIdBySku = {};
+    Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
+
+    // Dyes used by each recipe (for the current recipe, and for cross-recipe overlap checking)
     const cIds = compTable.id || [];
-    const dyeNames = [];
+    const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      if (recipeRef !== record.id) return;
       const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
-      if (dyeName) dyeNames.push(dyeName);
+      if (!recipeRef || !dyeName) return;
+      if (!dyesByRecipeId[recipeRef]) dyesByRecipeId[recipeRef] = [];
+      dyesByRecipeId[recipeRef].push(dyeName);
     });
+    const dyeNames = dyesByRecipeId[record.id] || [];
 
     const recipeSku = normalize(record.SKU_Base || '');
     const wolIds = wolTable.id || [];
     const orders = [];
+
+    // Also walk every active line to find which OTHER recipes are pending (for the cleanup overlap check)
+    const pendingRecipeIds = new Set();
 
     for (let i = 0; i < wolIds.length; i++) {
       const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
       const info = woInfo[woId];
       if (!info || !info.active) continue;
 
-      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
-      const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
-      const matches = directRecipeId === record.id || (recipeSku && sku === recipeSku);
-      if (!matches) continue;
-
       const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
       const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
       const remaining = qtyNeeded - qtyDyed;
       if (remaining <= 0) continue;
+
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
+      const lineRecipeId = directRecipeId || recipeIdBySku[sku] || null;
+      if (lineRecipeId) pendingRecipeIds.add(lineRecipeId);
+
+      const matches = directRecipeId === record.id || (recipeSku && sku === recipeSku);
+      if (!matches) continue;
 
       orders.push({
         lineId: wolIds[i],
@@ -183,11 +211,23 @@ async function loadForRecipe(record) {
       });
     }
 
+    // For each dye this recipe uses, find which OTHER pending recipes also need it
+    const cleanupInfo = dyeNames.map(dyeName => {
+      const key = normalize(dyeName);
+      const others = [];
+      pendingRecipeIds.forEach(rid => {
+        if (rid === record.id) return;
+        const otherDyes = (dyesByRecipeId[rid] || []).map(normalize);
+        if (otherDyes.includes(key)) others.push(recipeNameById[rid] || `Recipe #${rid}`);
+      });
+      return { dyeName, isOneOff: others.length === 0, others };
+    });
+
     const max = safeMaxForComplexity(dyeNames.length);
     const batches = suggestBatches(orders, max);
     const totalQty = orders.reduce((s, o) => s + o.qty, 0);
 
-    currentEntry = { recipeName: record.Recipe_Name, dyeCount: dyeNames.length, max, orders, batches, totalQty };
+    currentEntry = { recipeName: record.Recipe_Name, dyeCount: dyeNames.length, max, orders, batches, totalQty, cleanupInfo };
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -218,10 +258,22 @@ function render() {
     </div>`;
   }).join('');
 
+  const cleanupHtml = (e.cleanupInfo || []).map(c => {
+    if (c.isOneOff) {
+      return `<div class="cleanup-row cleanup-oneoff">
+        <strong>${c.dyeName}</strong> — one-off, nothing else pending needs it. Keep leftover, toss, or make extra to use it up.
+      </div>`;
+    }
+    return `<div class="cleanup-row cleanup-keep">
+      <strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}
+    </div>`;
+  }).join('');
+
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
     <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'} · max ${e.max}/batch · ${e.totalQty} spools total</div>
     ${batchesHtml}
+    ${cleanupHtml ? `<div class="cleanup-title">After you finish — dye cleanup</div>${cleanupHtml}` : ''}
   `;
 }
 
