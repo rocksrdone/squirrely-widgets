@@ -194,10 +194,10 @@ function suggestBatches(orders, max) {
       const remainder = o.qty - base * parts;
       for (let p = 0; p < parts; p++) {
         const partQty = base + (p < remainder ? 1 : 0);
-        batches.push({ qty: partQty, contributors: [`${o.customerName} (part ${p + 1}/${parts})`] });
+        batches.push({ qty: partQty, contributors: [{ lineId: o.lineId, customerName: `${o.customerName} (part ${p + 1}/${parts})`, qty: partQty, currentQtyDyed: o.currentQtyDyed }] });
       }
     } else if (o.qty >= max * 0.5) {
-      batches.push({ qty: o.qty, contributors: [o.customerName] });
+      batches.push({ qty: o.qty, contributors: [{ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed }] });
     } else {
       smallOrders.push(o);
     }
@@ -211,7 +211,7 @@ function suggestBatches(orders, max) {
       batches.push(current);
     }
     current.qty += o.qty;
-    current.contributors.push(o.customerName);
+    current.contributors.push({ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed });
   });
 
   return batches.filter(b => b.qty > 0);
@@ -316,9 +316,11 @@ async function loadEverything() {
         };
       }
       pendingByRecipe[recipe.id].orders.push({
+        lineId: wolIds[i],
         orderNumber: info.orderNumber,
         customerName: info.customerName,
         qty: remaining,
+        currentQtyDyed: qtyDyed,
       });
     }
 
@@ -357,17 +359,29 @@ function renderMorning() {
     return;
   }
 
-  content.innerHTML = recipeData.map(entry => {
+  content.innerHTML = recipeData.map((entry, entryIdx) => {
     const ordersHtml = entry.orders.map(o =>
       `<div class="order-row"><span>${o.customerName || '—'}</span><span>${o.qty} spools</span></div>`
     ).join('');
 
-    const batchesHtml = entry.batches.map((b, i) =>
-      `<div class="batch-suggestion">
-        <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools</div>
-        <div class="batch-suggestion-detail">${b.contributors.join(' + ')}</div>
-      </div>`
-    ).join('');
+    const batchesHtml = entry.batches.map((b, i) => {
+      const contributorInputs = b.contributors.map((c, ci) =>
+        `<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-top:3px;">
+          <span style="font-size:11px;">${c.customerName}</span>
+          <input type="number" id="log-${entryIdx}-${i}-${ci}" value="${c.qty}" min="0"
+            style="width:56px; padding:3px 5px; border:1px solid var(--rule); border-radius:4px; font-size:11px;">
+        </div>`
+      ).join('');
+
+      return `<div class="batch-suggestion">
+        <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools suggested</div>
+        ${contributorInputs}
+        <button onclick="logBatchCompletion(${entryIdx}, ${i})"
+          style="margin-top:6px; width:100%; font-size:11px; padding:6px; border-radius:5px; border:1px solid var(--teal); background:var(--teal-light); color:var(--teal); cursor:pointer;">
+          ✓ Log actual amounts made
+        </button>
+      </div>`;
+    }).join('');
 
     const stockHtml = entry.dyes.map(d => {
       const key = normalize(d);
@@ -456,6 +470,34 @@ function renderCleanup() {
       </div>
     `;
   }).join('');
+}
+
+async function logBatchCompletion(entryIdx, batchIdx) {
+  const entry = recipeData[entryIdx];
+  const batch = entry.batches[batchIdx];
+
+  const actions = [];
+  const summary = [];
+
+  batch.contributors.forEach((c, ci) => {
+    const input = document.getElementById(`log-${entryIdx}-${batchIdx}-${ci}`);
+    const enteredQty = Number(input.value) || 0;
+    if (enteredQty <= 0) return;
+    const newQtyDyed = (c.currentQtyDyed || 0) + enteredQty;
+    actions.push(['UpdateRecord', 'Work_Order_Lines', c.lineId, { Qty_Dyed: newQtyDyed }]);
+    summary.push(`${c.customerName}: +${enteredQty}`);
+  });
+
+  if (!actions.length) { showToast('Enter at least one completed amount'); return; }
+
+  try {
+    await grist.docApi.applyUserActions(actions);
+    showToast(`Logged: ${summary.join(', ')} ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to log completion:', e);
+    showToast('Failed to log — check Work_Order_Lines table');
+  }
 }
 
 function showToast(msg) {
