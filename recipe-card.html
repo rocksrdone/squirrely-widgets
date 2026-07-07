@@ -540,7 +540,7 @@ let currentPhotoIndex = 0;
 let currentPreviewUrl = null;
 let currentBaseSegments = [];
 let currentOverlayMarks = [];
-let currentSpoolStats = { needed: 0, made: 0 };
+let currentSpoolStats = { needed: 0, made: 0, perOrder: [] };
 let currentShopifyUrl = '';
 let currentHistoryEntries = [];
 let currentPreviewId = null;
@@ -863,6 +863,11 @@ function renderLeft() {
             🧵 ${currentSpoolStats.made}/${currentSpoolStats.needed} dyed
           </div>
         ` : ''}
+        ${currentSpoolStats.perOrder && currentSpoolStats.perOrder.length ? `
+          <div style="margin-top:6px; font-size:11px; color:#6B5E52;">
+            ${currentSpoolStats.perOrder.map(o => `<div>${o.customerName} — ${o.qty} spools</div>`).join('')}
+          </div>
+        ` : ''}
         ${r.Created_Date ? `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${new Date(Number(r.Created_Date)*1000).toLocaleString('default',{month:'long'})} ${new Date(Number(r.Created_Date)*1000).getFullYear()}</div>` : ''}
         ${currentShopifyUrl ? `<div style="margin-top:4px;"><a href="${currentShopifyUrl}" target="_blank" style="font-size:11px;color:var(--teal);text-decoration:none;font-weight:600;">🛍️ View on Shopify ↗</a></div>` : ''}
       </div>
@@ -1139,7 +1144,7 @@ grist.onRecord(async (record) => {
 
   try {
     const recipeSku = (currentRecipe.SKU_Base || currentRecipe.Shopify_SKU || '').toString().trim().toUpperCase();
-    currentSpoolStats = { needed: 0, made: 0 };
+    currentSpoolStats = { needed: 0, made: 0, perOrder: [] };
 
     if (recipeSku) {
       const [woTable, wolTable] = await Promise.all([
@@ -1161,6 +1166,10 @@ grist.onRecord(async (record) => {
         return null;
       };
 
+      const woCustomer = woTable.Customer_Name || [];
+      const woCustomerByIdx = {};
+      for (let i = 0; i < woIds.length; i++) woCustomerByIdx[woIds[i]] = woCustomer[i] || '';
+
       const lIds = wolTable.id || [];
       const lSku = wolTable.SKU || [];
       const lWo = wolTable.Work_Order || [];
@@ -1168,18 +1177,24 @@ grist.onRecord(async (record) => {
       const lDyed = wolTable.Qty_Dyed || [];
 
       let needed = 0, made = 0;
+      const perOrder = [];
       for (let i = 0; i < lIds.length; i++) {
         const sku = (lSku[i] || '').toString().trim().toUpperCase();
         if (sku !== recipeSku) continue;
-        if (!activeWoIds.has(getRefIdLocal(lWo[i]))) continue;
+        const woId = getRefIdLocal(lWo[i]);
+        if (!activeWoIds.has(woId)) continue;
         needed += Number(lNeeded[i]) || 0;
         made += Number(lDyed[i]) || 0;
+        const remaining = (Number(lNeeded[i]) || 0) - (Number(lDyed[i]) || 0);
+        if (remaining > 0) {
+          perOrder.push({ customerName: woCustomerByIdx[woId] || '—', qty: remaining });
+        }
       }
-      currentSpoolStats = { needed, made };
+      currentSpoolStats = { needed, made, perOrder };
     }
   } catch (e) {
     console.error('Failed to compute spool stats:', e);
-    currentSpoolStats = { needed: 0, made: 0 };
+    currentSpoolStats = { needed: 0, made: 0, perOrder: [] };
   }
 
   currentShopifyUrl = record.Shopify_URL || '';

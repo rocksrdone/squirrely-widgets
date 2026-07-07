@@ -156,6 +156,16 @@ function getRefId(ref) {
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
+function jumpToRecipe(recipeId) {
+  try {
+    grist.setCursorPos({ rowId: recipeId, tableId: 'Recipes' });
+    showToast('Jumped to recipe — check Recipe Card if it\'s on this page');
+  } catch (e) {
+    console.error('Could not jump to recipe:', e);
+    showToast('Could not jump — is this widget set up with document access?');
+  }
+}
+
 function switchTab(name) {
   document.getElementById('tab-morning').classList.toggle('active', name === 'morning');
   document.getElementById('tab-cleanup').classList.toggle('active', name === 'cleanup');
@@ -380,7 +390,8 @@ function renderMorning() {
     }).filter(Boolean).join('');
 
     return `
-      <div class="recipe-card">
+      <div class="recipe-card" onclick="jumpToRecipe(${entry.recipe.id})" style="cursor:pointer;" title="Click to open this recipe in Recipe Card">
+        <div style="font-size:10px;color:var(--teal);font-weight:600;margin-bottom:4px;">→ Click to make this one</div>
         <div class="recipe-card-top">
           <div>
             <div class="recipe-card-name">${entry.recipe.name}</div>
