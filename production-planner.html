@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Production Planner</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --accent-light: #F2E8E5;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-text: #27500A;
+    --done-bg: #EAF3DE;
+    --urgent: #A01830;
+    --urgent-light: #F5E0E4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .section-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .section-tab {
+    font-size: 12px; font-weight: 600; padding: 8px 16px; border-radius: 8px;
+    border: 1px solid var(--rule); background: white; color: #8B7D72; cursor: pointer;
+  }
+  .section-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 19px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 14px; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
+
+  .recipe-card {
+    background: white; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; margin-bottom: 12px;
+  }
+  .recipe-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; gap: 10px; }
+  .recipe-card-name { font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700; }
+  .recipe-card-meta { font-size: 11px; color: #8B7D72; margin-top: 2px; }
+  .complexity-badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+    padding: 3px 8px; border-radius: 10px; background: var(--teal-light); color: var(--teal); white-space: nowrap;
+  }
+
+  .two-col-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+  @media (max-width: 700px) { .two-col-grid { grid-template-columns: 1fr; } }
+
+  .sub-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; margin-bottom: 6px;
+  }
+
+  .order-row {
+    display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--warm);
+  }
+  .order-row:last-child { border-bottom: none; }
+
+  .batch-suggestion {
+    background: var(--gold-light); border: 1px solid #D4B07A; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px;
+  }
+  .batch-suggestion-title { font-size: 11px; font-weight: 700; color: var(--gold); margin-bottom: 3px; }
+  .batch-suggestion-detail { font-size: 11px; color: #6B5E52; }
+
+  .stock-item {
+    display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px dashed var(--rule);
+  }
+  .stock-item:last-child { border-bottom: none; }
+  .bin-tag {
+    font-family: 'DM Mono', monospace; font-size: 11px; background: var(--warm); padding: 1px 7px; border-radius: 4px;
+  }
+  .no-stock { font-size: 11px; color: #8B7D72; font-style: italic; }
+
+  .peek-ahead-item { font-size: 11px; color: #6B5E52; padding: 3px 0; }
+
+  .cleanup-dye-row {
+    background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  .cleanup-dye-row input[type=checkbox] { margin-top: 3px; width: 16px; height: 16px; cursor: pointer; }
+  .cleanup-dye-name { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
+  .cleanup-status {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 8px; margin-top: 4px; display: inline-block;
+  }
+  .status-oneoff { background: var(--urgent-light); color: var(--urgent); }
+  .status-keep { background: var(--gold-light); color: var(--gold); }
+  .status-shelve { background: var(--done-bg); color: var(--done-text); }
+  .cleanup-detail { font-size: 11px; color: #6B5E52; margin-top: 5px; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="section-tabs">
+  <div class="section-tab active" id="tab-morning" onclick="switchTab('morning')">☀️ Morning Batch Planning</div>
+  <div class="section-tab" id="tab-cleanup" onclick="switchTab('cleanup')">🧹 End-of-Day Cleanup</div>
+</div>
+
+<div class="panel active" id="panel-morning">
+  <div class="header-row">
+    <div class="header-title">Morning Batch Planning</div>
+    <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+  </div>
+  <div class="header-sub" id="morningSub">Loading...</div>
+  <div id="morningContent"></div>
+</div>
+
+<div class="panel" id="panel-cleanup">
+  <div class="header-row">
+    <div class="header-title">End-of-Day Cleanup</div>
+    <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+  </div>
+  <div class="header-sub">Check off which dyes you actually worked with today</div>
+  <div id="cleanupContent"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+function switchTab(name) {
+  document.getElementById('tab-morning').classList.toggle('active', name === 'morning');
+  document.getElementById('tab-cleanup').classList.toggle('active', name === 'cleanup');
+  document.getElementById('panel-morning').classList.toggle('active', name === 'morning');
+  document.getElementById('panel-cleanup').classList.toggle('active', name === 'cleanup');
+}
+
+function safeMaxForComplexity(numColors) {
+  if (numColors >= 3) return 10;
+  if (numColors === 2) return 12;
+  return 15;
+}
+
+// Suggest a batching plan for a recipe given its per-order quantities and safe max.
+// Orders exceeding max get split into roughly-equal dedicated sub-batches.
+// Remaining "substantial" orders (>=70% of max) stay as their own dedicated batch.
+// Remaining "small" orders get greedily combined together up to max.
+function suggestBatches(orders, max) {
+  const batches = [];
+  const smallOrders = [];
+
+  orders.forEach(o => {
+    if (o.qty > max) {
+      const parts = Math.ceil(o.qty / max);
+      const base = Math.floor(o.qty / parts);
+      const remainder = o.qty - base * parts;
+      for (let p = 0; p < parts; p++) {
+        const partQty = base + (p < remainder ? 1 : 0);
+        batches.push({ qty: partQty, contributors: [`${o.customerName} (part ${p + 1}/${parts})`] });
+      }
+    } else if (o.qty >= max * 0.5) {
+      batches.push({ qty: o.qty, contributors: [o.customerName] });
+    } else {
+      smallOrders.push(o);
+    }
+  });
+
+  smallOrders.sort((a, b) => b.qty - a.qty);
+  let current = null;
+  smallOrders.forEach(o => {
+    if (!current || current.qty + o.qty > max) {
+      current = { qty: 0, contributors: [] };
+      batches.push(current);
+    }
+    current.qty += o.qty;
+    current.contributors.push(o.customerName);
+  });
+
+  return batches.filter(b => b.qty > 0);
+}
+
+let recipeData = [];
+let dyeUsageMap = {}; // dyeName -> [{recipeName, qty}] across ALL pending recipes, for peek-ahead and cleanup
+let stockByDyeName = {};
+let powderLocationByDye = {};
+
+async function loadEverything() {
+  document.getElementById('morningSub').textContent = 'Loading...';
+
+  try {
+    const [woTable, wolTable, recipesTable, compTable, dyesTable, stockTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+      };
+    });
+
+    const rIds = recipesTable.id || [];
+    const recipeById = {};
+    const recipeBySku = {};
+    rIds.forEach((id, i) => {
+      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i] };
+      recipeById[id] = rec;
+      const sku = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
+      if (sku) recipeBySku[sku] = rec;
+    });
+
+    const cIds = compTable.id || [];
+    const dyesByRecipe = {};
+    cIds.forEach((id, i) => {
+      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      if (!recipeRef || !dyeName) return;
+      if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = [];
+      dyesByRecipe[recipeRef].push(dyeName);
+    });
+
+    const dIds = dyesTable.id || [];
+    powderLocationByDye = {};
+    dIds.forEach((id, i) => {
+      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
+      if (!name) return;
+      powderLocationByDye[name] = columnAsArray(dyesTable, 'Powder_Location')[i] || '';
+    });
+
+    const sIds = stockTable.id || [];
+    stockByDyeName = {};
+    sIds.forEach((id, i) => {
+      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      if (!dyeRef) return;
+      const dyeIdx = dIds.indexOf(dyeRef);
+      const dyeName = dyeIdx !== -1 ? normalize(columnAsArray(dyesTable, 'Dye_Name')[dyeIdx]) : null;
+      if (!dyeName) return;
+      if (!stockByDyeName[dyeName]) stockByDyeName[dyeName] = [];
+      stockByDyeName[dyeName].push({
+        qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
+        binLocation: columnAsArray(stockTable, 'Bin_Location')[i] || '',
+      });
+    });
+
+    const wolIds = wolTable.id || [];
+    const pendingByRecipe = {};
+
+    for (let i = 0; i < wolIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const remaining = qtyNeeded - qtyDyed;
+      if (remaining <= 0) continue;
+
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      let recipe = null;
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
+      else recipe = recipeBySku[normalize(sku)] || null;
+      if (!recipe) continue;
+
+      if (!pendingByRecipe[recipe.id]) {
+        pendingByRecipe[recipe.id] = {
+          recipe,
+          dyes: dyesByRecipe[recipe.id] || [],
+          orders: [],
+        };
+      }
+      pendingByRecipe[recipe.id].orders.push({
+        orderNumber: info.orderNumber,
+        customerName: info.customerName,
+        qty: remaining,
+      });
+    }
+
+    // Build dye usage map across ALL pending recipes (for peek-ahead + cleanup one-off detection)
+    dyeUsageMap = {};
+    Object.values(pendingByRecipe).forEach(entry => {
+      const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
+      entry.dyes.forEach(d => {
+        const key = normalize(d);
+        if (!dyeUsageMap[key]) dyeUsageMap[key] = [];
+        dyeUsageMap[key].push({ recipeName: entry.recipe.name, qty: totalQty });
+      });
+    });
+
+    recipeData = Object.values(pendingByRecipe).filter(r => r.dyes.length > 0).map(entry => {
+      const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
+      const max = safeMaxForComplexity(entry.dyes.length);
+      const batches = suggestBatches(entry.orders, max);
+      return { ...entry, totalQty, max, batches };
+    }).sort((a, b) => b.totalQty - a.totalQty);
+
+    document.getElementById('morningSub').textContent =
+      `${recipeData.length} recipe${recipeData.length === 1 ? '' : 's'} to plan for today`;
+    renderMorning();
+    renderCleanup();
+  } catch (e) {
+    console.error('Failed to load production planner:', e);
+    document.getElementById('morningSub').textContent = 'Failed to load — check table/column names';
+  }
+}
+
+function renderMorning() {
+  const content = document.getElementById('morningContent');
+  if (!recipeData.length) {
+    content.innerHTML = `<div class="empty-state">🎉 Nothing to plan right now.</div>`;
+    return;
+  }
+
+  content.innerHTML = recipeData.map(entry => {
+    const ordersHtml = entry.orders.map(o =>
+      `<div class="order-row"><span>${o.customerName || '—'}</span><span>${o.qty} spools</span></div>`
+    ).join('');
+
+    const batchesHtml = entry.batches.map((b, i) =>
+      `<div class="batch-suggestion">
+        <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools</div>
+        <div class="batch-suggestion-detail">${b.contributors.join(' + ')}</div>
+      </div>`
+    ).join('');
+
+    const stockHtml = entry.dyes.map(d => {
+      const key = normalize(d);
+      const stockRows = stockByDyeName[key] || [];
+      const powderLoc = powderLocationByDye[key] || '';
+      if (!stockRows.length) {
+        return `<div class="stock-item"><span>${d}</span><span class="no-stock">none premade${powderLoc ? ` · powder: <span class="bin-tag">${powderLoc}</span>` : ''}</span></div>`;
+      }
+      const totalStock = stockRows.reduce((s, r) => s + r.qty, 0);
+      const bins = stockRows.map(r => r.binLocation).filter(Boolean);
+      return `<div class="stock-item"><span>${d}</span><span>${totalStock.toFixed(0)}mL ${bins.length ? bins.map(b => `<span class="bin-tag">${b}</span>`).join(' ') : ''}</span></div>`;
+    }).join('');
+
+    const peekHtml = entry.dyes.map(d => {
+      const key = normalize(d);
+      const others = (dyeUsageMap[key] || []).filter(u => u.recipeName !== entry.recipe.name);
+      if (!others.length) return '';
+      const otherText = others.map(o => `${o.recipeName} (${o.qty})`).join(', ');
+      return `<div class="peek-ahead-item"><strong>${d}</strong> also needed by: ${otherText}</div>`;
+    }).filter(Boolean).join('');
+
+    return `
+      <div class="recipe-card">
+        <div class="recipe-card-top">
+          <div>
+            <div class="recipe-card-name">${entry.recipe.name}</div>
+            <div class="recipe-card-meta">${entry.dyes.length} color${entry.dyes.length === 1 ? '' : 's'} · ${entry.totalQty} spools total needed</div>
+          </div>
+          <div class="complexity-badge">Max ${entry.max}/batch</div>
+        </div>
+        <div class="two-col-grid">
+          <div>
+            <div class="sub-title">Who wants what</div>
+            ${ordersHtml}
+          </div>
+          <div>
+            <div class="sub-title">Suggested batches</div>
+            ${batchesHtml}
+          </div>
+        </div>
+        <div class="two-col-grid">
+          <div>
+            <div class="sub-title">Premade stock on hand</div>
+            ${stockHtml}
+          </div>
+          <div>
+            <div class="sub-title">Peek ahead — shared dyes</div>
+            ${peekHtml || '<div class="no-stock">No other pending recipes share these dyes</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderCleanup() {
+  const content = document.getElementById('cleanupContent');
+  const allDyeNames = Object.keys(dyeUsageMap);
+
+  if (!allDyeNames.length) {
+    content.innerHTML = `<div class="empty-state">No dyes currently in play across open orders.</div>`;
+    return;
+  }
+
+  content.innerHTML = allDyeNames.sort().map(key => {
+    const usages = dyeUsageMap[key];
+    const displayName = usages[0] ? usages.find(u => u.recipeName) : key;
+    const otherRecipeCount = usages.length;
+    const isOneOff = otherRecipeCount <= 1;
+
+    const statusHtml = isOneOff
+      ? `<span class="cleanup-status status-oneoff">One-off — no other open orders need this</span>`
+      : `<span class="cleanup-status status-keep">Needed by ${otherRecipeCount} recipes still open</span>`;
+
+    const detailHtml = usages.map(u => `${u.recipeName} (${u.qty} spools)`).join(', ');
+
+    return `
+      <div class="cleanup-dye-row">
+        <input type="checkbox" id="used-${key}">
+        <div style="flex:1">
+          <div class="cleanup-dye-name">${key}</div>
+          ${statusHtml}
+          <div class="cleanup-detail">Still needed for: ${detailHtml}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
