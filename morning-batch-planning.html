@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morning Batch Planning</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 19px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 12px; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .counter-row { display: flex; gap: 16px; margin-bottom: 12px; }
+  .counter-chip {
+    background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 14px;
+    font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700;
+  }
+  .counter-chip span { font-family: 'Inter', sans-serif; font-weight: 500; font-size: 11px; color: #8B7D72; margin-left: 4px; }
+
+  .controls-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .search-input {
+    flex: 1; min-width: 180px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px;
+  }
+  .filter-select { padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; }
+
+  .empty-state { text-align: center; color: var(--done-text); padding: 60px 20px; font-size: 14px; }
+
+  .work-table { width: 100%; border-collapse: collapse; }
+  .work-table thead th {
+    text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; padding: 6px 8px; border-bottom: 2px solid var(--rule);
+    position: sticky; top: 0; background: var(--paper); z-index: 2;
+  }
+  .work-table td { padding: 8px; border-bottom: 1px solid var(--warm); vertical-align: top; font-size: 12px; }
+  .recipe-row { cursor: pointer; background: white; }
+  .recipe-row:hover { background: var(--warm); }
+  .recipe-row.selected { background: var(--teal-light); }
+
+  .recipe-name-cell { font-family: 'Libre Baskerville', serif; font-size: 13px; font-weight: 700; }
+  .recipe-meta-cell { font-size: 10px; color: #8B7D72; margin-top: 2px; }
+
+  .priority-pill {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+    padding: 2px 8px; border-radius: 8px; white-space: nowrap;
+  }
+  .priority-Urgent { background: #F5E0E4; color: #A01830; }
+  .priority-High { background: var(--gold-light); color: var(--gold); }
+  .priority-Normal { background: var(--warm); color: #6B5E52; }
+  .priority-Low { background: #EAF3DE; color: var(--done-text); }
+
+  .stock-line { font-size: 11px; padding: 1px 0; }
+  .bin-tag {
+    font-family: 'DM Mono', monospace; font-size: 10px; background: var(--warm); padding: 1px 6px; border-radius: 4px;
+  }
+  .no-stock { color: #8B7D72; font-style: italic; }
+  .peek-line { font-size: 11px; color: #6B5E52; padding: 1px 0; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div>
+    <div class="header-title">Morning Batch Planning</div>
+  </div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+<div class="header-sub" id="headerSub">Loading...</div>
+
+<div class="counter-row" id="counterRow"></div>
+
+<div class="controls-row">
+  <input class="search-input" id="searchBox" placeholder="Search colorway, SKU, or customer..." oninput="renderList()">
+  <select class="filter-select" id="customerFilter" onchange="renderList()">
+    <option value="">All customers</option>
+  </select>
+  <select class="filter-select" id="priorityFilter" onchange="renderList()">
+    <option value="">All priorities</option>
+    <option value="Urgent">Urgent only</option>
+    <option value="High">High only</option>
+    <option value="Normal">Normal only</option>
+    <option value="Low">Low only</option>
+  </select>
+</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+const PRIORITY_RANK = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 };
+function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
+
+let recipeData = [];
+let selectedRecipeId = null;
+
+function jumpToRecipe(recipeId) {
+  selectedRecipeId = recipeId;
+  try {
+    grist.setCursorPos({ rowId: recipeId });
+  } catch (e) {
+    console.error('Could not jump to recipe:', e);
+    showToast('Could not jump — check widget access level');
+  }
+  renderList();
+}
+
+async function loadEverything() {
+  document.getElementById('headerSub').textContent = 'Loading...';
+
+  try {
+    const [woTable, wolTable, recipesTable, compTable, dyesTable, stockTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+      };
+    });
+
+    const rIds = recipesTable.id || [];
+    const recipeById = {};
+    const recipeBySku = {};
+    rIds.forEach((id, i) => {
+      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i], sku: columnAsArray(recipesTable, 'SKU_Base')[i] };
+      recipeById[id] = rec;
+      const sku = normalize(rec.sku);
+      if (sku) recipeBySku[sku] = rec;
+    });
+
+    const cIds = compTable.id || [];
+    const dyesByRecipe = {};
+    cIds.forEach((id, i) => {
+      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      if (!recipeRef || !dyeName) return;
+      if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = [];
+      dyesByRecipe[recipeRef].push(dyeName);
+    });
+
+    const dIds = dyesTable.id || [];
+    const powderLocationByDye = {};
+    dIds.forEach((id, i) => {
+      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
+      if (name) powderLocationByDye[name] = columnAsArray(dyesTable, 'Powder_Location')[i] || '';
+    });
+
+    const sIds = stockTable.id || [];
+    const stockByDyeName = {};
+    sIds.forEach((id, i) => {
+      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      if (!dyeRef) return;
+      const dyeIdx = dIds.indexOf(dyeRef);
+      const dyeName = dyeIdx !== -1 ? normalize(columnAsArray(dyesTable, 'Dye_Name')[dyeIdx]) : null;
+      if (!dyeName) return;
+      if (!stockByDyeName[dyeName]) stockByDyeName[dyeName] = [];
+      stockByDyeName[dyeName].push({
+        qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
+        binLocation: columnAsArray(stockTable, 'Bin_Location')[i] || '',
+      });
+    });
+
+    const wolIds = wolTable.id || [];
+    const pendingByRecipe = {};
+
+    for (let i = 0; i < wolIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const remaining = qtyNeeded - qtyDyed;
+      if (remaining <= 0) continue;
+
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      let recipe = null;
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
+      else recipe = recipeBySku[normalize(sku)] || null;
+      if (!recipe) continue;
+
+      const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
+
+      if (!pendingByRecipe[recipe.id]) {
+        pendingByRecipe[recipe.id] = {
+          recipe,
+          dyes: dyesByRecipe[recipe.id] || [],
+          orders: [],
+          bestPriority: priority,
+        };
+      }
+      const entry = pendingByRecipe[recipe.id];
+      if (priorityRank(priority) < priorityRank(entry.bestPriority)) entry.bestPriority = priority;
+      entry.orders.push({
+        orderNumber: info.orderNumber,
+        customerName: info.customerName,
+        qty: remaining,
+      });
+    }
+
+    // Peek-ahead: dye -> [{recipeName, qty}] across all pending recipes
+    const dyeUsageMap = {};
+    Object.values(pendingByRecipe).forEach(entry => {
+      const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
+      entry.dyes.forEach(d => {
+        const key = normalize(d);
+        if (!dyeUsageMap[key]) dyeUsageMap[key] = [];
+        dyeUsageMap[key].push({ recipeName: entry.recipe.name, qty: totalQty });
+      });
+    });
+
+    recipeData = Object.values(pendingByRecipe).map(entry => {
+      const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
+      const stock = entry.dyes.map(d => {
+        const key = normalize(d);
+        const rows = stockByDyeName[key] || [];
+        const total = rows.reduce((s, r) => s + r.qty, 0);
+        const bins = rows.map(r => r.binLocation).filter(Boolean);
+        const powderLoc = powderLocationByDye[key] || '';
+        return { dyeName: d, total, bins, powderLoc };
+      });
+      const peek = entry.dyes.map(d => {
+        const key = normalize(d);
+        const others = (dyeUsageMap[key] || []).filter(u => u.recipeName !== entry.recipe.name);
+        return { dyeName: d, others };
+      }).filter(p => p.others.length > 0);
+
+      return { ...entry, totalQty, stock, peek };
+    }).sort((a, b) => priorityRank(a.bestPriority) - priorityRank(b.bestPriority) || b.totalQty - a.totalQty);
+
+    // Populate customer filter dropdown
+    const allCustomers = new Set();
+    recipeData.forEach(e => e.orders.forEach(o => { if (o.customerName) allCustomers.add(o.customerName); }));
+    const customerFilter = document.getElementById('customerFilter');
+    const prevVal = customerFilter.value;
+    customerFilter.innerHTML = '<option value="">All customers</option>' +
+      Array.from(allCustomers).sort().map(c => `<option value="${c}">${c}</option>`).join('');
+    customerFilter.value = prevVal;
+
+    document.getElementById('headerSub').textContent = `${recipeData.length} colorways pending`;
+    renderList();
+  } catch (e) {
+    console.error('Failed to load morning batch planning:', e);
+    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+  }
+}
+
+function renderList() {
+  const search = normalize(document.getElementById('searchBox').value);
+  const customerVal = document.getElementById('customerFilter').value;
+  const priorityVal = document.getElementById('priorityFilter').value;
+
+  let filtered = recipeData.filter(e => {
+    if (priorityVal && e.bestPriority !== priorityVal) return false;
+    if (customerVal && !e.orders.some(o => o.customerName === customerVal)) return false;
+    if (search) {
+      const hay = normalize(e.recipe.name + ' ' + (e.recipe.sku || '') + ' ' + e.orders.map(o => o.customerName).join(' '));
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Counter reflects the FILTERED set, so it's useful when narrowing by customer etc.
+  const totalSpools = filtered.reduce((s, e) => s + e.totalQty, 0);
+  document.getElementById('counterRow').innerHTML = `
+    <div class="counter-chip">${totalSpools}<span>spools left</span></div>
+    <div class="counter-chip">${filtered.length}<span>colorways</span></div>
+  `;
+
+  const content = document.getElementById('content');
+  if (!filtered.length) {
+    content.innerHTML = `<div class="empty-state">🎉 Nothing matches — try clearing filters, or you're all caught up.</div>`;
+    return;
+  }
+
+  const rows = filtered.map(e => {
+    const stockHtml = e.stock.map(s => {
+      if (!s.total) {
+        return `<div class="stock-line no-stock">${s.dyeName}: none${s.powderLoc ? ` · powder <span class="bin-tag">${s.powderLoc}</span>` : ''}</div>`;
+      }
+      const bins = s.bins.map(b => `<span class="bin-tag">${b}</span>`).join(' ');
+      return `<div class="stock-line">${s.dyeName}: ${s.total.toFixed(0)}mL ${bins}</div>`;
+    }).join('');
+
+    const peekHtml = e.peek.map(p =>
+      `<div class="peek-line"><strong>${p.dyeName}</strong> → ${p.others.map(o => `${o.recipeName} (${o.qty})`).join(', ')}</div>`
+    ).join('') || '<div class="peek-line" style="color:#8B7D72;font-style:italic;">No overlap with other pending recipes</div>';
+
+    const isSelected = e.recipe.id === selectedRecipeId;
+
+    return `
+      <tr class="recipe-row ${isSelected ? 'selected' : ''}" onclick="jumpToRecipe(${e.recipe.id})">
+        <td>
+          <div class="recipe-name-cell">${e.recipe.name}</div>
+          <div class="recipe-meta-cell">${e.recipe.sku || ''} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
+        </td>
+        <td><span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span></td>
+        <td>${e.totalQty} spools</td>
+        <td>${stockHtml}</td>
+        <td>${peekHtml}</td>
+      </tr>
+    `;
+  }).join('');
+
+  content.innerHTML = `
+    <table class="work-table">
+      <thead>
+        <tr>
+          <th>Colorway</th>
+          <th>Priority</th>
+          <th>Total</th>
+          <th>Premade Stock</th>
+          <th>Peek Ahead</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full',
+  allowSelectBy: true
+});
+
+loadEverything();
+</script>
+</body>
+</html>
