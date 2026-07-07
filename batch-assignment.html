@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Batch Assignment</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-text: #27500A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 19px; font-weight: 700; margin-bottom: 2px; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 14px; }
+
+  .empty-state { text-align: center; color: #8B7D72; padding: 60px 20px; font-size: 13px; }
+
+  .sub-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; margin: 14px 0 6px;
+  }
+  .sub-title:first-child { margin-top: 0; }
+
+  .order-row {
+    display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--warm);
+  }
+  .order-row:last-child { border-bottom: none; }
+
+  .batch-suggestion {
+    background: var(--gold-light); border: 1px solid #D4B07A; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+  }
+  .batch-suggestion-title { font-size: 12px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
+  .contributor-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 4px; }
+  .contributor-row input {
+    width: 60px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
+  }
+  .log-btn {
+    margin-top: 8px; width: 100%; font-size: 12px; padding: 7px; border-radius: 6px;
+    border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
+  }
+  .log-btn:hover { background: var(--teal); color: white; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="content">
+  <div class="empty-state">Select a colorway in Morning Batch Planning to see batch details here.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+function safeMaxForComplexity(numColors) {
+  if (numColors >= 3) return 10;
+  if (numColors === 2) return 12;
+  return 15;
+}
+
+function suggestBatches(orders, max) {
+  const batches = [];
+  const smallOrders = [];
+
+  orders.forEach(o => {
+    if (o.qty > max) {
+      const parts = Math.ceil(o.qty / max);
+      const base = Math.floor(o.qty / parts);
+      const remainder = o.qty - base * parts;
+      for (let p = 0; p < parts; p++) {
+        const partQty = base + (p < remainder ? 1 : 0);
+        batches.push({ qty: partQty, contributors: [{ lineId: o.lineId, customerName: `${o.customerName} (part ${p + 1}/${parts})`, qty: partQty, currentQtyDyed: o.currentQtyDyed }] });
+      }
+    } else if (o.qty >= max * 0.5) {
+      batches.push({ qty: o.qty, contributors: [{ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed }] });
+    } else {
+      smallOrders.push(o);
+    }
+  });
+
+  smallOrders.sort((a, b) => b.qty - a.qty);
+  let current = null;
+  smallOrders.forEach(o => {
+    if (!current || current.qty + o.qty > max) {
+      current = { qty: 0, contributors: [] };
+      batches.push(current);
+    }
+    current.qty += o.qty;
+    current.contributors.push({ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed });
+  });
+
+  return batches.filter(b => b.qty > 0);
+}
+
+let currentEntry = null;
+
+async function loadForRecipe(record) {
+  if (!record || !record.id) {
+    document.getElementById('content').innerHTML = `<div class="empty-state">Select a colorway in Morning Batch Planning to see batch details here.</div>`;
+    currentEntry = null;
+    return;
+  }
+
+  document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
+
+  try {
+    const [woTable, wolTable, compTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+    ]);
+
+    const woIds = woTable.id || [];
+    const woInfo = {};
+    woIds.forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
+        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+      };
+    });
+
+    const cIds = compTable.id || [];
+    const dyeNames = [];
+    cIds.forEach((id, i) => {
+      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      if (recipeRef !== record.id) return;
+      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      if (dyeName) dyeNames.push(dyeName);
+    });
+
+    const recipeSku = normalize(record.SKU_Base || '');
+    const wolIds = wolTable.id || [];
+    const orders = [];
+
+    for (let i = 0; i < wolIds.length; i++) {
+      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) continue;
+
+      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
+      const matches = directRecipeId === record.id || (recipeSku && sku === recipeSku);
+      if (!matches) continue;
+
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const remaining = qtyNeeded - qtyDyed;
+      if (remaining <= 0) continue;
+
+      orders.push({
+        lineId: wolIds[i],
+        orderNumber: info.orderNumber,
+        customerName: info.customerName,
+        qty: remaining,
+        currentQtyDyed: qtyDyed,
+      });
+    }
+
+    const max = safeMaxForComplexity(dyeNames.length);
+    const batches = suggestBatches(orders, max);
+    const totalQty = orders.reduce((s, o) => s + o.qty, 0);
+
+    currentEntry = { recipeName: record.Recipe_Name, dyeCount: dyeNames.length, max, orders, batches, totalQty };
+    render();
+  } catch (e) {
+    console.error('Failed to load batch assignment:', e);
+    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load — check table/column names</div>`;
+  }
+}
+
+function render() {
+  if (!currentEntry || !currentEntry.orders.length) {
+    document.getElementById('content').innerHTML = `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
+    return;
+  }
+
+  const e = currentEntry;
+  const ordersHtml = e.orders.map(o =>
+    `<div class="order-row"><span>${o.customerName || '—'}</span><span>${o.qty} spools</span></div>`
+  ).join('');
+
+  const batchesHtml = e.batches.map((b, i) => {
+    const contributorInputs = b.contributors.map((c, ci) =>
+      `<div class="contributor-row">
+        <span style="font-size:12px;">${c.customerName}</span>
+        <input type="number" id="log-${i}-${ci}" value="${c.qty}" min="0">
+      </div>`
+    ).join('');
+
+    return `<div class="batch-suggestion">
+      <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools suggested</div>
+      ${contributorInputs}
+      <button class="log-btn" onclick="logBatchCompletion(${i})">✓ Log actual amounts made</button>
+    </div>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="header-title">${e.recipeName}</div>
+    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'} · max ${e.max}/batch · ${e.totalQty} spools total</div>
+
+    <div class="sub-title">Who wants what</div>
+    ${ordersHtml}
+
+    <div class="sub-title">Suggested batches</div>
+    ${batchesHtml}
+  `;
+}
+
+async function logBatchCompletion(batchIdx) {
+  const batch = currentEntry.batches[batchIdx];
+  const actions = [];
+  const summary = [];
+
+  batch.contributors.forEach((c, ci) => {
+    const input = document.getElementById(`log-${batchIdx}-${ci}`);
+    const enteredQty = Number(input.value) || 0;
+    if (enteredQty <= 0) return;
+    const newQtyDyed = (c.currentQtyDyed || 0) + enteredQty;
+    actions.push(['UpdateRecord', 'Work_Order_Lines', c.lineId, { Qty_Dyed: newQtyDyed }]);
+    summary.push(`${c.customerName}: +${enteredQty}`);
+  });
+
+  if (!actions.length) { showToast('Enter at least one completed amount'); return; }
+
+  try {
+    await grist.docApi.applyUserActions(actions);
+    showToast(`Logged: ${summary.join(', ')} ✓`);
+  } catch (e) {
+    console.error('Failed to log completion:', e);
+    showToast('Failed to log — check Work_Order_Lines table');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full'
+});
+
+grist.onRecord((record) => {
+  loadForRecipe(record);
+});
+</script>
+</body>
+</html>
