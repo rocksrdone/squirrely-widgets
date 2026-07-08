@@ -70,6 +70,20 @@
   .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
   .cleanup-keep { background: var(--teal-light); color: var(--teal); }
 
+  .dye-action-row { margin-bottom: 8px; }
+  .dye-action-row select {
+    width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; background: white;
+  }
+  .action-fields { display: flex; gap: 5px; margin-top: 4px; }
+  .action-fields input {
+    flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
+  }
+  .action-confirm-btn {
+    font-size: 11px; padding: 4px 10px; border-radius: 4px; white-space: nowrap;
+    border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
+  }
+  .action-confirm-btn:hover { background: var(--teal); color: white; }
+
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
@@ -109,12 +123,20 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
-    const [woTable, wolTable, compTable, recipesTable] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable, dyesTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
       grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Dyes'),
     ]);
+
+    const dIds = dyesTable.id || [];
+    const dyeIdByName = {};
+    dIds.forEach((id, i) => {
+      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
+      if (name) dyeIdByName[name] = id;
+    });
 
     const woIds = woTable.id || [];
     const woInfo = {};
@@ -186,10 +208,10 @@ async function loadForRecipe(record) {
         const otherDyes = (dyesByRecipeId[rid] || []).map(normalize);
         if (otherDyes.includes(key)) others.push(recipeNameById[rid] || `Recipe #${rid}`);
       });
-      return { dyeName, isOneOff: others.length === 0, others };
+      return { dyeName, dyeId: dyeIdByName[key] || null, isOneOff: others.length === 0, others };
     });
 
-    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, dyeCount: dyeNames.length, orders, cleanupInfo };
+    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeNames.length, orders, cleanupInfo };
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -226,12 +248,30 @@ function render() {
       }).join('')
     : `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
 
-  const cleanupHtml = e.cleanupInfo.map(c => {
-    if (c.isOneOff) {
-      return `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeName}</strong> — one-off, nothing else pending needs it. Keep leftover, toss, or make extra to use it up.</div>`;
-    }
-    return `<div class="cleanup-row cleanup-keep"><strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
+  const cleanupHtml = e.cleanupInfo.map((c, idx) => {
+    const flagHtml = c.isOneOff
+      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeName}</strong> — one-off, nothing else pending needs it.</div>`
+      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
+
+    return `
+      ${flagHtml}
+      <div class="dye-action-row">
+        <select id="action-${idx}" onchange="onDyeActionChange(${idx})">
+          <option value="">What did you do with the leftover?</option>
+          <option value="put_away">Put away in a bin</option>
+          <option value="hold">Hold for later (no bin yet)</option>
+          <option value="dump">Dump it</option>
+          <option value="make_more">Make more thread → backstock</option>
+        </select>
+        <div id="action-fields-${idx}"></div>
+      </div>
+    `;
   }).join('');
+
+  const draftActionHtml = `
+    <div class="section-title">Combined leftovers into something new?</div>
+    <button class="log-btn" style="width:100%;" onclick="createColorDraft()">🎨 Create new color draft from leftovers</button>
+  `;
 
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
@@ -240,7 +280,7 @@ function render() {
     <div class="section-title">Log progress per customer</div>
     ${ordersHtml}
 
-    ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}` : ''}
+    ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}${draftActionHtml}` : ''}
   `;
 }
 
@@ -285,6 +325,151 @@ async function undoLast(lineId) {
   } catch (e) {
     console.error('Failed to undo:', e);
     showToast('Failed to undo — check Work_Order_Lines table');
+  }
+}
+
+const YARDS_PER_SPOOL = {
+  'FF NYLON': 100,
+  'E NYLON': 150,
+  'FF COTTON': 100,
+  // Blackwing not yet confirmed — defaults to 100, update if that's wrong
+  'BLACKWING': 100,
+};
+function yardsPerSpool(fiberType) {
+  return YARDS_PER_SPOOL[normalize(fiberType)] || 100;
+}
+
+async function generateLotNumber() {
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  try {
+    const lotsTable = await grist.docApi.fetchTable('Production_Lots');
+    const existing = (lotsTable.Lot_Number || []).filter(n => (n || '').startsWith(dateStr + '-'));
+    return `${dateStr}-${existing.length + 1}`;
+  } catch (e) {
+    console.error('Could not check existing lots, using sequence 1:', e);
+    return `${dateStr}-1`;
+  }
+}
+
+function onDyeActionChange(idx) {
+  const action = document.getElementById(`action-${idx}`).value;
+  const wrap = document.getElementById(`action-fields-${idx}`);
+
+  if (action === 'put_away') {
+    wrap.innerHTML = `<div class="action-fields">
+      <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
+      <input type="text" id="bin-${idx}" placeholder="Bin location">
+      <button class="action-confirm-btn" onclick="putAwayDye(${idx})">✓</button>
+    </div>`;
+  } else if (action === 'hold') {
+    wrap.innerHTML = `<div class="action-fields">
+      <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
+      <button class="action-confirm-btn" onclick="holdDye(${idx})">✓</button>
+    </div>`;
+  } else if (action === 'dump') {
+    wrap.innerHTML = `<div class="action-fields">
+      <button class="action-confirm-btn" onclick="dumpDye(${idx})" style="flex:1;">Confirm dumped</button>
+    </div>`;
+  } else if (action === 'make_more') {
+    wrap.innerHTML = `<div class="action-fields">
+      <input type="number" id="qty-${idx}" placeholder="Spools" min="0">
+      <button class="action-confirm-btn" onclick="makeMoreBackstock(${idx})">✓</button>
+    </div>`;
+  } else {
+    wrap.innerHTML = '';
+  }
+}
+
+async function putAwayDye(idx) {
+  const c = currentEntry.cleanupInfo[idx];
+  if (!c.dyeId) { showToast(`${c.dyeName} isn't linked to a Dyes row — can't log stock`); return; }
+  const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
+  const bin = document.getElementById(`bin-${idx}`).value.trim();
+  if (qty <= 0) { showToast('Enter how many mL are left'); return; }
+  if (!bin) { showToast('Enter a bin location'); return; }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Bin_Location: bin, Mixed_Date: Math.floor(Date.now() / 1000) }]
+    ]);
+    showToast(`${c.dyeName}: ${qty}mL put away in ${bin} ✓`);
+    document.getElementById(`action-${idx}`).value = '';
+    document.getElementById(`action-fields-${idx}`).innerHTML = '';
+  } catch (e) {
+    console.error('Failed to put away dye:', e);
+    showToast('Failed — check the Dye_Stock table');
+  }
+}
+
+async function holdDye(idx) {
+  const c = currentEntry.cleanupInfo[idx];
+  if (!c.dyeId) { showToast(`${c.dyeName} isn't linked to a Dyes row — can't log stock`); return; }
+  const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
+  if (qty <= 0) { showToast('Enter how many mL are left'); return; }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Mixed_Date: Math.floor(Date.now() / 1000) }]
+    ]);
+    showToast(`${c.dyeName}: ${qty}mL held, no bin assigned yet ✓`);
+    document.getElementById(`action-${idx}`).value = '';
+    document.getElementById(`action-fields-${idx}`).innerHTML = '';
+  } catch (e) {
+    console.error('Failed to hold dye:', e);
+    showToast('Failed — check the Dye_Stock table');
+  }
+}
+
+function dumpDye(idx) {
+  const c = currentEntry.cleanupInfo[idx];
+  showToast(`${c.dyeName}: noted as dumped`);
+  document.getElementById(`action-${idx}`).value = '';
+  document.getElementById(`action-fields-${idx}`).innerHTML = '';
+}
+
+async function makeMoreBackstock(idx) {
+  const c = currentEntry.cleanupInfo[idx];
+  const spools = Number(document.getElementById(`qty-${idx}`).value) || 0;
+  if (spools <= 0) { showToast('Enter how many spools this makes'); return; }
+
+  const ySpool = yardsPerSpool(currentEntry.fiberType);
+  const lotNumber = await generateLotNumber();
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Production_Lots', null, {
+        Lot_Number: lotNumber,
+        Recipe: currentEntry.recipeId,
+        Lot_Date: Math.floor(Date.now() / 1000),
+        Total_Yards_Made: spools * ySpool,
+        Form: 'Hank Backstock',
+        Listed_Vendor_Store: false,
+        Listed_Regular_Store: false,
+      }]
+    ]);
+    showToast(`Logged lot ${lotNumber} — ${spools} spools to backstock ✓`);
+    document.getElementById(`action-${idx}`).value = '';
+    document.getElementById(`action-fields-${idx}`).innerHTML = '';
+  } catch (e) {
+    console.error('Failed to log backstock lot:', e);
+    showToast('Failed — check the Production_Lots table');
+  }
+}
+
+async function createColorDraft() {
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipes', null, {
+        Recipe_Name: 'Untitled Draft (from leftovers)',
+        Status: 'Researching',
+        Notes: `Created from leftover dyes while working on ${currentEntry.recipeName}`,
+      }]
+    ]);
+    showToast('New color draft created — find it in your Recipes drafts ✓');
+  } catch (e) {
+    console.error('Failed to create draft:', e);
+    showToast('Failed — check the Recipes table');
   }
 }
 
