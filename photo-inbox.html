@@ -70,6 +70,8 @@
   }
   .delete-btn:hover { background: var(--accent); }
   .photo-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
+  .photo-card img.lazy-photo:not(.loaded) { opacity: 0.3; }
+  .photo-card img.lazy-photo { transition: opacity 0.2s; }
   .photo-card-body { padding: 10px; }
   .photo-filename { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; }
   .source-tag {
@@ -303,6 +305,27 @@ function renderGrid() {
       </div>
     ` : ''}
   `;
+
+  loadImagesInBatches();
+}
+
+// Load images a few at a time instead of all at once — firing 30 simultaneous
+// requests at the n8n webhook was overwhelming it and tripping n8n's crash
+// detection, which auto-disables the workflow after repeated failures.
+async function loadImagesInBatches() {
+  const images = Array.from(document.querySelectorAll('img.lazy-photo:not(.loaded)'));
+  const BATCH_SIZE = 4;
+
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    const batch = images.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(img => new Promise(resolve => {
+      const src = img.getAttribute('data-src');
+      if (!src) { resolve(); return; }
+      img.onload = () => { img.classList.add('loaded'); resolve(); };
+      img.onerror = () => { img.style.opacity = 0.2; resolve(); };
+      img.src = src;
+    })));
+  }
 }
 
 function loadMorePhotos() {
@@ -340,7 +363,7 @@ function photoCardHTML(p) {
   return `
     <div class="photo-card" id="card-${key}">
       <button class="delete-btn" onclick="deleteInboxPhoto('${key}')" title="Delete this photo permanently">🗑</button>
-      <img src="${p.preview_url}" alt="${p.filename}" onerror="this.style.opacity=0.2">
+      <img class="lazy-photo" data-src="${p.preview_url}" alt="${p.filename}">
       <div class="photo-card-body">
         <div class="photo-filename">${p.filename}</div>
         <span class="source-tag source-${p.source}">${p.source === 'dslr' ? 'DSLR' : 'Phone'}</span>
