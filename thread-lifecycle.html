@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thread Lifecycle</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --accent: #8B3A2A;
+    --teal: #3A8B7A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --done-text: #27500A;
+    --done-bg: #EAF3DE;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+  }
+
+  .header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .header-title { font-family: 'Libre Baskerville', serif; font-size: 19px; font-weight: 700; }
+  .refresh-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+  }
+
+  .stage-title {
+    font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700;
+    margin: 18px 0 8px; padding-top: 12px; border-top: 2px solid var(--rule);
+  }
+  .stage-title:first-of-type { margin-top: 10px; border-top: none; padding-top: 0; }
+  .stage-sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; margin-top: -6px; }
+
+  .empty-stage { font-size: 11px; color: #8B7D72; font-style: italic; padding: 8px 0; }
+
+  .lot-card {
+    background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .lot-info { flex: 1; min-width: 180px; }
+  .lot-name { font-family: 'Libre Baskerville', serif; font-size: 13px; font-weight: 700; }
+  .lot-meta { font-size: 11px; color: #8B7D72; margin-top: 2px; }
+  .advance-btn {
+    font-size: 11px; padding: 6px 12px; border-radius: 5px; white-space: nowrap;
+    border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
+  }
+  .advance-btn:hover { background: var(--teal); color: white; }
+
+  .assign-form { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .assign-form select, .assign-form input {
+    padding: 5px 7px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; color: var(--ink);
+    background: white; color-scheme: light;
+  }
+  .assign-form select option { background: white; color: var(--ink); }
+  .assign-form input { width: 70px; }
+  .assign-btn {
+    font-size: 11px; padding: 5px 10px; border-radius: 4px;
+    border: 1px solid var(--gold); background: var(--gold-light); color: var(--gold); cursor: pointer; font-weight: 600;
+  }
+  .assign-btn:hover { background: var(--gold); color: white; }
+
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header-row">
+  <div class="header-title">Thread Lifecycle</div>
+  <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
+</div>
+
+<div id="content"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+const YARDS_PER_SPOOL = {
+  'FF NYLON': 100,
+  'E NYLON': 150,
+  'FF COTTON': 100,
+  'BLACKWING': 100,
+};
+function yardsPerSpool(fiberType) {
+  return YARDS_PER_SPOOL[normalize(fiberType)] || 100;
+}
+
+const DRYING_NEXT = {
+  'Drying - Day Rack': 'Drying - Overnight',
+  'Drying - Overnight': 'Ready to Assign',
+};
+const ALLOC_NEXT = {
+  'In Bin - Unwound': 'Wound - Needs Labels',
+  'Wound - Needs Labels': 'Packaged - Shipped',
+};
+
+let lotsData = [];
+let allocationsData = [];
+let customersList = [];
+
+async function loadEverything() {
+  document.getElementById('content').innerHTML = `<div class="empty-stage">Loading...</div>`;
+
+  try {
+    const [lotsTable, recipesTable, allocTable, customersTable] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Customers'),
+    ]);
+
+    const rIds = recipesTable.id || [];
+    const recipeById = {};
+    rIds.forEach((id, i) => {
+      recipeById[id] = {
+        name: columnAsArray(recipesTable, 'Recipe_Name')[i],
+        fiberType: columnAsArray(recipesTable, 'Fiber_Type')[i],
+      };
+    });
+
+    const cIds = customersTable.id || [];
+    customersList = cIds.map((id, i) => ({ id, name: columnAsArray(customersTable, 'Name')[i] })).filter(c => c.name);
+
+    const aIds = allocTable.id || [];
+    allocationsData = aIds.map((id, i) => ({
+      id,
+      lotId: getRefId(columnAsArray(allocTable, 'Lot')[i]),
+      customerId: getRefId(columnAsArray(allocTable, 'Customer')[i]),
+      customerName: (() => {
+        const cid = getRefId(columnAsArray(allocTable, 'Customer')[i]);
+        const c = customersList.find(x => x.id === cid);
+        return c ? c.name : '—';
+      })(),
+      qtySpools: Number(columnAsArray(allocTable, 'Qty_Spools')[i]) || 0,
+      status: columnAsArray(allocTable, 'Status')[i] || 'In Bin - Unwound',
+    }));
+
+    const lIds = lotsTable.id || [];
+    lotsData = lIds.map((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotsTable, 'Recipe')[i]);
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiberType: '' };
+      const totalYards = Number(columnAsArray(lotsTable, 'Total_Yards_Made')[i]) || 0;
+      const ySpool = yardsPerSpool(recipe.fiberType);
+      const totalSpools = Math.round(totalYards / ySpool);
+
+      const allocatedSpools = allocationsData
+        .filter(a => a.lotId === id)
+        .reduce((s, a) => s + a.qtySpools, 0);
+
+      return {
+        id,
+        lotNumber: columnAsArray(lotsTable, 'Lot_Number')[i],
+        recipeName: recipe.name,
+        fiberType: recipe.fiberType,
+        totalSpools,
+        allocatedSpools,
+        remainingSpools: Math.max(0, totalSpools - allocatedSpools),
+        dryingStatus: columnAsArray(lotsTable, 'Drying_Status')[i] || 'Drying - Day Rack',
+      };
+    });
+
+    render();
+  } catch (e) {
+    console.error('Failed to load thread lifecycle:', e);
+    document.getElementById('content').innerHTML = `<div class="empty-stage">Failed to load — check table/column names</div>`;
+  }
+}
+
+function render() {
+  const dryingLots = lotsData.filter(l => l.dryingStatus !== 'Ready to Assign');
+  const readyLots = lotsData.filter(l => l.dryingStatus === 'Ready to Assign' && l.remainingSpools > 0);
+  const unwoundAllocs = allocationsData.filter(a => a.status === 'In Bin - Unwound');
+  const woundAllocs = allocationsData.filter(a => a.status === 'Wound - Needs Labels');
+  const packagedAllocs = allocationsData.filter(a => a.status === 'Packaged - Shipped');
+
+  const dryingHtml = dryingLots.length ? dryingLots.map(l => `
+    <div class="lot-card">
+      <div class="lot-info">
+        <div class="lot-name">${l.lotNumber} — ${l.recipeName}</div>
+        <div class="lot-meta">${l.totalSpools} spools · ${l.dryingStatus}</div>
+      </div>
+      <button class="advance-btn" onclick="advanceDrying(${l.id})">→ ${DRYING_NEXT[l.dryingStatus]}</button>
+    </div>
+  `).join('') : `<div class="empty-stage">Nothing drying right now.</div>`;
+
+  const readyHtml = readyLots.length ? readyLots.map(l => `
+    <div class="lot-card" style="flex-direction:column; align-items:stretch;">
+      <div class="lot-info">
+        <div class="lot-name">${l.lotNumber} — ${l.recipeName}</div>
+        <div class="lot-meta">${l.remainingSpools} of ${l.totalSpools} spools still unassigned</div>
+      </div>
+      <div class="assign-form">
+        <select id="cust-${l.id}">
+          <option value="">Pick customer...</option>
+          ${customersList.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+        </select>
+        <input type="number" id="qty-${l.id}" placeholder="Spools" min="1" max="${l.remainingSpools}">
+        <button class="assign-btn" onclick="assignToCustomer(${l.id})">✓ Assign to bin</button>
+      </div>
+    </div>
+  `).join('') : `<div class="empty-stage">Nothing ready to assign right now.</div>`;
+
+  const unwoundHtml = unwoundAllocs.length ? unwoundAllocs.map(a => {
+    const lot = lotsData.find(l => l.id === a.lotId);
+    return `
+      <div class="lot-card">
+        <div class="lot-info">
+          <div class="lot-name">${a.customerName} — ${a.qtySpools} spools</div>
+          <div class="lot-meta">${lot ? lot.recipeName + ' · ' + lot.lotNumber : ''}</div>
+        </div>
+        <button class="advance-btn" onclick="advanceAllocation(${a.id})">→ Wound - Needs Labels</button>
+      </div>
+    `;
+  }).join('') : `<div class="empty-stage">Nothing in bins waiting to be wound.</div>`;
+
+  const woundHtml = woundAllocs.length ? woundAllocs.map(a => {
+    const lot = lotsData.find(l => l.id === a.lotId);
+    return `
+      <div class="lot-card">
+        <div class="lot-info">
+          <div class="lot-name">${a.customerName} — ${a.qtySpools} spools</div>
+          <div class="lot-meta">${lot ? lot.recipeName + ' · ' + lot.lotNumber : ''}</div>
+        </div>
+        <button class="advance-btn" onclick="advanceAllocation(${a.id})">→ Packaged - Shipped</button>
+      </div>
+    `;
+  }).join('') : `<div class="empty-stage">Nothing wound and waiting on labels.</div>`;
+
+  const packagedHtml = packagedAllocs.length
+    ? `<div class="stage-sub">${packagedAllocs.length} item${packagedAllocs.length === 1 ? '' : 's'} packaged and shipped — shown for reference only.</div>`
+    : `<div class="empty-stage">Nothing packaged yet.</div>`;
+
+  document.getElementById('content').innerHTML = `
+    <div class="stage-title">🌡️ Drying</div>
+    ${dryingHtml}
+
+    <div class="stage-title">📦 Ready to Assign</div>
+    <div class="stage-sub">Split leftover spools across customer bins as needed</div>
+    ${readyHtml}
+
+    <div class="stage-title">🧶 In Bin — Unwound</div>
+    ${unwoundHtml}
+
+    <div class="stage-title">🏷️ Wound — Needs Labels</div>
+    ${woundHtml}
+
+    <div class="stage-title">✅ Packaged — Shipped</div>
+    ${packagedHtml}
+  `;
+}
+
+async function advanceDrying(lotId) {
+  const lot = lotsData.find(l => l.id === lotId);
+  const next = DRYING_NEXT[lot.dryingStatus];
+  if (!next) return;
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Production_Lots', lotId, { Drying_Status: next }]
+    ]);
+    showToast(`${lot.lotNumber} → ${next} ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to advance drying status:', e);
+    showToast('Failed — check the Production_Lots table');
+  }
+}
+
+async function assignToCustomer(lotId) {
+  const custId = Number(document.getElementById(`cust-${lotId}`).value);
+  const qty = Number(document.getElementById(`qty-${lotId}`).value) || 0;
+  const lot = lotsData.find(l => l.id === lotId);
+
+  if (!custId) { showToast('Pick a customer'); return; }
+  if (qty <= 0) { showToast('Enter how many spools'); return; }
+  if (qty > lot.remainingSpools) { showToast(`Only ${lot.remainingSpools} spools remaining on this lot`); return; }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Lot_Allocations', null, {
+        Lot: lotId,
+        Customer: custId,
+        Qty_Spools: qty,
+        Status: 'In Bin - Unwound',
+      }]
+    ]);
+    showToast(`Assigned ${qty} spools to bin ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to assign to customer:', e);
+    showToast('Failed — check the Lot_Allocations table');
+  }
+}
+
+async function advanceAllocation(allocId) {
+  const alloc = allocationsData.find(a => a.id === allocId);
+  const next = ALLOC_NEXT[alloc.status];
+  if (!next) return;
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Lot_Allocations', allocId, { Status: next }]
+    ]);
+    showToast(`${alloc.customerName}'s bin → ${next} ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to advance allocation status:', e);
+    showToast('Failed — check the Lot_Allocations table');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({
+  requiredAccess: 'full'
+});
+
+loadEverything();
+</script>
+</body>
+</html>
