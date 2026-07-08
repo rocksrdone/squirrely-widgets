@@ -1,0 +1,246 @@
+{
+  "name": "SS - Backfill Public Photo Links",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n1-trigger",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://docs.getgrist.com/api/docs/pmzM656ewkBmeYAEaJtYSd/tables/Product_Photos/records",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "n2-fetch-photos",
+      "name": "Get All Product Photos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -980,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "acSr72M0SPl2h9o1",
+          "name": "Grist API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $json.records || [];\nconst needsBackfill = records.filter(r => (r.fields.Nextcloud_URL || '').includes('n8n.cloud/webhook/photo'));\n\nreturn needsBackfill.map(r => {\n  const url = new URL(r.fields.Nextcloud_URL);\n  const path = decodeURIComponent(url.searchParams.get('path') || '');\n  return { json: { recordId: r.id, path } };\n});"
+      },
+      "id": "n3-extract-paths",
+      "name": "Filter + Extract Real Paths",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "n4-loop",
+      "name": "Loop Over Photos",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://nx99546.your-storageshare.de/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "OCS-APIRequest",
+              "value": "true"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "path",
+              "value": "=/{{ $json.path }}"
+            },
+            {
+              "name": "shareType",
+              "value": "3"
+            },
+            {
+              "name": "permissions",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n5-create-share",
+      "name": "Create Public Share",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        -60
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REPLACE_WITH_NEXTCLOUD_BASIC_AUTH_CREDENTIAL_ID",
+          "name": "NextCloud Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const shareData = $json.ocs && $json.ocs.data ? $json.ocs.data : $json;\nconst shareUrl = shareData.url;\nif (!shareUrl) {\n  throw new Error('No share URL returned \u2014 check Nextcloud auth and the path: ' + $('Loop Over Photos').item.json.path);\n}\nconst directUrl = shareUrl.endsWith('/') ? shareUrl + 'download' : shareUrl + '/download';\nreturn { json: { recordId: $('Loop Over Photos').item.json.recordId, direct_url: directUrl } };"
+      },
+      "id": "n6-build-url",
+      "name": "Build Direct URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -100,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://docs.getgrist.com/api/docs/pmzM656ewkBmeYAEaJtYSd/tables/Product_Photos/records",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"records\": [ { \"id\": $json.recordId, \"fields\": { \"Nextcloud_URL\": $json.direct_url } } ] } }}",
+        "options": {}
+      },
+      "id": "n7-update-record",
+      "name": "Update Product Photos Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        -60
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "acSr72M0SPl2h9o1",
+          "name": "Grist API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Get All Product Photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Product Photos": {
+      "main": [
+        [
+          {
+            "node": "Filter + Extract Real Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter + Extract Real Paths": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Photos": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Create Public Share",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Public Share": {
+      "main": [
+        [
+          {
+            "node": "Build Direct URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Direct URL": {
+      "main": [
+        [
+          {
+            "node": "Update Product Photos Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Product Photos Record": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Photos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
