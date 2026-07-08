@@ -265,7 +265,6 @@ function render() {
           <option value="put_away">Put away in a bin</option>
           <option value="hold">Hold for later (no bin yet)</option>
           <option value="dump">Dump it</option>
-          <option value="make_more">Make more thread → backstock</option>
         </select>
         <div id="action-fields-${idx}"></div>
       </div>
@@ -332,30 +331,6 @@ async function undoLast(lineId) {
   }
 }
 
-const YARDS_PER_SPOOL = {
-  'FF NYLON': 100,
-  'E NYLON': 150,
-  'FF COTTON': 100,
-  // Blackwing not yet confirmed — defaults to 100, update if that's wrong
-  'BLACKWING': 100,
-};
-function yardsPerSpool(fiberType) {
-  return YARDS_PER_SPOOL[normalize(fiberType)] || 100;
-}
-
-async function generateLotNumber() {
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-  try {
-    const lotsTable = await grist.docApi.fetchTable('Production_Lots');
-    const existing = (lotsTable.Lot_Number || []).filter(n => (n || '').startsWith(dateStr + '-'));
-    return `${dateStr}-${existing.length + 1}`;
-  } catch (e) {
-    console.error('Could not check existing lots, using sequence 1:', e);
-    return `${dateStr}-1`;
-  }
-}
-
 function onDyeActionChange(idx) {
   const action = document.getElementById(`action-${idx}`).value;
   const wrap = document.getElementById(`action-fields-${idx}`);
@@ -374,11 +349,6 @@ function onDyeActionChange(idx) {
   } else if (action === 'dump') {
     wrap.innerHTML = `<div class="action-fields">
       <button class="action-confirm-btn" onclick="dumpDye(${idx})" style="flex:1;">Confirm dumped</button>
-    </div>`;
-  } else if (action === 'make_more') {
-    wrap.innerHTML = `<div class="action-fields">
-      <input type="number" id="qty-${idx}" placeholder="Spools" min="0">
-      <button class="action-confirm-btn" onclick="makeMoreBackstock(${idx})">✓</button>
     </div>`;
   } else {
     wrap.innerHTML = '';
@@ -430,35 +400,6 @@ function dumpDye(idx) {
   showToast(`${c.dyeName}: noted as dumped`);
   document.getElementById(`action-${idx}`).value = '';
   document.getElementById(`action-fields-${idx}`).innerHTML = '';
-}
-
-async function makeMoreBackstock(idx) {
-  const c = currentEntry.cleanupInfo[idx];
-  const spools = Number(document.getElementById(`qty-${idx}`).value) || 0;
-  if (spools <= 0) { showToast('Enter how many spools this makes'); return; }
-
-  const ySpool = yardsPerSpool(currentEntry.fiberType);
-  const lotNumber = await generateLotNumber();
-
-  try {
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Production_Lots', null, {
-        Lot_Number: lotNumber,
-        Recipe: currentEntry.recipeId,
-        Lot_Date: Math.floor(Date.now() / 1000),
-        Total_Yards_Made: spools * ySpool,
-        Form: 'Hank Backstock',
-        Listed_Vendor_Store: false,
-        Listed_Regular_Store: false,
-      }]
-    ]);
-    showToast(`Logged lot ${lotNumber} — ${spools} spools to backstock ✓`);
-    document.getElementById(`action-${idx}`).value = '';
-    document.getElementById(`action-fields-${idx}`).innerHTML = '';
-  } catch (e) {
-    console.error('Failed to log backstock lot:', e);
-    showToast('Failed — check the Production_Lots table');
-  }
 }
 
 async function createColorDraft() {
