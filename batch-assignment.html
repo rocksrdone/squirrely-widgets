@@ -331,21 +331,60 @@ async function undoLast(lineId) {
   }
 }
 
-function onDyeActionChange(idx) {
+async function onDyeActionChange(idx) {
   const action = document.getElementById(`action-${idx}`).value;
   const wrap = document.getElementById(`action-fields-${idx}`);
 
-  if (action === 'put_away') {
-    wrap.innerHTML = `<div class="action-fields">
-      <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
-      <input type="text" id="bin-${idx}" placeholder="Bin location">
-      <button class="action-confirm-btn" onclick="putAwayDye(${idx})">✓</button>
-    </div>`;
-  } else if (action === 'hold') {
-    wrap.innerHTML = `<div class="action-fields">
-      <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
-      <button class="action-confirm-btn" onclick="holdDye(${idx})">✓</button>
-    </div>`;
+  if (action === 'put_away' || action === 'hold') {
+    wrap.innerHTML = `<div class="action-fields">Checking existing stock...</div>`;
+    const c = currentEntry.cleanupInfo[idx];
+    let existing = [];
+    if (c.dyeId) {
+      try {
+        const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+        const sIds = stockTable.id || [];
+        sIds.forEach((id, i) => {
+          const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+          if (dyeRef !== c.dyeId) return;
+          existing.push({
+            id,
+            qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
+            bin: columnAsArray(stockTable, 'Bin_Location')[i] || '(no bin)',
+            mixedDate: columnAsArray(stockTable, 'Mixed_Date')[i],
+          });
+        });
+      } catch (e) {
+        console.error('Could not check existing stock:', e);
+      }
+    }
+
+    const binField = action === 'put_away' ? `<input type="text" id="bin-${idx}" placeholder="Bin location">` : '';
+
+    if (existing.length) {
+      const existingOptions = existing.map(s => {
+        const dateStr = s.mixedDate ? new Date(Number(s.mixedDate) * 1000).toLocaleDateString() : 'unknown date';
+        return `<option value="${s.id}">${s.qty}mL in ${s.bin} (mixed ${dateStr})</option>`;
+      }).join('');
+
+      wrap.innerHTML = `
+        <div style="font-size:10px; color:#8B7D72; margin-top:3px;">This dye already has stock on record — is this the same batch, or freshly mixed?</div>
+        <select id="which-${idx}" style="width:100%; margin-top:3px;">
+          <option value="new">This is freshly mixed — log as new</option>
+          ${existingOptions}
+        </select>
+        <div class="action-fields" style="margin-top:3px;">
+          <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
+          ${binField}
+          <button class="action-confirm-btn" onclick="${action === 'put_away' ? 'putAwayDye' : 'holdDye'}(${idx})">✓</button>
+        </div>
+      `;
+    } else {
+      wrap.innerHTML = `<div class="action-fields">
+        <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
+        ${binField}
+        <button class="action-confirm-btn" onclick="${action === 'put_away' ? 'putAwayDye' : 'holdDye'}(${idx})">✓</button>
+      </div>`;
+    }
   } else if (action === 'dump') {
     wrap.innerHTML = `<div class="action-fields">
       <button class="action-confirm-btn" onclick="dumpDye(${idx})" style="flex:1;">Confirm dumped</button>
@@ -363,11 +402,21 @@ async function putAwayDye(idx) {
   if (qty <= 0) { showToast('Enter how many mL are left'); return; }
   if (!bin) { showToast('Enter a bin location'); return; }
 
+  const whichSelect = document.getElementById(`which-${idx}`);
+  const which = whichSelect ? whichSelect.value : 'new';
+
   try {
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Bin_Location: bin, Mixed_Date: Math.floor(Date.now() / 1000) }]
-    ]);
-    showToast(`${c.dyeName}: ${qty}mL put away in ${bin} ✓`);
+    if (which === 'new') {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Bin_Location: bin, Mixed_Date: Math.floor(Date.now() / 1000) }]
+      ]);
+      showToast(`${c.dyeName}: ${qty}mL logged as new stock in ${bin} ✓`);
+    } else {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty, Bin_Location: bin }]
+      ]);
+      showToast(`${c.dyeName}: existing stock updated to ${qty}mL in ${bin} (original date kept) ✓`);
+    }
     document.getElementById(`action-${idx}`).value = '';
     document.getElementById(`action-fields-${idx}`).innerHTML = '';
   } catch (e) {
@@ -382,11 +431,21 @@ async function holdDye(idx) {
   const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
   if (qty <= 0) { showToast('Enter how many mL are left'); return; }
 
+  const whichSelect = document.getElementById(`which-${idx}`);
+  const which = whichSelect ? whichSelect.value : 'new';
+
   try {
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Mixed_Date: Math.floor(Date.now() / 1000) }]
-    ]);
-    showToast(`${c.dyeName}: ${qty}mL held, no bin assigned yet ✓`);
+    if (which === 'new') {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Mixed_Date: Math.floor(Date.now() / 1000) }]
+      ]);
+      showToast(`${c.dyeName}: ${qty}mL held as new stock, no bin assigned yet ✓`);
+    } else {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty }]
+      ]);
+      showToast(`${c.dyeName}: existing stock updated to ${qty}mL (original date kept) ✓`);
+    }
     document.getElementById(`action-${idx}`).value = '';
     document.getElementById(`action-fields-${idx}`).innerHTML = '';
   } catch (e) {
