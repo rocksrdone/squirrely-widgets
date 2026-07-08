@@ -309,23 +309,39 @@ function renderGrid() {
   loadImagesInBatches();
 }
 
-// Load images a few at a time instead of all at once — firing 30 simultaneous
+// Load images a few at a time instead of all at once — firing many simultaneous
 // requests at the n8n webhook was overwhelming it and tripping n8n's crash
 // detection, which auto-disables the workflow after repeated failures.
 async function loadImagesInBatches() {
   const images = Array.from(document.querySelectorAll('img.lazy-photo:not(.loaded)'));
-  const BATCH_SIZE = 4;
+  const BATCH_SIZE = 2;
 
   for (let i = 0; i < images.length; i += BATCH_SIZE) {
     const batch = images.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(img => new Promise(resolve => {
-      const src = img.getAttribute('data-src');
-      if (!src) { resolve(); return; }
-      img.onload = () => { img.classList.add('loaded'); resolve(); };
-      img.onerror = () => { img.style.opacity = 0.2; resolve(); };
-      img.src = src;
-    })));
+    await Promise.all(batch.map(img => loadOneImageWithRetry(img)));
   }
+}
+
+function loadOneImageWithRetry(img) {
+  return new Promise(resolve => {
+    const src = img.getAttribute('data-src');
+    if (!src) { resolve(); return; }
+
+    let retried = false;
+    img.onload = () => { img.classList.add('loaded'); resolve(); };
+    img.onerror = () => {
+      if (!retried) {
+        // n8n can occasionally hiccup under load — give it one more try
+        // after a short pause instead of immediately showing a broken image.
+        retried = true;
+        setTimeout(() => { img.src = src; }, 1500);
+      } else {
+        img.style.opacity = 0.2;
+        resolve();
+      }
+    };
+    img.src = src;
+  });
 }
 
 function loadMorePhotos() {
