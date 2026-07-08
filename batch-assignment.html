@@ -86,6 +86,17 @@ function getRefId(ref) {
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
+const YARDS_PER_SPOOL = {
+  'FF NYLON': 100,
+  'E NYLON': 150,
+  'FF COTTON': 100,
+  // Blackwing not yet confirmed — defaults to 100, update if that's wrong
+  'BLACKWING': 100,
+};
+function yardsPerSpool(fiberType) {
+  return YARDS_PER_SPOOL[normalize(fiberType)] || 100;
+}
+
 function safeMaxForComplexity(numColors) {
   if (numColors >= 3) return 10;
   if (numColors === 2) return 12;
@@ -227,7 +238,7 @@ async function loadForRecipe(record) {
     const batches = suggestBatches(orders, max);
     const totalQty = orders.reduce((s, o) => s + o.qty, 0);
 
-    currentEntry = { recipeName: record.Recipe_Name, dyeCount: dyeNames.length, max, orders, batches, totalQty, cleanupInfo };
+    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeNames.length, max, orders, batches, totalQty, cleanupInfo };
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -252,8 +263,19 @@ function render() {
     ).join('');
 
     return `<div class="batch-suggestion">
-      <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools</div>
+      <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools suggested</div>
       ${contributorInputs}
+      <div class="contributor-row" style="margin-top:4px; padding-top:4px; border-top:1px dashed var(--rule);">
+        <span>Total actually made</span>
+        <input type="number" id="total-made-${i}" value="${b.qty}" min="0">
+      </div>
+      <div class="contributor-row">
+        <span>Form</span>
+        <select id="form-${i}" style="font-size:11px; padding:2px 4px; border:1px solid var(--rule); border-radius:3px;">
+          <option value="Wound Spools">Wound Spools</option>
+          <option value="Hank Backstock">Hank Backstock</option>
+        </select>
+      </div>
       <button class="log-btn" onclick="logBatchCompletion(${i})">✓ Log actual amounts made</button>
     </div>`;
   }).join('');
@@ -277,6 +299,20 @@ function render() {
   `;
 }
 
+async function generateLotNumber() {
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  try {
+    const lotsTable = await grist.docApi.fetchTable('Production_Lots');
+    const existing = (lotsTable.Lot_Number || []).filter(n => (n || '').startsWith(dateStr + '-'));
+    const nextSeq = existing.length + 1;
+    return `${dateStr}-${nextSeq}`;
+  } catch (e) {
+    console.error('Could not check existing lots, using sequence 1:', e);
+    return `${dateStr}-1`;
+  }
+}
+
 async function logBatchCompletion(batchIdx) {
   const batch = currentEntry.batches[batchIdx];
   const actions = [];
@@ -293,12 +329,32 @@ async function logBatchCompletion(batchIdx) {
 
   if (!actions.length) { showToast('Enter at least one completed amount'); return; }
 
+  const totalMadeInput = document.getElementById(`total-made-${batchIdx}`);
+  const totalMadeSpools = Number(totalMadeInput.value) || 0;
+  const form = document.getElementById(`form-${batchIdx}`).value;
+  const ySpool = yardsPerSpool(currentEntry.fiberType);
+  const totalYards = totalMadeSpools * ySpool;
+
   try {
     await grist.docApi.applyUserActions(actions);
-    showToast(`Logged: ${summary.join(', ')} ✓`);
+
+    const lotNumber = await generateLotNumber();
+    await grist.docApi.applyUserActions([
+      ['AddRecord', 'Production_Lots', null, {
+        Lot_Number: lotNumber,
+        Recipe: currentEntry.recipeId,
+        Lot_Date: Math.floor(Date.now() / 1000),
+        Total_Yards_Made: totalYards,
+        Form: form,
+        Listed_Vendor_Store: false,
+        Listed_Regular_Store: false,
+      }]
+    ]);
+
+    showToast(`Logged: ${summary.join(', ')} · Lot ${lotNumber} ✓`);
   } catch (e) {
     console.error('Failed to log completion:', e);
-    showToast('Failed to log — check Work_Order_Lines table');
+    showToast('Failed to log — check Work_Order_Lines / Production_Lots tables');
   }
 }
 
