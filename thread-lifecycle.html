@@ -148,7 +148,7 @@ async function loadEverything() {
     });
 
     const cIds = customersTable.id || [];
-    customersList = cIds.map((id, i) => ({ id, name: columnAsArray(customersTable, 'Name')[i] })).filter(c => c.name);
+    customersList = cIds.map((id, i) => ({ id, name: columnAsArray(customersTable, 'customer_name')[i] })).filter(c => c.name);
 
     const aIds = allocTable.id || [];
     allocationsData = aIds.map((id, i) => ({
