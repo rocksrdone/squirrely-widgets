@@ -175,6 +175,7 @@ async function loadEverything() {
       const allocatedSpools = allocationsData
         .filter(a => a.lotId === id)
         .reduce((s, a) => s + a.qtySpools, 0);
+      const generalStockSpools = Number(columnAsArray(lotsTable, 'General_Stock_Spools')[i]) || 0;
 
       return {
         id,
@@ -183,7 +184,8 @@ async function loadEverything() {
         fiberType: recipe.fiberType,
         totalSpools,
         allocatedSpools,
-        remainingSpools: Math.max(0, totalSpools - allocatedSpools),
+        generalStockSpools,
+        remainingSpools: Math.max(0, totalSpools - allocatedSpools - generalStockSpools),
         dryingStatus: columnAsArray(lotsTable, 'Drying_Status')[i] || 'Drying - Day Rack',
       };
     });
@@ -216,7 +218,7 @@ function render() {
     <div class="lot-card" style="flex-direction:column; align-items:stretch;">
       <div class="lot-info">
         <div class="lot-name">${l.lotNumber} — ${l.recipeName}</div>
-        <div class="lot-meta">${l.remainingSpools} of ${l.totalSpools} spools still unassigned</div>
+        <div class="lot-meta">${l.remainingSpools} of ${l.totalSpools} spools still unassigned${l.generalStockSpools > 0 ? ` · ${l.generalStockSpools} already marked as general stock` : ''}</div>
       </div>
       <div class="assign-form">
         <select id="cust-${l.id}">
@@ -225,6 +227,15 @@ function render() {
         </select>
         <input type="number" id="qty-${l.id}" placeholder="Spools" min="1" max="${l.remainingSpools}">
         <button class="assign-btn" onclick="assignToCustomer(${l.id})">✓ Assign to bin</button>
+      </div>
+      <div class="assign-form" style="margin-top:5px; padding-top:5px; border-top:1px dashed var(--rule);">
+        <select id="stockstore-${l.id}">
+          <option value="vendor">Vendor Store</option>
+          <option value="regular">Regular Store</option>
+          <option value="both">Both</option>
+        </select>
+        <input type="number" id="stockqty-${l.id}" placeholder="Spools" min="1" max="${l.remainingSpools}" value="${l.remainingSpools}">
+        <button class="assign-btn" onclick="keepAsGeneralStock(${l.id})">→ Keep as general stock</button>
       </div>
     </div>
   `).join('') : `<div class="empty-stage">Nothing ready to assign right now.</div>`;
@@ -318,6 +329,31 @@ async function assignToCustomer(lotId) {
   } catch (e) {
     console.error('Failed to assign to customer:', e);
     showToast('Failed — check the Lot_Allocations table');
+  }
+}
+
+async function keepAsGeneralStock(lotId) {
+  const store = document.getElementById(`stockstore-${lotId}`).value;
+  const qty = Number(document.getElementById(`stockqty-${lotId}`).value) || 0;
+  const lot = lotsData.find(l => l.id === lotId);
+
+  if (qty <= 0) { showToast('Enter how many spools'); return; }
+  if (qty > lot.remainingSpools) { showToast(`Only ${lot.remainingSpools} spools remaining on this lot`); return; }
+
+  const newGeneralStock = lot.generalStockSpools + qty;
+  const updateFields = { General_Stock_Spools: newGeneralStock };
+  if (store === 'vendor' || store === 'both') updateFields.Listed_Vendor_Store = true;
+  if (store === 'regular' || store === 'both') updateFields.Listed_Regular_Store = true;
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Production_Lots', lotId, updateFields]
+    ]);
+    showToast(`${qty} spools marked as general stock ✓`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to mark as general stock:', e);
+    showToast('Failed — check the Production_Lots table');
   }
 }
 
