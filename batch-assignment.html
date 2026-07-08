@@ -52,6 +52,17 @@
   }
   .log-btn:hover { background: var(--teal); color: white; }
 
+  .hank-list { margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--rule); }
+  .hank-row { display: flex; justify-content: space-between; align-items: center; gap: 5px; padding: 2px 0; }
+  .hank-label { font-size: 11px; color: #6B5E52; }
+  .hank-input { width: 46px; padding: 2px 4px; border: 1px solid var(--rule); border-radius: 3px; font-size: 11px; }
+  .add-hank-btn {
+    flex: 1; font-size: 10px; padding: 4px; border-radius: 4px;
+    border: 1px dashed var(--rule); background: white; color: #8B7D72; cursor: pointer;
+  }
+  .add-hank-btn:hover { border-color: var(--teal); color: var(--teal); }
+  .log-btn { flex: 1; }
+
   .cleanup-title {
     font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
     color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
@@ -265,18 +276,16 @@ function render() {
     return `<div class="batch-suggestion">
       <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools suggested</div>
       ${contributorInputs}
-      <div class="contributor-row" style="margin-top:4px; padding-top:4px; border-top:1px dashed var(--rule);">
-        <span>Total actually made</span>
-        <input type="number" id="total-made-${i}" value="${b.qty}" min="0">
+      <div class="hank-list" id="hank-list-${i}">
+        <div class="hank-row">
+          <span class="hank-label">Hank size</span>
+          <input type="number" class="hank-input" value="${b.qty}" min="0">
+        </div>
       </div>
-      <div class="contributor-row">
-        <span>Form</span>
-        <select id="form-${i}" style="font-size:11px; padding:2px 4px; border:1px solid var(--rule); border-radius:3px;">
-          <option value="Wound Spools">Wound Spools</option>
-          <option value="Hank Backstock">Hank Backstock</option>
-        </select>
+      <div style="display:flex; gap:5px; margin-top:4px;">
+        <button class="add-hank-btn" onclick="addHankRow(${i})">+ Add another hank</button>
+        <button class="log-btn" onclick="logBatchCompletion(${i})" style="margin-top:0;">✓ Log</button>
       </div>
-      <button class="log-btn" onclick="logBatchCompletion(${i})">✓ Log actual amounts made</button>
     </div>`;
   }).join('');
 
@@ -297,6 +306,14 @@ function render() {
     ${batchesHtml}
     ${cleanupHtml ? `<div class="cleanup-title">After you finish — dye cleanup</div>${cleanupHtml}` : ''}
   `;
+}
+
+function addHankRow(batchIdx) {
+  const list = document.getElementById(`hank-list-${batchIdx}`);
+  const row = document.createElement('div');
+  row.className = 'hank-row';
+  row.innerHTML = `<span class="hank-label">Hank size</span><input type="number" class="hank-input" value="0" min="0">`;
+  list.appendChild(row);
 }
 
 async function generateLotNumber() {
@@ -329,29 +346,31 @@ async function logBatchCompletion(batchIdx) {
 
   if (!actions.length) { showToast('Enter at least one completed amount'); return; }
 
-  const totalMadeInput = document.getElementById(`total-made-${batchIdx}`);
-  const totalMadeSpools = Number(totalMadeInput.value) || 0;
-  const form = document.getElementById(`form-${batchIdx}`).value;
+  const hankInputs = document.querySelectorAll(`#hank-list-${batchIdx} .hank-input`);
+  const hankSizes = Array.from(hankInputs).map(inp => Number(inp.value) || 0).filter(v => v > 0);
   const ySpool = yardsPerSpool(currentEntry.fiberType);
-  const totalYards = totalMadeSpools * ySpool;
 
   try {
     await grist.docApi.applyUserActions(actions);
 
-    const lotNumber = await generateLotNumber();
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Production_Lots', null, {
-        Lot_Number: lotNumber,
-        Recipe: currentEntry.recipeId,
-        Lot_Date: Math.floor(Date.now() / 1000),
-        Total_Yards_Made: totalYards,
-        Form: form,
-        Listed_Vendor_Store: false,
-        Listed_Regular_Store: false,
-      }]
-    ]);
+    const lotSummaries = [];
+    for (const spools of hankSizes) {
+      const lotNumber = await generateLotNumber();
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Production_Lots', null, {
+          Lot_Number: lotNumber,
+          Recipe: currentEntry.recipeId,
+          Lot_Date: Math.floor(Date.now() / 1000),
+          Total_Yards_Made: spools * ySpool,
+          Form: 'Hank Backstock',
+          Listed_Vendor_Store: false,
+          Listed_Regular_Store: false,
+        }]
+      ]);
+      lotSummaries.push(`${lotNumber} (${spools} spools)`);
+    }
 
-    showToast(`Logged: ${summary.join(', ')} · Lot ${lotNumber} ✓`);
+    showToast(`Logged: ${summary.join(', ')} · ${lotSummaries.join(', ')} ✓`);
   } catch (e) {
     console.error('Failed to log completion:', e);
     showToast('Failed to log — check Work_Order_Lines / Production_Lots tables');
