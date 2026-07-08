@@ -16,9 +16,8 @@
     --accent: #8B3A2A;
     --teal: #3A8B7A;
     --teal-light: #E5F2EF;
-    --gold: #B07D2A;
-    --gold-light: #F5EDD8;
     --done-text: #27500A;
+    --done-bg: #EAF3DE;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -37,36 +36,36 @@
 
   .empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; }
 
-  .batch-suggestion {
-    background: var(--gold-light); border: 1px solid #D4B07A; border-radius: 6px; padding: 6px 8px; margin-bottom: 5px;
+  .section-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
   }
-  .batch-suggestion-title { font-size: 11px; font-weight: 700; color: var(--gold); margin-bottom: 3px; }
-  .contributor-row { display: flex; justify-content: space-between; align-items: center; gap: 5px; padding: 1px 0; }
-  .contributor-row span { font-size: 11px; }
-  .contributor-row input {
-    width: 46px; padding: 2px 4px; border: 1px solid var(--rule); border-radius: 3px; font-size: 11px;
+  .section-title:first-of-type { margin-top: 4px; }
+
+  .order-card {
+    background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; margin-bottom: 5px;
+  }
+  .order-top { display: flex; justify-content: space-between; align-items: center; }
+  .order-customer { font-weight: 600; font-size: 12px; }
+  .order-progress { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
+  .order-progress.complete { color: var(--done-text); font-weight: 700; }
+
+  .order-log-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
+  .order-log-row input {
+    flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
   }
   .log-btn {
-    margin-top: 4px; width: 100%; font-size: 11px; padding: 4px; border-radius: 4px;
+    font-size: 11px; padding: 4px 10px; border-radius: 4px;
     border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
   }
   .log-btn:hover { background: var(--teal); color: white; }
 
-  .hank-list { margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--rule); }
-  .hank-row { display: flex; justify-content: space-between; align-items: center; gap: 5px; padding: 2px 0; }
-  .hank-label { font-size: 11px; color: #6B5E52; }
-  .hank-input { width: 46px; padding: 2px 4px; border: 1px solid var(--rule); border-radius: 3px; font-size: 11px; }
-  .add-hank-btn {
-    flex: 1; font-size: 10px; padding: 4px; border-radius: 4px;
-    border: 1px dashed var(--rule); background: white; color: #8B7D72; cursor: pointer;
+  .order-confirm {
+    font-size: 10px; color: var(--done-text); margin-top: 3px; display: flex; justify-content: space-between; align-items: center;
   }
-  .add-hank-btn:hover { border-color: var(--teal); color: var(--teal); }
-  .log-btn { flex: 1; }
+  .undo-link { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .undo-link:hover { text-decoration: underline; }
 
-  .cleanup-title {
-    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-    color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
-  }
   .cleanup-row { font-size: 11px; padding: 4px 6px; border-radius: 5px; margin-bottom: 3px; }
   .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
   .cleanup-keep { background: var(--teal-light); color: var(--teal); }
@@ -82,7 +81,7 @@
 <body>
 
 <div id="content">
-  <div class="empty-state">Select a colorway in Morning Batch Planning to see batch details here.</div>
+  <div class="empty-state">Select a colorway in Morning Batch Planning to see details here.</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -97,62 +96,12 @@ function getRefId(ref) {
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
-const YARDS_PER_SPOOL = {
-  'FF NYLON': 100,
-  'E NYLON': 150,
-  'FF COTTON': 100,
-  // Blackwing not yet confirmed — defaults to 100, update if that's wrong
-  'BLACKWING': 100,
-};
-function yardsPerSpool(fiberType) {
-  return YARDS_PER_SPOOL[normalize(fiberType)] || 100;
-}
-
-function safeMaxForComplexity(numColors) {
-  if (numColors >= 3) return 10;
-  if (numColors === 2) return 12;
-  return 15;
-}
-
-function suggestBatches(orders, max) {
-  const batches = [];
-  const smallOrders = [];
-
-  orders.forEach(o => {
-    if (o.qty > max) {
-      const parts = Math.ceil(o.qty / max);
-      const base = Math.floor(o.qty / parts);
-      const remainder = o.qty - base * parts;
-      for (let p = 0; p < parts; p++) {
-        const partQty = base + (p < remainder ? 1 : 0);
-        batches.push({ qty: partQty, contributors: [{ lineId: o.lineId, customerName: `${o.customerName} (part ${p + 1}/${parts})`, qty: partQty, currentQtyDyed: o.currentQtyDyed }] });
-      }
-    } else if (o.qty >= max * 0.5) {
-      batches.push({ qty: o.qty, contributors: [{ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed }] });
-    } else {
-      smallOrders.push(o);
-    }
-  });
-
-  smallOrders.sort((a, b) => b.qty - a.qty);
-  let current = null;
-  smallOrders.forEach(o => {
-    if (!current || current.qty + o.qty > max) {
-      current = { qty: 0, contributors: [] };
-      batches.push(current);
-    }
-    current.qty += o.qty;
-    current.contributors.push({ lineId: o.lineId, customerName: o.customerName, qty: o.qty, currentQtyDyed: o.currentQtyDyed });
-  });
-
-  return batches.filter(b => b.qty > 0);
-}
-
 let currentEntry = null;
+let lastLoggedDelta = {}; // lineId -> amount just added, for undo
 
 async function loadForRecipe(record) {
   if (!record || !record.id) {
-    document.getElementById('content').innerHTML = `<div class="empty-state">Select a colorway in Morning Batch Planning to see batch details here.</div>`;
+    document.getElementById('content').innerHTML = `<div class="empty-state">Select a colorway in Morning Batch Planning to see details here.</div>`;
     currentEntry = null;
     return;
   }
@@ -187,7 +136,6 @@ async function loadForRecipe(record) {
     const recipeIdBySku = {};
     Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
 
-    // Dyes used by each recipe (for the current recipe, and for cross-recipe overlap checking)
     const cIds = compTable.id || [];
     const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
@@ -202,8 +150,6 @@ async function loadForRecipe(record) {
     const recipeSku = normalize(record.SKU_Base || '');
     const wolIds = wolTable.id || [];
     const orders = [];
-
-    // Also walk every active line to find which OTHER recipes are pending (for the cleanup overlap check)
     const pendingRecipeIds = new Set();
 
     for (let i = 0; i < wolIds.length; i++) {
@@ -213,8 +159,6 @@ async function loadForRecipe(record) {
 
       const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
       const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
-      const remaining = qtyNeeded - qtyDyed;
-      if (remaining <= 0) continue;
 
       const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
       const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
@@ -223,17 +167,17 @@ async function loadForRecipe(record) {
 
       const matches = directRecipeId === record.id || (recipeSku && sku === recipeSku);
       if (!matches) continue;
+      if (qtyDyed >= qtyNeeded) continue; // fully done, don't clutter the list
 
       orders.push({
         lineId: wolIds[i],
         orderNumber: info.orderNumber,
         customerName: info.customerName,
-        qty: remaining,
-        currentQtyDyed: qtyDyed,
+        qtyNeeded,
+        qtyDyed,
       });
     }
 
-    // For each dye this recipe uses, find which OTHER pending recipes also need it
     const cleanupInfo = dyeNames.map(dyeName => {
       const key = normalize(dyeName);
       const others = [];
@@ -245,11 +189,7 @@ async function loadForRecipe(record) {
       return { dyeName, isOneOff: others.length === 0, others };
     });
 
-    const max = safeMaxForComplexity(dyeNames.length);
-    const batches = suggestBatches(orders, max);
-    const totalQty = orders.reduce((s, o) => s + o.qty, 0);
-
-    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeNames.length, max, orders, batches, totalQty, cleanupInfo };
+    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, dyeCount: dyeNames.length, orders, cleanupInfo };
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -258,122 +198,93 @@ async function loadForRecipe(record) {
 }
 
 function render() {
-  if (!currentEntry || !currentEntry.orders.length) {
-    document.getElementById('content').innerHTML = `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
+  if (!currentEntry) {
+    document.getElementById('content').innerHTML = `<div class="empty-state">Select a colorway in Morning Batch Planning to see details here.</div>`;
     return;
   }
 
   const e = currentEntry;
 
-  const batchesHtml = e.batches.map((b, i) => {
-    const contributorInputs = b.contributors.map((c, ci) =>
-      `<div class="contributor-row">
-        <span>${c.customerName}</span>
-        <input type="number" id="log-${i}-${ci}" value="${c.qty}" min="0">
-      </div>`
-    ).join('');
+  const ordersHtml = e.orders.length
+    ? e.orders.map(o => {
+        const complete = o.qtyDyed >= o.qtyNeeded;
+        const confirmMsg = lastLoggedDelta[o.lineId]
+          ? `<div class="order-confirm"><span>✓ Registered +${lastLoggedDelta[o.lineId]}</span><span class="undo-link" onclick="undoLast(${o.lineId})">↺ undo</span></div>`
+          : '';
+        return `
+          <div class="order-card">
+            <div class="order-top">
+              <span class="order-customer">${o.customerName || '—'}</span>
+              <span class="order-progress ${complete ? 'complete' : ''}">${o.qtyDyed}/${o.qtyNeeded} spools</span>
+            </div>
+            <div class="order-log-row">
+              <input type="number" id="made-${o.lineId}" placeholder="Spools just made" min="0">
+              <button class="log-btn" onclick="logProgress(${o.lineId})">✓ Log</button>
+            </div>
+            ${confirmMsg}
+          </div>`;
+      }).join('')
+    : `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
 
-    return `<div class="batch-suggestion">
-      <div class="batch-suggestion-title">Batch ${i + 1}: ${b.qty} spools suggested</div>
-      ${contributorInputs}
-      <div class="hank-list" id="hank-list-${i}">
-        <div class="hank-row">
-          <span class="hank-label">Hank size</span>
-          <input type="number" class="hank-input" value="${b.qty}" min="0">
-        </div>
-      </div>
-      <div style="display:flex; gap:5px; margin-top:4px;">
-        <button class="add-hank-btn" onclick="addHankRow(${i})">+ Add another hank</button>
-        <button class="log-btn" onclick="logBatchCompletion(${i})" style="margin-top:0;">✓ Log</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  const cleanupHtml = (e.cleanupInfo || []).map(c => {
+  const cleanupHtml = e.cleanupInfo.map(c => {
     if (c.isOneOff) {
-      return `<div class="cleanup-row cleanup-oneoff">
-        <strong>${c.dyeName}</strong> — one-off, nothing else pending needs it. Keep leftover, toss, or make extra to use it up.
-      </div>`;
+      return `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeName}</strong> — one-off, nothing else pending needs it. Keep leftover, toss, or make extra to use it up.</div>`;
     }
-    return `<div class="cleanup-row cleanup-keep">
-      <strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}
-    </div>`;
+    return `<div class="cleanup-row cleanup-keep"><strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
   }).join('');
 
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
-    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'} · max ${e.max}/batch · ${e.totalQty} spools total</div>
-    ${batchesHtml}
-    ${cleanupHtml ? `<div class="cleanup-title">After you finish — dye cleanup</div>${cleanupHtml}` : ''}
+    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}</div>
+
+    <div class="section-title">Log progress per customer</div>
+    ${ordersHtml}
+
+    ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}` : ''}
   `;
 }
 
-function addHankRow(batchIdx) {
-  const list = document.getElementById(`hank-list-${batchIdx}`);
-  const row = document.createElement('div');
-  row.className = 'hank-row';
-  row.innerHTML = `<span class="hank-label">Hank size</span><input type="number" class="hank-input" value="0" min="0">`;
-  list.appendChild(row);
-}
+async function logProgress(lineId) {
+  const input = document.getElementById(`made-${lineId}`);
+  const amount = Number(input.value) || 0;
+  if (amount <= 0) { showToast('Enter how many spools you just made'); return; }
 
-async function generateLotNumber() {
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  const order = currentEntry.orders.find(o => o.lineId === lineId);
+  const newQtyDyed = order.qtyDyed + amount;
+
   try {
-    const lotsTable = await grist.docApi.fetchTable('Production_Lots');
-    const existing = (lotsTable.Lot_Number || []).filter(n => (n || '').startsWith(dateStr + '-'));
-    const nextSeq = existing.length + 1;
-    return `${dateStr}-${nextSeq}`;
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: newQtyDyed }]
+    ]);
+    lastLoggedDelta[lineId] = amount;
+    order.qtyDyed = newQtyDyed;
+    input.value = '';
+    render();
+    showToast(`Registered +${amount} for ${order.customerName} ✓`);
   } catch (e) {
-    console.error('Could not check existing lots, using sequence 1:', e);
-    return `${dateStr}-1`;
+    console.error('Failed to log progress:', e);
+    showToast('Failed to log — check Work_Order_Lines table');
   }
 }
 
-async function logBatchCompletion(batchIdx) {
-  const batch = currentEntry.batches[batchIdx];
-  const actions = [];
-  const summary = [];
+async function undoLast(lineId) {
+  const amount = lastLoggedDelta[lineId];
+  if (!amount) return;
 
-  batch.contributors.forEach((c, ci) => {
-    const input = document.getElementById(`log-${batchIdx}-${ci}`);
-    const enteredQty = Number(input.value) || 0;
-    if (enteredQty <= 0) return;
-    const newQtyDyed = (c.currentQtyDyed || 0) + enteredQty;
-    actions.push(['UpdateRecord', 'Work_Order_Lines', c.lineId, { Qty_Dyed: newQtyDyed }]);
-    summary.push(`${c.customerName}: +${enteredQty}`);
-  });
-
-  if (!actions.length) { showToast('Enter at least one completed amount'); return; }
-
-  const hankInputs = document.querySelectorAll(`#hank-list-${batchIdx} .hank-input`);
-  const hankSizes = Array.from(hankInputs).map(inp => Number(inp.value) || 0).filter(v => v > 0);
-  const ySpool = yardsPerSpool(currentEntry.fiberType);
+  const order = currentEntry.orders.find(o => o.lineId === lineId);
+  const revertedQtyDyed = Math.max(0, order.qtyDyed - amount);
 
   try {
-    await grist.docApi.applyUserActions(actions);
-
-    const lotSummaries = [];
-    for (const spools of hankSizes) {
-      const lotNumber = await generateLotNumber();
-      await grist.docApi.applyUserActions([
-        ['AddRecord', 'Production_Lots', null, {
-          Lot_Number: lotNumber,
-          Recipe: currentEntry.recipeId,
-          Lot_Date: Math.floor(Date.now() / 1000),
-          Total_Yards_Made: spools * ySpool,
-          Form: 'Hank Backstock',
-          Listed_Vendor_Store: false,
-          Listed_Regular_Store: false,
-        }]
-      ]);
-      lotSummaries.push(`${lotNumber} (${spools} spools)`);
-    }
-
-    showToast(`Logged: ${summary.join(', ')} · ${lotSummaries.join(', ')} ✓`);
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: revertedQtyDyed }]
+    ]);
+    order.qtyDyed = revertedQtyDyed;
+    delete lastLoggedDelta[lineId];
+    render();
+    showToast('Undone ✓');
   } catch (e) {
-    console.error('Failed to log completion:', e);
-    showToast('Failed to log — check Work_Order_Lines / Production_Lots tables');
+    console.error('Failed to undo:', e);
+    showToast('Failed to undo — check Work_Order_Lines table');
   }
 }
 
@@ -389,6 +300,7 @@ grist.ready({
 });
 
 grist.onRecord((record) => {
+  lastLoggedDelta = {};
   loadForRecipe(record);
 });
 </script>
