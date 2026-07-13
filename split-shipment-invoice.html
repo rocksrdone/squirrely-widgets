@@ -44,6 +44,13 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
 .btn:disabled { opacity: .4; cursor: default; }
 .status-msg { font-size: 11px; color: #8B7D72; margin-top: 8px; }
 .status-msg.error { color: var(--accent); }
+.shipment-picker { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.shipment-picker-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; width: 100%; margin-bottom: 2px; }
+.shipment-btn {
+  font-size: 11px; padding: 6px 10px; border-radius: 5px; border: 1px solid var(--teal);
+  background: white; color: var(--teal); cursor: pointer; font-weight: 600;
+}
+.shipment-btn:hover { background: var(--teal); color: white; }
 
 .invoice-wrap { display: none; }
 .invoice-wrap.ready { display: block; }
@@ -141,6 +148,7 @@ table.items input[type="text"] {
     <button class="btn" onclick="lookupOrder()" id="lookupBtn">Look Up Order</button>
   </div>
   <div class="status-msg" id="statusMsg"></div>
+  <div id="shipmentPicker"></div>
 </div>
 
 <div class="invoice-wrap" id="invoiceWrap">
@@ -249,6 +257,7 @@ const LOOKUP_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/split-i
 let shopifyLines = [];   // [{id, sku, name, orderedQty, unitPrice}]
 let customLines = [];    // [{key, description, qty, unitPrice}]
 let customLineSeq = 0;
+let detectedShipments = []; // [{source, status, label, line_items}]
 
 function todayISO() {
   const d = new Date();
@@ -286,6 +295,7 @@ async function lookupOrder() {
     }));
     customLines = [];
     customLineSeq = 0;
+    detectedShipments = data.shipments || [];
 
     document.getElementById('sourceOrderNumber').value = data.order_number || '';
     document.getElementById('currency').value = data.currency || 'USD';
@@ -300,7 +310,8 @@ async function lookupOrder() {
     document.getElementById('toCountry').value = st.country || '';
 
     document.getElementById('invoiceWrap').classList.add('ready');
-    statusEl.textContent = `Loaded ${data.order_type} order ${data.order_number} — ${shopifyLines.length} line item(s). Check off what's in this shipment and set quantities below.`;
+    statusEl.textContent = `Loaded ${data.order_type} order ${data.order_number} — ${shopifyLines.length} line item(s).`;
+    renderShipmentPicker();
     renderItems();
     recalcTotals();
   } catch (e) {
@@ -311,6 +322,51 @@ async function lookupOrder() {
     btn.disabled = false;
     btn.textContent = 'Look Up Order';
   }
+}
+
+function renderShipmentPicker() {
+  const box = document.getElementById('shipmentPicker');
+  if (!detectedShipments.length) {
+    box.innerHTML = `<div style="font-size:11px; color:#8B7D72; margin-top:6px;">No existing Shopify split/fulfillment detected for this order — check off items manually below.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="shipment-picker">
+      <div class="shipment-picker-label">Detected in Shopify — click to auto-fill this shipment's items:</div>
+      ${detectedShipments.map((s, i) => `<button type="button" class="shipment-btn" onclick="applyShipmentPreset(${i})">${s.label} (${s.line_items.length} item${s.line_items.length === 1 ? '' : 's'})</button>`).join('')}
+      <button type="button" class="shipment-btn" style="border-color:var(--rule); color:#6B5E52;" onclick="clearAllQuantities()">Clear all</button>
+    </div>
+  `;
+}
+
+function applyShipmentPreset(idx) {
+  const shipment = detectedShipments[idx];
+  if (!shipment) return;
+  const qtyById = {};
+  shipment.line_items.forEach(li => { qtyById[li.id] = (qtyById[li.id] || 0) + (li.quantity || 0); });
+
+  shopifyLines.forEach((li, i) => {
+    const qty = qtyById[li.id] || 0;
+    const row = document.querySelector(`tr[data-kind="shopify"][data-idx="${i}"]`);
+    if (!row) return;
+    const checkbox = row.querySelector('input[type="checkbox"]');
+    const qtyInput = row.querySelector('input[type="number"]');
+    checkbox.checked = qty > 0;
+    qtyInput.value = qty;
+    updateShopifyQty(i, qty);
+  });
+
+  document.getElementById('shipmentLabel').value = shipment.label;
+}
+
+function clearAllQuantities() {
+  shopifyLines.forEach((li, i) => {
+    const row = document.querySelector(`tr[data-kind="shopify"][data-idx="${i}"]`);
+    if (!row) return;
+    row.querySelector('input[type="checkbox"]').checked = false;
+    row.querySelector('input[type="number"]').value = 0;
+    updateShopifyQty(i, 0);
+  });
 }
 
 function renderItems() {
@@ -401,6 +457,8 @@ function resetAll() {
   shopifyLines = [];
   customLines = [];
   customLineSeq = 0;
+  detectedShipments = [];
+  document.getElementById('shipmentPicker').innerHTML = '';
   document.getElementById('invoiceWrap').classList.remove('ready');
   document.getElementById('orderNumberInput').value = '';
   document.getElementById('statusMsg').textContent = '';
