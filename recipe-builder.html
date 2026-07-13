@@ -242,7 +242,7 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Linked Customer (optional)</span>
-        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner();">
+        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner(); renderSkuSuggestion();">
           <option value="">— none —</option>
         </select>
       </div>
@@ -679,16 +679,32 @@ function slugifyForSku(name) {
   return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function getLinkedCustomerInitials() {
+  const select = document.getElementById('linkedCustomer');
+  const opt = select.options[select.selectedIndex];
+  const text = opt ? opt.textContent : '';
+  if (!text || text.startsWith('—')) return '';
+  const parts = text.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '';
+  const first = parts[0][0] || '';
+  const last = parts.length > 1 ? (parts[parts.length - 1][0] || '') : '';
+  return (first + last).toUpperCase().replace(/[^A-Z]/g, '');
+}
+
 function computeSuggestedSku() {
   const fiberType = document.getElementById('fiberType').value;
   const name = document.getElementById('nameInput').value;
   const scope = document.getElementById('recipeScope').value;
   const vendor = document.getElementById('reservedFor').value;
-
   const fc = FIBER_NAME_TO_CODE[fiberType] || 'GEN';
   const namePart = slugifyForSku(name) || 'UNNAMED';
   let sku = `${fc}_${namePart}`;
-  if (/reserv/i.test(scope) && vendor) sku += `_${vendor}`;
+  if (/reserv/i.test(scope) && vendor) {
+  sku += `_${vendor}`;
+  } else if (scope === 'Retail Custom') {
+  const initials = getLinkedCustomerInitials();
+  if (initials) sku += `_RC${initials}`;
+  }
   return sku;
 }
 
