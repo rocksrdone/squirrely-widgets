@@ -502,6 +502,7 @@ let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder
 let deletedDyeIds = [];
 let allDyes = [];        // for autocomplete: {name, brand, powder, water}
 let unsavedChanges = false;
+let isSaving = false;
 let nextClientKey = 1;
 
 function markUnsaved() {
@@ -1072,6 +1073,7 @@ async function createNewRecipe() {
 
 async function saveRecipe() {
   if (!currentRecipeId) return;
+  isSaving = true;
   const saveBtn = document.getElementById('saveBtn');
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving...';
@@ -1138,6 +1140,7 @@ async function saveRecipe() {
     console.error('Failed to save recipe:', e);
     showToast('Save failed — check widget access level and column names');
   } finally {
+    isSaving = false;
     saveBtn.disabled = false;
     saveBtn.textContent = '💾 Save';
   }
@@ -1149,6 +1152,7 @@ grist.ready({
 });
 
 grist.onRecord(async (record) => {
+  if (isSaving) return;
   if (!record || !record.Recipe_Name) {
     if (!currentRecipeId) {
       document.getElementById('emptyState').style.display = 'flex';
