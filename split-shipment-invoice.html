@@ -52,6 +52,25 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
 }
 .shipment-btn:hover { background: var(--teal); color: white; }
 
+.order-browser-box {
+  margin-top: 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--warm);
+  padding: 10px; max-height: 340px; overflow-y: auto;
+}
+.order-browser-search {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; margin-bottom: 8px; font-family: 'Inter', sans-serif;
+}
+.order-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: 5px; cursor: pointer; font-size: 12px; background: white;
+  margin-bottom: 4px; border: 1px solid var(--rule);
+}
+.order-row:hover { border-color: var(--accent); }
+.order-row .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
+.order-row .ord-cust { color: #6B5E52; }
+.order-row .ord-meta { font-size: 10px; color: #8B7D72; text-align: right; }
+.order-browser-empty { font-size: 11px; color: #8B7D72; font-style: italic; padding: 8px; }
+
 .invoice-wrap { display: none; }
 .invoice-wrap.ready { display: block; }
 
@@ -146,9 +165,11 @@ table.items input[type="text"] {
   <div class="lookup-row">
     <input id="orderNumberInput" placeholder="Order number (e.g. 1071 or #1071)">
     <button class="btn" onclick="lookupOrder()" id="lookupBtn">Look Up Order</button>
+    <button class="btn secondary" onclick="browseRecentOrders()" id="browseBtn">Browse Recent Orders</button>
   </div>
   <div class="status-msg" id="statusMsg"></div>
   <div id="shipmentPicker"></div>
+  <div id="orderBrowser"></div>
 </div>
 
 <div class="invoice-wrap" id="invoiceWrap">
@@ -253,6 +274,9 @@ table.items input[type="text"] {
 
 <script>
 const LOOKUP_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/split-invoice-lookup';
+const LIST_ORDERS_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/split-invoice-list-orders';
+
+let recentOrdersCache = [];
 
 let shopifyLines = [];   // [{id, sku, name, orderedQty, unitPrice}]
 let customLines = [];    // [{key, description, qty, unitPrice}]
@@ -262,6 +286,76 @@ let detectedShipments = []; // [{source, status, label, line_items}]
 function todayISO() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
+}
+
+async function browseRecentOrders() {
+  const box = document.getElementById('orderBrowser');
+  const btn = document.getElementById('browseBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  box.innerHTML = `<div class="order-browser-box"><div class="order-browser-empty">Loading recent orders...</div></div>`;
+
+  try {
+    const res = await fetch(LIST_ORDERS_WEBHOOK_URL);
+    const data = await res.json();
+    recentOrdersCache = data.orders || [];
+    renderOrderBrowser(recentOrdersCache);
+  } catch (e) {
+    console.error(e);
+    box.innerHTML = `<div class="order-browser-box"><div class="order-browser-empty">Couldn't load orders — is the n8n webhook live?</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Browse Recent Orders';
+  }
+}
+
+function renderOrderBrowser(orders) {
+  const box = document.getElementById('orderBrowser');
+  const rows = orders.length
+    ? orders.map(o => `
+        <div class="order-row" onclick='selectBrowsedOrder(${JSON.stringify(o.order_number)})'>
+          <div>
+            <span class="ord-num">${o.order_number}</span>
+            <span class="ord-cust"> — ${o.customer_name}</span>
+          </div>
+          <div class="ord-meta">${o.order_type}${o.country ? ' · ' + o.country : ''}<br>${o.currency} ${o.total_price} · ${(o.order_date || '').slice(0, 10)}</div>
+        </div>
+      `).join('')
+    : `<div class="order-browser-empty">No matching orders.</div>`;
+
+  box.innerHTML = `
+    <div class="order-browser-box">
+      <input class="order-browser-search" placeholder="Filter by customer name or order number..." oninput="filterOrderBrowser(this.value)">
+      <div id="orderBrowserRows">${rows}</div>
+    </div>
+  `;
+}
+
+function filterOrderBrowser(query) {
+  const q = query.trim().toLowerCase();
+  const filtered = !q ? recentOrdersCache : recentOrdersCache.filter(o =>
+    (o.customer_name || '').toLowerCase().includes(q) ||
+    (o.order_number || '').toLowerCase().includes(q)
+  );
+  const rowsEl = document.getElementById('orderBrowserRows');
+  if (!rowsEl) return;
+  rowsEl.innerHTML = filtered.length
+    ? filtered.map(o => `
+        <div class="order-row" onclick='selectBrowsedOrder(${JSON.stringify(o.order_number)})'>
+          <div>
+            <span class="ord-num">${o.order_number}</span>
+            <span class="ord-cust"> — ${o.customer_name}</span>
+          </div>
+          <div class="ord-meta">${o.order_type}${o.country ? ' · ' + o.country : ''}<br>${o.currency} ${o.total_price} · ${(o.order_date || '').slice(0, 10)}</div>
+        </div>
+      `).join('')
+    : `<div class="order-browser-empty">No matching orders.</div>`;
+}
+
+function selectBrowsedOrder(orderNumber) {
+  document.getElementById('orderNumberInput').value = orderNumber;
+  document.getElementById('orderBrowser').innerHTML = '';
+  lookupOrder();
 }
 
 async function lookupOrder() {
@@ -459,6 +553,7 @@ function resetAll() {
   customLineSeq = 0;
   detectedShipments = [];
   document.getElementById('shipmentPicker').innerHTML = '';
+  document.getElementById('orderBrowser').innerHTML = '';
   document.getElementById('invoiceWrap').classList.remove('ready');
   document.getElementById('orderNumberInput').value = '';
   document.getElementById('statusMsg').textContent = '';
