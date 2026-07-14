@@ -332,7 +332,7 @@ function photoCardHTML(p) {
 
   const recipeSection = state.recipe
     ? `<div class="recipe-chip">
-        <span>${state.recipe.Recipe_Name} <span style="color:#8B7D72">(${state.recipe.Fiber_Type || '—'})</span></span>
+        <span>${state.recipe.Recipe_Name} <span style="color:#8B7D72">(${state.recipe.SKU_Base || state.recipe.Fiber_Type || '—'})</span></span>
         <span class="change-link" onclick="clearRecipe('${key}')">change</span>
       </div>`
     : `<div class="recipe-search-wrap">
@@ -378,12 +378,16 @@ function keyToPath(key) {
   return atob(key);
 }
 
+function normalizeSearch(s) {
+  return (s || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 function searchRecipes(key, query) {
   const box = document.getElementById(`suggestions-${key}`);
-  const q = query.trim().toLowerCase();
+  const q = normalizeSearch(query.trim());
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const matches = allRecipes
-    .filter(r => r.Recipe_Name.toLowerCase().includes(q))
+    .filter(r => normalizeSearch(r.Recipe_Name).includes(q) || normalizeSearch(r.SKU_Base).includes(q))
     .slice(0, 8);
   if (!matches.length) {
     box.innerHTML = `<div class="recipe-suggestion" style="color:#8B7D72;font-style:italic">No matches</div>`;
@@ -393,7 +397,7 @@ function searchRecipes(key, query) {
   box.innerHTML = matches.map(r => `
     <div class="recipe-suggestion" onclick='selectRecipe("${key}", ${r.id})'>
       <div class="rs-name">${r.Recipe_Name}</div>
-      <div class="rs-meta">${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
+      <div class="rs-meta">${r.SKU_Base ? r.SKU_Base + ' · ' : ''}${r.Fiber_Type || '—'}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
     </div>
   `).join('');
   box.style.display = 'block';
