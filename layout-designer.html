@@ -194,6 +194,8 @@ const DYE_COLORS = {
 };
 
 function guessColor(name) {
+  const manual = getManualColor(name);
+  if (manual) return manual;
   if (!name) return '#888780';
   const l = name.toLowerCase();
   for (const [k, v] of Object.entries(DYE_COLORS)) {
@@ -246,15 +248,23 @@ async function loadDyesList() {
     const dyesTable = await grist.docApi.fetchTable('Dyes');
     const nameCol = findColumn(dyesTable, ['Dye_Name', 'Name']) || 'Dye_Name';
     const brandCol = findColumn(dyesTable, ['Brand']);
+    const hexCol = findColumn(dyesTable, ['Swatch_Hex', 'Manual_Hex', 'Swatch_Color', 'Hex_Color']);
     const ids = dyesTable.id || [];
     allDyes = ids.map((id, i) => ({
       name: columnAsArray(dyesTable, nameCol)[i],
       brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
+      hex: hexCol ? columnAsArray(dyesTable, hexCol)[i] : '',
     })).filter(d => d.name);
   } catch (e) {
     console.error('Could not load Dyes table for autocomplete:', e);
     allDyes = [];
   }
+}
+
+function getManualColor(name) {
+  const n = normalize(name);
+  const found = allDyes.find(d => normalize(d.name) === n && d.hex);
+  return found ? found.hex : null;
 }
 
 function searchDyeSuggestions(boxId, query, onPick) {
