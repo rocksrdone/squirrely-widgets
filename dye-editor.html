@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dye Library</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif;
+  font-size: 13px; line-height: 1.5; padding: 14px;
+}
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.top-actions { display: flex; gap: 8px; }
+.btn {
+  font-size: 12px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink);
+}
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-primary.unsaved::after { content: ' •'; }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn.active-tab { background: var(--ink); border-color: var(--ink); color: white; }
+
+.layout-grid { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 760px) { .layout-grid { grid-template-columns: 1fr; } }
+
+.list-panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 10px; }
+.search-input {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px;
+  font-size: 12px; margin-bottom: 8px; font-family: 'Inter', sans-serif;
+}
+.filter-row { display: flex; gap: 5px; margin-bottom: 8px; flex-wrap: wrap; }
+.filter-chip {
+  font-size: 10px; padding: 4px 8px; border-radius: 10px; border: 1px solid var(--rule);
+  background: white; color: #6B5E52; cursor: pointer;
+}
+.filter-chip.active { background: var(--teal); border-color: var(--teal); color: white; }
+.dye-list { max-height: 640px; overflow-y: auto; }
+.dye-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; margin-bottom: 2px;
+}
+.dye-row:hover { background: var(--paper); }
+.dye-row.selected { background: var(--accent-light); }
+.swatch-dot { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,.15); }
+.swatch-dot.no-manual { border: 1px dashed #8B7D72; }
+.dye-row-name { font-size: 12.5px; flex: 1; }
+.dye-row-brand { font-size: 10px; color: #8B7D72; }
+.list-empty { font-size: 11px; color: #8B7D72; font-style: italic; padding: 10px; text-align: center; }
+
+.edit-panel, .mix-panel {
+  background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 20px;
+}
+.no-selection { color: #8B7D72; font-style: italic; padding: 40px; text-align: center; }
+
+.section-title {
+  font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--teal); margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule);
+}
+.section-title:first-child { margin-top: 0; }
+.field-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.field-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.field-input, .field-select, textarea.field-input {
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-family: 'Inter', sans-serif; font-size: 13px; outline: none; width: 100%;
+}
+.field-input:focus, .field-select:focus { border-color: var(--accent); }
+textarea.field-input { resize: vertical; min-height: 44px; }
+.checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.checkbox-row label { font-size: 12px; color: #6B5E52; }
+
+.swatch-editor { display: flex; align-items: center; gap: 10px; }
+.swatch-editor input[type="color"] { width: 44px; height: 36px; border: 1px solid var(--rule); border-radius: 6px; cursor: pointer; padding: 2px; }
+.swatch-editor input[type="text"] { width: 100px; font-family: 'DM Mono', monospace; }
+.guess-compare { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8B7D72; margin-top: 6px; }
+.guess-compare .mini-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+
+.picker-wrap { position: relative; }
+.picker-suggestions {
+  position: absolute; z-index: 30; background: white; border: 1px solid var(--rule); border-top: none;
+  border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto; width: 100%;
+  box-shadow: 0 6px 16px rgba(0,0,0,.08);
+}
+.picker-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.picker-suggestion-row:hover { background: var(--warm); }
+.picker-chip {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 5px;
+  background: var(--paper); border: 1px solid var(--rule); font-size: 12px; margin-top: 4px;
+}
+.picker-chip .clear-link { margin-left: auto; font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+.mix-row { display: flex; gap: 16px; align-items: flex-start; }
+.mix-col { flex: 1; }
+.mix-preview-box {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; min-width: 160px;
+}
+.mix-swatch-big { width: 90px; height: 90px; border-radius: 12px; border: 2px solid white; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.mix-hex-label { font-family: 'DM Mono', monospace; font-size: 12px; color: #6B5E52; }
+.mix-slider-wrap { margin: 14px 0; }
+.mix-slider-wrap input[type="range"] { width: 100%; }
+.mix-slider-labels { display: flex; justify-content: space-between; font-size: 10px; color: #8B7D72; }
+
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Dye Library</div>
+  <div class="top-actions">
+    <button class="btn" id="tabEdit" onclick="setViewMode('edit')">Edit Dyes</button>
+    <button class="btn" id="tabMix" onclick="setViewMode('mix')">🧪 Mix Lab</button>
+    <button class="btn btn-teal" onclick="createNewDye()">+ New Dye</button>
+  </div>
+</div>
+
+<div class="layout-grid">
+  <div class="list-panel">
+    <input class="search-input" id="dyeSearch" placeholder="Search name or brand..." oninput="renderDyeList()">
+    <div class="filter-row">
+      <button class="filter-chip" id="filterAll" onclick="setFilter('all')">All</button>
+      <button class="filter-chip" id="filterMissing" onclick="setFilter('missing')">Missing Color</button>
+      <button class="filter-chip" id="filterCustom" onclick="setFilter('custom')">Custom Mixes</button>
+    </div>
+    <div class="dye-list" id="dyeList"></div>
+  </div>
+
+  <div id="editPanel" class="edit-panel">
+    <div class="no-selection">Select a dye from the list, or create a new one.</div>
+  </div>
+
+  <div id="mixPanel" class="mix-panel" style="display:none; grid-column: 2;">
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) {
+    if (l.includes(k)) return v;
+  }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+
+function mixColors(hex1, hex2, ratioTo2) {
+  const c1 = parseInt((hex1 || '#888780').replace('#', ''), 16);
+  const c2 = parseInt((hex2 || '#888780').replace('#', ''), 16);
+  const r1 = (c1 >> 16) & 255, g1 = (c1 >> 8) & 255, b1 = c1 & 255;
+  const r2 = (c2 >> 16) & 255, g2 = (c2 >> 8) & 255, b2 = c2 & 255;
+  const t = Math.max(0, Math.min(100, ratioTo2)) / 100;
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function normalize(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+const DYE_TYPE_CHOICES = ['Acid', 'Super Fast Acid', 'Procion MX', 'Procion MX Ice', 'Basic', 'Cochineal', 'Indigo', 'iDye Natural', 'iDye Poly', 'Conc Vinyl Sulphon', 'Silk Colors', 'Custom Mix'];
+const STATUS_CHOICES = ['Active', 'Discontinued', 'Reformulated', 'Needs Review'];
+const SOURCE_TYPE_CHOICES = ['Commercial Dye', 'Custom Color'];
+
+// ── STATE ──
+let allDyes = [];       // full catalog, each: {id, Dye_Name, Brand, ..., Swatch_Hex}
+let editingDye = null;  // working copy of the currently-selected dye
+let currentDyeId = null;
+let listFilter = 'all';
+let unsavedChanges = false;
+let viewMode = 'edit';
+let hasSwatchColumn = true;
+
+// Mix Lab state
+let mixDyeA = null;
+let mixDyeB = null;
+let mixRatio = 50;
+
+function resolvedColor(dye) {
+  if (!dye) return '#888780';
+  return dye.Swatch_Hex || guessColor(dye.Dye_Name);
+}
+
+async function loadAllDyes() {
+  try {
+    const table = await grist.docApi.fetchTable('Dyes');
+    const ids = table.id || [];
+    const col = (cands) => findColumn(table, cands);
+
+    const swatchCol = col(['Swatch_Hex', 'Manual_Hex', 'Swatch_Color', 'Hex_Color']);
+    hasSwatchColumn = !!swatchCol;
+
+    const c = {
+      name: col(['Dye_Name']) || 'Dye_Name',
+      brand: col(['Brand']) || 'Brand',
+      serial: col(['Serial']) || 'Serial',
+      sourceType: col(['Dye_Source_Type']) || 'Dye_Source_Type',
+      dyeType: col(['Dye_Type']) || 'Dye_Type',
+      status: col(['Status']) || 'Status',
+      statusNotes: col(['Status_Notes']) || 'Status_Notes',
+      stdPowder: col(['Std_Powder_tsp']) || 'Std_Powder_tsp_',
+      stdWater: col(['Std_Water_mL']) || 'Std_Water_mL_',
+      defaultMlPer100: col(['Default_mL_per_100_yds']) || 'Default_mL_per_100_yds',
+      stdDryWeight: col(['Std_Dry_Weight_g']) || 'Std_Dry_Weight_g_',
+      shelfLife: col(['Shelf_Life_days']) || 'Shelf_Life_days_',
+      ageSensitive: col(['Age_Sensitive']) || 'Age_Sensitive_',
+      cleanupOrder: col(['Cleanup_Order']) || 'Cleanup_Order',
+      stainsEquipment: col(['Stains_Equipment']) || 'Stains_Equipment_',
+      dyeFamily: col(['Dye_Family']) || 'Dye_Family',
+      swapBurden: col(['Swap_Burden']) || 'Swap_Burden',
+      tinctorial: col(['Tinctorial_Strength']) || 'Tinctorial_Strength',
+      bleedRisk: col(['Bleed_Risk']) || 'Bleed_Risk',
+      undertone: col(['Undertone']) || 'Undertone',
+      usageNotes: col(['Typical_Usage_Notes']) || 'Typical_Usage_Notes',
+      agingNotes: col(['Aging_Notes']) || 'Aging_Notes',
+      notes: col(['Notes']) || 'Notes',
+      blendDesc: col(['Blend_Description']) || 'Blend_Description',
+      replacementDye: col(['Replacement_Dye']) || 'Replacement_Dye',
+    };
+
+    allDyes = ids.map((id, i) => ({
+      id,
+      Dye_Name: columnAsArray(table, c.name)[i] || '',
+      Brand: columnAsArray(table, c.brand)[i] || '',
+      Serial: columnAsArray(table, c.serial)[i] || '',
+      Dye_Source_Type: columnAsArray(table, c.sourceType)[i] || '',
+      Dye_Type: columnAsArray(table, c.dyeType)[i] || '',
+      Status: columnAsArray(table, c.status)[i] || '',
+      Status_Notes: columnAsArray(table, c.statusNotes)[i] || '',
+      Std_Powder_tsp: columnAsArray(table, c.stdPowder)[i] ?? '',
+      Std_Water_mL: columnAsArray(table, c.stdWater)[i] ?? '',
+      Default_mL_per_100_yds: columnAsArray(table, c.defaultMlPer100)[i] ?? '',
+      Std_Dry_Weight_g: columnAsArray(table, c.stdDryWeight)[i] ?? '',
+      Shelf_Life_days: columnAsArray(table, c.shelfLife)[i] ?? '',
+      Age_Sensitive: columnAsArray(table, c.ageSensitive)[i] || '',
+      Cleanup_Order: columnAsArray(table, c.cleanupOrder)[i] ?? '',
+      Stains_Equipment: columnAsArray(table, c.stainsEquipment)[i] || '',
+      Dye_Family: columnAsArray(table, c.dyeFamily)[i] ?? '',
+      Swap_Burden: columnAsArray(table, c.swapBurden)[i] ?? '',
+      Tinctorial_Strength: columnAsArray(table, c.tinctorial)[i] ?? '',
+      Bleed_Risk: columnAsArray(table, c.bleedRisk)[i] ?? '',
+      Undertone: columnAsArray(table, c.undertone)[i] ?? '',
+      Typical_Usage_Notes: columnAsArray(table, c.usageNotes)[i] ?? '',
+      Aging_Notes: columnAsArray(table, c.agingNotes)[i] ?? '',
+      Notes: columnAsArray(table, c.notes)[i] || '',
+      Blend_Description: columnAsArray(table, c.blendDesc)[i] || '',
+      Replacement_Dye: getRefId(columnAsArray(table, c.replacementDye)[i]),
+      Swatch_Hex: swatchCol ? (columnAsArray(table, swatchCol)[i] || '') : '',
+    })).filter(d => d.Dye_Name);
+
+    allDyes.sort((a, b) => a.Dye_Name.localeCompare(b.Dye_Name));
+
+    if (!hasSwatchColumn) {
+      showToast('No "Swatch_Hex" column found on Dyes — add a Text column with that name in Grist to enable manual colors.');
+    }
+
+    renderDyeList();
+    if (viewMode === 'mix') renderMixPanel();
+  } catch (e) {
+    console.error('Failed to load Dyes table:', e);
+    document.getElementById('dyeList').innerHTML = `<div class="list-empty">Failed to load — check the Dyes table is accessible.</div>`;
+  }
+}
+
+function setFilter(f) {
+  listFilter = f;
+  renderDyeList();
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('editPanel').style.display = mode === 'edit' ? 'block' : 'none';
+  document.getElementById('mixPanel').style.display = mode === 'mix' ? 'block' : 'none';
+  document.getElementById('tabEdit').classList.toggle('active-tab', mode === 'edit');
+  document.getElementById('tabMix').classList.toggle('active-tab', mode === 'mix');
+  if (mode === 'mix') renderMixPanel();
+}
+
+function renderDyeList() {
+  const box = document.getElementById('dyeList');
+  document.getElementById('filterAll').classList.toggle('active', listFilter === 'all');
+  document.getElementById('filterMissing').classList.toggle('active', listFilter === 'missing');
+  document.getElementById('filterCustom').classList.toggle('active', listFilter === 'custom');
+
+  const q = normalize(document.getElementById('dyeSearch').value);
+  let list = allDyes;
+  if (listFilter === 'missing') list = list.filter(d => !d.Swatch_Hex);
+  if (listFilter === 'custom') list = list.filter(d => d.Dye_Source_Type === 'Custom Color');
+  if (q) list = list.filter(d => normalize(d.Dye_Name).includes(q) || normalize(d.Brand).includes(q));
+
+  if (!list.length) {
+    box.innerHTML = `<div class="list-empty">No dyes match.</div>`;
+    return;
+  }
+
+  box.innerHTML = list.map(d => `
+    <div class="dye-row ${d.id === currentDyeId ? 'selected' : ''}" onclick="selectDye(${d.id})">
+      <span class="swatch-dot ${d.Swatch_Hex ? '' : 'no-manual'}" style="background:${resolvedColor(d)}"></span>
+      <span class="dye-row-name">${d.Dye_Name}</span>
+      <span class="dye-row-brand">${d.Brand || ''}</span>
+    </div>
+  `).join('');
+}
+
+function markUnsaved() {
+  unsavedChanges = true;
+  const btn = document.getElementById('saveBtn');
+  if (btn) btn.classList.add('unsaved');
+}
+function clearUnsaved() {
+  unsavedChanges = false;
+  const btn = document.getElementById('saveBtn');
+  if (btn) btn.classList.remove('unsaved');
+}
+
+function selectDye(id) {
+  if (unsavedChanges && !confirm('Discard unsaved changes to the current dye?')) return;
+  currentDyeId = id;
+  editingDye = { ...allDyes.find(d => d.id === id) };
+  viewMode = 'edit';
+  setViewMode('edit');
+  renderDyeList();
+  renderEditPanel();
+}
+
+function updateField(field, value) {
+  if (!editingDye) return;
+  editingDye[field] = value;
+  markUnsaved();
+}
+
+function resetSwatchToGuess() {
+  updateField('Swatch_Hex', '');
+  renderEditPanel();
+}
+
+function renderReplacementPicker() {
+  const current = editingDye.Replacement_Dye ? allDyes.find(d => d.id === editingDye.Replacement_Dye) : null;
+  if (current) {
+    return `
+      <div class="picker-chip">
+        <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(current)}"></span>
+        ${current.Dye_Name}
+        <span class="clear-link" onclick="updateField('Replacement_Dye', null); renderEditPanel();">clear</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="picker-wrap">
+      <input class="field-input" placeholder="Search dyes..." id="replacementSearch"
+        oninput="searchReplacementDye(this.value)"
+        onblur="setTimeout(() => { const b = document.getElementById('replacementSuggestions'); if (b) b.style.display='none'; }, 150)">
+      <div class="picker-suggestions" id="replacementSuggestions" style="display:none"></div>
+    </div>
+  `;
+}
+
+function searchReplacementDye(query) {
+  const box = document.getElementById('replacementSuggestions');
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = allDyes.filter(d => d.id !== currentDyeId && normalize(d.Dye_Name).includes(q)).slice(0, 8);
+  if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
+  box.innerHTML = matches.map(d => `
+    <div class="picker-suggestion-row" onmousedown="event.preventDefault(); updateField('Replacement_Dye', ${d.id}); renderEditPanel();">
+      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>${d.Dye_Name}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function selectOption(field, choices, currentValue) {
+  return `<option value=""></option>` + choices.map(c => `<option ${currentValue === c ? 'selected' : ''}>${c}</option>`).join('');
+}
+
+function renderEditPanel() {
+  const panel = document.getElementById('editPanel');
+  if (!editingDye) {
+    panel.innerHTML = `<div class="no-selection">Select a dye from the list, or create a new one.</div>`;
+    return;
+  }
+  const d = editingDye;
+  const guess = guessColor(d.Dye_Name);
+
+  panel.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-family:'Libre Baskerville',serif; font-size:18px;">${d.Dye_Name || '(unnamed)'}</div>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveDye()">💾 Save</button>
+    </div>
+
+    <div class="section-title">Identity</div>
+    <div class="field-grid-2">
+      <div class="field-row">
+        <span class="field-label">Dye Name</span>
+        <input class="field-input" value="${(d.Dye_Name || '').replace(/"/g, '&quot;')}" oninput="updateField('Dye_Name', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Brand</span>
+        <input class="field-input" value="${(d.Brand || '').replace(/"/g, '&quot;')}" oninput="updateField('Brand', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Serial / SKU</span>
+        <input class="field-input" value="${(d.Serial || '').replace(/"/g, '&quot;')}" oninput="updateField('Serial', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Source Type</span>
+        <select class="field-select" onchange="updateField('Dye_Source_Type', this.value)">${selectOption('Dye_Source_Type', SOURCE_TYPE_CHOICES, d.Dye_Source_Type)}</select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Dye Type</span>
+        <select class="field-select" onchange="updateField('Dye_Type', this.value)">${selectOption('Dye_Type', DYE_TYPE_CHOICES, d.Dye_Type)}</select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Status</span>
+        <select class="field-select" onchange="updateField('Status', this.value)">${selectOption('Status', STATUS_CHOICES, d.Status)}</select>
+      </div>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Status Notes</span>
+      <textarea class="field-input" rows="2" oninput="updateField('Status_Notes', this.value)">${d.Status_Notes || ''}</textarea>
+    </div>
+
+    <div class="section-title">Recipe Colorway Swatch</div>
+    <div class="swatch-editor">
+      <input type="color" value="${d.Swatch_Hex || guess}" oninput="updateField('Swatch_Hex', this.value); renderEditPanel();">
+      <input type="text" class="field-input" value="${d.Swatch_Hex || ''}" placeholder="${guess}"
+        oninput="updateField('Swatch_Hex', this.value)">
+      <button class="btn" onclick="resetSwatchToGuess()">Use auto-guess</button>
+    </div>
+    <div class="guess-compare">
+      <span class="mini-swatch" style="background:${guess}"></span> Auto-guess would show this color if left blank
+    </div>
+    ${!hasSwatchColumn ? '<div style="font-size:11px;color:var(--accent);margin-top:6px;">⚠ No Swatch_Hex column found on the Dyes table yet — add a Text column named "Swatch_Hex" in Grist so this saves correctly.</div>' : ''}
+
+    <div class="section-title">Standard Usage Ratios</div>
+    <div class="field-grid-2">
+      <div class="field-row">
+        <span class="field-label">Std Powder (tsp)</span>
+        <input class="field-input" type="number" step="0.1" value="${d.Std_Powder_tsp}" oninput="updateField('Std_Powder_tsp', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Std Water (mL)</span>
+        <input class="field-input" type="number" step="1" value="${d.Std_Water_mL}" oninput="updateField('Std_Water_mL', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Default mL per 100 yds</span>
+        <input class="field-input" type="number" step="0.1" value="${d.Default_mL_per_100_yds}" oninput="updateField('Default_mL_per_100_yds', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Std Dry Weight (g)</span>
+        <input class="field-input" type="number" step="0.1" value="${d.Std_Dry_Weight_g}" oninput="updateField('Std_Dry_Weight_g', this.value)">
+      </div>
+    </div>
+
+    <div class="section-title">Handling</div>
+    <div class="field-grid-2">
+      <div class="field-row">
+        <span class="field-label">Shelf Life (days)</span>
+        <input class="field-input" type="number" value="${d.Shelf_Life_days}" oninput="updateField('Shelf_Life_days', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Cleanup Order</span>
+        <input class="field-input" type="number" placeholder="e.g. 1 = clean first" value="${d.Cleanup_Order}" oninput="updateField('Cleanup_Order', this.value)">
+      </div>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="ageSensitiveBox" ${d.Age_Sensitive === 'True' ? 'checked' : ''}
+        onchange="updateField('Age_Sensitive', this.checked ? 'True' : 'False')">
+      <label for="ageSensitiveBox">Age sensitive (degrades / shifts over time)</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="stainsEquipBox" ${d.Stains_Equipment === 'True' ? 'checked' : ''}
+        onchange="updateField('Stains_Equipment', this.checked ? 'True' : 'False')">
+      <label for="stainsEquipBox">Stains equipment</label>
+    </div>
+
+    <div class="section-title">Characterization <span style="font-weight:400; text-transform:none; letter-spacing:0; color:#8B7D72;">(useful for future recipe/mix planning)</span></div>
+    <div class="field-grid-3">
+      <div class="field-row">
+        <span class="field-label">Dye Family</span>
+        <input class="field-input" list="dyeFamilyOptions" value="${d.Dye_Family}" oninput="updateField('Dye_Family', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Tinctorial Strength (1–10)</span>
+        <input class="field-input" type="number" min="1" max="10" value="${d.Tinctorial_Strength}" oninput="updateField('Tinctorial_Strength', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Swap Burden</span>
+        <input class="field-input" list="swapBurdenOptions" value="${d.Swap_Burden}" oninput="updateField('Swap_Burden', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Bleed Risk</span>
+        <input class="field-input" list="bleedRiskOptions" value="${d.Bleed_Risk}" oninput="updateField('Bleed_Risk', this.value)">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Undertone</span>
+        <input class="field-input" list="undertoneOptions" value="${d.Undertone}" oninput="updateField('Undertone', this.value)">
+      </div>
+    </div>
+    <datalist id="bleedRiskOptions"><option>Low</option><option>Medium</option><option>High</option></datalist>
+    <datalist id="undertoneOptions"><option>Warm</option><option>Cool</option><option>Neutral</option></datalist>
+    <datalist id="swapBurdenOptions"><option>Low</option><option>Medium</option><option>High</option></datalist>
+    <datalist id="dyeFamilyOptions"><option>Acid</option><option>Reactive</option><option>Direct</option><option>Natural</option></datalist>
+
+    <div class="section-title">Notes &amp; Relationships</div>
+    <div class="field-row">
+      <span class="field-label">Typical Usage Notes</span>
+      <textarea class="field-input" rows="2" oninput="updateField('Typical_Usage_Notes', this.value)">${d.Typical_Usage_Notes}</textarea>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Aging Notes</span>
+      <textarea class="field-input" rows="2" oninput="updateField('Aging_Notes', this.value)">${d.Aging_Notes}</textarea>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Blend Description</span>
+      <textarea class="field-input" rows="2" oninput="updateField('Blend_Description', this.value)">${d.Blend_Description || ''}</textarea>
+    </div>
+    <div class="field-row">
+      <span class="field-label">General Notes</span>
+      <textarea class="field-input" rows="2" oninput="updateField('Notes', this.value)">${d.Notes || ''}</textarea>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Replacement Dye</span>
+      ${renderReplacementPicker()}
+    </div>
+  `;
+}
+
+async function saveDye() {
+  if (!editingDye) return;
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const fields = {
+    Dye_Name: editingDye.Dye_Name,
+    Brand: editingDye.Brand,
+    Serial: editingDye.Serial,
+    Dye_Source_Type: editingDye.Dye_Source_Type,
+    Dye_Type: editingDye.Dye_Type,
+    Status: editingDye.Status,
+    Status_Notes: editingDye.Status_Notes,
+    Std_Powder_tsp_: editingDye.Std_Powder_tsp === '' ? null : Number(editingDye.Std_Powder_tsp),
+    Std_Water_mL_: editingDye.Std_Water_mL === '' ? null : Number(editingDye.Std_Water_mL),
+    Default_mL_per_100_yds: editingDye.Default_mL_per_100_yds === '' ? null : Number(editingDye.Default_mL_per_100_yds),
+    Std_Dry_Weight_g_: editingDye.Std_Dry_Weight_g === '' ? null : Number(editingDye.Std_Dry_Weight_g),
+    Shelf_Life_days_: editingDye.Shelf_Life_days,
+    Age_Sensitive_: editingDye.Age_Sensitive,
+    Cleanup_Order: editingDye.Cleanup_Order,
+    Stains_Equipment_: editingDye.Stains_Equipment,
+    Dye_Family: editingDye.Dye_Family,
+    Swap_Burden: editingDye.Swap_Burden,
+    Tinctorial_Strength: editingDye.Tinctorial_Strength,
+    Bleed_Risk: editingDye.Bleed_Risk,
+    Undertone: editingDye.Undertone,
+    Typical_Usage_Notes: editingDye.Typical_Usage_Notes,
+    Aging_Notes: editingDye.Aging_Notes,
+    Notes: editingDye.Notes,
+    Blend_Description: editingDye.Blend_Description,
+    Replacement_Dye: editingDye.Replacement_Dye || null,
+  };
+  if (hasSwatchColumn) fields.Swatch_Hex = editingDye.Swatch_Hex;
+
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Dyes', currentDyeId, fields]]);
+    Object.assign(allDyes.find(d => d.id === currentDyeId), editingDye);
+    clearUnsaved();
+    showToast('Saved.');
+    renderDyeList();
+  } catch (e) {
+    console.error('Save failed:', e);
+    showToast('Save failed — check the console for details.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Save';
+  }
+}
+
+async function createNewDye() {
+  try {
+    const fields = { Dye_Name: 'New Dye', Dye_Source_Type: 'Commercial Dye' };
+    const result = await grist.docApi.applyUserActions([['AddRecord', 'Dyes', null, fields]]);
+    const newId = result[0];
+    await loadAllDyes();
+    selectDye(newId);
+    showToast('New dye created — fill in the details and Save.');
+  } catch (e) {
+    console.error('Create failed:', e);
+    showToast('Could not create a new dye — check the console.');
+  }
+}
+
+// ── MIX LAB ──
+function renderMixPanel() {
+  const panel = document.getElementById('mixPanel');
+  const a = mixDyeA ? allDyes.find(d => d.id === mixDyeA) : null;
+  const b = mixDyeB ? allDyes.find(d => d.id === mixDyeB) : null;
+  const colorA = a ? resolvedColor(a) : '#CCCCCC';
+  const colorB = b ? resolvedColor(b) : '#CCCCCC';
+  const mixed = (a && b) ? mixColors(colorA, colorB, mixRatio) : '#EEEEEE';
+
+  panel.innerHTML = `
+    <div style="font-family:'Libre Baskerville',serif; font-size:18px; margin-bottom:14px;">🧪 Mix Lab — preview a blend before you dye it</div>
+    <div class="mix-row">
+      <div class="mix-col">
+        <div class="field-row">
+          <span class="field-label">Dye A</span>
+          ${mixPickerHtml('A', a)}
+        </div>
+        <div class="field-row">
+          <span class="field-label">Dye B</span>
+          ${mixPickerHtml('B', b)}
+        </div>
+        <div class="mix-slider-wrap">
+          <input type="range" min="0" max="100" value="${mixRatio}" oninput="setMixRatio(this.value)">
+          <div class="mix-slider-labels">
+            <span>100% ${a ? a.Dye_Name : 'A'}</span>
+            <span>${mixRatio}% toward B</span>
+            <span>100% ${b ? b.Dye_Name : 'B'}</span>
+          </div>
+        </div>
+        <div class="section-title">Save as a new dye</div>
+        <div class="field-row">
+          <span class="field-label">New Dye Name</span>
+          <input class="field-input" id="mixNewName" placeholder="${a && b ? a.Dye_Name + ' / ' + b.Dye_Name + ' Mix' : 'e.g. Sunset Blend'}">
+        </div>
+        <div class="field-row">
+          <span class="field-label">Brand / Notes</span>
+          <input class="field-input" id="mixNewBrand" placeholder="Optional">
+        </div>
+        <button class="btn btn-teal" ${a && b ? '' : 'disabled'} onclick="saveMixAsNewDye()">+ Save as New Dye</button>
+      </div>
+      <div class="mix-col" style="flex:0 0 auto;">
+        <div class="mix-preview-box">
+          <div class="mix-swatch-big" style="background:${mixed}"></div>
+          <div class="mix-hex-label">${mixed}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function mixPickerHtml(slot, dye) {
+  if (dye) {
+    return `
+      <div class="picker-chip">
+        <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(dye)}"></span>
+        ${dye.Dye_Name}
+        <span class="clear-link" onclick="setMixDye('${slot}', null)">change</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="picker-wrap">
+      <input class="field-input" placeholder="Search dyes..." id="mixSearch${slot}"
+        oninput="searchMixDye('${slot}', this.value)"
+        onblur="setTimeout(() => { const b = document.getElementById('mixSuggestions${slot}'); if (b) b.style.display='none'; }, 150)">
+      <div class="picker-suggestions" id="mixSuggestions${slot}" style="display:none"></div>
+    </div>
+  `;
+}
+
+function searchMixDye(slot, query) {
+  const box = document.getElementById(`mixSuggestions${slot}`);
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = allDyes.filter(d => normalize(d.Dye_Name).includes(q)).slice(0, 8);
+  if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
+  box.innerHTML = matches.map(d => `
+    <div class="picker-suggestion-row" onmousedown="event.preventDefault(); setMixDye('${slot}', ${d.id})">
+      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>${d.Dye_Name}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function setMixDye(slot, id) {
+  if (slot === 'A') mixDyeA = id; else mixDyeB = id;
+  renderMixPanel();
+}
+
+function setMixRatio(value) {
+  mixRatio = Number(value);
+  renderMixPanel();
+}
+
+async function saveMixAsNewDye() {
+  const a = allDyes.find(d => d.id === mixDyeA);
+  const b = allDyes.find(d => d.id === mixDyeB);
+  if (!a || !b) return;
+  const mixed = mixColors(resolvedColor(a), resolvedColor(b), mixRatio);
+  const name = document.getElementById('mixNewName').value.trim() || `${a.Dye_Name} / ${b.Dye_Name} Mix`;
+  const brand = document.getElementById('mixNewBrand').value.trim();
+
+  const fields = {
+    Dye_Name: name,
+    Brand: brand,
+    Dye_Source_Type: 'Custom Color',
+    Dye_Type: 'Custom Mix',
+    Blend_Description: `Mix of ${a.Dye_Name} and ${b.Dye_Name} (${mixRatio}% toward ${b.Dye_Name})`,
+  };
+  if (hasSwatchColumn) fields.Swatch_Hex = mixed;
+
+  try {
+    const result = await grist.docApi.applyUserActions([['AddRecord', 'Dyes', null, fields]]);
+    const newId = result[0];
+    await loadAllDyes();
+    showToast(`Saved "${name}" as a new dye.`);
+    setViewMode('edit');
+    selectDye(newId);
+  } catch (e) {
+    console.error('Failed to save mix:', e);
+    showToast('Could not save the new dye — check the console.');
+  }
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({ requiredAccess: 'full' });
+loadAllDyes();
+</script>
+</body>
+</html>
