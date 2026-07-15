@@ -71,7 +71,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   <div class="controls">
     <label>Daily capacity</label>
     <input type="number" id="capacityInput" value="20" min="1">
-    <button class="btn btn-teal" onclick="runPlan()">↻ Generate Today's Plan</button>
+    <button class="btn btn-teal" onclick="loadAll()">↻ Generate Today's Plan</button>
   </div>
 </div>
 
@@ -155,6 +155,12 @@ function dyeLabel(dyeId) {
 }
 
 async function loadAll() {
+  workOrders = {};
+  recipes = {};
+  dyes = {};
+  dyeStockByDye = {};
+  recipeDyes = {};
+  queueLines = [];
   document.getElementById('planStatus').textContent = 'Loading...';
   try {
     const woTable = await grist.docApi.fetchTable('Work_Orders');
