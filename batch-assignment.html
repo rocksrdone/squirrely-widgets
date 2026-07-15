@@ -113,12 +113,13 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
-    const [woTable, wolTable, compTable, recipesTable, dyesTable] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
     ]);
 
     // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve it through
@@ -207,6 +208,32 @@ async function loadForRecipe(record) {
       });
     }
 
+    // Bin suggestion — prefer a bin that already holds only this dye and has room,
+    // computed upfront so it can show right in the row, not just after a click.
+    const BIN_CAPACITY = 18;
+    const stockEntries = [];
+    (stockTableUpfront.id || []).forEach((id, i) => {
+      stockEntries.push({
+        dyeRef: getRefId(columnAsArray(stockTableUpfront, 'Dye')[i]),
+        bin: columnAsArray(stockTableUpfront, 'Bin_Location')[i] || '',
+      });
+    });
+    function suggestBinFor(dyeId) {
+      const binGroups = {};
+      stockEntries.forEach(s => {
+        const bin = (s.bin || '').toString().trim();
+        if (!bin) return;
+        if (!binGroups[bin]) binGroups[bin] = [];
+        binGroups[bin].push(s);
+      });
+      for (const [bin, entries] of Object.entries(binGroups)) {
+        const onlyThisDye = entries.every(e => e.dyeRef === dyeId);
+        if (onlyThisDye && entries.length < BIN_CAPACITY) return bin;
+      }
+      const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
+      return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+    }
+
     const cleanupInfo = dyeIds.map(dyeId => {
       const others = [];
       pendingRecipeIds.forEach(rid => {
@@ -220,6 +247,7 @@ async function loadForRecipe(record) {
         dyeDetail: dyeDisplayLabel(dyeId),
         isOneOff: others.length === 0,
         others,
+        suggestedBin: suggestBinFor(dyeId),
       };
     });
 
@@ -261,8 +289,8 @@ function render() {
 
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
     const flagHtml = c.isOneOff
-      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it.</div>`
-      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
+      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}.</span></div>`
+      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}.</span></div>`;
     return `
       ${flagHtml}
       <div class="dye-action-row">
@@ -342,20 +370,17 @@ async function onDyeActionChange(idx) {
     wrap.innerHTML = `<div class="action-fields">Checking existing stock...</div>`;
     const c = currentEntry.cleanupInfo[idx];
     let existing = [];
-    let allStockEntries = []; // {dyeRef, bin} across every dye, used to suggest a bin
     if (c.dyeId) {
       try {
         const stockTable = await grist.docApi.fetchTable('Dye_Stock');
         const sIds = stockTable.id || [];
         sIds.forEach((id, i) => {
           const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
-          const bin = columnAsArray(stockTable, 'Bin_Location')[i] || '';
-          allStockEntries.push({ dyeRef, bin });
           if (dyeRef !== c.dyeId) return;
           existing.push({
             id,
             qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
-            bin: bin || '(no bin)',
+            bin: columnAsArray(stockTable, 'Bin_Location')[i] || '(no bin)',
             mixedDate: columnAsArray(stockTable, 'Mixed_Date')[i],
           });
         });
@@ -364,25 +389,9 @@ async function onDyeActionChange(idx) {
       }
     }
 
-    // Suggest a bin: prefer one that already holds only this dye and has room,
-    // so repeat batches of the same color keep landing in the same place.
-    const BIN_CAPACITY = 18;
-    const binGroups = {};
-    allStockEntries.forEach(s => {
-      const bin = (s.bin || '').toString().trim();
-      if (!bin) return;
-      if (!binGroups[bin]) binGroups[bin] = [];
-      binGroups[bin].push(s);
-    });
-    let suggestedBin = null;
-    for (const [bin, entries] of Object.entries(binGroups)) {
-      const onlyThisDye = entries.every(e => e.dyeRef === c.dyeId);
-      if (onlyThisDye && entries.length < BIN_CAPACITY) { suggestedBin = bin; break; }
-    }
-    if (!suggestedBin) {
-      const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
-      suggestedBin = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
-    }
+    // Bin suggestion was already computed when this recipe loaded (see cleanupInfo) —
+    // reuse it here so the pre-filled field matches what's shown in the row above.
+    const suggestedBin = c.suggestedBin;
 
     const binField = action === 'put_away'
       ? `<input type="text" id="bin-${idx}" placeholder="Bin location" value="${suggestedBin}">`

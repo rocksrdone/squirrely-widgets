@@ -345,19 +345,29 @@ function renderStockTable() {
   if (!stockRows.length) {
     return `<div class="empty-state">No premade stock logged yet. Add some above.</div>`;
   }
-  const rows = stockRows.map(s => {
+  const sorted = [...stockRows].sort((a, b) => {
+    const aUnbinned = !a.Bin_Location, bUnbinned = !b.Bin_Location;
+    if (aUnbinned !== bUnbinned) return aUnbinned ? -1 : 1;
+    return 0;
+  });
+  const rows = sorted.map(s => {
     const d = dyeFor(s.dyeId);
     const age = daysAgo(s.Mixed_Date);
     const shelf = d && d.Shelf_Life_days ? Number(d.Shelf_Life_days) : null;
     const isStale = shelf && age !== null && age > shelf;
+    const needsBin = !s.Bin_Location;
+    const binCell = needsBin
+      ? `<input class="bin-input" type="text" value="" placeholder="none yet" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">
+         <button class="btn btn-small" onclick="useSuggestedBin(${s.id})" style="margin-top:3px;">Use bin ${suggestBinForDye(s.dyeId)}</button>`
+      : `<input class="bin-input" type="text" value="${s.Bin_Location}" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">`;
     return `
-      <tr>
+      <tr ${needsBin ? 'style="background: var(--gold-light);"' : ''}>
         <td><span class="swatch-dot" style="background:${resolvedColor(d)}"></span></td>
         <td>${d ? d.Dye_Name : '(unknown dye)'}<div style="font-size:10px;color:#8B7D72;">${d ? dyeDetailLine(d) : ''}</div></td>
         <td><input class="qty-input" type="number" value="${s.Quantity_mL}" onchange="updateStockField(${s.id}, 'Quantity_mL', this.value)"> mL</td>
         <td><input class="date-input" type="date" value="${toDateInputValue(s.Mixed_Date)}" onchange="updateStockField(${s.id}, 'Mixed_Date', this.value)"></td>
         <td>${age !== null ? `<span class="age-tag ${isStale ? 'stale' : ''}">${age}d ago${isStale ? ' · past shelf life' : ''}</span>` : '—'}</td>
-        <td><input class="bin-input" type="text" value="${s.Bin_Location}" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)"></td>
+        <td>${binCell}</td>
         <td class="row-actions"><button class="btn btn-small" onclick="deleteStock(${s.id})">Remove</button></td>
       </tr>
     `;
@@ -391,6 +401,13 @@ async function addStock() {
   }
 }
 
+async function useSuggestedBin(stockId) {
+  const row = stockRows.find(s => s.id === stockId);
+  if (!row) return;
+  const suggested = suggestBinForDye(row.dyeId);
+  await updateStockField(stockId, 'Bin_Location', suggested);
+}
+
 async function updateStockField(id, field, value) {
   const fields = {};
   fields[field] = field === 'Quantity_mL' ? Number(value) : value;
@@ -399,6 +416,7 @@ async function updateStockField(id, field, value) {
     const row = stockRows.find(s => s.id === id);
     if (row) row[field] = fields[field];
     showToast('Saved.');
+    if (field === 'Bin_Location') renderStockPanel();
     if (currentView === 'sequence') renderSeqPanel();
   } catch (e) {
     console.error(e);
