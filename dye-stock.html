@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dye Stock</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif;
+  font-size: 13px; line-height: 1.5; padding: 14px;
+}
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab-btn {
+  font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink);
+}
+.tab-btn.active { background: var(--ink); border-color: var(--ink); color: white; }
+.btn {
+  font-size: 12px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink);
+}
+.btn:hover { border-color: var(--accent); }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-small { font-size: 10px; padding: 4px 8px; }
+
+.panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 16px; }
+
+.add-stock-form {
+  display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; align-items: end;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 7px; padding: 12px; margin-bottom: 16px;
+}
+.form-field { display: flex; flex-direction: column; gap: 3px; }
+.form-field label { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; }
+.form-field input, .field-input {
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px;
+  font-family: 'Inter', sans-serif; outline: none; width: 100%;
+}
+.picker-wrap { position: relative; }
+.picker-suggestions {
+  position: absolute; z-index: 30; background: white; border: 1px solid var(--rule); border-top: none;
+  border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto; width: 100%;
+  box-shadow: 0 6px 16px rgba(0,0,0,.08);
+}
+.picker-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.picker-suggestion-row:hover { background: var(--warm); }
+.picker-chip {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px;
+  background: white; border: 1px solid var(--rule); font-size: 12px;
+}
+.picker-chip .clear-link { margin-left: auto; font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+table.stock-table { width: 100%; border-collapse: collapse; }
+table.stock-table thead th {
+  text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+  color: white; background: var(--ink); padding: 8px 10px;
+}
+table.stock-table tbody tr:nth-child(even) { background: var(--paper); }
+table.stock-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
+.swatch-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); flex-shrink: 0; display: inline-block; vertical-align: middle; }
+.qty-input { width: 70px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px; }
+.date-input { padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px; }
+.bin-input { width: 60px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px; }
+.age-tag { font-size: 10px; color: #8B7D72; }
+.age-tag.stale { color: var(--accent); font-weight: 600; }
+.row-actions { display: flex; gap: 4px; }
+
+.seq-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 7px;
+  background: var(--paper); border: 1px solid var(--rule); margin-bottom: 6px;
+}
+.seq-order-num {
+  width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: white;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.seq-swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); flex-shrink: 0; }
+.seq-name { font-weight: 600; }
+.seq-meta { font-size: 11px; color: #8B7D72; }
+.seq-badge {
+  font-size: 9px; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em;
+  font-weight: 600; margin-left: auto;
+}
+.seq-badge.ready { background: var(--teal-light); color: var(--teal); }
+.seq-badge.unordered { background: var(--warm); color: #8B7D72; }
+.seq-section-title {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--teal); margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule);
+}
+.seq-section-title:first-child { margin-top: 0; }
+.seq-hint { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 4px; }
+
+.empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Dye Stock</div>
+</div>
+<div class="tabs">
+  <button class="tab-btn active" id="tabStock" onclick="setView('stock')">Current Stock</button>
+  <button class="tab-btn" id="tabSeq" onclick="setView('sequence')">Suggested Sequence</button>
+</div>
+
+<div id="stockPanel" class="panel"></div>
+<div id="seqPanel" class="panel" style="display:none;"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) { if (l.includes(k)) return v; }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+function resolvedColor(dye) {
+  if (!dye) return '#888780';
+  return dye.Swatch_Hex || guessColor(dye.Dye_Name);
+}
+function normalize(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+function daysAgo(dateVal) {
+  if (!dateVal) return null;
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms) return null;
+  return Math.floor((Date.now() - ms) / 86400000);
+}
+function toDateInputValue(dateVal) {
+  if (!dateVal) return '';
+  const d = typeof dateVal === 'number' ? new Date(dateVal * 1000) : new Date(dateVal);
+  if (isNaN(d)) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+let allDyes = [];    // {id, Dye_Name, Brand, Swatch_Hex, Cleanup_Order, Shelf_Life_days}
+let stockRows = [];  // {id, dyeId, Quantity_mL, Mixed_Date, Bin_Location}
+let newStockDyeId = null;
+let currentView = 'stock';
+
+async function loadAll() {
+  try {
+    const dyesTable = await grist.docApi.fetchTable('Dyes');
+    const dc = (cands) => findColumn(dyesTable, cands);
+    const nameCol = dc(['Dye_Name']) || 'Dye_Name';
+    const brandCol = dc(['Brand']);
+    const hexCol = dc(['Swatch_Hex', 'Manual_Hex', 'Swatch_Color']);
+    const cleanupCol = dc(['Cleanup_Order']);
+    const shelfCol = dc(['Shelf_Life_days']);
+    const dyeIds = dyesTable.id || [];
+    allDyes = dyeIds.map((id, i) => ({
+      id,
+      Dye_Name: columnAsArray(dyesTable, nameCol)[i] || '',
+      Brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
+      Swatch_Hex: hexCol ? columnAsArray(dyesTable, hexCol)[i] : '',
+      Cleanup_Order: cleanupCol ? columnAsArray(dyesTable, cleanupCol)[i] : '',
+      Shelf_Life_days: shelfCol ? columnAsArray(dyesTable, shelfCol)[i] : '',
+    })).filter(d => d.Dye_Name);
+    allDyes.sort((a, b) => a.Dye_Name.localeCompare(b.Dye_Name));
+
+    const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+    const sc = (cands) => findColumn(stockTable, cands);
+    const dyeRefCol = sc(['Dye']) || 'Dye';
+    const qtyCol = sc(['Quantity_mL']) || 'Quantity_mL';
+    const mixedCol = sc(['Mixed_Date']) || 'Mixed_Date';
+    const binCol = sc(['Bin_Location']) || 'Bin_Location';
+    const stockIds = stockTable.id || [];
+    stockRows = stockIds.map((id, i) => ({
+      id,
+      dyeId: getRefId(columnAsArray(stockTable, dyeRefCol)[i]),
+      Quantity_mL: columnAsArray(stockTable, qtyCol)[i] ?? '',
+      Mixed_Date: columnAsArray(stockTable, mixedCol)[i] ?? '',
+      Bin_Location: columnAsArray(stockTable, binCol)[i] || '',
+    }));
+
+    renderStockPanel();
+    renderSeqPanel();
+  } catch (e) {
+    console.error('Failed to load:', e);
+    document.getElementById('stockPanel').innerHTML = `<div class="empty-state">Failed to load Dyes / Dye_Stock — check widget access.</div>`;
+  }
+}
+
+function setView(view) {
+  currentView = view;
+  document.getElementById('stockPanel').style.display = view === 'stock' ? 'block' : 'none';
+  document.getElementById('seqPanel').style.display = view === 'sequence' ? 'block' : 'none';
+  document.getElementById('tabStock').classList.toggle('active', view === 'stock');
+  document.getElementById('tabSeq').classList.toggle('active', view === 'sequence');
+  if (view === 'sequence') renderSeqPanel();
+}
+
+function dyeFor(id) { return allDyes.find(d => d.id === id); }
+
+// ── STOCK TAB ──
+function renderStockPanel() {
+  const panel = document.getElementById('stockPanel');
+  panel.innerHTML = `
+    <div class="add-stock-form">
+      <div class="form-field">
+        <label>Dye</label>
+        ${renderNewStockDyePicker()}
+      </div>
+      <div class="form-field">
+        <label>Quantity (mL)</label>
+        <input type="number" id="newStockQty" step="1" placeholder="0">
+      </div>
+      <div class="form-field">
+        <label>Mixed Date</label>
+        <input type="date" id="newStockDate" value="${new Date().toISOString().slice(0, 10)}">
+      </div>
+      <div class="form-field">
+        <label>Bin</label>
+        <input type="text" id="newStockBin" placeholder="e.g. 1">
+      </div>
+      <button class="btn btn-teal" onclick="addStock()">+ Log Stock</button>
+    </div>
+    ${renderStockTable()}
+  `;
+}
+
+function renderNewStockDyePicker() {
+  if (newStockDyeId) {
+    const d = dyeFor(newStockDyeId);
+    return `
+      <div class="picker-chip">
+        <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>
+        ${d ? d.Dye_Name : '—'}
+        <span class="clear-link" onclick="newStockDyeId=null; renderStockPanel();">change</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="picker-wrap">
+      <input class="field-input" placeholder="Search dyes..." id="newStockDyeSearch"
+        oninput="searchNewStockDye(this.value)"
+        onblur="setTimeout(() => { const b = document.getElementById('newStockDyeSuggestions'); if (b) b.style.display='none'; }, 150)">
+      <div class="picker-suggestions" id="newStockDyeSuggestions" style="display:none"></div>
+    </div>
+  `;
+}
+
+function searchNewStockDye(query) {
+  const box = document.getElementById('newStockDyeSuggestions');
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = allDyes.filter(d => normalize(d.Dye_Name).includes(q) || normalize(d.Brand).includes(q)).slice(0, 8);
+  if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
+  box.innerHTML = matches.map(d => `
+    <div class="picker-suggestion-row" onmousedown="event.preventDefault(); newStockDyeId=${d.id}; renderStockPanel();">
+      <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>${d.Dye_Name}
+    </div>
+  `).join('');
+  box.style.display = 'block';
+}
+
+function renderStockTable() {
+  if (!stockRows.length) {
+    return `<div class="empty-state">No premade stock logged yet. Add some above.</div>`;
+  }
+  const rows = stockRows.map(s => {
+    const d = dyeFor(s.dyeId);
+    const age = daysAgo(s.Mixed_Date);
+    const shelf = d && d.Shelf_Life_days ? Number(d.Shelf_Life_days) : null;
+    const isStale = shelf && age !== null && age > shelf;
+    return `
+      <tr>
+        <td><span class="swatch-dot" style="background:${resolvedColor(d)}"></span></td>
+        <td>${d ? d.Dye_Name : '(unknown dye)'}<div style="font-size:10px;color:#8B7D72;">${d && d.Brand ? d.Brand : ''}</div></td>
+        <td><input class="qty-input" type="number" value="${s.Quantity_mL}" onchange="updateStockField(${s.id}, 'Quantity_mL', this.value)"> mL</td>
+        <td><input class="date-input" type="date" value="${toDateInputValue(s.Mixed_Date)}" onchange="updateStockField(${s.id}, 'Mixed_Date', this.value)"></td>
+        <td>${age !== null ? `<span class="age-tag ${isStale ? 'stale' : ''}">${age}d ago${isStale ? ' · past shelf life' : ''}</span>` : '—'}</td>
+        <td><input class="bin-input" type="text" value="${s.Bin_Location}" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)"></td>
+        <td class="row-actions"><button class="btn btn-small" onclick="deleteStock(${s.id})">Remove</button></td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <table class="stock-table">
+      <thead>
+        <tr><th></th><th>Dye</th><th>Quantity</th><th>Mixed Date</th><th>Age</th><th>Bin</th><th></th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function addStock() {
+  if (!newStockDyeId) { showToast('Pick a dye first.'); return; }
+  const qty = Number(document.getElementById('newStockQty').value) || 0;
+  const date = document.getElementById('newStockDate').value;
+  const bin = document.getElementById('newStockBin').value;
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', 'Dye_Stock', null, {
+      Dye: newStockDyeId, Quantity_mL: qty, Mixed_Date: date, Bin_Location: bin,
+    }]]);
+    newStockDyeId = null;
+    await loadAll();
+    showToast('Stock logged.');
+  } catch (e) {
+    console.error(e);
+    showToast('Could not log stock — check the console.');
+  }
+}
+
+async function updateStockField(id, field, value) {
+  const fields = {};
+  fields[field] = field === 'Quantity_mL' ? Number(value) : value;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', id, fields]]);
+    const row = stockRows.find(s => s.id === id);
+    if (row) row[field] = fields[field];
+    showToast('Saved.');
+    if (currentView === 'sequence') renderSeqPanel();
+  } catch (e) {
+    console.error(e);
+    showToast('Save failed — check the console.');
+  }
+}
+
+async function deleteStock(id) {
+  if (!confirm('Remove this stock entry?')) return;
+  try {
+    await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', id]]);
+    stockRows = stockRows.filter(s => s.id !== id);
+    renderStockPanel();
+    showToast('Removed.');
+  } catch (e) {
+    console.error(e);
+    showToast('Could not remove — check the console.');
+  }
+}
+
+// ── SEQUENCE TAB ──
+function renderSeqPanel() {
+  const panel = document.getElementById('seqPanel');
+  const inStock = stockRows.filter(s => Number(s.Quantity_mL) > 0);
+  if (!inStock.length) {
+    panel.innerHTML = `<div class="empty-state">No stock on hand right now — log some in the Current Stock tab.</div>`;
+    return;
+  }
+
+  const withDye = inStock.map(s => ({ stock: s, dye: dyeFor(s.dyeId) })).filter(x => x.dye);
+
+  const ordered = withDye.filter(x => x.dye.Cleanup_Order !== '' && x.dye.Cleanup_Order !== null && x.dye.Cleanup_Order !== undefined);
+  const unordered = withDye.filter(x => !ordered.includes(x));
+
+  ordered.sort((a, b) => Number(a.dye.Cleanup_Order) - Number(b.dye.Cleanup_Order));
+
+  let html = `<div class="seq-hint">Based on stock you currently have on hand — sorted to minimize equipment switching between dyes.</div>`;
+
+  if (ordered.length) {
+    html += `<div class="seq-section-title">Suggested Order</div>`;
+    html += ordered.map((x, i) => seqItemHtml(x, i + 1)).join('');
+  }
+  if (unordered.length) {
+    html += `<div class="seq-section-title">Not Yet Sequenced <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#8B7D72;">(set Cleanup Order in Dye Library to place these)</span></div>`;
+    html += unordered.map(x => seqItemHtml(x, null)).join('');
+  }
+
+  panel.innerHTML = html;
+}
+
+function seqItemHtml(x, orderNum) {
+  const d = x.dye, s = x.stock;
+  return `
+    <div class="seq-item">
+      ${orderNum ? `<div class="seq-order-num">${orderNum}</div>` : `<div class="seq-order-num" style="background:#8B7D72;">?</div>`}
+      <div class="seq-swatch" style="background:${resolvedColor(d)}"></div>
+      <div>
+        <div class="seq-name">${d.Dye_Name}</div>
+        <div class="seq-meta">${s.Quantity_mL} mL on hand${s.Bin_Location ? ' · bin ' + s.Bin_Location : ''}</div>
+      </div>
+      <span class="seq-badge ready">Ready to use</span>
+    </div>
+  `;
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({ requiredAccess: 'full' });
+loadAll();
+</script>
+</body>
+</html>
