@@ -246,6 +246,9 @@ function resolvedColor(dye) {
   if (!dye) return '#888780';
   return dye.Swatch_Hex || guessColor(dye.Dye_Name);
 }
+function dyeDetailLine(d) {
+  return [d.Brand, d.Serial, d.Dye_Type].filter(Boolean).join(' · ');
+}
 
 async function loadAllDyes() {
   try {
@@ -406,7 +409,10 @@ function renderReplacementPicker() {
     return `
       <div class="picker-chip">
         <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(current)}"></span>
-        ${current.Dye_Name}
+        <div>
+          <div>${current.Dye_Name}</div>
+          <div style="font-size:10px;color:#8B7D72;">${dyeDetailLine(current)}</div>
+        </div>
         <span class="clear-link" onclick="updateField('Replacement_Dye', null); renderEditPanel();">clear</span>
       </div>
     `;
@@ -429,7 +435,11 @@ function searchReplacementDye(query) {
   if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
   box.innerHTML = matches.map(d => `
     <div class="picker-suggestion-row" onmousedown="event.preventDefault(); updateField('Replacement_Dye', ${d.id}); renderEditPanel();">
-      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>${d.Dye_Name}
+      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>
+      <div>
+        <div>${d.Dye_Name}</div>
+        <div style="font-size:10px;color:#8B7D72;">${dyeDetailLine(d) || 'No brand/serial on file'}</div>
+      </div>
     </div>
   `).join('');
   box.style.display = 'block';
@@ -711,7 +721,10 @@ function mixPickerHtml(slot, dye) {
     return `
       <div class="picker-chip">
         <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(dye)}"></span>
-        ${dye.Dye_Name}
+        <div>
+          <div>${dye.Dye_Name}</div>
+          <div style="font-size:10px;color:#8B7D72;">${dyeDetailLine(dye)}</div>
+        </div>
         <span class="clear-link" onclick="setMixDye('${slot}', null)">change</span>
       </div>
     `;
@@ -734,7 +747,11 @@ function searchMixDye(slot, query) {
   if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
   box.innerHTML = matches.map(d => `
     <div class="picker-suggestion-row" onmousedown="event.preventDefault(); setMixDye('${slot}', ${d.id})">
-      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>${d.Dye_Name}
+      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>
+      <div>
+        <div>${d.Dye_Name}</div>
+        <div style="font-size:10px;color:#8B7D72;">${dyeDetailLine(d) || 'No brand/serial on file'}</div>
+      </div>
     </div>
   `).join('');
   box.style.display = 'block';

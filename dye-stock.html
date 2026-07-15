@@ -168,6 +168,9 @@ function showToast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2400);
 }
+function dyeDetailLine(d) {
+  return [d.Brand, d.Serial, d.Dye_Type].filter(Boolean).join(' · ');
+}
 function daysAgo(dateVal) {
   if (!dateVal) return null;
   const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
@@ -195,6 +198,8 @@ async function loadAll() {
     const hexCol = dc(['Swatch_Hex', 'Manual_Hex', 'Swatch_Color']);
     const cleanupCol = dc(['Cleanup_Order']);
     const shelfCol = dc(['Shelf_Life_days']);
+    const serialCol = dc(['Serial']);
+    const dyeTypeCol = dc(['Dye_Type']);
     const dyeIds = dyesTable.id || [];
     allDyes = dyeIds.map((id, i) => ({
       id,
@@ -203,6 +208,8 @@ async function loadAll() {
       Swatch_Hex: hexCol ? columnAsArray(dyesTable, hexCol)[i] : '',
       Cleanup_Order: cleanupCol ? columnAsArray(dyesTable, cleanupCol)[i] : '',
       Shelf_Life_days: shelfCol ? columnAsArray(dyesTable, shelfCol)[i] : '',
+      Serial: serialCol ? columnAsArray(dyesTable, serialCol)[i] : '',
+      Dye_Type: dyeTypeCol ? columnAsArray(dyesTable, dyeTypeCol)[i] : '',
     })).filter(d => d.Dye_Name);
     allDyes.sort((a, b) => a.Dye_Name.localeCompare(b.Dye_Name));
 
@@ -273,7 +280,10 @@ function renderNewStockDyePicker() {
     return `
       <div class="picker-chip">
         <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>
-        ${d ? d.Dye_Name : '—'}
+        <div>
+          <div>${d ? d.Dye_Name : '—'}</div>
+          <div style="font-size:10px;color:#8B7D72;">${d ? dyeDetailLine(d) : ''}</div>
+        </div>
         <span class="clear-link" onclick="newStockDyeId=null; renderStockPanel();">change</span>
       </div>
     `;
@@ -296,7 +306,11 @@ function searchNewStockDye(query) {
   if (!matches.length) { box.innerHTML = `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`; box.style.display = 'block'; return; }
   box.innerHTML = matches.map(d => `
     <div class="picker-suggestion-row" onmousedown="event.preventDefault(); newStockDyeId=${d.id}; renderStockPanel();">
-      <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>${d.Dye_Name}
+      <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>
+      <div>
+        <div>${d.Dye_Name}</div>
+        <div style="font-size:10px;color:#8B7D72;">${dyeDetailLine(d) || 'No brand/serial on file'}</div>
+      </div>
     </div>
   `).join('');
   box.style.display = 'block';
@@ -314,7 +328,7 @@ function renderStockTable() {
     return `
       <tr>
         <td><span class="swatch-dot" style="background:${resolvedColor(d)}"></span></td>
-        <td>${d ? d.Dye_Name : '(unknown dye)'}<div style="font-size:10px;color:#8B7D72;">${d && d.Brand ? d.Brand : ''}</div></td>
+        <td>${d ? d.Dye_Name : '(unknown dye)'}<div style="font-size:10px;color:#8B7D72;">${d ? dyeDetailLine(d) : ''}</div></td>
         <td><input class="qty-input" type="number" value="${s.Quantity_mL}" onchange="updateStockField(${s.id}, 'Quantity_mL', this.value)"> mL</td>
         <td><input class="date-input" type="date" value="${toDateInputValue(s.Mixed_Date)}" onchange="updateStockField(${s.id}, 'Mixed_Date', this.value)"></td>
         <td>${age !== null ? `<span class="age-tag ${isStale ? 'stale' : ''}">${age}d ago${isStale ? ' · past shelf life' : ''}</span>` : '—'}</td>
