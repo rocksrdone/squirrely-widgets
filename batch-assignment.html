@@ -226,10 +226,16 @@ async function loadForRecipe(record) {
         if (!binGroups[bin]) binGroups[bin] = [];
         binGroups[bin].push(s);
       });
+      // Prefer a bin that already has this same dye and still has room.
       for (const [bin, entries] of Object.entries(binGroups)) {
-        const onlyThisDye = entries.every(e => e.dyeRef === dyeId);
-        if (onlyThisDye && entries.length < BIN_CAPACITY) return bin;
+        const hasThisDye = entries.some(e => e.dyeRef === dyeId);
+        if (hasThisDye && entries.length < BIN_CAPACITY) return bin;
       }
+      // Otherwise, any bin with room — bins hold a mix of different dyes.
+      for (const [bin, entries] of Object.entries(binGroups)) {
+        if (entries.length < BIN_CAPACITY) return bin;
+      }
+      // Every existing bin is full — start a new one.
       const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
       return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
     }
