@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Batch Planner</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.controls { display: flex; align-items: center; gap: 8px; }
+.controls label { font-size: 11px; color: #8B7D72; }
+.controls input[type="number"] { width: 56px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px; }
+.btn { font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+.btn:hover { border-color: var(--accent); }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-small { font-size: 10px; padding: 4px 8px; }
+.btn-rush { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.btn-rush.active { background: var(--accent); color: white; }
+
+.section-title {
+  font-family: 'Libre Baskerville', serif; font-size: 15px; margin: 18px 0 10px;
+}
+.group-card { background: white; border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.group-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--warm); }
+.group-swatch { width: 26px; height: 26px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15); flex-shrink: 0; }
+.group-title { font-weight: 700; }
+.group-meta { font-size: 11px; color: #6B5E52; }
+.group-badges { margin-left: auto; display: flex; gap: 6px; }
+.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
+.badge.expiring { background: var(--accent); color: white; }
+.badge.ready { background: var(--teal-light); color: var(--teal); }
+.badge.mix { background: var(--gold-light); color: var(--gold); }
+.badge.oneoff { background: var(--rule); color: #6B5E52; }
+
+.line-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--rule); }
+.line-main { flex: 1; }
+.line-recipe { font-weight: 600; }
+.line-order { font-size: 11px; color: #8B7D72; }
+.line-due { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.line-due.soon { background: var(--accent-light); color: var(--accent); }
+.line-due.ok { background: var(--warm); color: #6B5E52; }
+.bin-tag { font-size: 11px; font-family: 'DM Mono', monospace; padding: 3px 8px; border-radius: 5px; background: var(--teal-light); color: var(--teal); cursor: default; }
+.bin-suggest-btn { font-size: 10px; padding: 4px 8px; border-radius: 5px; border: 1px dashed var(--rule); background: white; color: #6B5E52; cursor: pointer; }
+
+.waiting-panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 4px 0; }
+.waiting-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--rule); font-size: 12px; }
+.waiting-row:last-child { border-bottom: none; }
+
+.empty-state { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Batch Planner</div>
+  <div class="controls">
+    <label>Daily capacity</label>
+    <input type="number" id="capacityInput" value="20" min="1">
+    <button class="btn btn-teal" onclick="runPlan()">↻ Generate Today's Plan</button>
+  </div>
+</div>
+
+<div id="planStatus" style="font-size:11px; color:#8B7D72; margin-bottom:10px;"></div>
+<div id="planOutput"></div>
+
+<div class="section-title">Waiting (not in today's plan)</div>
+<div id="waitingOutput"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) { if (l.includes(k)) return v; }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function toEpochDays(dateVal) {
+  if (!dateVal) return null;
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return null;
+  return ms / 86400000;
+}
+function daysFromToday(dateVal) {
+  const ed = toEpochDays(dateVal);
+  if (ed === null) return null;
+  return Math.round(ed - Date.now() / 86400000);
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+let workOrders = {};   // id -> {Due_Date, Customer_Name, Order_Number}
+let recipes = {};      // id -> {Recipe_Name, SKU_Base, Cleanup_Order}
+let dyes = {};          // id -> {Dye_Name, Brand, Serial, Swatch_Hex, Shelf_Life_days, Cleanup_Order}
+let dyeStockByDye = {}; // dyeId -> [{qty, mixedDate, binLocation}]
+let recipeDyes = {};    // recipeId -> [dyeId,...]
+let queueLines = [];    // [{id, recipeId, workOrderId, qtyNeeded, dueDate, priority, orderNumber, customerName}]
+
+function resolvedColor(dyeId) {
+  const d = dyes[dyeId];
+  if (!d) return '#888780';
+  return d.Swatch_Hex || guessColor(d.Dye_Name);
+}
+function dyeLabel(dyeId) {
+  const d = dyes[dyeId];
+  if (!d) return '(no dye set)';
+  return [d.Dye_Name, d.Brand].filter(Boolean).join(' — ');
+}
+
+async function loadAll() {
+  document.getElementById('planStatus').textContent = 'Loading...';
+  try {
+    const woTable = await grist.docApi.fetchTable('Work_Orders');
+    const woc = (c) => findColumn(woTable, c);
+    const woDueCol = woc(['Due_Date']);
+    const woCustCol = woc(['Customer_Name']);
+    const woNumCol = woc(['Order_Number']);
+    (woTable.id || []).forEach((id, i) => {
+      workOrders[id] = {
+        Due_Date: woDueCol ? columnAsArray(woTable, woDueCol)[i] : null,
+        Customer_Name: woCustCol ? columnAsArray(woTable, woCustCol)[i] : '',
+        Order_Number: woNumCol ? columnAsArray(woTable, woNumCol)[i] : '',
+      };
+    });
+
+    const recipesTable = await grist.docApi.fetchTable('Recipes');
+    const rc = (c) => findColumn(recipesTable, c);
+    const rNameCol = rc(['Recipe_Name']) || 'Recipe_Name';
+    const rSkuCol = rc(['SKU_Base']);
+    const rCleanupCol = rc(['Cleanup_Order']);
+    (recipesTable.id || []).forEach((id, i) => {
+      recipes[id] = {
+        Recipe_Name: columnAsArray(recipesTable, rNameCol)[i] || '',
+        SKU_Base: rSkuCol ? columnAsArray(recipesTable, rSkuCol)[i] : '',
+        Cleanup_Order: rCleanupCol ? columnAsArray(recipesTable, rCleanupCol)[i] : '',
+      };
+    });
+
+    const dyesTable = await grist.docApi.fetchTable('Dyes');
+    const dc = (c) => findColumn(dyesTable, c);
+    const dNameCol = dc(['Dye_Name']) || 'Dye_Name';
+    const dBrandCol = dc(['Brand']);
+    const dSerialCol = dc(['Serial']);
+    const dHexCol = dc(['Swatch_Hex']);
+    const dShelfCol = dc(['Shelf_Life_days']);
+    const dCleanupCol = dc(['Cleanup_Order']);
+    (dyesTable.id || []).forEach((id, i) => {
+      dyes[id] = {
+        Dye_Name: columnAsArray(dyesTable, dNameCol)[i] || '',
+        Brand: dBrandCol ? columnAsArray(dyesTable, dBrandCol)[i] : '',
+        Serial: dSerialCol ? columnAsArray(dyesTable, dSerialCol)[i] : '',
+        Swatch_Hex: dHexCol ? columnAsArray(dyesTable, dHexCol)[i] : '',
+        Shelf_Life_days: dShelfCol ? columnAsArray(dyesTable, dShelfCol)[i] : '',
+        Cleanup_Order: dCleanupCol ? columnAsArray(dyesTable, dCleanupCol)[i] : '',
+      };
+    });
+
+    const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+    const sc = (c) => findColumn(stockTable, c);
+    const sDyeCol = sc(['Dye']) || 'Dye';
+    const sQtyCol = sc(['Quantity_mL']) || 'Quantity_mL';
+    const sMixedCol = sc(['Mixed_Date']) || 'Mixed_Date';
+    const sBinCol = sc(['Bin_Location']) || 'Bin_Location';
+    (stockTable.id || []).forEach((id, i) => {
+      const dyeId = getRefId(columnAsArray(stockTable, sDyeCol)[i]);
+      if (!dyeId) return;
+      const qty = Number(columnAsArray(stockTable, sQtyCol)[i]) || 0;
+      if (qty <= 0) return;
+      if (!dyeStockByDye[dyeId]) dyeStockByDye[dyeId] = [];
+      dyeStockByDye[dyeId].push({
+        qty,
+        mixedDate: columnAsArray(stockTable, sMixedCol)[i],
+        binLocation: columnAsArray(stockTable, sBinCol)[i] || '',
+      });
+    });
+
+    const rdcTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const rdcc = (c) => findColumn(rdcTable, c);
+    const rdcRecipeCol = rdcc(['Recipe']) || 'Recipe';
+    const rdcDyeCol = rdcc(['Dye_Name']) || 'Dye_Name';
+    (rdcTable.id || []).forEach((id, i) => {
+      const recipeId = getRefId(columnAsArray(rdcTable, rdcRecipeCol)[i]);
+      const dyeId = getRefId(columnAsArray(rdcTable, rdcDyeCol)[i]);
+      if (!recipeId || !dyeId) return;
+      if (!recipeDyes[recipeId]) recipeDyes[recipeId] = [];
+      if (!recipeDyes[recipeId].includes(dyeId)) recipeDyes[recipeId].push(dyeId);
+    });
+
+    const wolTable = await grist.docApi.fetchTable('Work_Order_Lines');
+    const wc = (c) => findColumn(wolTable, c);
+    const wRecipeCol = wc(['Recipe']) || 'Recipe';
+    const wWorkOrderCol = wc(['Work_Order']) || 'Work_Order';
+    const wQtyCol = wc(['Qty_Needed']);
+    const wStatusCol = wc(['Queue_Status']);
+    const wPriorityCol = wc(['Production_Priority']);
+    const wDueCol = wc(['Due_Date']);
+    queueLines = [];
+    (wolTable.id || []).forEach((id, i) => {
+      const status = wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '';
+      if (status !== 'Open') return;
+      const recipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
+      if (!recipeId || !recipes[recipeId]) return;
+      const workOrderId = getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]);
+      const wo = workOrders[workOrderId] || {};
+      const lineDue = wDueCol ? columnAsArray(wolTable, wDueCol)[i] : null;
+      queueLines.push({
+        id,
+        recipeId,
+        workOrderId,
+        qtyNeeded: wQtyCol ? columnAsArray(wolTable, wQtyCol)[i] : '',
+        priority: wPriorityCol ? (columnAsArray(wolTable, wPriorityCol)[i] || 'Normal') : 'Normal',
+        dueDate: lineDue || wo.Due_Date || null,
+        orderNumber: wo.Order_Number || '',
+        customerName: wo.Customer_Name || '',
+      });
+    });
+
+    document.getElementById('planStatus').textContent =
+      `${queueLines.length} open line(s) in queue · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data loaded`;
+
+    runPlan();
+  } catch (e) {
+    console.error('Failed to load:', e);
+    document.getElementById('planStatus').textContent = 'Failed to load — check the console.';
+  }
+}
+
+function isGlobalOneOff(line) {
+  const myDyes = recipeDyes[line.recipeId] || [];
+  if (!myDyes.length) return true;
+  return !queueLines.some(other => other.id !== line.id && (recipeDyes[other.recipeId] || []).some(d => myDyes.includes(d)));
+}
+
+function dyeReuseCountWithSelected(line, selected) {
+  const myDyes = recipeDyes[line.recipeId] || [];
+  if (!myDyes.length) return 0;
+  return selected.filter(s => (recipeDyes[s.recipeId] || []).some(d => myDyes.includes(d))).length;
+}
+
+function selectToday(capacity) {
+  const selected = [];
+  const selectedIds = new Set();
+
+  // Tier 1: Rush
+  queueLines.filter(c => c.priority === 'Rush').forEach(c => { selected.push(c); selectedIds.add(c.id); });
+
+  // Tier 2: due within 7 days, soonest first
+  const withinWeek = queueLines
+    .filter(c => !selectedIds.has(c.id) && daysFromToday(c.dueDate) !== null && daysFromToday(c.dueDate) <= 7)
+    .sort((a, b) => daysFromToday(a.dueDate) - daysFromToday(b.dueDate));
+  withinWeek.forEach(c => { if (selected.length < capacity) { selected.push(c); selectedIds.add(c.id); } });
+
+  // Tier 3: fill remaining capacity
+  let remaining = queueLines.filter(c => !selectedIds.has(c.id));
+  while (selected.length < capacity && remaining.length) {
+    remaining.forEach(c => {
+      c._reuseScore = dyeReuseCountWithSelected(c, selected);
+      c._isOneOff = isGlobalOneOff(c);
+      c._isHigh = c.priority === 'High';
+      c._isLow = c.priority === 'Low';
+    });
+    remaining.sort((a, b) => {
+      if (b._reuseScore !== a._reuseScore) return b._reuseScore - a._reuseScore;
+      if (a._isHigh !== b._isHigh) return a._isHigh ? -1 : 1;
+      const aBad = a._isOneOff || a._isLow, bBad = b._isOneOff || b._isLow;
+      if (aBad !== bBad) return aBad ? 1 : -1;
+      const ad = daysFromToday(a.dueDate), bd = daysFromToday(b.dueDate);
+      return (ad === null ? Infinity : ad) - (bd === null ? Infinity : bd);
+    });
+    const next = remaining.shift();
+    selected.push(next); selectedIds.add(next.id);
+  }
+
+  return { selected, waiting: queueLines.filter(c => !selectedIds.has(c.id)) };
+}
+
+function stockInfoForDye(dyeId) {
+  const entries = dyeStockByDye[dyeId] || [];
+  if (!entries.length) return { hasStock: false, expiringSoon: false, totalQty: 0, bins: [] };
+  const totalQty = entries.reduce((s, e) => s + e.qty, 0);
+  const bins = [...new Set(entries.map(e => e.binLocation).filter(Boolean))];
+  const dye = dyes[dyeId];
+  const shelfLife = dye && dye.Shelf_Life_days ? Number(dye.Shelf_Life_days) : null;
+  let expiringSoon = false;
+  if (shelfLife) {
+    expiringSoon = entries.some(e => {
+      const age = -daysFromToday(e.mixedDate);
+      return age !== null && (shelfLife - age) <= 5;
+    });
+  }
+  return { hasStock: true, expiringSoon, totalQty, bins };
+}
+
+function sequenceSelected(selected) {
+  const groups = {};
+  selected.forEach(line => {
+    const dyeIds = recipeDyes[line.recipeId] || [];
+    let bestDye = null, bestCount = -1;
+    dyeIds.forEach(dId => {
+      const count = selected.filter(l => (recipeDyes[l.recipeId] || []).includes(dId)).length;
+      if (count > bestCount) { bestCount = count; bestDye = dId; }
+    });
+    const key = bestDye || `none-${line.id}`;
+    if (!groups[key]) groups[key] = { dyeId: bestDye, lines: [] };
+    groups[key].lines.push(line);
+  });
+
+  const groupList = Object.values(groups).map(g => {
+    const stock = g.dyeId ? stockInfoForDye(g.dyeId) : { hasStock: false, expiringSoon: false, totalQty: 0, bins: [] };
+    return { ...g, size: g.lines.length, stock, isOneOff: g.size === 1 && !stock.hasStock };
+  });
+
+  groupList.sort((a, b) => {
+    if (a.stock.expiringSoon !== b.stock.expiringSoon) return a.stock.expiringSoon ? -1 : 1;
+    if (b.size !== a.size) return b.size - a.size;
+    if (a.stock.hasStock !== b.stock.hasStock) return a.stock.hasStock ? -1 : 1;
+    const aCO = a.dyeId && dyes[a.dyeId] && dyes[a.dyeId].Cleanup_Order !== '' ? Number(dyes[a.dyeId].Cleanup_Order) : 999;
+    const bCO = b.dyeId && dyes[b.dyeId] && dyes[b.dyeId].Cleanup_Order !== '' ? Number(dyes[b.dyeId].Cleanup_Order) : 999;
+    return aCO - bCO;
+  });
+
+  return groupList;
+}
+
+function runPlan() {
+  const capacity = Number(document.getElementById('capacityInput').value) || 20;
+  const { selected, waiting } = selectToday(capacity);
+  const groups = sequenceSelected(selected);
+  renderPlan(groups);
+  renderWaiting(waiting);
+}
+
+function dueTagHtml(dueDate) {
+  const d = daysFromToday(dueDate);
+  if (d === null) return '';
+  const soon = d <= 7;
+  const label = d < 0 ? `${Math.abs(d)}d overdue` : d === 0 ? 'due today' : `due in ${d}d`;
+  return `<span class="line-due ${soon ? 'soon' : 'ok'}">${label}</span>`;
+}
+
+async function toggleRush(lineId, currentPriority) {
+  const newPriority = currentPriority === 'Rush' ? 'Normal' : 'Rush';
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Order_Lines', lineId, { Production_Priority: newPriority }]]);
+    const line = queueLines.find(l => l.id === lineId);
+    if (line) line.priority = newPriority;
+    showToast(newPriority === 'Rush' ? 'Marked Rush.' : 'Rush cleared.');
+    runPlan();
+  } catch (e) {
+    console.error(e);
+    showToast('Could not update — check the console.');
+  }
+}
+
+function renderPlan(groups) {
+  const box = document.getElementById('planOutput');
+  if (!groups.length) {
+    box.innerHTML = `<div class="empty-state">Nothing selected — check your open queue or capacity.</div>`;
+    return;
+  }
+  box.innerHTML = groups.map((g, i) => {
+    const badges = [];
+    if (g.stock.expiringSoon) badges.push('<span class="badge expiring">Use soon — expiring</span>');
+    else if (g.stock.hasStock) badges.push('<span class="badge ready">Premade ready</span>');
+    else badges.push('<span class="badge mix">Needs mixing</span>');
+    if (g.isOneOff) badges.push('<span class="badge oneoff">One-off</span>');
+
+    return `
+      <div class="group-card">
+        <div class="group-header">
+          <div class="group-swatch" style="background:${g.dyeId ? resolvedColor(g.dyeId) : '#CCC'}"></div>
+          <div>
+            <div class="group-title">${i + 1}. ${g.dyeId ? dyeLabel(g.dyeId) : 'No dye recorded'}</div>
+            <div class="group-meta">${g.size} recipe${g.size === 1 ? '' : 's'}${g.stock.hasStock ? ` · ${g.stock.totalQty}mL on hand${g.stock.bins.length ? ' · bin ' + g.stock.bins.join('/') : ''}` : ''}</div>
+          </div>
+          <div class="group-badges">${badges.join('')}</div>
+        </div>
+        ${g.lines.map(line => lineRowHtml(line)).join('')}
+      </div>
+    `;
+  }).join('');
+}
+
+function lineRowHtml(line) {
+  const r = recipes[line.recipeId] || {};
+  return `
+    <div class="line-row">
+      <div class="line-main">
+        <div class="line-recipe">${r.Recipe_Name || '(unnamed)'} ${r.SKU_Base ? `<span style="color:#8B7D72;font-weight:400;">(${r.SKU_Base})</span>` : ''}</div>
+        <div class="line-order">${line.orderNumber || ''}${line.customerName ? ' — ' + line.customerName : ''} · qty ${line.qtyNeeded || '?'}</div>
+      </div>
+      ${dueTagHtml(line.dueDate)}
+      <button class="btn btn-small btn-rush ${line.priority === 'Rush' ? 'active' : ''}" onclick="toggleRush(${line.id}, '${line.priority}')">
+        ${line.priority === 'Rush' ? '★ Rush' : 'Mark Rush'}
+      </button>
+    </div>
+  `;
+}
+
+function renderWaiting(waiting) {
+  const box = document.getElementById('waitingOutput');
+  if (!waiting.length) {
+    box.innerHTML = `<div class="empty-state">Nothing waiting — everything open fits in today's plan.</div>`;
+    return;
+  }
+  waiting.sort((a, b) => {
+    const ad = daysFromToday(a.dueDate), bd = daysFromToday(b.dueDate);
+    return (ad === null ? Infinity : ad) - (bd === null ? Infinity : bd);
+  });
+  document.getElementById('waitingOutput').innerHTML = `
+    <div class="waiting-panel">
+      ${waiting.map(line => {
+        const r = recipes[line.recipeId] || {};
+        return `
+          <div class="waiting-row">
+            <div style="flex:1;">${r.Recipe_Name || '(unnamed)'} <span style="color:#8B7D72;">${line.orderNumber || ''}</span></div>
+            ${dueTagHtml(line.dueDate)}
+            <button class="btn btn-small btn-rush" onclick="toggleRush(${line.id}, '${line.priority}')">Mark Rush</button>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── GRIST INTEGRATION ──
+grist.ready({ requiredAccess: 'full' });
+loadAll();
+</script>
+</body>
+</html>

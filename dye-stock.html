@@ -186,6 +186,31 @@ function toDateInputValue(dateVal) {
 
 let allDyes = [];    // {id, Dye_Name, Brand, Swatch_Hex, Cleanup_Order, Shelf_Life_days}
 let stockRows = [];  // {id, dyeId, Quantity_mL, Mixed_Date, Bin_Location}
+const BIN_CAPACITY = 18; // ~15-20 premade dye containers per bin
+
+function suggestBinForDye(dyeId) {
+  const binGroups = {};
+  stockRows.forEach(s => {
+    const bin = (s.Bin_Location || '').toString().trim();
+    if (!bin) return;
+    if (!binGroups[bin]) binGroups[bin] = [];
+    binGroups[bin].push(s);
+  });
+
+  // Prefer a bin that already holds only this same dye and still has room —
+  // keeps a given dye's containers together so it's easy to find next time.
+  for (const [bin, entries] of Object.entries(binGroups)) {
+    const onlyThisDye = entries.every(e => e.dyeId === dyeId);
+    if (onlyThisDye && entries.length < BIN_CAPACITY) {
+      return bin;
+    }
+  }
+
+  // Otherwise, the next never-used bin number.
+  const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
+  return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+}
+
 let newStockDyeId = null;
 let currentView = 'stock';
 
@@ -265,8 +290,8 @@ function renderStockPanel() {
         <input type="date" id="newStockDate" value="${new Date().toISOString().slice(0, 10)}">
       </div>
       <div class="form-field">
-        <label>Bin</label>
-        <input type="text" id="newStockBin" placeholder="e.g. 1">
+        <label>Bin${newStockDyeId ? ' (suggested)' : ''}</label>
+        <input type="text" id="newStockBin" placeholder="e.g. 1" value="${newStockDyeId ? suggestBinForDye(newStockDyeId) : ''}">
       </div>
       <button class="btn btn-teal" onclick="addStock()">+ Log Stock</button>
     </div>
