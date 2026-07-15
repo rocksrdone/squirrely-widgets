@@ -176,6 +176,15 @@ async function loadForRecipe(record) {
       if (!dyesByRecipeId[recipeRef].includes(dyeRef)) dyesByRecipeId[recipeRef].push(dyeRef);
     });
 
+    // Which dyes get used together in the same recipe — used to group bin suggestions.
+    const coUsedDyes = {};
+    Object.values(dyesByRecipeId).forEach(dyeList => {
+      dyeList.forEach(d1 => {
+        if (!coUsedDyes[d1]) coUsedDyes[d1] = new Set();
+        dyeList.forEach(d2 => { if (d2 !== d1) coUsedDyes[d1].add(d2); });
+      });
+    });
+
     const dyeIds = dyesByRecipeId[record.id] || [];
     const recipeSku = normalize(record.SKU_Base || '');
 
@@ -226,18 +235,34 @@ async function loadForRecipe(record) {
         if (!binGroups[bin]) binGroups[bin] = [];
         binGroups[bin].push(s);
       });
-      // Prefer a bin that already has this same dye and still has room.
+      // 1. Prefer a bin that already has this same dye and still has room.
       for (const [bin, entries] of Object.entries(binGroups)) {
-        const hasThisDye = entries.some(e => e.dyeRef === dyeId);
-        if (hasThisDye && entries.length < BIN_CAPACITY) return bin;
+        if (entries.some(e => e.dyeRef === dyeId) && entries.length < BIN_CAPACITY) {
+          return { bin, note: 'already has this dye' };
+        }
       }
-      // Otherwise, any bin with room — bins hold a mix of different dyes.
+      // 2. Prefer a bin holding dyes this one is used together with in the same recipe.
+      const coUsed = coUsedDyes[dyeId] || new Set();
+      if (coUsed.size) {
+        let bestBin = null, bestNeighbors = [];
+        for (const [bin, entries] of Object.entries(binGroups)) {
+          if (entries.length >= BIN_CAPACITY) continue;
+          const neighbors = [...new Set(entries.filter(e => coUsed.has(e.dyeRef)).map(e => e.dyeRef))];
+          if (neighbors.length > bestNeighbors.length) { bestNeighbors = neighbors; bestBin = bin; }
+        }
+        if (bestBin) {
+          const names = bestNeighbors.map(dyeShortName).filter(Boolean);
+          return { bin: bestBin, note: names.length ? `near ${names.join(', ')} — used together` : 'used together with a dye already there' };
+        }
+      }
+      // 3. Any bin with room — bins hold a mix of different dyes.
       for (const [bin, entries] of Object.entries(binGroups)) {
-        if (entries.length < BIN_CAPACITY) return bin;
+        if (entries.length < BIN_CAPACITY) return { bin, note: 'next open bin' };
       }
-      // Every existing bin is full — start a new one.
+      // 4. Every existing bin is full — start a new one.
       const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
-      return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+      const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+      return { bin: next, note: 'new bin' };
     }
 
     const cleanupInfo = dyeIds.map(dyeId => {
@@ -247,13 +272,15 @@ async function loadForRecipe(record) {
         const otherDyeIds = dyesByRecipeId[rid] || [];
         if (otherDyeIds.includes(dyeId)) others.push(recipeNameById[rid] || `Recipe #${rid}`);
       });
+      const binSuggestion = suggestBinFor(dyeId);
       return {
         dyeId,
         dyeName: dyeShortName(dyeId),
         dyeDetail: dyeDisplayLabel(dyeId),
         isOneOff: others.length === 0,
         others,
-        suggestedBin: suggestBinFor(dyeId),
+        suggestedBin: binSuggestion.bin,
+        suggestedBinNote: binSuggestion.note,
       };
     });
 
@@ -295,8 +322,8 @@ function render() {
 
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
     const flagHtml = c.isOneOff
-      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}.</span></div>`
-      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}.</span></div>`;
+      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`
+      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
     return `
       ${flagHtml}
       <div class="dye-action-row">

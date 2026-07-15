@@ -186,6 +186,7 @@ function toDateInputValue(dateVal) {
 
 let allDyes = [];    // {id, Dye_Name, Brand, Swatch_Hex, Cleanup_Order, Shelf_Life_days}
 let stockRows = [];  // {id, dyeId, Quantity_mL, Mixed_Date, Bin_Location}
+let coUsedDyes = {};  // dyeId -> Set of dyeIds used together with it in some recipe
 const BIN_CAPACITY = 18; // ~15-20 premade dye containers per bin
 
 function suggestBinForDye(dyeId) {
@@ -197,25 +198,39 @@ function suggestBinForDye(dyeId) {
     binGroups[bin].push(s);
   });
 
-  // Prefer a bin that already has this same dye and still has room.
+  // 1. Prefer a bin that already has this same dye and still has room.
   for (const [bin, entries] of Object.entries(binGroups)) {
-    const hasThisDye = entries.some(e => e.dyeId === dyeId);
-    if (hasThisDye && entries.length < BIN_CAPACITY) {
-      return bin;
+    if (entries.some(e => e.dyeId === dyeId) && entries.length < BIN_CAPACITY) {
+      return { bin, note: 'already has this dye' };
     }
   }
 
-  // Otherwise, any bin with room — bins hold a mix of different dyes,
-  // filled to capacity before a new one is started.
+  // 2. Prefer a bin holding dyes this one is used together with in the same recipe.
+  const coUsed = coUsedDyes[dyeId] || new Set();
+  if (coUsed.size) {
+    let bestBin = null, bestNeighbors = [];
+    for (const [bin, entries] of Object.entries(binGroups)) {
+      if (entries.length >= BIN_CAPACITY) continue;
+      const neighbors = [...new Set(entries.filter(e => coUsed.has(e.dyeId)).map(e => e.dyeId))];
+      if (neighbors.length > bestNeighbors.length) { bestNeighbors = neighbors; bestBin = bin; }
+    }
+    if (bestBin) {
+      const names = bestNeighbors.map(id => (dyeFor(id) || {}).Dye_Name).filter(Boolean);
+      return { bin: bestBin, note: names.length ? `near ${names.join(', ')} — used together` : 'used together with a dye already there' };
+    }
+  }
+
+  // 3. Any bin with room — bins hold a mix of different dyes.
   for (const [bin, entries] of Object.entries(binGroups)) {
     if (entries.length < BIN_CAPACITY) {
-      return bin;
+      return { bin, note: 'next open bin' };
     }
   }
 
-  // Every existing bin is full — start a new one.
+  // 4. Every existing bin is full — start a new one.
   const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
-  return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+  const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+  return { bin: next, note: 'new bin' };
 }
 
 let newStockDyeId = null;
@@ -260,6 +275,27 @@ async function loadAll() {
       Bin_Location: columnAsArray(stockTable, binCol)[i] || '',
     }));
 
+    // Which dyes get used together in the same recipe — used to group bins sensibly.
+    const rdcTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const rdcc = (cands) => findColumn(rdcTable, cands);
+    const rdcRecipeCol = rdcc(['Recipe']) || 'Recipe';
+    const rdcDyeCol = rdcc(['Dye_Name']) || 'Dye_Name';
+    const dyesByRecipe = {};
+    (rdcTable.id || []).forEach((id, i) => {
+      const recipeId = getRefId(columnAsArray(rdcTable, rdcRecipeCol)[i]);
+      const dyeId = getRefId(columnAsArray(rdcTable, rdcDyeCol)[i]);
+      if (!recipeId || !dyeId) return;
+      if (!dyesByRecipe[recipeId]) dyesByRecipe[recipeId] = [];
+      if (!dyesByRecipe[recipeId].includes(dyeId)) dyesByRecipe[recipeId].push(dyeId);
+    });
+    coUsedDyes = {};
+    Object.values(dyesByRecipe).forEach(dyeList => {
+      dyeList.forEach(d1 => {
+        if (!coUsedDyes[d1]) coUsedDyes[d1] = new Set();
+        dyeList.forEach(d2 => { if (d2 !== d1) coUsedDyes[d1].add(d2); });
+      });
+    });
+
     renderStockPanel();
     renderSeqPanel();
   } catch (e) {
@@ -298,7 +334,8 @@ function renderStockPanel() {
       </div>
       <div class="form-field">
         <label>Bin${newStockDyeId ? ' (suggested)' : ''}</label>
-        <input type="text" id="newStockBin" placeholder="e.g. 1" value="${newStockDyeId ? suggestBinForDye(newStockDyeId) : ''}">
+        <input type="text" id="newStockBin" placeholder="e.g. 1" value="${newStockDyeId ? suggestBinForDye(newStockDyeId).bin : ''}">
+        ${newStockDyeId ? `<div style="font-size:9px; color:#8B7D72; margin-top:2px;">${suggestBinForDye(newStockDyeId).note}</div>` : ''}
       </div>
       <button class="btn btn-teal" onclick="addStock()">+ Log Stock</button>
     </div>
@@ -363,9 +400,11 @@ function renderStockTable() {
     const shelf = d && d.Shelf_Life_days ? Number(d.Shelf_Life_days) : null;
     const isStale = shelf && age !== null && age > shelf;
     const needsBin = !s.Bin_Location;
+    const suggestion = needsBin ? suggestBinForDye(s.dyeId) : null;
     const binCell = needsBin
       ? `<input class="bin-input" type="text" value="" placeholder="none yet" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">
-         <button class="btn btn-small" onclick="useSuggestedBin(${s.id})" style="margin-top:3px;">Use bin ${suggestBinForDye(s.dyeId)}</button>`
+         <button class="btn btn-small" onclick="useSuggestedBin(${s.id})" style="margin-top:3px;">Use bin ${suggestion.bin}</button>
+         <div style="font-size:9px; color:#8B7D72; margin-top:2px;">${suggestion.note}</div>`
       : `<input class="bin-input" type="text" value="${s.Bin_Location}" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">`;
     return `
       <tr ${needsBin ? 'style="background: var(--gold-light);"' : ''}>
@@ -411,7 +450,7 @@ async function addStock() {
 async function useSuggestedBin(stockId) {
   const row = stockRows.find(s => s.id === stockId);
   if (!row) return;
-  const suggested = suggestBinForDye(row.dyeId);
+  const suggested = suggestBinForDye(row.dyeId).bin;
   await updateStockField(stockId, 'Bin_Location', suggested);
 }
 
