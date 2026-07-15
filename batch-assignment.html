@@ -6,94 +6,82 @@
 <title>Batch Assignment</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
-
-  :root {
-    --ink: #1A1614;
-    --paper: #F7F3EE;
-    --warm: #E8DFD4;
-    --rule: #D4C9BC;
-    --accent: #8B3A2A;
-    --teal: #3A8B7A;
-    --teal-light: #E5F2EF;
-    --done-text: #27500A;
-    --done-bg: #EAF3DE;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--paper);
-    color: var(--ink);
-    font-family: 'Inter', sans-serif;
-    font-size: 12px;
-    line-height: 1.4;
-    padding: 8px;
-  }
-
-  .header-title { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
-  .header-sub { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
-
-  .empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; }
-
-  .section-title {
-    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-    color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
-  }
-  .section-title:first-of-type { margin-top: 4px; }
-
-  .order-card {
-    background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; margin-bottom: 5px;
-  }
-  .order-top { display: flex; justify-content: space-between; align-items: center; }
-  .order-customer { font-weight: 600; font-size: 12px; }
-  .order-progress { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
-  .order-progress.complete { color: var(--done-text); font-weight: 700; }
-
-  .order-log-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
-  .order-log-row input {
-    flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
-  }
-  .log-btn {
-    font-size: 11px; padding: 4px 10px; border-radius: 4px;
-    border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
-  }
-  .log-btn:hover { background: var(--teal); color: white; }
-
-  .order-confirm {
-    font-size: 10px; color: var(--done-text); margin-top: 3px; display: flex; justify-content: space-between; align-items: center;
-  }
-  .undo-link { color: var(--accent); cursor: pointer; font-weight: 600; }
-  .undo-link:hover { text-decoration: underline; }
-
-  .cleanup-row { font-size: 11px; padding: 4px 6px; border-radius: 5px; margin-bottom: 3px; }
-  .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
-  .cleanup-keep { background: var(--teal-light); color: var(--teal); }
-
-  .dye-action-row { margin-bottom: 8px; }
-  .dye-action-row select {
-    width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
-    background: white; color: var(--ink); color-scheme: light;
-  }
-  .dye-action-row select option {
-    background: white; color: var(--ink);
-  }
-  .action-fields { display: flex; gap: 5px; margin-top: 4px; }
-  .action-fields input {
-    flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
-  }
-  .action-confirm-btn {
-    font-size: 11px; padding: 4px 10px; border-radius: 4px; white-space: nowrap;
-    border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
-  }
-  .action-confirm-btn:hover { background: var(--teal); color: white; }
-
-  .toast {
-    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
-    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
-  }
-  .toast.show { opacity: 1; }
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --done-text: #27500A;
+  --done-bg: #EAF3DE;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px;
+}
+.header-title { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
+.header-sub { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
+.empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; }
+.section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
+}
+.section-title:first-of-type { margin-top: 4px; }
+.order-card {
+  background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; margin-bottom: 5px;
+}
+.order-top { display: flex; justify-content: space-between; align-items: center; }
+.order-customer { font-weight: 600; font-size: 12px; }
+.order-progress { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
+.order-progress.complete { color: var(--done-text); font-weight: 700; }
+.order-log-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
+.order-log-row input {
+  flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
+}
+.log-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 4px;
+  border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
+}
+.log-btn:hover { background: var(--teal); color: white; }
+.order-confirm {
+  font-size: 10px; color: var(--done-text); margin-top: 3px; display: flex; justify-content: space-between; align-items: center;
+}
+.undo-link { color: var(--accent); cursor: pointer; font-weight: 600; }
+.undo-link:hover { text-decoration: underline; }
+.cleanup-row { font-size: 11px; padding: 4px 6px; border-radius: 5px; margin-bottom: 3px; }
+.cleanup-oneoff { background: #F5E0E4; color: #A01830; }
+.cleanup-keep { background: var(--teal-light); color: var(--teal); }
+.dye-action-row { margin-bottom: 8px; }
+.dye-action-row select {
+  width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
+  background: white; color: var(--ink); color-scheme: light;
+}
+.dye-action-row select option {
+  background: white; color: var(--ink);
+}
+.action-fields { display: flex; gap: 5px; margin-top: 4px; }
+.action-fields input {
+  flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
+}
+.action-confirm-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 4px; white-space: nowrap;
+  border: 1px solid var(--teal); background: var(--teal-light); color: var(--teal); cursor: pointer; font-weight: 600;
+}
+.action-confirm-btn:hover { background: var(--teal); color: white; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -101,7 +89,6 @@
 <div id="content">
   <div class="empty-state">Select a colorway in Morning Batch Planning to see details here.</div>
 </div>
-
 <div class="toast" id="toast"></div>
 
 <script>
@@ -123,7 +110,6 @@ async function loadForRecipe(record) {
     currentEntry = null;
     return;
   }
-
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
@@ -135,12 +121,28 @@ async function loadForRecipe(record) {
       grist.docApi.fetchTable('Dyes'),
     ]);
 
+    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve it through
+    // this table to get the actual name/brand/serial/type, rather than displaying
+    // the raw row id.
     const dIds = dyesTable.id || [];
-    const dyeIdByName = {};
+    const dyeInfoById = {};
     dIds.forEach((id, i) => {
-      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
-      if (name) dyeIdByName[name] = id;
+      dyeInfoById[id] = {
+        name: columnAsArray(dyesTable, 'Dye_Name')[i] || '',
+        brand: columnAsArray(dyesTable, 'Brand')[i] || '',
+        serial: columnAsArray(dyesTable, 'Serial')[i] || '',
+        dyeType: columnAsArray(dyesTable, 'Dye_Type')[i] || '',
+      };
     });
+    function dyeShortName(dyeId) {
+      const d = dyeInfoById[dyeId];
+      return d && d.name ? d.name : `Dye #${dyeId}`;
+    }
+    function dyeDisplayLabel(dyeId) {
+      const d = dyeInfoById[dyeId];
+      if (!d) return `Dye #${dyeId}`;
+      return [d.name, d.brand, d.serial, d.dyeType].filter(Boolean).join(' · ');
+    }
 
     const woIds = woTable.id || [];
     const woInfo = {};
@@ -162,18 +164,20 @@ async function loadForRecipe(record) {
     const recipeIdBySku = {};
     Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
 
+    // recipeId -> [dyeId, dyeId, ...] — dyeId is the real Dyes row id, resolved via getRefId
     const cIds = compTable.id || [];
     const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
-      if (!recipeRef || !dyeName) return;
+      const dyeRef = getRefId(columnAsArray(compTable, 'Dye_Name')[i]);
+      if (!recipeRef || !dyeRef) return;
       if (!dyesByRecipeId[recipeRef]) dyesByRecipeId[recipeRef] = [];
-      dyesByRecipeId[recipeRef].push(dyeName);
+      if (!dyesByRecipeId[recipeRef].includes(dyeRef)) dyesByRecipeId[recipeRef].push(dyeRef);
     });
-    const dyeNames = dyesByRecipeId[record.id] || [];
 
+    const dyeIds = dyesByRecipeId[record.id] || [];
     const recipeSku = normalize(record.SKU_Base || '');
+
     const wolIds = wolTable.id || [];
     const orders = [];
     const pendingRecipeIds = new Set();
@@ -185,7 +189,6 @@ async function loadForRecipe(record) {
 
       const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
       const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
-
       const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
       const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
       const lineRecipeId = directRecipeId || recipeIdBySku[sku] || null;
@@ -204,18 +207,23 @@ async function loadForRecipe(record) {
       });
     }
 
-    const cleanupInfo = dyeNames.map(dyeName => {
-      const key = normalize(dyeName);
+    const cleanupInfo = dyeIds.map(dyeId => {
       const others = [];
       pendingRecipeIds.forEach(rid => {
         if (rid === record.id) return;
-        const otherDyes = (dyesByRecipeId[rid] || []).map(normalize);
-        if (otherDyes.includes(key)) others.push(recipeNameById[rid] || `Recipe #${rid}`);
+        const otherDyeIds = dyesByRecipeId[rid] || [];
+        if (otherDyeIds.includes(dyeId)) others.push(recipeNameById[rid] || `Recipe #${rid}`);
       });
-      return { dyeName, dyeId: dyeIdByName[key] || null, isOneOff: others.length === 0, others };
+      return {
+        dyeId,
+        dyeName: dyeShortName(dyeId),
+        dyeDetail: dyeDisplayLabel(dyeId),
+        isOneOff: others.length === 0,
+        others,
+      };
     });
 
-    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeNames.length, orders, cleanupInfo };
+    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeIds.length, orders, cleanupInfo };
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -228,7 +236,6 @@ function render() {
     document.getElementById('content').innerHTML = `<div class="empty-state">Select a colorway in Morning Batch Planning to see details here.</div>`;
     return;
   }
-
   const e = currentEntry;
 
   const ordersHtml = e.orders.length
@@ -254,9 +261,8 @@ function render() {
 
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
     const flagHtml = c.isOneOff
-      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeName}</strong> — one-off, nothing else pending needs it.</div>`
-      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeName}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
-
+      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it.</div>`
+      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}</div>`;
     return `
       ${flagHtml}
       <div class="dye-action-row">
@@ -279,10 +285,8 @@ function render() {
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
     <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}</div>
-
     <div class="section-title">Log progress per customer</div>
     ${ordersHtml}
-
     ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}${draftActionHtml}` : ''}
   `;
 }
@@ -313,7 +317,6 @@ async function logProgress(lineId) {
 async function undoLast(lineId) {
   const amount = lastLoggedDelta[lineId];
   if (!amount) return;
-
   const order = currentEntry.orders.find(o => o.lineId === lineId);
   const revertedQtyDyed = Math.max(0, order.qtyDyed - amount);
 
@@ -365,7 +368,6 @@ async function onDyeActionChange(idx) {
         const dateStr = s.mixedDate ? new Date(Number(s.mixedDate) * 1000).toLocaleDateString() : 'unknown date';
         return `<option value="${s.id}">${s.qty}mL in ${s.bin} (mixed ${dateStr})</option>`;
       }).join('');
-
       wrap.innerHTML = `
         <div style="font-size:10px; color:#8B7D72; margin-top:3px;">This dye already has stock on record — is this the same batch, or freshly mixed?</div>
         <select id="which-${idx}" style="width:100%; margin-top:3px;">
