@@ -223,7 +223,6 @@
           <option>General</option>
           <option>Customer Reserved</option>
           <option>Retail Custom</option>
-          <option>College/University</option>
         </select>
       </div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
@@ -316,6 +315,18 @@
         <input class="field-input" id="photoPF" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
         <input class="field-input" id="notePF" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
+      <div class="photo-slot">
+        <div class="photo-slot-label">Inspiration</div>
+        <div class="photo-thumb" id="thumbInsp"><span>No photo</span></div>
+        <input class="field-input" id="photoInsp" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <input class="field-input" id="noteInsp" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
+      </div>
+    </div>
+    <div class="field-wrap wide" style="margin-top:10px;">
+      <span class="field-label">Inspiration Hex Codes (customer-provided, or your own reference)</span>
+      <input class="field-input" id="inspirationHex" placeholder="Comma-separated, e.g. #E8D020, #C8294A"
+        oninput="markUnsaved(); renderInspirationSwatches();" style="width:100%;">
+      <div id="inspirationSwatches" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;"></div>
     </div>
     <div class="photo-hint">Tip: photos are usually easier to attach through the Photo Inbox widget, which files and renames them automatically. These fields are here for direct edits or corrections.</div>
     </div>
@@ -808,9 +819,13 @@ async function loadRecipe(record) {
   document.getElementById('photoP1').value = record.Photo_Process_1 || '';
   document.getElementById('photoP2').value = record.Photo_Process_2 || '';
   document.getElementById('photoPF').value = record.Photo_Finished || '';
+  document.getElementById('photoInsp').value = record.Photo_Inspiration || '';
   document.getElementById('noteP1').value = record.Photo_Process_1_Note || '';
   document.getElementById('noteP2').value = record.Photo_Process_2_Note || '';
   document.getElementById('notePF').value = record.Photo_Finished_Note || '';
+  document.getElementById('noteInsp').value = record.Photo_Inspiration_Note || '';
+  document.getElementById('inspirationHex').value = record.Inspiration_Hex_Codes || '';
+  renderInspirationSwatches();
   document.getElementById('draftNotes').value = record.Draft_Notes || '';
   updatePhotoThumbs();
 
@@ -999,7 +1014,7 @@ function renderLayoutPreview() {
 }
 
 function updatePhotoThumbs() {
-  [['photoP1', 'thumbP1'], ['photoP2', 'thumbP2'], ['photoPF', 'thumbPF']].forEach(([inputId, thumbId]) => {
+  [['photoP1', 'thumbP1'], ['photoP2', 'thumbP2'], ['photoPF', 'thumbPF'], ['photoInsp', 'thumbInsp']].forEach(([inputId, thumbId]) => {
     const url = document.getElementById(inputId).value.trim();
     const thumb = document.getElementById(thumbId);
     if (url) {
@@ -1010,6 +1025,28 @@ function updatePhotoThumbs() {
       thumb.innerHTML = `<span>No photo</span>`;
     }
   });
+}
+
+function parseHexList(raw) {
+  return (raw || '')
+    .split(/[,\n]/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => s.startsWith('#') ? s : '#' + s)
+    .filter(s => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s));
+}
+
+function renderInspirationSwatches() {
+  const raw = document.getElementById('inspirationHex').value;
+  const hexes = parseHexList(raw);
+  const wrap = document.getElementById('inspirationSwatches');
+  if (!hexes.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = hexes.map(hex => `
+    <div style="display:flex; flex-direction:column; align-items:center; gap:3px;">
+      <div style="width:32px; height:32px; border-radius:6px; border:1px solid rgba(0,0,0,.15); background:${hex};"></div>
+      <div style="font-family:'DM Mono',monospace; font-size:9px; color:#6B5E52;">${hex}</div>
+    </div>
+  `).join('');
 }
 
 function syncLinkedCustomerFromVendor() {
@@ -1095,9 +1132,12 @@ async function saveRecipe() {
       Photo_Process_1: document.getElementById('photoP1').value,
       Photo_Process_2: document.getElementById('photoP2').value,
       Photo_Finished: document.getElementById('photoPF').value,
+      Photo_Inspiration: document.getElementById('photoInsp').value,
       Photo_Process_1_Note: document.getElementById('noteP1').value,
       Photo_Process_2_Note: document.getElementById('noteP2').value,
       Photo_Finished_Note: document.getElementById('notePF').value,
+      Photo_Inspiration_Note: document.getElementById('noteInsp').value,
+      Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
 
     await grist.docApi.applyUserActions([
