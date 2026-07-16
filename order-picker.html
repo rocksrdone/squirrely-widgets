@@ -59,9 +59,26 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .pinned-divider { border: none; border-top: 1px dashed var(--rule); margin: 10px 0; }
 
 .order-list.dense .order-card { padding: 7px 12px; }
-.order-list.dense .card-notes,
+.order-list.dense .card-notes-row { display: none; }
 .order-list.dense .card-shopify { display: none; }
 .order-list.dense .card-meta-row { margin-top: 2px; }
+
+.card-notes-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.card-notes { font-size: 11px; color: #8B7D72; font-style: italic; flex: 1; }
+.no-note { font-size: 11px; color: #B8ABA0; font-style: italic; flex: 1; }
+.note-edit-link { font-size: 10px; color: var(--teal); cursor: pointer; text-decoration: underline; white-space: nowrap; }
+.note-edit { margin-top: 6px; }
+.note-textarea {
+  width: 100%; min-height: 44px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 11px; font-family: 'Inter', sans-serif; resize: vertical; outline: none;
+}
+.note-textarea:focus { border-color: var(--accent); }
+.note-edit-actions { display: flex; gap: 6px; margin-top: 5px; }
+.note-save-btn, .note-cancel-btn {
+  font-size: 10px; padding: 4px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--rule);
+}
+.note-save-btn { background: var(--teal); border-color: var(--teal); color: white; font-weight: 600; }
+.note-cancel-btn { background: white; color: #6B5E52; }
 .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card-ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
 .card-customer { font-size: 14px; font-weight: 600; }
@@ -135,6 +152,7 @@ let statusFilter = 'ALL';
 let channelFilter = 'ALL';
 let selectedId = null;
 let denseMode = false;
+let editingNoteId = null;
 
 function toggleDense() {
   denseMode = !denseMode;
@@ -253,6 +271,33 @@ function orderSkuText(orderId) {
   return d ? d.skus.join(' ') : '';
 }
 
+function startEditNote(id) {
+  editingNoteId = id;
+  renderList();
+  setTimeout(() => {
+    const el = document.getElementById(`noteInput-${id}`);
+    if (el) el.focus();
+  }, 0);
+}
+function cancelEditNote() {
+  editingNoteId = null;
+  renderList();
+}
+async function saveNote(id) {
+  const el = document.getElementById(`noteInput-${id}`);
+  const value = el ? el.value : '';
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, { Notes: value }]]);
+    const o = allOrders.find(o => o.id === id);
+    if (o) o.notes = value;
+    editingNoteId = null;
+    renderList();
+  } catch (e) {
+    console.error('Failed to save note:', e);
+    alert('Could not save note — check the console.');
+  }
+}
+
 function channelClass(channel) {
   const c = (channel || '').toLowerCase();
   if (c === 'wholesale') return 'channel-wholesale';
@@ -352,7 +397,18 @@ function renderList() {
           ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${dueLabel}</span>` : ''}
         </div>
         ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${shopifyUrl}" target="_blank" onclick="event.stopPropagation()">Shopify #${o.shopifyId} ↗</a>` : `Shopify #${o.shopifyId}`}</div>` : ''}
-        ${o.notes ? `<div class="card-notes">${o.notes}</div>` : ''}
+        ${editingNoteId === o.id
+          ? `<div class="note-edit" onclick="event.stopPropagation()">
+               <textarea class="note-textarea" id="noteInput-${o.id}">${(o.notes || '').replace(/</g, '&lt;')}</textarea>
+               <div class="note-edit-actions">
+                 <button class="note-save-btn" onclick="saveNote(${o.id})">Save</button>
+                 <button class="note-cancel-btn" onclick="cancelEditNote()">Cancel</button>
+               </div>
+             </div>`
+          : `<div class="card-notes-row" onclick="event.stopPropagation()">
+               ${o.notes ? `<span class="card-notes">${o.notes}</span>` : `<span class="no-note">No note</span>`}
+               <span class="note-edit-link" onclick="startEditNote(${o.id})">${o.notes ? 'edit' : '+ add note'}</span>
+             </div>`}
       </div>
     `;
   };
