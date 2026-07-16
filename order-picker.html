@@ -260,9 +260,10 @@ function channelClass(channel) {
   if (c === 'custom') return 'channel-custom';
   return '';
 }
-function shopifyAdminUrl(shopifyId) {
+function shopifyAdminUrl(shopifyId, orderType) {
   if (!shopifyId) return null;
-  return `https://squirrelvender.myshopify.com/admin/orders/${shopifyId}`;
+  const path = orderType === 'Draft' ? 'draft_orders' : 'orders';
+  return `https://squirrelvender.myshopify.com/admin/${path}/${shopifyId}`;
 }
 
 function renderSummaryStrip() {
@@ -330,7 +331,7 @@ function renderList() {
     const prodStatus = productionStatus(o.id);
     const isRush = orderHasRush(o.id);
     const borderClass = overdue ? 'overdue' : channelClass(o.channel);
-    const shopifyUrl = shopifyAdminUrl(o.shopifyId);
+    const shopifyUrl = shopifyAdminUrl(o.shopifyId, o.orderType);
 
     return `
       <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass}" onclick="selectOrder(${o.id})">
