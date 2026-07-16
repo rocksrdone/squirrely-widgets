@@ -119,6 +119,7 @@ function getRefId(ref) {
 let allWorkOrders = [];   // {id, orderNumber, customerName, orderDate, dueDate, status, paymentStatus, channel, orderType}
 let allLines = [];        // {id, workOrderId, recipeId, qtyNeeded, qtyDyed, qtyWound, qtyPacked, queueStatus, priority, sku}
 let recipes = {};         // id -> {Recipe_Name, SKU_Base}
+let recipeIdBySku = {};   // normalized SKU -> recipe id, fallback when Work_Order_Lines.Recipe is unset
 let currentView = 'one';
 
 function lineStage(line) {
@@ -174,11 +175,15 @@ async function loadCoreData() {
   const rNameCol = rc(['Recipe_Name']) || 'Recipe_Name';
   const rSkuCol = rc(['SKU_Base']);
   recipes = {};
+  recipeIdBySku = {};
   (recipesTable.id || []).forEach((id, i) => {
+    const sku = rSkuCol ? columnAsArray(recipesTable, rSkuCol)[i] : '';
     recipes[id] = {
       Recipe_Name: columnAsArray(recipesTable, rNameCol)[i] || '',
-      SKU_Base: rSkuCol ? columnAsArray(recipesTable, rSkuCol)[i] : '',
+      SKU_Base: sku || '',
     };
+    const skuKey = normalize(sku || '');
+    if (skuKey) recipeIdBySku[skuKey] = id;
   });
 
   const wolTable = await grist.docApi.fetchTable('Work_Order_Lines');
@@ -192,10 +197,14 @@ async function loadCoreData() {
   const wStatusCol = wc(['Queue_Status']);
   const wPriorityCol = wc(['Production_Priority']);
   const wSkuCol = wc(['SKU']);
-  allLines = (wolTable.id || []).map((id, i) => ({
+  allLines = (wolTable.id || []).map((id, i) => {
+    const directRecipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
+    const sku = wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '';
+    const recipeId = directRecipeId || recipeIdBySku[normalize(sku || '')] || null;
+    return {
     id,
     workOrderId: getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]),
-    recipeId: getRefId(columnAsArray(wolTable, wRecipeCol)[i]),
+    recipeId,
     qtyNeeded: wNeededCol ? columnAsArray(wolTable, wNeededCol)[i] : 0,
     qtyDyed: wDyedCol ? columnAsArray(wolTable, wDyedCol)[i] : 0,
     qtyWound: wWoundCol ? columnAsArray(wolTable, wWoundCol)[i] : 0,
@@ -203,7 +212,8 @@ async function loadCoreData() {
     queueStatus: wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '',
     priority: wPriorityCol ? columnAsArray(wolTable, wPriorityCol)[i] : '',
     sku: wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '',
-  }));
+  };
+  });
 }
 
 function setView(view) {
@@ -301,7 +311,7 @@ function renderOrderDetail(workOrderId) {
     const r = recipes[line.recipeId] || {};
     return `
       <tr>
-        <td>${r.Recipe_Name || '(no recipe linked)'} ${r.SKU_Base ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
+        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe or SKU on this line)')} ${r.SKU_Base && r.Recipe_Name ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
         <td class="qty-cell ${Number(line.qtyDyed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyDyed ? 'zero' : '')}">${line.qtyDyed || 0}/${line.qtyNeeded || 0}</td>
         <td class="qty-cell ${Number(line.qtyWound) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyWound ? 'zero' : '')}">${line.qtyWound || 0}/${line.qtyNeeded || 0}</td>
         <td class="qty-cell ${Number(line.qtyPacked) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyPacked ? 'zero' : '')}">${line.qtyPacked || 0}/${line.qtyNeeded || 0}</td>
