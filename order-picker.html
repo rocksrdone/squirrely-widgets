@@ -24,6 +24,19 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .filter-chip.active { background: var(--ink); border-color: var(--ink); color: white; }
 .result-count { font-size: 11px; color: #8B7D72; margin-bottom: 10px; }
 
+.summary-strip { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.summary-item {
+  font-size: 11px; padding: 6px 12px; border-radius: 6px; font-weight: 600;
+  background: white; border: 1px solid var(--rule); color: #6B5E52;
+}
+.summary-item.warn { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.summary-item.soon { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
+
+.badge.rush { background: var(--accent); color: white; }
+.badge.prod-ready { background: var(--done-bg); color: var(--done-text); }
+.badge.prod-progress { background: var(--gold-light); color: var(--gold); }
+.badge.prod-notstarted { background: var(--rule); color: #6B5E52; }
+
 .order-list { display: flex; flex-direction: column; gap: 8px; }
 .order-card {
   background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 12px 14px;
@@ -31,6 +44,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 }
 .order-card:hover { border-color: var(--accent); }
 .order-card.selected { border-color: var(--accent); background: var(--accent-light); }
+.order-card.overdue { border-left: 4px solid var(--accent); }
 .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card-ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
 .card-customer { font-size: 14px; font-weight: 600; }
@@ -55,6 +69,8 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <body>
 
 <div class="top-bar"><div class="title">Orders</div></div>
+
+<div class="summary-strip" id="summaryStrip"></div>
 
 <div class="controls">
   <input class="search-input" id="searchBox" placeholder="Search customer, order #, Shopify ID..." oninput="renderList()">
@@ -96,13 +112,17 @@ function fmtDate(dateVal) {
 }
 
 let allOrders = [];
+let orderLineData = {}; // workOrderId -> {needed, dyed, wound, packed, hasRush, skus: []}
 let statusFilter = 'ALL';
 let channelFilter = 'ALL';
 let selectedId = null;
 
 async function loadOrders() {
   try {
-    const table = await grist.docApi.fetchTable('Work_Orders');
+    const [table, linesTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+    ]);
     const c = (cands) => findColumn(table, cands);
     const custCol = c(['Customer_Name']) || 'Customer_Name';
     const orderDateCol = c(['Order_Date']);
@@ -129,12 +149,44 @@ async function loadOrders() {
       notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
     }));
 
+    // Per-order production summary from Work_Order_Lines
+    const lc = (cands) => findColumn(linesTable, cands);
+    const lWoCol = lc(['Work_Order']) || 'Work_Order';
+    const lNeededCol = lc(['Qty_Needed']);
+    const lDyedCol = lc(['Qty_Dyed']);
+    const lWoundCol = lc(['Qty_Wound']);
+    const lPackedCol = lc(['Qty_Packed']);
+    const lPriorityCol = lc(['Production_Priority']);
+    const lSkuCol = lc(['SKU']);
+
+    orderLineData = {};
+    (linesTable.id || []).forEach((id, i) => {
+      const woId = getRefId(columnAsArray(linesTable, lWoCol)[i]);
+      if (!woId) return;
+      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, wound: 0, packed: 0, hasRush: false, skus: [] };
+      const d = orderLineData[woId];
+      const needed = lNeededCol ? Number(columnAsArray(linesTable, lNeededCol)[i]) || 0 : 0;
+      d.needed += needed;
+      d.dyed += Math.min(lDyedCol ? Number(columnAsArray(linesTable, lDyedCol)[i]) || 0 : 0, needed || Infinity);
+      d.wound += Math.min(lWoundCol ? Number(columnAsArray(linesTable, lWoundCol)[i]) || 0 : 0, needed || Infinity);
+      d.packed += Math.min(lPackedCol ? Number(columnAsArray(linesTable, lPackedCol)[i]) || 0 : 0, needed || Infinity);
+      if (lPriorityCol && columnAsArray(linesTable, lPriorityCol)[i] === 'Rush') d.hasRush = true;
+      if (lSkuCol) { const sku = columnAsArray(linesTable, lSkuCol)[i]; if (sku) d.skus.push(sku); }
+    });
+
     renderFilters();
     renderList();
   } catch (e) {
     console.error('Failed to load orders:', e);
     document.getElementById('orderList').innerHTML = `<div class="empty-state">Failed to load Work_Orders — check widget access.</div>`;
   }
+}
+
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
 }
 
 function renderFilters() {
@@ -160,7 +212,40 @@ function paymentBadgeClass(status) {
   return 'pay-other';
 }
 
+function productionStatus(orderId) {
+  const d = orderLineData[orderId];
+  if (!d || !d.needed) return null;
+  if (d.packed >= d.needed) return { cls: 'prod-ready', label: 'Ready to ship' };
+  if (d.dyed === 0) return { cls: 'prod-notstarted', label: 'Not started' };
+  return { cls: 'prod-progress', label: 'In progress' };
+}
+function orderHasRush(orderId) {
+  const d = orderLineData[orderId];
+  return !!(d && d.hasRush);
+}
+function orderSkuText(orderId) {
+  const d = orderLineData[orderId];
+  return d ? d.skus.join(' ') : '';
+}
+
+function renderSummaryStrip() {
+  const now = allOrders.filter(o => (o.status || '').toLowerCase() !== 'closed');
+  const overdue = now.filter(o => { const d = daysFromToday(o.dueDate); return d !== null && d < 0; });
+  const dueThisWeek = now.filter(o => { const d = daysFromToday(o.dueDate); return d !== null && d >= 0 && d <= 7; });
+  const rush = now.filter(o => orderHasRush(o.id));
+
+  const strip = document.getElementById('summaryStrip');
+  const parts = [];
+  parts.push(`<span class="summary-item">${now.length} active order${now.length === 1 ? '' : 's'}</span>`);
+  if (overdue.length) parts.push(`<span class="summary-item warn">${overdue.length} overdue</span>`);
+  if (dueThisWeek.length) parts.push(`<span class="summary-item soon">${dueThisWeek.length} due this week</span>`);
+  if (rush.length) parts.push(`<span class="summary-item warn">${rush.length} rush</span>`);
+  strip.innerHTML = parts.join('');
+}
+
 function renderList() {
+  renderSummaryStrip();
+
   const q = normalize(document.getElementById('searchBox').value);
   const sortMode = document.getElementById('sortSelect').value;
 
@@ -168,7 +253,7 @@ function renderList() {
     if (statusFilter !== 'ALL' && o.status !== statusFilter) return false;
     if (channelFilter !== 'ALL' && o.channel !== channelFilter) return false;
     if (q) {
-      const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId);
+      const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId + ' ' + orderSkuText(o.id));
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -197,15 +282,20 @@ function renderList() {
   box.innerHTML = list.map(o => {
     const dueDays = daysFromToday(o.dueDate);
     const dueSoon = dueDays !== null && dueDays <= 7;
+    const overdue = dueDays !== null && dueDays < 0;
     const dueLabel = dueDays === null ? '' : dueDays < 0 ? `${Math.abs(dueDays)}d overdue` : dueDays === 0 ? 'due today' : `due in ${dueDays}d`;
+    const prodStatus = productionStatus(o.id);
+    const isRush = orderHasRush(o.id);
 
     return `
-      <div class="order-card ${o.id === selectedId ? 'selected' : ''}" onclick="selectOrder(${o.id})">
+      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${overdue ? 'overdue' : ''}" onclick="selectOrder(${o.id})">
         <div class="card-top">
           <span class="card-ordernum">${o.orderNumber || '—'}</span>
           <span class="card-customer">${o.customerName || '(no customer)'}</span>
           <div class="card-badges">
+            ${isRush ? '<span class="badge rush">★ Rush</span>' : ''}
             ${o.orderType === 'Draft' ? '<span class="badge draft">Draft</span>' : ''}
+            ${prodStatus ? `<span class="badge ${prodStatus.cls}">${prodStatus.label}</span>` : ''}
             ${o.status ? `<span class="badge status ${o.status.toLowerCase() === 'closed' ? 'closed' : ''}">${o.status}</span>` : ''}
             ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${o.paymentStatus}</span>` : ''}
             ${o.channel ? `<span class="badge channel">${o.channel}</span>` : ''}
