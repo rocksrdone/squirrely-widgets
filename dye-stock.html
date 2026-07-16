@@ -187,7 +187,13 @@ function toDateInputValue(dateVal) {
 let allDyes = [];    // {id, Dye_Name, Brand, Swatch_Hex, Cleanup_Order, Shelf_Life_days}
 let stockRows = [];  // {id, dyeId, Quantity_mL, Mixed_Date, Bin_Location}
 let coUsedDyes = {};  // dyeId -> Set of dyeIds used together with it in some recipe
-const BIN_CAPACITY = 18; // ~15-20 premade dye containers per bin
+const BIN_CAPACITY = 12; // premade dye containers per bin
+const GENERIC_FILL_CAP = 6; // don't let unrelated fills use more than half a bin — leaves room for a related dye to join later
+
+function isTrueOneOff(dyeId) {
+  const coUsed = coUsedDyes[dyeId];
+  return !coUsed || coUsed.size === 0;
+}
 
 function suggestBinForDye(dyeId) {
   const binGroups = {};
@@ -205,6 +211,23 @@ function suggestBinForDye(dyeId) {
     }
   }
 
+  if (isTrueOneOff(dyeId)) {
+    // Route one-offs to whichever existing bin already holds only other
+    // one-offs — packed to full capacity, since there's no benefit to
+    // leaving it roomy. Keeps them out of the bins you actually search often.
+    let catchAllBin = null;
+    for (const [bin, entries] of Object.entries(binGroups)) {
+      const allOneOff = entries.every(e => isTrueOneOff(e.dyeId));
+      if (allOneOff && entries.length < BIN_CAPACITY) {
+        if (catchAllBin === null || Number(bin) > Number(catchAllBin)) catchAllBin = bin;
+      }
+    }
+    if (catchAllBin) return { bin: catchAllBin, note: 'one-off — catch-all bin, out of the way' };
+    const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
+    const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+    return { bin: next, note: 'one-off — starting a new catch-all bin' };
+  }
+
   // 2. Prefer a bin holding dyes this one is used together with in the same recipe.
   const coUsed = coUsedDyes[dyeId] || new Set();
   if (coUsed.size) {
@@ -220,14 +243,15 @@ function suggestBinForDye(dyeId) {
     }
   }
 
-  // 3. Any bin with room — bins hold a mix of different dyes.
+  // 3. Generic fallback: any bin under the soft fill cap, leaving headroom
+  // for a genuinely related dye to join this bin later.
   for (const [bin, entries] of Object.entries(binGroups)) {
-    if (entries.length < BIN_CAPACITY) {
-      return { bin, note: 'next open bin' };
+    if (entries.length < GENERIC_FILL_CAP) {
+      return { bin, note: 'next open bin — leaving room for related dyes later' };
     }
   }
 
-  // 4. Every existing bin is full — start a new one.
+  // 4. Nothing eligible — start a new bin.
   const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
   const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
   return { bin: next, note: 'new bin' };

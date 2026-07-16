@@ -219,7 +219,8 @@ async function loadForRecipe(record) {
 
     // Bin suggestion — prefer a bin that already holds only this dye and has room,
     // computed upfront so it can show right in the row, not just after a click.
-    const BIN_CAPACITY = 18;
+    const BIN_CAPACITY = 12;
+    const GENERIC_FILL_CAP = 6;
     const stockEntries = [];
     (stockTableUpfront.id || []).forEach((id, i) => {
       stockEntries.push({
@@ -227,6 +228,11 @@ async function loadForRecipe(record) {
         bin: columnAsArray(stockTableUpfront, 'Bin_Location')[i] || '',
       });
     });
+    function isTrueOneOff(dyeId) {
+      const coUsed = coUsedDyes[dyeId];
+      return !coUsed || coUsed.size === 0;
+    }
+
     function suggestBinFor(dyeId) {
       const binGroups = {};
       stockEntries.forEach(s => {
@@ -241,6 +247,23 @@ async function loadForRecipe(record) {
           return { bin, note: 'already has this dye' };
         }
       }
+
+      if (isTrueOneOff(dyeId)) {
+        // Route to whichever existing bin already holds only other one-offs —
+        // packed full, kept separate from the bins you actually search often.
+        let catchAllBin = null;
+        for (const [bin, entries] of Object.entries(binGroups)) {
+          const allOneOff = entries.every(e => isTrueOneOff(e.dyeRef));
+          if (allOneOff && entries.length < BIN_CAPACITY) {
+            if (catchAllBin === null || Number(bin) > Number(catchAllBin)) catchAllBin = bin;
+          }
+        }
+        if (catchAllBin) return { bin: catchAllBin, note: 'one-off — catch-all bin, out of the way' };
+        const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
+        const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
+        return { bin: next, note: 'one-off — starting a new catch-all bin' };
+      }
+
       // 2. Prefer a bin holding dyes this one is used together with in the same recipe.
       const coUsed = coUsedDyes[dyeId] || new Set();
       if (coUsed.size) {
@@ -255,11 +278,13 @@ async function loadForRecipe(record) {
           return { bin: bestBin, note: names.length ? `near ${names.join(', ')} — used together` : 'used together with a dye already there' };
         }
       }
-      // 3. Any bin with room — bins hold a mix of different dyes.
+
+      // 3. Generic fallback: only fill a bin up to the soft cap, leaving
+      // headroom for a genuinely related dye to join it later.
       for (const [bin, entries] of Object.entries(binGroups)) {
-        if (entries.length < BIN_CAPACITY) return { bin, note: 'next open bin' };
+        if (entries.length < GENERIC_FILL_CAP) return { bin, note: 'next open bin — leaving room for related dyes later' };
       }
-      // 4. Every existing bin is full — start a new one.
+      // 4. Nothing eligible — start a new bin.
       const usedNumbers = Object.keys(binGroups).map(b => Number(b)).filter(n => !isNaN(n));
       const next = String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1);
       return { bin: next, note: 'new bin' };
