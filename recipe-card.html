@@ -993,9 +993,9 @@ grist.ready({
   requiredAccess: 'full'
 });
 
-async function refreshPreviewPhotos() {
-  if (!currentRecipe) return;
-  const recipeRowId = currentRecipe.id;
+async function refreshPreviewPhotos(recipeRowId) {
+  const targetId = recipeRowId !== undefined ? recipeRowId : (currentRecipe ? currentRecipe.id : null);
+  if (!targetId) return { candidates: [], matchUrl: null, matchId: null };
 
   try {
     const photoTable = await grist.docApi.fetchTable('Product_Photos');
@@ -1016,7 +1016,7 @@ async function refreshPreviewPhotos() {
         : Array.isArray(ref) ? ref[1]
         : (ref && typeof ref === 'object' && 'rowId' in ref) ? ref.rowId
         : null;
-      if (refId !== recipeRowId) continue;
+      if (refId !== targetId) continue;
 
       candidates.push({
         id: ids[i],
@@ -1033,45 +1033,49 @@ async function refreshPreviewPhotos() {
     }
 
     candidates.sort((a, b) => (Number(b.lotDate) || 0) - (Number(a.lotDate) || 0));
-    currentProductPhotos = candidates;
-    currentPreviewUrl = matchUrl;
-    currentPreviewId = matchId;
+    return { candidates, matchUrl, matchId };
   } catch (e) {
     console.error('Failed to fetch preview photo:', e);
-    currentProductPhotos = [];
-    currentPreviewUrl = null;
-    currentPreviewId = null;
+    return { candidates: [], matchUrl: null, matchId: null };
   }
 }
 
 async function refreshPreviewAndRerender() {
-  await refreshPreviewPhotos();
+  if (!currentRecipe) return;
+  const result = await refreshPreviewPhotos(currentRecipe.id);
+  currentProductPhotos = result.candidates;
+  currentPreviewUrl = result.matchUrl;
+  currentPreviewId = result.matchId;
   renderLeft();
 }
 
+let loadGeneration = 0;
+
 grist.onRecord(async (record) => {
+  const myGeneration = ++loadGeneration;
+
   if (!record || !record.Recipe_Name) {
+    if (myGeneration !== loadGeneration) return;
     document.getElementById('emptyState').style.display = 'flex';
     document.getElementById('cardView').style.display = 'none';
     return;
   }
 
-  currentRecipe = record;
-  currentPhotoIndex = 0;
-  previewPickerOpen = false;
   const recipeRowId = record.id;
-  console.log('Selected recipe row ID:', recipeRowId, 'Name:', record.Recipe_Name);
 
+  // Everything below is built into LOCAL variables first — nothing touches
+  // the shared global state until we've confirmed at the very end that no
+  // newer record selection has come in while these fetches were in flight.
+  // Without this, clicking through recipes quickly could let a slow, stale
+  // fetch for a previously-selected recipe finish last and overwrite the
+  // display for whatever recipe is actually selected now.
+
+  let localComponents = [];
   try {
     const tableData = await grist.docApi.fetchTable('Recipe_Dye_Components');
     const ids = tableData.id || [];
-    const recipeRefs = tableData.Recipe || [];
 
-    console.log('Total components:', ids.length);
-    console.log('First few Recipe refs:', recipeRefs.slice(0, 5));
-    console.log('Looking for ID:', recipeRowId);
-
-    currentComponents = ids.map((id, i) => {
+    localComponents = ids.map((id, i) => {
       const get = (col) => Array.isArray(tableData[col]) ? tableData[col][i] : undefined;
       return {
         id,
@@ -1092,20 +1096,18 @@ grist.onRecord(async (record) => {
       };
     }).filter(c => {
       const ref = c.Recipe;
-      // Handle all possible formats Grist might return
       if (typeof ref === 'number') return ref === recipeRowId;
       if (Array.isArray(ref)) return ref[1] === recipeRowId;
       if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId === recipeRowId;
       return false;
     });
-
-    console.log('Matched components:', currentComponents.length);
-
-  } catch(e) {
+  } catch (e) {
     console.error('Failed to fetch components:', e);
-    currentComponents = [];
+    localComponents = [];
   }
 
+  let localBaseSegments = [];
+  let localOverlayMarks = [];
   try {
     const layoutTable = await grist.docApi.fetchTable('Recipe_Layout_Segments');
     const lIds = layoutTable.id || [];
@@ -1134,17 +1136,17 @@ grist.onRecord(async (record) => {
       else base.push(row);
     }
     base.sort((a, b) => a.startPct - b.startPct);
-    currentBaseSegments = base;
-    currentOverlayMarks = overlays;
+    localBaseSegments = base;
+    localOverlayMarks = overlays;
   } catch (e) {
     console.error('Failed to fetch layout segments:', e);
-    currentBaseSegments = [];
-    currentOverlayMarks = [];
+    localBaseSegments = [];
+    localOverlayMarks = [];
   }
 
+  let localSpoolStats = { needed: 0, made: 0, perOrder: [] };
   try {
-    const recipeSku = (currentRecipe.SKU_Base || currentRecipe.Shopify_SKU || '').toString().trim().toUpperCase();
-    currentSpoolStats = { needed: 0, made: 0, perOrder: [] };
+    const recipeSku = (record.SKU_Base || record.Shopify_SKU || '').toString().trim().toUpperCase();
 
     if (recipeSku) {
       const [woTable, wolTable] = await Promise.all([
@@ -1190,15 +1192,14 @@ grist.onRecord(async (record) => {
           perOrder.push({ customerName: woCustomerByIdx[woId] || '—', qty: remaining });
         }
       }
-      currentSpoolStats = { needed, made, perOrder };
+      localSpoolStats = { needed, made, perOrder };
     }
   } catch (e) {
     console.error('Failed to compute spool stats:', e);
-    currentSpoolStats = { needed: 0, made: 0, perOrder: [] };
+    localSpoolStats = { needed: 0, made: 0, perOrder: [] };
   }
 
-  currentShopifyUrl = record.Shopify_URL || '';
-
+  let localHistoryEntries = [];
   try {
     const historyTable = await grist.docApi.fetchTable('Recipe_Change_Log');
     const hIds = historyTable.id || [];
@@ -1218,19 +1219,42 @@ grist.onRecord(async (record) => {
       });
     }
     entries.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
-    currentHistoryEntries = entries;
+    localHistoryEntries = entries;
   } catch (e) {
     console.error('Failed to load history log:', e);
-    currentHistoryEntries = [];
+    localHistoryEntries = [];
   }
 
-  await refreshPreviewPhotos();
+  const previewResult = await refreshPreviewPhotos(recipeRowId);
+
+  // A newer record selection came in while we were still loading this one —
+  // discard everything we just fetched instead of letting it clobber the
+  // display for whatever recipe is actually selected now.
+  if (myGeneration !== loadGeneration) return;
+
+  currentRecipe = record;
+  currentPhotoIndex = 0;
+  previewPickerOpen = false;
+  currentComponents = localComponents;
+  currentBaseSegments = localBaseSegments;
+  currentOverlayMarks = localOverlayMarks;
+  currentSpoolStats = localSpoolStats;
+  currentShopifyUrl = record.Shopify_URL || '';
+  currentHistoryEntries = localHistoryEntries;
+  currentProductPhotos = previewResult.candidates;
+  currentPreviewUrl = previewResult.matchUrl;
+  currentPreviewId = previewResult.matchId;
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('cardView').style.display = 'grid';
 
-  renderLeft();
-  renderRight();
+  try {
+    renderLeft();
+    renderRight();
+  } catch (e) {
+    console.error('Rendering failed for recipe', recipeRowId, e);
+    document.getElementById('leftPanel').innerHTML = `<div class="no-data">Something went wrong displaying this recipe — check the browser console for details.</div>`;
+  }
 });
 </script>
 </body>
