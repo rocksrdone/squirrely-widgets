@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recipe Picker</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.search-input { flex: 1; min-width: 160px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.sort-select { padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
+.filter-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.filter-chip { font-size: 11px; padding: 5px 10px; border-radius: 12px; border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; }
+.filter-chip.active { background: var(--ink); border-color: var(--ink); color: white; }
+.result-count { font-size: 11px; color: #8B7D72; margin-bottom: 10px; }
+
+.recipe-list { display: flex; flex-direction: column; gap: 8px; }
+.recipe-card {
+  background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 10px 12px;
+  cursor: pointer; transition: border-color .12s; display: flex; gap: 12px; align-items: center;
+}
+.recipe-card:hover { border-color: var(--accent); }
+.recipe-card.selected { border-color: var(--accent); background: var(--accent-light); }
+
+.rc-thumb {
+  width: 52px; height: 52px; border-radius: 6px; flex-shrink: 0; overflow: hidden;
+  background: var(--warm); border: 1px solid var(--rule); display: flex; align-items: center; justify-content: center;
+}
+.rc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .2s; }
+.rc-thumb img.loaded { opacity: 1; }
+.rc-swatch-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+
+.rc-body { flex: 1; min-width: 0; }
+.rc-top-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rc-name { font-weight: 700; font-size: 14px; }
+.rc-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+.rc-badges { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
+.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.badge.fiber { background: var(--teal-light); color: var(--teal); }
+.badge.scope-general { background: var(--done-bg); color: var(--done-text); }
+.badge.scope-reserved { background: var(--gold-light); color: var(--gold); }
+.badge.scope-custom { background: var(--accent-light); color: var(--accent); }
+.badge.status { background: var(--warm); color: #6B5E52; }
+.rc-meta-row { font-size: 11px; color: #8B7D72; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.rc-notes { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.load-more-wrap { text-align: center; margin-top: 14px; }
+.btn { font-size: 12px; padding: 8px 16px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+.btn:hover { border-color: var(--accent); }
+
+.empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="top-bar"><div class="title">Recipes</div></div>
+
+<div class="controls">
+  <input class="search-input" id="searchBox" placeholder="Search name, SKU, colorway, customer..." oninput="onFilterChange()">
+  <select class="sort-select" id="sortSelect" onchange="onFilterChange()">
+    <option value="name">Sort: Name A–Z</option>
+    <option value="created">Sort: Created (newest)</option>
+    <option value="cleanup">Sort: Cleanup order</option>
+  </select>
+</div>
+
+<div class="filter-row" id="scopeFilters"></div>
+<div class="filter-row" id="fiberFilters"></div>
+<div class="filter-row" id="statusFilters"></div>
+
+<div class="result-count" id="resultCount"></div>
+<div id="recipeList" class="recipe-list"></div>
+<div class="load-more-wrap" id="loadMoreWrap" style="display:none;">
+  <button class="btn" onclick="loadMore()">Load more</button>
+</div>
+
+<script>
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name || typeof name !== 'string') return '#888780';
+  const l = name.toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) { if (l.includes(k)) return v; }
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function fmtDate(dateVal) {
+  if (!dateVal) return '';
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function scopeClass(scope) {
+  const s = (scope || '').toLowerCase();
+  if (s === 'general') return 'scope-general';
+  if (s.includes('reserved')) return 'scope-reserved';
+  if (s.includes('custom')) return 'scope-custom';
+  return '';
+}
+
+let allRecipes = [];
+let scopeFilter = 'ALL';
+let fiberFilter = 'ALL';
+let statusFilter = 'ALL';
+let selectedId = null;
+let visibleCount = 30;
+let filteredCache = [];
+
+async function loadRecipes() {
+  try {
+    const [table, customersTable] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Customers'),
+    ]);
+    const c = (cands) => findColumn(table, cands);
+    const nameCol = c(['Recipe_Name']) || 'Recipe_Name';
+    const fiberCol = c(['Fiber_Type']);
+    const scopeCol = c(['Recipe_Scope']);
+    const skuCol = c(['SKU_Base']);
+    const statusCol = c(['Status']);
+    const colorwayCol = c(['Colorway']);
+    const notesCol = c(['Notes']);
+    const createdCol = c(['Created_Date']);
+    const photoCol = c(['Photo_Finished']);
+    const cleanupCol = c(['Cleanup_Order']);
+    const custRefCol = c(['Linked_Customer']);
+
+    const custIds = customersTable.id || [];
+    const custNameCol = findColumn(customersTable, ['Customer_Name']) || 'Customer_Name';
+    const custNameById = {};
+    custIds.forEach((id, i) => { custNameById[id] = columnAsArray(customersTable, custNameCol)[i] || ''; });
+
+    allRecipes = (table.id || []).map((id, i) => {
+      const custRef = custRefCol ? columnAsArray(table, custRefCol)[i] : null;
+      const custId = getRefId(custRef);
+      return {
+        id,
+        name: columnAsArray(table, nameCol)[i] || '',
+        fiberType: fiberCol ? (columnAsArray(table, fiberCol)[i] || '') : '',
+        scope: scopeCol ? (columnAsArray(table, scopeCol)[i] || '') : '',
+        sku: skuCol ? (columnAsArray(table, skuCol)[i] || '') : '',
+        status: statusCol ? (columnAsArray(table, statusCol)[i] || '') : '',
+        colorway: colorwayCol ? (columnAsArray(table, colorwayCol)[i] || '') : '',
+        notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
+        createdDate: createdCol ? columnAsArray(table, createdCol)[i] : null,
+        photoUrl: photoCol ? (columnAsArray(table, photoCol)[i] || '') : '',
+        cleanupOrder: cleanupCol ? columnAsArray(table, cleanupCol)[i] : '',
+        customerName: custId ? (custNameById[custId] || '') : '',
+      };
+    }).filter(r => r.name);
+
+    renderFilters();
+    onFilterChange();
+  } catch (e) {
+    console.error('Failed to load recipes:', e);
+    document.getElementById('recipeList').innerHTML = `<div class="empty-state">Failed to load Recipes — check widget access.</div>`;
+  }
+}
+
+function renderFilters() {
+  const scopes = [...new Set(allRecipes.map(r => r.scope).filter(Boolean))];
+  document.getElementById('scopeFilters').innerHTML = ['ALL', ...scopes].map(s => `
+    <button class="filter-chip ${scopeFilter === s ? 'active' : ''}" onclick="setFilter('scope','${s}')">${s === 'ALL' ? 'All Scopes' : s}</button>
+  `).join('');
+
+  const fibers = [...new Set(allRecipes.map(r => r.fiberType).filter(Boolean))];
+  document.getElementById('fiberFilters').innerHTML = ['ALL', ...fibers].map(f => `
+    <button class="filter-chip ${fiberFilter === f ? 'active' : ''}" onclick="setFilter('fiber','${f}')">${f === 'ALL' ? 'All Fibers' : f}</button>
+  `).join('');
+
+  const statuses = [...new Set(allRecipes.map(r => r.status).filter(Boolean))];
+  document.getElementById('statusFilters').innerHTML = ['ALL', ...statuses].map(s => `
+    <button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setFilter('status','${s}')">${s === 'ALL' ? 'All Statuses' : s}</button>
+  `).join('');
+}
+
+function setFilter(kind, value) {
+  if (kind === 'scope') scopeFilter = value;
+  if (kind === 'fiber') fiberFilter = value;
+  if (kind === 'status') statusFilter = value;
+  renderFilters();
+  onFilterChange();
+}
+
+function onFilterChange() {
+  visibleCount = 30;
+  const q = normalize(document.getElementById('searchBox').value);
+  const sortMode = document.getElementById('sortSelect').value;
+
+  let list = allRecipes.filter(r => {
+    if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
+    if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
+    if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
+    if (q) {
+      const hay = normalize(r.name + ' ' + r.sku + ' ' + r.colorway + ' ' + r.customerName);
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  list.sort((a, b) => {
+    if (sortMode === 'created') return (Number(b.createdDate) || 0) - (Number(a.createdDate) || 0);
+    if (sortMode === 'cleanup') {
+      const ao = a.cleanupOrder === '' ? 999 : Number(a.cleanupOrder);
+      const bo = b.cleanupOrder === '' ? 999 : Number(b.cleanupOrder);
+      return ao - bo;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
+  filteredCache = list;
+  renderList();
+}
+
+function renderList() {
+  document.getElementById('resultCount').textContent = `${filteredCache.length} recipe${filteredCache.length === 1 ? '' : 's'}`;
+
+  const box = document.getElementById('recipeList');
+  if (!filteredCache.length) {
+    box.innerHTML = `<div class="empty-state">No recipes match.</div>`;
+    document.getElementById('loadMoreWrap').style.display = 'none';
+    return;
+  }
+
+  const visible = filteredCache.slice(0, visibleCount);
+  box.innerHTML = visible.map(cardHtml).join('');
+
+  const remaining = filteredCache.length - visible.length;
+  const loadMoreWrap = document.getElementById('loadMoreWrap');
+  if (remaining > 0) {
+    loadMoreWrap.style.display = 'block';
+    document.getElementById('loadMoreWrap').querySelector('button').textContent = `Load ${Math.min(30, remaining)} more (${remaining} left)`;
+  } else {
+    loadMoreWrap.style.display = 'none';
+  }
+
+  loadThumbnailsInBatches();
+}
+
+function loadMore() {
+  visibleCount += 30;
+  renderList();
+}
+
+function cardHtml(r) {
+  const key = r.id;
+  const scopeCls = scopeClass(r.scope);
+  return `
+    <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" onclick="selectRecipe(${r.id})">
+      <div class="rc-thumb" id="thumb-${key}">
+        ${r.photoUrl
+          ? `<img class="lazy-thumb" data-src="${r.photoUrl}" alt="${r.name}" onerror="this.style.display='none'">`
+          : `<span class="rc-swatch-dot" style="background:${guessColor(r.name)}"></span>`}
+      </div>
+      <div class="rc-body">
+        <div class="rc-top-row">
+          <span class="rc-name">${r.name}</span>
+          <span class="rc-sku">${r.sku}</span>
+          <div class="rc-badges">
+            ${r.fiberType ? `<span class="badge fiber">${r.fiberType}</span>` : ''}
+            ${r.scope ? `<span class="badge ${scopeCls}">${r.scope}</span>` : ''}
+            ${r.status ? `<span class="badge status">${r.status}</span>` : ''}
+          </div>
+        </div>
+        <div class="rc-meta-row">
+          ${r.colorway && r.colorway !== r.name ? `<span>Colorway: ${r.colorway}</span>` : ''}
+          ${r.customerName ? `<span>For: ${r.customerName}</span>` : ''}
+          ${r.createdDate ? `<span>Created ${fmtDate(r.createdDate)}</span>` : ''}
+        </div>
+        ${r.notes ? `<div class="rc-notes">${r.notes}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// Load thumbnails a couple at a time rather than all at once — firing many
+// simultaneous requests at the photo-serving webhook can trip n8n's crash
+// detection and auto-disable the workflow (seen before with Photo Inbox).
+async function loadThumbnailsInBatches() {
+  const images = Array.from(document.querySelectorAll('img.lazy-thumb:not(.loaded)'));
+  const BATCH_SIZE = 2;
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    const batch = images.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(loadOneThumb));
+  }
+}
+function loadOneThumb(img) {
+  return new Promise(resolve => {
+    const src = img.getAttribute('data-src');
+    if (!src) { resolve(); return; }
+    img.onload = () => { img.classList.add('loaded'); resolve(); };
+    img.onerror = () => { img.style.display = 'none'; resolve(); };
+    img.src = src;
+  });
+}
+
+async function selectRecipe(id) {
+  selectedId = id;
+  renderList();
+  try {
+    await grist.setCursorPos({ rowId: id });
+  } catch (e) {
+    console.error('Could not set cursor position:', e);
+  }
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadRecipes();
+</script>
+</body>
+</html>
