@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Overview</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab-btn { font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+.tab-btn.active { background: var(--ink); border-color: var(--ink); color: white; }
+.btn { font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+.btn:hover { border-color: var(--accent); }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+
+.lookup-row { display: flex; gap: 8px; }
+.lookup-row input { flex: 1; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; font-family: 'DM Mono', monospace; }
+.status-msg { font-size: 11px; color: #8B7D72; margin-top: 8px; }
+.status-msg.error { color: var(--accent); }
+
+.order-browser-box { margin-top: 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--warm); padding: 10px; max-height: 320px; overflow-y: auto; }
+.order-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 5px; cursor: pointer; font-size: 12px; background: white; margin-bottom: 4px; border: 1px solid var(--rule); }
+.order-row:hover { border-color: var(--accent); }
+.order-row .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
+.order-row .ord-meta { font-size: 10px; color: #8B7D72; text-align: right; }
+
+.order-header { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px; margin: 14px 0; }
+.order-header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.order-title { font-family: 'Libre Baskerville', serif; font-size: 18px; }
+.order-sub { font-size: 11px; color: #8B7D72; margin-top: 2px; }
+.overall-badge { font-size: 11px; padding: 5px 12px; border-radius: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.overall-badge.ready { background: var(--done-bg); color: var(--done-text); }
+.overall-badge.progress { background: var(--gold-light); color: var(--gold); }
+.overall-badge.notstarted { background: var(--rule); color: #6B5E52; }
+
+.stage-summary { display: flex; gap: 16px; margin-top: 14px; }
+.stage-box { flex: 1; background: var(--paper); border-radius: 6px; padding: 10px 12px; text-align: center; }
+.stage-box .stage-label { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; }
+.stage-box .stage-count { font-family: 'DM Mono', monospace; font-size: 16px; font-weight: 700; margin-top: 3px; }
+.stage-box .stage-bar { height: 4px; border-radius: 2px; background: var(--rule); margin-top: 6px; overflow: hidden; }
+.stage-box .stage-bar-fill { height: 100%; background: var(--teal); }
+
+table.lines-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+table.lines-table thead th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: white; background: var(--ink); padding: 8px 10px; }
+table.lines-table tbody tr:nth-child(even) { background: var(--paper); }
+table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
+.qty-cell { font-family: 'DM Mono', monospace; text-align: center; }
+.qty-cell.complete { color: var(--done-text); font-weight: 700; }
+.qty-cell.zero { color: #8B7D72; }
+.line-stage-badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.line-stage-badge.packed { background: var(--done-bg); color: var(--done-text); }
+.line-stage-badge.wound { background: var(--teal-light); color: var(--teal); }
+.line-stage-badge.dyed { background: var(--gold-light); color: var(--gold); }
+.line-stage-badge.notstarted { background: var(--rule); color: #6B5E52; }
+
+.all-orders-table { width: 100%; border-collapse: collapse; }
+.all-orders-table thead th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: white; background: var(--ink); padding: 8px 10px; }
+.all-orders-table tbody tr { cursor: pointer; }
+.all-orders-table tbody tr:nth-child(even) { background: var(--paper); }
+.all-orders-table tbody tr:hover { background: var(--accent-light); }
+.all-orders-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; }
+.progress-mini { width: 100px; height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; }
+.progress-mini-fill { height: 100%; background: var(--teal); }
+
+.empty-state { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Order Overview</div>
+</div>
+<div class="tabs">
+  <button class="tab-btn active" id="tabOne" onclick="setView('one')">Look Up One Order</button>
+  <button class="tab-btn" id="tabAll" onclick="setView('all')">All Open Orders</button>
+</div>
+
+<div id="oneOrderPanel">
+  <div class="lookup-row">
+    <input id="orderNumberInput" placeholder="Order number (e.g. 1071 or #1071)">
+    <button class="btn" onclick="lookupOrder()" id="lookupBtn">Look Up</button>
+    <button class="btn" onclick="browseOrders()" id="browseBtn">Browse Recent Orders</button>
+  </div>
+  <div class="status-msg" id="statusMsg"></div>
+  <div id="orderBrowser"></div>
+  <div id="orderDetail"></div>
+</div>
+
+<div id="allOrdersPanel" style="display:none;"></div>
+
+<script>
+function normalize(s) { return (s || '').toString().toLowerCase().trim().replace(/[^a-z0-9]/g, ''); }
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+
+let allWorkOrders = [];   // {id, orderNumber, customerName, orderDate, dueDate, status, paymentStatus, channel, orderType}
+let allLines = [];        // {id, workOrderId, recipeId, qtyNeeded, qtyDyed, qtyWound, qtyPacked, queueStatus, priority, sku}
+let recipes = {};         // id -> {Recipe_Name, SKU_Base}
+let currentView = 'one';
+
+function lineStage(line) {
+  const needed = Number(line.qtyNeeded) || 0;
+  if (needed > 0 && Number(line.qtyPacked) >= needed) return 'packed';
+  if (Number(line.qtyPacked) > 0) return 'packed-partial';
+  if (needed > 0 && Number(line.qtyWound) >= needed) return 'wound';
+  if (Number(line.qtyWound) > 0) return 'wound-partial';
+  if (needed > 0 && Number(line.qtyDyed) >= needed) return 'dyed';
+  if (Number(line.qtyDyed) > 0) return 'dyed-partial';
+  return 'notstarted';
+}
+function stageBadgeHtml(line) {
+  const stage = lineStage(line);
+  const map = {
+    'packed': ['packed', 'Packed ✓'],
+    'packed-partial': ['wound', 'Packing...'],
+    'wound': ['wound', 'Wound ✓'],
+    'wound-partial': ['dyed', 'Winding...'],
+    'dyed': ['dyed', 'Dyed ✓'],
+    'dyed-partial': ['dyed', 'Dyeing...'],
+    'notstarted': ['notstarted', 'Not started'],
+  };
+  const [cls, label] = map[stage];
+  return `<span class="line-stage-badge ${cls}">${label}</span>`;
+}
+
+async function loadCoreData() {
+  const woTable = await grist.docApi.fetchTable('Work_Orders');
+  const woc = (c) => findColumn(woTable, c);
+  const woNumCol = woc(['Order_Number']) || 'Order_Number';
+  const woCustCol = woc(['Customer_Name']) || 'Customer_Name';
+  const woDateCol = woc(['Order_Date']);
+  const woDueCol = woc(['Due_Date']);
+  const woStatusCol = woc(['Status']);
+  const woPayCol = woc(['Payment_Status']);
+  const woChannelCol = woc(['Channel']);
+  const woTypeCol = woc(['Order_Type']);
+  allWorkOrders = (woTable.id || []).map((id, i) => ({
+    id,
+    orderNumber: columnAsArray(woTable, woNumCol)[i] || '',
+    customerName: columnAsArray(woTable, woCustCol)[i] || '',
+    orderDate: woDateCol ? columnAsArray(woTable, woDateCol)[i] : null,
+    dueDate: woDueCol ? columnAsArray(woTable, woDueCol)[i] : null,
+    status: woStatusCol ? columnAsArray(woTable, woStatusCol)[i] : '',
+    paymentStatus: woPayCol ? columnAsArray(woTable, woPayCol)[i] : '',
+    channel: woChannelCol ? columnAsArray(woTable, woChannelCol)[i] : '',
+    orderType: woTypeCol ? columnAsArray(woTable, woTypeCol)[i] : '',
+  }));
+
+  const recipesTable = await grist.docApi.fetchTable('Recipes');
+  const rc = (c) => findColumn(recipesTable, c);
+  const rNameCol = rc(['Recipe_Name']) || 'Recipe_Name';
+  const rSkuCol = rc(['SKU_Base']);
+  recipes = {};
+  (recipesTable.id || []).forEach((id, i) => {
+    recipes[id] = {
+      Recipe_Name: columnAsArray(recipesTable, rNameCol)[i] || '',
+      SKU_Base: rSkuCol ? columnAsArray(recipesTable, rSkuCol)[i] : '',
+    };
+  });
+
+  const wolTable = await grist.docApi.fetchTable('Work_Order_Lines');
+  const wc = (c) => findColumn(wolTable, c);
+  const wWorkOrderCol = wc(['Work_Order']) || 'Work_Order';
+  const wRecipeCol = wc(['Recipe']) || 'Recipe';
+  const wNeededCol = wc(['Qty_Needed']);
+  const wDyedCol = wc(['Qty_Dyed']);
+  const wWoundCol = wc(['Qty_Wound']);
+  const wPackedCol = wc(['Qty_Packed']);
+  const wStatusCol = wc(['Queue_Status']);
+  const wPriorityCol = wc(['Production_Priority']);
+  const wSkuCol = wc(['SKU']);
+  allLines = (wolTable.id || []).map((id, i) => ({
+    id,
+    workOrderId: getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]),
+    recipeId: getRefId(columnAsArray(wolTable, wRecipeCol)[i]),
+    qtyNeeded: wNeededCol ? columnAsArray(wolTable, wNeededCol)[i] : 0,
+    qtyDyed: wDyedCol ? columnAsArray(wolTable, wDyedCol)[i] : 0,
+    qtyWound: wWoundCol ? columnAsArray(wolTable, wWoundCol)[i] : 0,
+    qtyPacked: wPackedCol ? columnAsArray(wolTable, wPackedCol)[i] : 0,
+    queueStatus: wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '',
+    priority: wPriorityCol ? columnAsArray(wolTable, wPriorityCol)[i] : '',
+    sku: wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '',
+  }));
+}
+
+function setView(view) {
+  currentView = view;
+  document.getElementById('oneOrderPanel').style.display = view === 'one' ? 'block' : 'none';
+  document.getElementById('allOrdersPanel').style.display = view === 'all' ? 'block' : 'none';
+  document.getElementById('tabOne').classList.toggle('active', view === 'one');
+  document.getElementById('tabAll').classList.toggle('active', view === 'all');
+  if (view === 'all') renderAllOrders();
+}
+
+function lookupOrder() {
+  const raw = document.getElementById('orderNumberInput').value.trim();
+  const statusEl = document.getElementById('statusMsg');
+  if (!raw) { statusEl.textContent = 'Enter an order number.'; statusEl.className = 'status-msg error'; return; }
+  const digits = raw.replace(/[^0-9]/g, '');
+  const match = allWorkOrders.find(o => {
+    const name = (o.orderNumber || '').toString();
+    if (name === raw) return true;
+    if (name === '#' + raw) return true;
+    if (digits && name.replace(/[^0-9]/g, '') === digits) return true;
+    return false;
+  });
+  if (!match) {
+    statusEl.textContent = `No order found matching "${raw}".`;
+    statusEl.className = 'status-msg error';
+    document.getElementById('orderDetail').innerHTML = '';
+    return;
+  }
+  statusEl.textContent = '';
+  document.getElementById('orderBrowser').innerHTML = '';
+  renderOrderDetail(match.id);
+}
+
+function browseOrders() {
+  const box = document.getElementById('orderBrowser');
+  const rows = [...allWorkOrders].sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0)).slice(0, 150);
+  box.innerHTML = `
+    <div class="order-browser-box">
+      <input class="lookup-row" style="width:100%; margin-bottom:8px; padding:7px 9px; border:1px solid var(--rule); border-radius:5px; font-size:12px;"
+        placeholder="Filter by customer or order number..." oninput="filterBrowser(this.value)">
+      <div id="orderBrowserRows">${rows.map(orderRowHtml).join('')}</div>
+    </div>
+  `;
+}
+function orderRowHtml(o) {
+  const total = orderProgress(o.id);
+  return `
+    <div class="order-row" onclick="selectBrowsed(${o.id})">
+      <div><span class="ord-num">${o.orderNumber}</span><span> — ${o.customerName}</span></div>
+      <div class="ord-meta">${total.packed}/${total.needed} packed · ${(o.orderDate || '').toString().slice(0, 10)}</div>
+    </div>
+  `;
+}
+function filterBrowser(query) {
+  const q = normalize(query);
+  const rows = !q ? allWorkOrders : allWorkOrders.filter(o => normalize(o.customerName).includes(q) || normalize(o.orderNumber).includes(q));
+  document.getElementById('orderBrowserRows').innerHTML = rows.slice(0, 150).map(orderRowHtml).join('');
+}
+function selectBrowsed(workOrderId) {
+  document.getElementById('orderBrowser').innerHTML = '';
+  document.getElementById('statusMsg').textContent = '';
+  renderOrderDetail(workOrderId);
+}
+
+function orderProgress(workOrderId) {
+  const lines = allLines.filter(l => l.workOrderId === workOrderId);
+  const needed = lines.reduce((s, l) => s + (Number(l.qtyNeeded) || 0), 0);
+  const dyed = lines.reduce((s, l) => s + Math.min(Number(l.qtyDyed) || 0, Number(l.qtyNeeded) || Infinity), 0);
+  const wound = lines.reduce((s, l) => s + Math.min(Number(l.qtyWound) || 0, Number(l.qtyNeeded) || Infinity), 0);
+  const packed = lines.reduce((s, l) => s + Math.min(Number(l.qtyPacked) || 0, Number(l.qtyNeeded) || Infinity), 0);
+  return { needed, dyed, wound, packed, lineCount: lines.length };
+}
+
+function renderOrderDetail(workOrderId) {
+  const wo = allWorkOrders.find(o => o.id === workOrderId);
+  const lines = allLines.filter(l => l.workOrderId === workOrderId);
+  if (!wo) { document.getElementById('orderDetail').innerHTML = ''; return; }
+
+  const p = orderProgress(workOrderId);
+  const overallBadge = p.needed === 0 ? ['notstarted', 'No quantities set']
+    : p.packed >= p.needed ? ['ready', 'Ready to ship']
+    : p.dyed === 0 ? ['notstarted', 'Not started']
+    : ['progress', 'In progress'];
+
+  const stageBox = (label, count) => `
+    <div class="stage-box">
+      <div class="stage-label">${label}</div>
+      <div class="stage-count">${count}/${p.needed}</div>
+      <div class="stage-bar"><div class="stage-bar-fill" style="width:${p.needed ? Math.round(count / p.needed * 100) : 0}%"></div></div>
+    </div>
+  `;
+
+  const linesHtml = lines.length ? lines.map(line => {
+    const r = recipes[line.recipeId] || {};
+    return `
+      <tr>
+        <td>${r.Recipe_Name || '(no recipe linked)'} ${r.SKU_Base ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
+        <td class="qty-cell ${Number(line.qtyDyed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyDyed ? 'zero' : '')}">${line.qtyDyed || 0}/${line.qtyNeeded || 0}</td>
+        <td class="qty-cell ${Number(line.qtyWound) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyWound ? 'zero' : '')}">${line.qtyWound || 0}/${line.qtyNeeded || 0}</td>
+        <td class="qty-cell ${Number(line.qtyPacked) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyPacked ? 'zero' : '')}">${line.qtyPacked || 0}/${line.qtyNeeded || 0}</td>
+        <td>${stageBadgeHtml(line)}</td>
+        <td style="font-size:11px; color:#8B7D72;">${line.queueStatus || ''}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="6" style="text-align:center; color:#8B7D72; font-style:italic;">No line items on this order.</td></tr>`;
+
+  document.getElementById('orderDetail').innerHTML = `
+    <div class="order-header">
+      <div class="order-header-top">
+        <div>
+          <div class="order-title">${wo.orderNumber} — ${wo.customerName}</div>
+          <div class="order-sub">${wo.channel || ''}${wo.orderType ? ' · ' + wo.orderType : ''}${wo.dueDate ? ' · due ' + wo.dueDate.toString().slice(0, 10) : ''} · ${wo.paymentStatus || ''}</div>
+        </div>
+        <span class="overall-badge ${overallBadge[0]}">${overallBadge[1]}</span>
+      </div>
+      <div class="stage-summary">
+        ${stageBox('Dyed', p.dyed)}
+        ${stageBox('Wound', p.wound)}
+        ${stageBox('Packed', p.packed)}
+      </div>
+    </div>
+    <table class="lines-table">
+      <thead><tr><th>Recipe / SKU</th><th>Dyed</th><th>Wound</th><th>Packed</th><th>Stage</th><th>Queue</th></tr></thead>
+      <tbody>${linesHtml}</tbody>
+    </table>
+  `;
+}
+
+function renderAllOrders() {
+  const box = document.getElementById('allOrdersPanel');
+  const active = allWorkOrders.filter(o => o.status === 'Active' || !o.status);
+  if (!active.length) {
+    box.innerHTML = `<div class="empty-state">No active orders found.</div>`;
+    return;
+  }
+  const rows = active.map(o => {
+    const p = orderProgress(o.id);
+    const pct = p.needed ? Math.round(p.packed / p.needed * 100) : 0;
+    const label = p.needed === 0 ? '—' : p.packed >= p.needed ? 'Ready to ship' : p.dyed === 0 ? 'Not started' : 'In progress';
+    return `
+      <tr onclick="jumpToOrder(${o.id})">
+        <td><strong>${o.orderNumber}</strong></td>
+        <td>${o.customerName}</td>
+        <td>${(o.dueDate || '').toString().slice(0, 10)}</td>
+        <td>${p.lineCount}</td>
+        <td><div class="progress-mini"><div class="progress-mini-fill" style="width:${pct}%"></div></div> ${pct}%</td>
+        <td>${label}</td>
+      </tr>
+    `;
+  }).join('');
+  box.innerHTML = `
+    <table class="all-orders-table">
+      <thead><tr><th>Order</th><th>Customer</th><th>Due</th><th>Lines</th><th>Packed %</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+function jumpToOrder(workOrderId) {
+  setView('one');
+  document.getElementById('tabOne').classList.add('active');
+  document.getElementById('tabAll').classList.remove('active');
+  document.getElementById('oneOrderPanel').style.display = 'block';
+  document.getElementById('allOrdersPanel').style.display = 'none';
+  const wo = allWorkOrders.find(o => o.id === workOrderId);
+  if (wo) document.getElementById('orderNumberInput').value = wo.orderNumber;
+  renderOrderDetail(workOrderId);
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadCoreData().then(() => {
+  document.getElementById('statusMsg').textContent = `${allWorkOrders.length} orders, ${allLines.length} line items loaded.`;
+});
+</script>
+</body>
+</html>
