@@ -473,7 +473,7 @@ const DYE_COLORS = {
 };
 
 function guessColor(name) {
-  if (!name) return '#888780';
+  if (!name || typeof name !== 'string') return '#888780';
   const l = name.toLowerCase();
   for (const [k,v] of Object.entries(DYE_COLORS)) {
     if (l.includes(k)) return v;
@@ -1072,15 +1072,35 @@ grist.onRecord(async (record) => {
 
   let localComponents = [];
   try {
-    const tableData = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const [tableData, dyesTable] = await Promise.all([
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
+    ]);
     const ids = tableData.id || [];
+
+    const getRefIdLocal = (ref) => {
+      if (typeof ref === 'number') return ref || null;
+      if (Array.isArray(ref)) return ref[1];
+      if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+      return null;
+    };
+
+    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link, not text — resolve
+    // it through the Dyes table to get the actual name instead of a raw ref.
+    const dyeIds = dyesTable.id || [];
+    const dyeNameCol = Array.isArray(dyesTable.Dye_Name) ? dyesTable.Dye_Name : [];
+    const dyeNameById = {};
+    dyeIds.forEach((id, i) => { dyeNameById[id] = dyeNameCol[i] || ''; });
 
     localComponents = ids.map((id, i) => {
       const get = (col) => Array.isArray(tableData[col]) ? tableData[col][i] : undefined;
+      const dyeRef = get('Dye_Name');
+      const dyeRefId = getRefIdLocal(dyeRef);
+      const resolvedDyeName = dyeRefId ? (dyeNameById[dyeRefId] || '') : (typeof dyeRef === 'string' ? dyeRef : '');
       return {
         id,
         Recipe: get('Recipe'),
-        Dye_Name: get('Dye_Name'),
+        Dye_Name: resolvedDyeName,
         Dye_Full: get('Dye_Full'),
         'Std_Powder_tsp_': get('Std_Powder_tsp_'),
         'Std_Water_mL_': get('Std_Water_mL_'),
