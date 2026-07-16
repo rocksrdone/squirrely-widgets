@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Picker</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.search-input { flex: 1; min-width: 160px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.sort-select { padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
+.filter-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.filter-chip { font-size: 11px; padding: 5px 10px; border-radius: 12px; border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; }
+.filter-chip.active { background: var(--ink); border-color: var(--ink); color: white; }
+.result-count { font-size: 11px; color: #8B7D72; margin-bottom: 10px; }
+
+.order-list { display: flex; flex-direction: column; gap: 8px; }
+.order-card {
+  background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 12px 14px;
+  cursor: pointer; transition: border-color .12s;
+}
+.order-card:hover { border-color: var(--accent); }
+.order-card.selected { border-color: var(--accent); background: var(--accent-light); }
+.card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
+.card-customer { font-size: 14px; font-weight: 600; }
+.card-badges { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
+.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.badge.status { background: var(--teal-light); color: var(--teal); }
+.badge.status.closed { background: var(--rule); color: #6B5E52; }
+.badge.pay-unpaid { background: var(--accent-light); color: var(--accent); }
+.badge.pay-paid { background: var(--done-bg); color: var(--done-text); }
+.badge.pay-other { background: var(--gold-light); color: var(--gold); }
+.badge.channel { background: var(--warm); color: #6B5E52; }
+.badge.draft { background: var(--gold-light); color: var(--gold); }
+.card-meta-row { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; font-size: 11px; color: #8B7D72; }
+.due-tag { font-weight: 700; padding: 1px 6px; border-radius: 8px; }
+.due-tag.soon { background: var(--accent-light); color: var(--accent); }
+.card-notes { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 6px; }
+.card-shopify { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; margin-top: 4px; }
+
+.empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="top-bar"><div class="title">Orders</div></div>
+
+<div class="controls">
+  <input class="search-input" id="searchBox" placeholder="Search customer, order #, Shopify ID..." oninput="renderList()">
+  <select class="sort-select" id="sortSelect" onchange="renderList()">
+    <option value="due">Sort: Due date (soonest)</option>
+    <option value="orderdate">Sort: Order date (newest)</option>
+    <option value="customer">Sort: Customer A–Z</option>
+  </select>
+</div>
+
+<div class="filter-row" id="statusFilters"></div>
+<div class="filter-row" id="channelFilters"></div>
+
+<div class="result-count" id="resultCount"></div>
+<div id="orderList" class="order-list"></div>
+
+<script>
+function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function daysFromToday(dateVal) {
+  if (!dateVal) return null;
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return null;
+  return Math.round(ms / 86400000 - Date.now() / 86400000);
+}
+function fmtDate(dateVal) {
+  if (!dateVal) return '';
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+let allOrders = [];
+let statusFilter = 'ALL';
+let channelFilter = 'ALL';
+let selectedId = null;
+
+async function loadOrders() {
+  try {
+    const table = await grist.docApi.fetchTable('Work_Orders');
+    const c = (cands) => findColumn(table, cands);
+    const custCol = c(['Customer_Name']) || 'Customer_Name';
+    const orderDateCol = c(['Order_Date']);
+    const dueCol = c(['Due_Date']);
+    const statusCol = c(['Status']);
+    const shopifyCol = c(['Shopify_Order_ID']);
+    const payCol = c(['Payment_Status']);
+    const channelCol = c(['Channel']);
+    const numCol = c(['Order_Number']) || 'Order_Number';
+    const typeCol = c(['Order_Type']);
+    const notesCol = c(['Notes']);
+
+    allOrders = (table.id || []).map((id, i) => ({
+      id,
+      customerName: columnAsArray(table, custCol)[i] || '',
+      orderDate: orderDateCol ? columnAsArray(table, orderDateCol)[i] : null,
+      dueDate: dueCol ? columnAsArray(table, dueCol)[i] : null,
+      status: statusCol ? (columnAsArray(table, statusCol)[i] || '') : '',
+      shopifyId: shopifyCol ? columnAsArray(table, shopifyCol)[i] : '',
+      paymentStatus: payCol ? (columnAsArray(table, payCol)[i] || '') : '',
+      channel: channelCol ? (columnAsArray(table, channelCol)[i] || '') : '',
+      orderNumber: columnAsArray(table, numCol)[i] || '',
+      orderType: typeCol ? (columnAsArray(table, typeCol)[i] || '') : '',
+      notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
+    }));
+
+    renderFilters();
+    renderList();
+  } catch (e) {
+    console.error('Failed to load orders:', e);
+    document.getElementById('orderList').innerHTML = `<div class="empty-state">Failed to load Work_Orders — check widget access.</div>`;
+  }
+}
+
+function renderFilters() {
+  const statuses = [...new Set(allOrders.map(o => o.status).filter(Boolean))];
+  const statusBox = document.getElementById('statusFilters');
+  statusBox.innerHTML = ['ALL', ...statuses].map(s => `
+    <button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setStatusFilter('${s}')">${s === 'ALL' ? 'All Statuses' : s}</button>
+  `).join('');
+
+  const channels = [...new Set(allOrders.map(o => o.channel).filter(Boolean))];
+  const channelBox = document.getElementById('channelFilters');
+  channelBox.innerHTML = ['ALL', ...channels].map(c => `
+    <button class="filter-chip ${channelFilter === c ? 'active' : ''}" onclick="setChannelFilter('${c}')">${c === 'ALL' ? 'All Channels' : c}</button>
+  `).join('');
+}
+function setStatusFilter(s) { statusFilter = s; renderFilters(); renderList(); }
+function setChannelFilter(c) { channelFilter = c; renderFilters(); renderList(); }
+
+function paymentBadgeClass(status) {
+  const s = (status || '').toLowerCase();
+  if (s === 'unpaid') return 'pay-unpaid';
+  if (s.includes('paid') || s === 'invoiced') return 'pay-paid';
+  return 'pay-other';
+}
+
+function renderList() {
+  const q = normalize(document.getElementById('searchBox').value);
+  const sortMode = document.getElementById('sortSelect').value;
+
+  let list = allOrders.filter(o => {
+    if (statusFilter !== 'ALL' && o.status !== statusFilter) return false;
+    if (channelFilter !== 'ALL' && o.channel !== channelFilter) return false;
+    if (q) {
+      const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId);
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  list.sort((a, b) => {
+    if (sortMode === 'due') {
+      const ad = daysFromToday(a.dueDate), bd = daysFromToday(b.dueDate);
+      return (ad === null ? Infinity : ad) - (bd === null ? Infinity : bd);
+    }
+    if (sortMode === 'orderdate') {
+      const ad = a.orderDate ? Number(a.orderDate) : 0, bd = b.orderDate ? Number(b.orderDate) : 0;
+      return bd - ad;
+    }
+    return a.customerName.localeCompare(b.customerName);
+  });
+
+  document.getElementById('resultCount').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
+
+  const box = document.getElementById('orderList');
+  if (!list.length) {
+    box.innerHTML = `<div class="empty-state">No orders match.</div>`;
+    return;
+  }
+
+  box.innerHTML = list.map(o => {
+    const dueDays = daysFromToday(o.dueDate);
+    const dueSoon = dueDays !== null && dueDays <= 7;
+    const dueLabel = dueDays === null ? '' : dueDays < 0 ? `${Math.abs(dueDays)}d overdue` : dueDays === 0 ? 'due today' : `due in ${dueDays}d`;
+
+    return `
+      <div class="order-card ${o.id === selectedId ? 'selected' : ''}" onclick="selectOrder(${o.id})">
+        <div class="card-top">
+          <span class="card-ordernum">${o.orderNumber || '—'}</span>
+          <span class="card-customer">${o.customerName || '(no customer)'}</span>
+          <div class="card-badges">
+            ${o.orderType === 'Draft' ? '<span class="badge draft">Draft</span>' : ''}
+            ${o.status ? `<span class="badge status ${o.status.toLowerCase() === 'closed' ? 'closed' : ''}">${o.status}</span>` : ''}
+            ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${o.paymentStatus}</span>` : ''}
+            ${o.channel ? `<span class="badge channel">${o.channel}</span>` : ''}
+          </div>
+        </div>
+        <div class="card-meta-row">
+          ${o.orderDate ? `<span>Ordered ${fmtDate(o.orderDate)}</span>` : ''}
+          ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${dueLabel}</span>` : ''}
+        </div>
+        ${o.shopifyId ? `<div class="card-shopify">Shopify #${o.shopifyId}</div>` : ''}
+        ${o.notes ? `<div class="card-notes">${o.notes}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+async function selectOrder(id) {
+  selectedId = id;
+  renderList();
+  try {
+    await grist.setCursorPos({ rowId: id });
+  } catch (e) {
+    console.error('Could not set cursor position:', e);
+  }
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadOrders();
+</script>
+</body>
+</html>
