@@ -45,6 +45,23 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .order-card:hover { border-color: var(--accent); }
 .order-card.selected { border-color: var(--accent); background: var(--accent-light); }
 .order-card.overdue { border-left: 4px solid var(--accent); }
+.order-card.channel-wholesale { border-left: 4px solid var(--teal); }
+.order-card.channel-retail { border-left: 4px solid var(--gold); }
+.order-card.channel-custom { border-left: 4px solid var(--accent); }
+
+.shopify-link { color: var(--teal); text-decoration: none; }
+.shopify-link:hover { text-decoration: underline; }
+
+.view-toggle-btn { font-size: 11px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer; }
+.view-toggle-btn.active { background: var(--ink); border-color: var(--ink); color: white; }
+
+.pinned-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); margin-bottom: 4px; }
+.pinned-divider { border: none; border-top: 1px dashed var(--rule); margin: 10px 0; }
+
+.order-list.dense .order-card { padding: 7px 12px; }
+.order-list.dense .card-notes,
+.order-list.dense .card-shopify { display: none; }
+.order-list.dense .card-meta-row { margin-top: 2px; }
 .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card-ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
 .card-customer { font-size: 14px; font-weight: 600; }
@@ -79,6 +96,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
     <option value="orderdate">Sort: Order date (newest)</option>
     <option value="customer">Sort: Customer A–Z</option>
   </select>
+  <button class="view-toggle-btn" id="denseToggle" onclick="toggleDense()">Compact view</button>
 </div>
 
 <div class="filter-row" id="statusFilters"></div>
@@ -116,6 +134,13 @@ let orderLineData = {}; // workOrderId -> {needed, dyed, wound, packed, hasRush,
 let statusFilter = 'ALL';
 let channelFilter = 'ALL';
 let selectedId = null;
+let denseMode = false;
+
+function toggleDense() {
+  denseMode = !denseMode;
+  document.getElementById('denseToggle').classList.toggle('active', denseMode);
+  document.getElementById('orderList').classList.toggle('dense', denseMode);
+}
 
 async function loadOrders() {
   try {
@@ -228,6 +253,18 @@ function orderSkuText(orderId) {
   return d ? d.skus.join(' ') : '';
 }
 
+function channelClass(channel) {
+  const c = (channel || '').toLowerCase();
+  if (c === 'wholesale') return 'channel-wholesale';
+  if (c === 'retail') return 'channel-retail';
+  if (c === 'custom') return 'channel-custom';
+  return '';
+}
+function shopifyAdminUrl(shopifyId) {
+  if (!shopifyId) return null;
+  return `https://squirrelvender.myshopify.com/admin/orders/${shopifyId}`;
+}
+
 function renderSummaryStrip() {
   const now = allOrders.filter(o => (o.status || '').toLowerCase() !== 'closed');
   const overdue = now.filter(o => { const d = daysFromToday(o.dueDate); return d !== null && d < 0; });
@@ -274,21 +311,29 @@ function renderList() {
   document.getElementById('resultCount').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
 
   const box = document.getElementById('orderList');
-  if (!list.length) {
+
+  // If the currently selected order got filtered/searched out, pin it above
+  // the regular results so context isn't lost while narrowing the list.
+  const pinnedOrder = selectedId ? allOrders.find(o => o.id === selectedId) : null;
+  const pinnedIsHidden = pinnedOrder && !list.some(o => o.id === selectedId);
+
+  if (!list.length && !pinnedIsHidden) {
     box.innerHTML = `<div class="empty-state">No orders match.</div>`;
     return;
   }
 
-  box.innerHTML = list.map(o => {
+  const cardHtml = (o) => {
     const dueDays = daysFromToday(o.dueDate);
     const dueSoon = dueDays !== null && dueDays <= 7;
     const overdue = dueDays !== null && dueDays < 0;
     const dueLabel = dueDays === null ? '' : dueDays < 0 ? `${Math.abs(dueDays)}d overdue` : dueDays === 0 ? 'due today' : `due in ${dueDays}d`;
     const prodStatus = productionStatus(o.id);
     const isRush = orderHasRush(o.id);
+    const borderClass = overdue ? 'overdue' : channelClass(o.channel);
+    const shopifyUrl = shopifyAdminUrl(o.shopifyId);
 
     return `
-      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${overdue ? 'overdue' : ''}" onclick="selectOrder(${o.id})">
+      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass}" onclick="selectOrder(${o.id})">
         <div class="card-top">
           <span class="card-ordernum">${o.orderNumber || '—'}</span>
           <span class="card-customer">${o.customerName || '(no customer)'}</span>
@@ -305,11 +350,20 @@ function renderList() {
           ${o.orderDate ? `<span>Ordered ${fmtDate(o.orderDate)}</span>` : ''}
           ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${dueLabel}</span>` : ''}
         </div>
-        ${o.shopifyId ? `<div class="card-shopify">Shopify #${o.shopifyId}</div>` : ''}
+        ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${shopifyUrl}" target="_blank" onclick="event.stopPropagation()">Shopify #${o.shopifyId} ↗</a>` : `Shopify #${o.shopifyId}`}</div>` : ''}
         ${o.notes ? `<div class="card-notes">${o.notes}</div>` : ''}
       </div>
     `;
-  }).join('');
+  };
+
+  let html = '';
+  if (pinnedIsHidden) {
+    html += `<div class="pinned-label">Currently selected (hidden by filter/search)</div>`;
+    html += cardHtml(pinnedOrder);
+    html += `<hr class="pinned-divider">`;
+  }
+  html += list.map(cardHtml).join('');
+  box.innerHTML = html || `<div class="empty-state">No orders match.</div>`;
 }
 
 async function selectOrder(id) {
