@@ -6,127 +6,115 @@
 <title>Photo Gallery</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
-
-  :root {
-    --ink: #1A1614;
-    --paper: #F7F3EE;
-    --warm: #E8DFD4;
-    --rule: #D4C9BC;
-    --accent: #8B3A2A;
-    --accent-light: #F2E8E5;
-    --teal: #3A8B7A;
-    --teal-light: #E5F2EF;
-    --gold: #B07D2A;
-    --gold-light: #F5EDD8;
-    --done-bg: #EAF3DE;
-    --done-border: #639922;
-    --done-text: #27500A;
-    --star: #C8A020;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--paper);
-    color: var(--ink);
-    font-family: 'Inter', sans-serif;
-    font-size: 13px;
-    line-height: 1.5;
-    padding: 16px;
-  }
-
-  .empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 80vh;
-    color: #8B7D72;
-    text-align: center;
-    padding: 40px;
-  }
-  .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
-  .empty-title { font-family: 'Libre Baskerville', serif; font-size: 16px; color: #6B5E52; margin-bottom: 6px; }
-  .empty-sub { font-size: 12px; }
-
-  .order-header {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: 4px;
-    flex-wrap: wrap;
-  }
-  .order-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
-  .order-sub { font-size: 12px; color: #6B5E52; }
-  .order-tag {
-    font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 500;
-    letter-spacing: .03em; text-transform: uppercase;
-    background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7;
-  }
-
-  .search-row { margin: 14px 0 18px; }
-  .search-input {
-    width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px;
-    font-family: 'Inter', sans-serif; font-size: 13px; background: white; color: var(--ink); outline: none;
-  }
-  .search-input:focus { border-color: var(--accent); }
-
-  .slabel {
-    font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
-    color: #8B7D72; margin: 20px 0 10px;
-  }
-  .slabel:first-of-type { margin-top: 0; }
-
-  .line-block {
-    border: 1px solid var(--rule); border-radius: 8px; padding: 12px; margin-bottom: 14px; background: white;
-  }
-  .line-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-  .line-sku { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; }
-  .line-qty { font-size: 11px; color: #8B7D72; }
-  .line-guess { font-size: 11px; color: #8B7D72; font-style: italic; }
-
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  .no-match { color: #8B7D72; font-size: 12px; font-style: italic; padding: 6px 0; }
-
-  .pcard {
-    border: 1.5px solid var(--warm); border-radius: 6px; overflow: hidden; background: white;
-  }
-  .pcard.fav { border-color: var(--star); }
-  .pcard img {
-    width: 100%; height: 110px; object-fit: cover; display: block; background: var(--warm);
-  }
-  .pcard-body { padding: 8px; }
-  .pcard-name { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
-  .pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
-  .pcard-status {
-    display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px;
-    text-transform: uppercase; letter-spacing: .04em; font-weight: 500; margin-bottom: 6px;
-  }
-  .status-approved { background: var(--done-bg); color: var(--done-text); }
-  .status-pending { background: var(--gold-light); color: var(--gold); }
-  .status-rejected { background: var(--accent-light); color: var(--accent); }
-  .status-other { background: var(--warm); color: #6B5E52; }
-
-  .pcard-actions { display: flex; align-items: center; gap: 6px; }
-  .star-btn {
-    background: none; border: none; cursor: pointer; font-size: 16px; color: var(--rule); line-height: 1; padding: 2px;
-  }
-  .star-btn.on { color: var(--star); }
-  .share-btn {
-    flex: 1; font-size: 11px; padding: 5px 8px; border-radius: 4px; border: 1px solid var(--accent);
-    background: var(--accent); color: white; cursor: pointer; font-family: 'Inter', sans-serif;
-  }
-  .share-btn:disabled { opacity: .6; cursor: default; }
-  .share-btn.shared { background: var(--done-bg); border-color: var(--done-border); color: var(--done-text); }
-  .share-note { font-size: 9px; color: #8B7D72; margin-top: 4px; }
-
-  .toast {
-    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-    background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
-    opacity: 0; pointer-events: none; transition: opacity .2s;
-  }
-  .toast.show { opacity: 1; }
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --done-bg: #EAF3DE;
+  --done-border: #639922;
+  --done-text: #27500A;
+  --star: #C8A020;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+}
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 80vh;
+  color: #8B7D72;
+  text-align: center;
+  padding: 40px;
+}
+.empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
+.empty-title { font-family: 'Libre Baskerville', serif; font-size: 16px; color: #6B5E52; margin-bottom: 6px; }
+.empty-sub { font-size: 12px; }
+.order-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.order-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.order-sub { font-size: 12px; color: #6B5E52; }
+.order-tag {
+  font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 500;
+  letter-spacing: .03em; text-transform: uppercase;
+  background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7;
+}
+.search-row { margin: 14px 0 18px; }
+.search-input {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px;
+  font-family: 'Inter', sans-serif; font-size: 13px; background: white; color: var(--ink); outline: none;
+}
+.search-input:focus { border-color: var(--accent); }
+.slabel {
+  font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: #8B7D72; margin: 20px 0 10px;
+}
+.slabel:first-of-type { margin-top: 0; }
+.line-block {
+  border: 1px solid var(--rule); border-radius: 8px; padding: 12px; margin-bottom: 14px; background: white;
+}
+.line-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.line-sku { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; }
+.line-qty { font-size: 11px; color: #8B7D72; }
+.line-guess { font-size: 11px; color: #8B7D72; font-style: italic; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.no-match { color: #8B7D72; font-size: 12px; font-style: italic; padding: 6px 0; }
+.pcard {
+  border: 1.5px solid var(--warm); border-radius: 6px; overflow: hidden; background: white;
+}
+.pcard.fav { border-color: var(--star); }
+.pcard img {
+  width: 100%; height: 110px; object-fit: cover; display: block; background: var(--warm);
+}
+.pcard-body { padding: 8px; }
+.pcard-name { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
+.pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
+.pcard-status {
+  display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: .04em; font-weight: 500; margin-bottom: 6px;
+}
+.status-approved { background: var(--done-bg); color: var(--done-text); }
+.status-pending { background: var(--gold-light); color: var(--gold); }
+.status-rejected { background: var(--accent-light); color: var(--accent); }
+.status-other { background: var(--warm); color: #6B5E52; }
+.pcard-actions { display: flex; align-items: center; gap: 6px; }
+.star-btn {
+  background: none; border: none; cursor: pointer; font-size: 16px; color: var(--rule); line-height: 1; padding: 2px;
+}
+.star-btn.on { color: var(--star); }
+.share-btn {
+  flex: 1; font-size: 11px; padding: 5px 8px; border-radius: 4px; border: 1px solid var(--accent);
+  background: var(--accent); color: white; cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.share-btn:disabled { opacity: .6; cursor: default; }
+.share-btn.shared { background: var(--done-bg); border-color: var(--done-border); color: var(--done-text); }
+.share-note { font-size: 9px; color: #8B7D72; margin-top: 4px; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.toast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -145,10 +133,10 @@
   </div>
 
   <div class="search-row">
-    <input class="search-input" id="searchBox" type="text" placeholder="Search all photos by colorway..." oninput="renderSearch(this.value)">
+    <input class="search-input" id="searchBox" type="text" placeholder="Search this order's colorways..." oninput="renderSearch(this.value)">
   </div>
-
   <div id="searchResults"></div>
+
   <div id="linesContainer"></div>
 </div>
 
@@ -159,7 +147,6 @@
 // Replace with the production webhook URL once the n8n workflow
 // "SS - Share Photo to Vendor" is built and activated.
 const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/share-photo';
-
 const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
   'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
 
@@ -175,11 +162,9 @@ function getRefId(ref) {
   if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
   return null;
 }
-
 function normalize(s) {
   return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
-
 function parseColorwayFromSKU(sku) {
   if (!sku) return '';
   const parts = sku.split('_');
@@ -191,11 +176,9 @@ function parseColorwayFromSKU(sku) {
   }
   return parts.join(' ');
 }
-
 function columnAsArray(tableData, col) {
   return Array.isArray(tableData[col]) ? tableData[col] : [];
 }
-
 function rowsFromTableData(tableData, colNames) {
   const ids = tableData.id || [];
   return ids.map((id, i) => {
@@ -204,7 +187,6 @@ function rowsFromTableData(tableData, colNames) {
     return row;
   });
 }
-
 function findColumn(tableData, candidates) {
   const keys = Object.keys(tableData);
   for (const cand of candidates) {
@@ -213,14 +195,12 @@ function findColumn(tableData, candidates) {
   }
   return null;
 }
-
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
 }
-
 function statusClass(status) {
   const s = (status || '').toLowerCase();
   if (s.includes('approve')) return 'status-approved';
@@ -280,7 +260,6 @@ async function loadData(record) {
         sharedAt: s.Shared_At,
       }));
     }
-
   } catch (e) {
     console.error('Failed to load data:', e);
     orderLines = [];
@@ -292,7 +271,6 @@ async function loadData(record) {
   document.getElementById('mainView').style.display = 'block';
   document.getElementById('searchBox').value = '';
   document.getElementById('searchResults').innerHTML = '';
-
   renderLines();
 }
 
@@ -308,6 +286,13 @@ function matchPhotos(colorwayGuess) {
       if (!!b.Is_Favorite !== !!a.Is_Favorite) return (b.Is_Favorite ? 1 : 0) - (a.Is_Favorite ? 1 : 0);
       return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
     });
+}
+
+// Every colorway guess derived from this order's own line items — used to
+// keep manual search scoped to what's actually relevant to this order,
+// instead of searching the entire photo library.
+function orderColorwayGuesses() {
+  return orderLines.map(l => normalize(parseColorwayFromSKU(l.SKU))).filter(Boolean);
 }
 
 function photoCardHTML(p) {
@@ -337,12 +322,10 @@ function photoCardHTML(p) {
 
 function renderLines() {
   const container = document.getElementById('linesContainer');
-
   if (!orderLines.length) {
     container.innerHTML = `<div class="no-match">No line items found for this order.</div>`;
     return;
   }
-
   container.innerHTML = orderLines.map(line => {
     const guess = parseColorwayFromSKU(line.SKU);
     const matches = matchPhotos(guess);
@@ -365,14 +348,24 @@ function renderSearch(query) {
   const q = normalize(query);
   if (!q) { results.innerHTML = ''; return; }
 
+  const orderGuesses = orderColorwayGuesses();
+
   const matches = allPhotos
-    .filter(p => normalize(p.Colorway_Name).includes(q))
+    .filter(p => {
+      const n = normalize(p.Colorway_Name);
+      if (!n) return false;
+      // Must belong to a colorway that's actually on this order...
+      const belongsToOrder = orderGuesses.some(g => g && (n.includes(g) || g.includes(n)));
+      if (!belongsToOrder) return false;
+      // ...and match what was typed.
+      return n.includes(q);
+    })
     .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0));
 
   results.innerHTML = `
-    <div class="slabel">Search results</div>
+    <div class="slabel">Search results (this order's colorways only)</div>
     <div class="photo-grid">
-      ${matches.length ? matches.map(photoCardHTML).join('') : '<div class="no-match">No photos found.</div>'}
+      ${matches.length ? matches.map(photoCardHTML).join('') : '<div class="no-match">No matching photos found among this order\'s colorways.</div>'}
     </div>`;
 }
 
@@ -394,7 +387,6 @@ async function toggleFavorite(photoId, currentlyFav) {
 async function sharePhoto(photoId, btnEl) {
   const p = allPhotos.find(p => p.id === photoId);
   if (!p || !currentOrder) return;
-
   if (!p.Source_Filename) {
     showToast('Missing Source_Filename for this photo — add it in Product Photos first');
     return;
