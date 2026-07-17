@@ -779,7 +779,7 @@ async function promoteToRecipe() {
     await grist.docApi.applyUserActions([
       ['AddRecord', 'Recipe_Dye_Components', null, {
         Recipe: newRecipeId,
-        Dye_Name: selectedDye.name,
+        Dye_Name: selectedDye.id,
         Dye_Full: selectedDye.brand ? `${selectedDye.name} (${selectedDye.brand})` : selectedDye.name,
         [powderCol]: lastComputed.dyeMeasure,
         [waterCol]: lastComputed.stockVol,

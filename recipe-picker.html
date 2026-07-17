@@ -144,9 +144,10 @@ let filteredCache = [];
 
 async function loadRecipes() {
   try {
-    const [table, customersTable] = await Promise.all([
+    const [table, customersTable, colorwaysTable] = await Promise.all([
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Customers'),
+      grist.docApi.fetchTable('Colorways').catch(() => null),
     ]);
     const c = (cands) => findColumn(table, cands);
     const nameCol = c(['Recipe_Name']) || 'Recipe_Name';
@@ -166,6 +167,15 @@ async function loadRecipes() {
     const custNameById = {};
     custIds.forEach((id, i) => { custNameById[id] = columnAsArray(customersTable, custNameCol)[i] || ''; });
 
+    // Recipes.Colorway is a Ref:Colorways link — resolve to the colorway's name.
+    const colorwayNameById = {};
+    if (colorwaysTable) {
+      const cwNameCol = findColumn(colorwaysTable, ['Colorway_Name']) || 'Colorway_Name';
+      (colorwaysTable.id || []).forEach((id, i) => {
+        colorwayNameById[id] = columnAsArray(colorwaysTable, cwNameCol)[i] || '';
+      });
+    }
+
     allRecipes = (table.id || []).map((id, i) => {
       const custRef = custRefCol ? columnAsArray(table, custRefCol)[i] : null;
       const custId = getRefId(custRef);
@@ -176,7 +186,12 @@ async function loadRecipes() {
         scope: scopeCol ? (columnAsArray(table, scopeCol)[i] || '') : '',
         sku: skuCol ? (columnAsArray(table, skuCol)[i] || '') : '',
         status: statusCol ? (columnAsArray(table, statusCol)[i] || '') : '',
-        colorway: colorwayCol ? (columnAsArray(table, colorwayCol)[i] || '') : '',
+        colorway: (() => {
+          if (!colorwayCol) return '';
+          const raw = columnAsArray(table, colorwayCol)[i];
+          const cwId = getRefId(raw);
+          return cwId ? (colorwayNameById[cwId] || '') : (typeof raw === 'string' ? raw : '');
+        })(),
         notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
         createdDate: createdCol ? columnAsArray(table, createdCol)[i] : null,
         photoUrl: photoCol ? (columnAsArray(table, photoCol)[i] || '') : '',

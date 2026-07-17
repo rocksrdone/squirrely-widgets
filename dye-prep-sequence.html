@@ -189,12 +189,21 @@ async function loadEverything() {
 
     const cIds = compTable.id || [];
     const compsByRecipe = {};
+    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve it to the
+    // actual dye name via the Dyes table, or downstream stock/powder lookups
+    // (keyed by name) silently fail.
+    const preDyeIds = dyesTable.id || [];
+    const dyeNameById = {};
+    preDyeIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
       if (!recipeRef) return;
       const rate = Number(columnAsArray(compTable, 'Effective_mL_per_100_yd')[i]) ||
                    Number(columnAsArray(compTable, 'Default_mL_per_100_yds')[i]) || 0;
-      const entry = { dyeName: columnAsArray(compTable, 'Dye_Name')[i] || '', rate };
+      const rawDye = columnAsArray(compTable, 'Dye_Name')[i];
+      const dyeRefId = getRefId(rawDye);
+      const resolvedName = dyeRefId ? (dyeNameById[dyeRefId] || '') : (typeof rawDye === 'string' ? rawDye : '');
+      const entry = { dyeName: resolvedName, rate };
       if (!compsByRecipe[recipeRef]) compsByRecipe[recipeRef] = [];
       compsByRecipe[recipeRef].push(entry);
     });

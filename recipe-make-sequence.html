@@ -128,11 +128,12 @@ async function loadEverything() {
   document.getElementById('headerSub').textContent = 'Loading...';
 
   try {
-    const [woTable, wolTable, recipesTable, compTable] = await Promise.all([
+    const [woTable, wolTable, recipesTable, compTable, dyesTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
     ]);
 
     const woIds = woTable.id || [];
@@ -157,9 +158,14 @@ async function loadEverything() {
 
     const cIds = compTable.id || [];
     const dyesByRecipe = {};
+    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve to the real name.
+    const dyeNameById = {};
+    (dyesTable.id || []).forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      const rawDye = columnAsArray(compTable, 'Dye_Name')[i];
+      const dyeRefId = getRefId(rawDye);
+      const dyeName = dyeRefId ? dyeNameById[dyeRefId] : (typeof rawDye === 'string' ? rawDye : '');
       if (!recipeRef || !dyeName) return;
       if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = new Set();
       dyesByRecipe[recipeRef].add(dyeName);

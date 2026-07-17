@@ -184,9 +184,16 @@ async function loadEverything() {
 
     const cIds = compTable.id || [];
     const dyesByRecipe = {};
+    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve to the
+    // real name first, or stock lookups keyed by name silently miss.
+    const preDyeIds = dyesTable.id || [];
+    const dyeNameById = {};
+    preDyeIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      const rawDye = columnAsArray(compTable, 'Dye_Name')[i];
+      const dyeRefId = getRefId(rawDye);
+      const dyeName = dyeRefId ? dyeNameById[dyeRefId] : (typeof rawDye === 'string' ? rawDye : '');
       if (!recipeRef || !dyeName) return;
       if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = [];
       dyesByRecipe[recipeRef].push(dyeName);

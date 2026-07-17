@@ -251,6 +251,7 @@ async function loadDyesList() {
     const hexCol = findColumn(dyesTable, ['Swatch_Hex', 'Manual_Hex', 'Swatch_Color', 'Hex_Color']);
     const ids = dyesTable.id || [];
     allDyes = ids.map((id, i) => ({
+      id,
       name: columnAsArray(dyesTable, nameCol)[i],
       brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
       hex: hexCol ? columnAsArray(dyesTable, hexCol)[i] : '',
@@ -389,8 +390,14 @@ async function loadLayout(record) {
     for (let i = 0; i < cIds.length; i++) {
       if (getRefId(cRefs[i]) !== currentRecipeId) continue;
       const get = (col) => Array.isArray(compTable[col]) ? compTable[col][i] : undefined;
+      // Dye_Name here is a Ref:Dyes link — resolve through allDyes (loaded just above).
+      const rawDye = get('Dye_Name');
+      const dyeRefId = getRefId(rawDye);
+      const resolvedName = dyeRefId
+        ? ((allDyes.find(d => d.id === dyeRefId) || {}).name || '')
+        : (typeof rawDye === 'string' ? rawDye : '');
       comps.push({
-        dyeName: get('Dye_Name') || '',
+        dyeName: resolvedName,
         dyeFull: get('Dye_Full') || '',
         stepNumber: get('Step_Number') || 0,
         applicationNotes: get('Application_Notes') || '',
