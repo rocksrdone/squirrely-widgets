@@ -183,17 +183,24 @@ async function loadEverything() {
       if (sku) recipeBySku[sku] = rec;
     });
 
+    // Dyes lookup — needed to resolve Recipe_Dye_Components.Dye_Name, which is
+    // a Ref:Dyes reference, not text.
+    const dIds = dyesTable.id || [];
+    const dyeNameById = {};
+    dIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
+
     const cIds = compTable.id || [];
     const dyesByRecipe = {};
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const dyeName = columnAsArray(compTable, 'Dye_Name')[i];
+      const rawDyeVal = columnAsArray(compTable, 'Dye_Name')[i];
+      const dyeRefId = getRefId(rawDyeVal);
+      const dyeName = dyeRefId ? dyeNameById[dyeRefId] : (typeof rawDyeVal === 'string' ? rawDyeVal : '');
       if (!recipeRef || !dyeName) return;
       if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = [];
       dyesByRecipe[recipeRef].push(dyeName);
     });
 
-    const dIds = dyesTable.id || [];
     const powderLocationByDye = {};
     dIds.forEach((id, i) => {
       const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
