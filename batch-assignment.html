@@ -60,6 +60,13 @@ body {
 .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
 .cleanup-keep { background: var(--teal-light); color: var(--teal); }
 .dye-action-row { margin-bottom: 8px; }
+.action-done-banner {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--done-bg); border: 1px solid var(--done-text); border-radius: 5px;
+  padding: 6px 10px; font-size: 11px; color: var(--done-text); font-weight: 600;
+}
+.undo-link { color: var(--accent); cursor: pointer; text-decoration: underline; font-weight: 600; }
+.undo-link:hover { opacity: .8; }
 .dye-action-row select {
   width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
   background: white; color: var(--ink); color-scheme: light;
@@ -103,6 +110,7 @@ function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
 let currentEntry = null;
 let lastLoggedDelta = {}; // lineId -> amount just added, for undo
+let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
 
 async function loadForRecipe(record) {
   if (!record || !record.id) {
@@ -310,6 +318,7 @@ async function loadForRecipe(record) {
     });
 
     currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeIds.length, orders, cleanupInfo };
+    completedActions = {};
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -349,16 +358,25 @@ function render() {
     const flagHtml = c.isOneOff
       ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`
       : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+
+    const done = completedActions[idx];
+    const actionBlock = done
+      ? `<div class="action-done-banner">
+           <span>✓ ${done.label}</span>
+           <span class="undo-link" onclick="undoAction(${idx})">Undo</span>
+         </div>`
+      : `<select id="action-${idx}" onchange="onDyeActionChange(${idx})">
+           <option value="">What did you do with the leftover?</option>
+           <option value="put_away">Put away in a bin</option>
+           <option value="hold">Hold for later (no bin yet)</option>
+           <option value="dump">Dump it</option>
+         </select>
+         <div id="action-fields-${idx}"></div>`;
+
     return `
       ${flagHtml}
       <div class="dye-action-row">
-        <select id="action-${idx}" onchange="onDyeActionChange(${idx})">
-          <option value="">What did you do with the leftover?</option>
-          <option value="put_away">Put away in a bin</option>
-          <option value="hold">Hold for later (no bin yet)</option>
-          <option value="dump">Dump it</option>
-        </select>
-        <div id="action-fields-${idx}"></div>
+        ${actionBlock}
       </div>
     `;
   }).join('');
@@ -505,18 +523,33 @@ async function putAwayDye(idx) {
 
   try {
     if (which === 'new') {
-      await grist.docApi.applyUserActions([
+      const result = await grist.docApi.applyUserActions([
         ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Bin_Location: bin, Mixed_Date: Math.floor(Date.now() / 1000) }]
       ]);
-      showToast(`${c.dyeName}: ${qty}mL logged as new stock in ${bin} ✓`);
+      const newRowId = result.retValues[0];
+      completedActions[idx] = {
+        label: `Put away — ${qty}mL logged as new stock in bin ${bin}`,
+        undo: async () => {
+          await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', newRowId]]);
+        },
+      };
     } else {
+      const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+      const rowIdx = (stockTable.id || []).indexOf(Number(which));
+      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, 'Quantity_mL')[rowIdx] : null;
+      const originalBin = rowIdx >= 0 ? columnAsArray(stockTable, 'Bin_Location')[rowIdx] : null;
+
       await grist.docApi.applyUserActions([
         ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty, Bin_Location: bin }]
       ]);
-      showToast(`${c.dyeName}: existing stock updated to ${qty}mL in ${bin} (original date kept) ✓`);
+      completedActions[idx] = {
+        label: `Put away — existing stock updated to ${qty}mL in bin ${bin}`,
+        undo: async () => {
+          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: originalQty, Bin_Location: originalBin }]]);
+        },
+      };
     }
-    document.getElementById(`action-${idx}`).value = '';
-    document.getElementById(`action-fields-${idx}`).innerHTML = '';
+    render();
   } catch (e) {
     console.error('Failed to put away dye:', e);
     showToast('Failed — check the Dye_Stock table');
@@ -534,29 +567,101 @@ async function holdDye(idx) {
 
   try {
     if (which === 'new') {
-      await grist.docApi.applyUserActions([
+      const result = await grist.docApi.applyUserActions([
         ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Mixed_Date: Math.floor(Date.now() / 1000) }]
       ]);
-      showToast(`${c.dyeName}: ${qty}mL held as new stock, no bin assigned yet ✓`);
+      const newRowId = result.retValues[0];
+      completedActions[idx] = {
+        label: `Held — ${qty}mL logged as new stock, no bin yet`,
+        undo: async () => {
+          await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', newRowId]]);
+        },
+      };
     } else {
+      const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+      const rowIdx = (stockTable.id || []).indexOf(Number(which));
+      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, 'Quantity_mL')[rowIdx] : null;
+
       await grist.docApi.applyUserActions([
         ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty }]
       ]);
-      showToast(`${c.dyeName}: existing stock updated to ${qty}mL (original date kept) ✓`);
+      completedActions[idx] = {
+        label: `Held — existing stock updated to ${qty}mL`,
+        undo: async () => {
+          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: originalQty }]]);
+        },
+      };
     }
-    document.getElementById(`action-${idx}`).value = '';
-    document.getElementById(`action-fields-${idx}`).innerHTML = '';
+    render();
   } catch (e) {
     console.error('Failed to hold dye:', e);
     showToast('Failed — check the Dye_Stock table');
   }
 }
 
-function dumpDye(idx) {
+async function dumpDye(idx) {
   const c = currentEntry.cleanupInfo[idx];
-  showToast(`${c.dyeName}: noted as dumped`);
-  document.getElementById(`action-${idx}`).value = '';
-  document.getElementById(`action-fields-${idx}`).innerHTML = '';
+  if (!c.dyeId) {
+    completedActions[idx] = { label: 'Dumped', undo: async () => {} };
+    render();
+    return;
+  }
+
+  let existing = [];
+  try {
+    const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+    const sIds = stockTable.id || [];
+    sIds.forEach((id, i) => {
+      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      if (dyeRef !== c.dyeId) return;
+      existing.push({
+        id,
+        dye: c.dyeId,
+        qty: columnAsArray(stockTable, 'Quantity_mL')[i],
+        bin: columnAsArray(stockTable, 'Bin_Location')[i],
+        mixedDate: columnAsArray(stockTable, 'Mixed_Date')[i],
+      });
+    });
+  } catch (e) {
+    console.error('Could not check existing stock before dumping:', e);
+  }
+
+  if (!existing.length) {
+    completedActions[idx] = { label: 'Dumped (no premade stock was on record)', undo: async () => {} };
+    render();
+    return;
+  }
+
+  const totalQty = existing.reduce((s, e) => s + (Number(e.qty) || 0), 0);
+  if (!confirm(`This will remove ${totalQty}mL of recorded premade stock for ${c.dyeName}. Continue?`)) return;
+
+  try {
+    await grist.docApi.applyUserActions(existing.map(e => ['RemoveRecord', 'Dye_Stock', e.id]));
+    completedActions[idx] = {
+      label: `Dumped — removed ${totalQty}mL from stock`,
+      undo: async () => {
+        await grist.docApi.applyUserActions(existing.map(e => ['AddRecord', 'Dye_Stock', null, { Dye: e.dye, Quantity_mL: e.qty, Bin_Location: e.bin, Mixed_Date: e.mixedDate }]));
+      },
+    };
+    render();
+  } catch (e) {
+    console.error('Failed to dump dye stock:', e);
+    showToast('Failed — check the Dye_Stock table');
+  }
+}
+
+async function undoAction(idx) {
+  const done = completedActions[idx];
+  if (!done) return;
+  try {
+    await done.undo();
+    delete completedActions[idx];
+    render();
+    showToast('Undone — pick an option again if needed');
+  } catch (e) {
+    console.error('Undo failed:', e);
+    showToast('Undo failed — check the Dye_Stock table');
+  }
 }
 
 async function createColorDraft() {
