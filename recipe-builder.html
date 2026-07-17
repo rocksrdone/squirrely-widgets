@@ -375,7 +375,7 @@ const DYE_COLORS = {
 };
 
 function guessColor(name) {
-  if (!name) return '#888780';
+  if (!name || typeof name !== 'string') return '#888780';
   const l = name.toLowerCase();
   for (const [k, v] of Object.entries(DYE_COLORS)) {
     if (l.includes(k)) return v;
@@ -781,6 +781,7 @@ async function loadDyesList() {
     const waterCol = findColumn(dyesTable, ['Std_Water_mL_', 'Water', 'Standard_Water']);
     const ids = dyesTable.id || [];
     allDyes = ids.map((id, i) => ({
+      id,
       name: columnAsArray(dyesTable, nameCol)[i],
       brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
       powder: powderCol ? columnAsArray(dyesTable, powderCol)[i] : '',
@@ -865,10 +866,13 @@ async function loadRecipe(record) {
     const rows = [];
     for (let i = 0; i < ids.length; i++) {
       if (getRefId(refs[i]) !== currentRecipeId) continue;
+      const dyeRefId = getRefId(columnAsArray(compTable, 'Dye_Name')[i]);
+      const resolvedName = dyeRefId ? ((allDyes.find(d => d.id === dyeRefId) || {}).name || '') : '';
       rows.push({
         rowId: ids[i],
         clientKey: nextClientKey++,
-        Dye_Name: columnAsArray(compTable, 'Dye_Name')[i] || '',
+        dyeId: dyeRefId,
+        Dye_Name: resolvedName,
         Dye_Full: columnAsArray(compTable, 'Dye_Full')[i] || '',
         powder: columnAsArray(compTable, 'Std_Powder_tsp_')[i] ?? '',
         water: columnAsArray(compTable, 'Std_Water_mL_')[i] ?? '',
@@ -894,6 +898,7 @@ function addDyeRow() {
   dyeRows.push({
     rowId: null,
     clientKey: nextClientKey++,
+    dyeId: null,
     Dye_Name: '', Dye_Full: '', powder: '', water: '', dilution: '', technique: '', notes: '',
   });
   markUnsaved();
@@ -925,7 +930,7 @@ function updateDyeField(clientKey, field, value) {
   if (!row) return;
   row[field] = value;
   markUnsaved();
-  if (field === 'Dye_Name') renderLayoutPreview();
+  if (field === 'Dye_Name') { row.dyeId = null; renderLayoutPreview(); }
 }
 
 function searchDyeSuggestions(clientKey, query) {
@@ -947,6 +952,7 @@ function searchDyeSuggestions(clientKey, query) {
 function pickDyeSuggestion(clientKey, dye) {
   const row = dyeRows.find(r => r.clientKey === clientKey);
   if (!row) return;
+  row.dyeId = dye.id;
   row.Dye_Name = dye.name;
   row.Dye_Full = dye.brand ? `${dye.name} (${dye.brand})` : dye.name;
   if (dye.powder !== '' && dye.powder != null) row.powder = dye.powder;
@@ -1145,10 +1151,40 @@ async function saveRecipe() {
     ]);
 
     const dyeActions = [];
-    dyeRows.forEach((row, i) => {
+    for (let i = 0; i < dyeRows.length; i++) {
+      const row = dyeRows[i];
+      let resolvedDyeId = row.dyeId || null;
+
+      // If we don't already know the exact Dye row (e.g. the name was typed
+      // by hand rather than picked from the suggestion list), resolve it —
+      // matching an existing Dye if the name matches one, or creating a new
+      // catalog entry if it's genuinely new. Writing raw text into this field
+      // doesn't work since Dye_Name on Recipe_Dye_Components is a reference,
+      // not text.
+      if (!resolvedDyeId) {
+        const typedName = (row.Dye_Name || '').trim();
+        if (typedName) {
+          const existing = allDyes.find(d => normalize(d.name) === normalize(typedName));
+          if (existing) {
+            resolvedDyeId = existing.id;
+          } else {
+            try {
+              const result = await grist.docApi.applyUserActions([
+                ['AddRecord', 'Dyes', null, { Dye_Name: typedName }]
+              ]);
+              resolvedDyeId = result.retValues[0];
+              allDyes.push({ id: resolvedDyeId, name: typedName, brand: '', powder: '', water: '' });
+            } catch (e) {
+              console.error('Failed to auto-create new dye:', typedName, e);
+              resolvedDyeId = null;
+            }
+          }
+        }
+      }
+
       const fields = {
         Recipe: currentRecipeId,
-        Dye_Name: row.Dye_Name,
+        Dye_Name: resolvedDyeId,
         Dye_Full: row.Dye_Full || row.Dye_Name,
         'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
         'Std_Water_mL_': row.water === '' ? null : Number(row.water),
@@ -1162,7 +1198,7 @@ async function saveRecipe() {
       } else {
         dyeActions.push(['AddRecord', 'Recipe_Dye_Components', null, fields]);
       }
-    });
+    }
 
     deletedDyeIds.forEach(id => {
       dyeActions.push(['RemoveRecord', 'Recipe_Dye_Components', id]);
