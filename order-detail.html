@@ -13,62 +13,71 @@
   --gold: #B07D2A; --gold-light: #F5EDD8; --done-text: #27500A;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.4; padding: 10px 12px; }
 
-.order-head { border-bottom: 2px solid var(--rule); padding-bottom: 10px; margin-bottom: 14px; }
-.order-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
-.order-meta { font-size: 11px; color: #8B7D72; margin-top: 3px; }
-.order-chips { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.chip { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 5px 11px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; }
-.chip span { font-family: 'Inter', sans-serif; font-weight: 500; font-size: 10px; color: #8B7D72; margin-left: 4px; }
+.order-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid var(--rule); padding-bottom: 7px; margin-bottom: 8px; }
+.order-title { font-family: 'Libre Baskerville', serif; font-size: 16px; font-weight: 700; }
+.order-meta { font-size: 11px; color: #8B7D72; }
+.order-stat { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.order-stat span { font-family: 'Inter', sans-serif; font-weight: 500; font-size: 10px; color: #8B7D72; margin-left: 3px; }
 
-.line-card { background: white; border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
-.line-head { display: flex; align-items: center; gap: 10px; padding: 10px 13px; background: var(--warm); }
-.line-name { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
-.line-sku { font-size: 10px; color: #6B5E52; font-family: 'DM Mono', monospace; }
-.line-progress { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; white-space: nowrap; }
-.line-progress.complete { color: var(--done-text); }
+table.lines { width: 100%; border-collapse: collapse; }
+table.lines thead th {
+  text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: #8B7D72; padding: 4px 6px; border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; background: var(--paper); z-index: 2;
+}
+table.lines td { padding: 4px 6px; border-bottom: 1px solid var(--warm); vertical-align: middle; }
+tr.line { background: white; }
+tr.line:hover { background: #FCFAF7; }
+tr.line.done td { background: #F4F8EE; }
+tr.line.open-row td { background: var(--teal-light); }
 
-.bar { height: 5px; background: var(--warm); }
+.nm { font-weight: 600; font-size: 12px; line-height: 1.25; }
+.sk { font-family: 'DM Mono', monospace; font-size: 9px; color: #8B7D72; }
+.ct { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ct.complete { color: var(--done-text); }
+.bar { width: 62px; height: 4px; background: var(--warm); border-radius: 2px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--teal); }
 .bar-fill.complete { background: var(--done-text); }
+.pri { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+.pri-Rush, .pri-Urgent { background: #F5E0E4; color: #A01830; }
+.pri-High { background: var(--gold-light); color: var(--gold); }
+.pri-Normal { background: var(--warm); color: #6B5E52; }
+.pri-Low { background: #EAF3DE; color: var(--done-text); }
+.stock-chip { font-family: 'DM Mono', monospace; font-size: 9px; background: var(--gold-light); color: var(--gold); padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
 
-.line-body { padding: 11px 13px; }
-.row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 7px; }
-.row:last-child { margin-bottom: 0; }
-.row-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; font-weight: 700; width: 100%; }
-
-input[type="number"], input[type="text"], select {
-  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px;
+input[type="number"], select {
+  padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
   font-family: 'Inter', sans-serif; background: white; color: var(--ink); color-scheme: light;
 }
-input[type="number"] { width: 92px; }
-select { max-width: 100%; }
-.btn { font-size: 12px; padding: 6px 12px; border-radius: 5px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+input.qty { width: 52px; }
+.btn { font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); white-space: nowrap; }
 .btn:hover { border-color: var(--accent); }
 .btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
 .btn-gold { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
-.btn:disabled { opacity: .5; cursor: default; }
+.btn-x { font-size: 10px; padding: 2px 6px; }
+.nowrap { white-space: nowrap; }
 
-.stock-note { font-size: 11px; color: #6B5E52; }
-.stock-none { font-size: 11px; color: #8B7D72; font-style: italic; }
-.divider { border-top: 1px dashed var(--rule); margin: 9px 0; }
-
-.alloc-line { font-size: 11px; padding: 3px 0; color: #6B5E52; display: flex; gap: 7px; align-items: center; }
-.alloc-tag { font-family: 'DM Mono', monospace; font-size: 10px; background: var(--teal-light); color: var(--teal); padding: 1px 6px; border-radius: 4px; }
-.alloc-status { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: var(--warm); color: #6B5E52; }
+.panel td { background: var(--paper); padding: 8px 10px; }
+.panel-grid { display: flex; gap: 18px; flex-wrap: wrap; }
+.panel-col { display: flex; flex-direction: column; gap: 4px; }
+.panel-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; font-weight: 700; }
+.panel-row { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.hint { font-size: 10px; color: #8B7D72; }
+.alloc-line { font-size: 10px; color: #6B5E52; display: flex; gap: 6px; align-items: center; }
+.alloc-tag { font-family: 'DM Mono', monospace; font-size: 9px; background: var(--teal-light); color: var(--teal); padding: 1px 5px; border-radius: 3px; }
 
 .done-banner {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  background: #EAF3DE; color: var(--done-text); border-radius: 6px; padding: 7px 10px; font-size: 11px; margin-bottom: 7px;
+  display: flex; align-items: center; gap: 8px;
+  background: #EAF3DE; color: var(--done-text); border-radius: 4px; padding: 3px 7px; font-size: 10px;
 }
 .undo-link { text-decoration: underline; cursor: pointer; font-weight: 600; }
-
-.warn { background: var(--gold-light); color: var(--gold); border: 1px solid var(--gold); border-radius: 6px; padding: 8px 11px; font-size: 11px; margin-bottom: 12px; }
-.empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+.warn { background: var(--gold-light); color: var(--gold); border: 1px solid var(--gold); border-radius: 5px; padding: 6px 9px; font-size: 10px; margin-bottom: 7px; }
+.empty-state { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; font-size: 12px; }
 .toast {
-  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 6px 14px; border-radius: 5px; font-size: 11px;
   opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
@@ -229,6 +238,12 @@ async function loadOrder(record) {
   }
 }
 
+let expandedLine = null;
+function toggleExpand(lineId) {
+  expandedLine = expandedLine === lineId ? null : lineId;
+  render();
+}
+
 function render() {
   if (!orderEntry) return;
   const o = orderEntry;
@@ -239,99 +254,99 @@ function render() {
 
   const warnHtml = hasLineLink ? '' :
     `<div class="warn"><strong>Lot_Allocations has no Work_Order_Line column.</strong>
-     Fulfilling from stock will still adjust the counts, but nothing will record which lot
-     went to which order line. Add a Reference column named <code>Work_Order_Line</code>
-     pointing at Work_Order_Lines to get that traceability.</div>`;
+     Stock pulls will still adjust the counts, but won't record which lot went to which line.</div>`;
 
-  const linesHtml = o.lines.length
-    ? o.lines.map(l => lineCardHtml(l)).join('')
-    : `<div class="empty-state">This order has no lines.</div>`;
+  const body = o.lines.length
+    ? o.lines.map(l => lineRowHtml(l)).join('')
+    : `<tr><td colspan="7"><div class="empty-state">This order has no lines.</div></td></tr>`;
 
   document.getElementById('content').innerHTML = `
     <div class="order-head">
       <div class="order-title">${o.orderNumber}</div>
       <div class="order-meta">${o.customerName || 'no customer'}${o.status ? ' · ' + o.status : ''}${o.dueDate ? ' · due ' + fmtDate(o.dueDate) : ''}</div>
-      <div class="order-chips">
-        <div class="chip">${o.lines.length}<span>lines</span></div>
-        <div class="chip">${totalDyed}/${totalNeeded}<span>spools done</span></div>
-        <div class="chip">${openLines}<span>still open</span></div>
-      </div>
+      <div class="order-stat">${totalDyed}/${totalNeeded}<span>spools</span> · ${openLines}<span>open</span> · ${o.lines.length}<span>lines</span></div>
     </div>
     ${warnHtml}
-    ${linesHtml}
+    <table class="lines">
+      <thead><tr>
+        <th>Colorway</th><th>Progress</th><th>Done</th><th>Priority</th>
+        <th>Stock</th><th>Log dyed</th><th></th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>
   `;
 }
 
-function lineCardHtml(l) {
+function lineRowHtml(l) {
   const complete = l.qtyNeeded > 0 && l.qtyDyed >= l.qtyNeeded;
   const pct = l.qtyNeeded > 0 ? Math.min(100, Math.round((l.qtyDyed / l.qtyNeeded) * 100)) : 0;
   const done = doneActions[l.id];
-
+  const isOpen = expandedLine === l.id;
   const availableTotal = l.stockLots.reduce((s, lot) => s + lot.general + lot.unassigned, 0);
+
+  const mainRow = `
+    <tr class="line ${complete ? 'done' : ''} ${isOpen ? 'open-row' : ''}">
+      <td>
+        <div class="nm">${l.recipeName}</div>
+        <div class="sk">${l.sku || ''}</div>
+        ${done ? `<div class="done-banner"><span>✓ ${done.label}</span><span class="undo-link" onclick="undoLine(${l.id})">undo</span></div>` : ''}
+      </td>
+      <td><div class="bar"><div class="bar-fill ${complete ? 'complete' : ''}" style="width:${pct}%"></div></div></td>
+      <td><span class="ct ${complete ? 'complete' : ''}">${l.qtyDyed}/${l.qtyNeeded}${complete ? ' ✓' : ''}</span></td>
+      <td><span class="pri pri-${l.priority}">${l.priority}</span></td>
+      <td>${availableTotal ? `<span class="stock-chip">${availableTotal} free</span>` : '<span class="hint">—</span>'}</td>
+      <td class="nowrap">
+        <input type="number" class="qty" id="dyed-${l.id}" min="1" placeholder="spools">
+        <button class="btn btn-teal btn-x" onclick="logDyed(${l.id})">✓</button>
+      </td>
+      <td><button class="btn btn-x" onclick="toggleExpand(${l.id})">${isOpen ? '▲' : '▼'}</button></td>
+    </tr>`;
+
+  if (!isOpen) return mainRow;
+
   const stockHtml = l.stockLots.length
-    ? `
-      <div class="row">
+    ? `<div class="panel-row">
         <select id="lot-${l.id}">
           ${l.stockLots.map(lot => {
             const avail = lot.general + lot.unassigned;
-            return `<option value="${lot.id}">${lot.lotNumber} — ${avail} spool${avail === 1 ? '' : 's'} free${lot.general ? ` (${lot.general} back stock)` : ''}</option>`;
+            return `<option value="${lot.id}">${lot.lotNumber} — ${avail} free${lot.general ? ` (${lot.general} back stock)` : ''}</option>`;
           }).join('')}
         </select>
-        <input type="number" id="stockqty-${l.id}" min="1" placeholder="spools" value="${Math.min(l.remaining || 1, availableTotal)}">
-        <button class="btn btn-gold" onclick="fulfilFromStock(${l.id})">Use back stock</button>
-      </div>
-      <div class="stock-note">${availableTotal} spool${availableTotal === 1 ? '' : 's'} already made and unclaimed for this colorway.</div>`
-    : `<div class="stock-none">No ready lots with spare spools for this colorway.</div>`;
+        <input type="number" class="qty" id="stockqty-${l.id}" min="1" value="${Math.min(l.remaining || 1, availableTotal)}">
+        <button class="btn btn-gold btn-x" onclick="fulfilFromStock(${l.id})">Use stock</button>
+      </div>`
+    : `<div class="hint">No ready lots with spare spools.</div>`;
 
   const allocHtml = l.allocs.length
-    ? `<div class="divider"></div>
-       <div class="row-label">Filled from these lots</div>
-       ${l.allocs.map(a => {
+    ? `<div class="panel-col">
+        <div class="panel-lbl">Filled from</div>
+        ${l.allocs.map(a => {
           const lot = orderEntry.lotById[a.lotId];
-          return `<div class="alloc-line">
-            <span class="alloc-tag">${lot ? lot.lotNumber : 'lot #' + a.lotId}</span>
-            ${a.qty} spool${a.qty === 1 ? '' : 's'}
-            <span class="alloc-status">${a.status}</span>
-          </div>`;
-        }).join('')}`
+          return `<div class="alloc-line"><span class="alloc-tag">${lot ? lot.lotNumber : 'lot #' + a.lotId}</span>${a.qty} · ${a.status}</div>`;
+        }).join('')}
+      </div>`
     : '';
 
-  return `
-    <div class="line-card">
-      <div class="line-head">
-        <div>
-          <div class="line-name">${l.recipeName}</div>
-          <div class="line-sku">${l.sku || ''}</div>
+  return mainRow + `
+    <tr class="panel"><td colspan="7">
+      <div class="panel-grid">
+        <div class="panel-col">
+          <div class="panel-lbl">Already made — pull from stock</div>
+          ${stockHtml}
         </div>
-        <div class="line-progress ${complete ? 'complete' : ''}">${l.qtyDyed}/${l.qtyNeeded}${complete ? ' ✓' : ''}</div>
-      </div>
-      <div class="bar"><div class="bar-fill ${complete ? 'complete' : ''}" style="width:${pct}%"></div></div>
-      <div class="line-body">
-        ${done ? `<div class="done-banner"><span>✓ ${done.label}</span><span class="undo-link" onclick="undoLine(${l.id})">Undo</span></div>` : ''}
-
-        <div class="row-label">Just dyed some</div>
-        <div class="row">
-          <input type="number" id="dyed-${l.id}" min="1" placeholder="spools made">
-          <button class="btn btn-teal" onclick="logDyed(${l.id})">✓ Log dyed</button>
-        </div>
-
-        <div class="divider"></div>
-        <div class="row-label">Already made — pull from stock</div>
-        ${stockHtml}
-
-        <div class="divider"></div>
-        <div class="row-label">Edit this line</div>
-        <div class="row">
-          <input type="number" id="need-${l.id}" min="0" value="${l.qtyNeeded}" title="Qty needed">
-          <select id="prio-${l.id}">
-            ${PRIORITIES.map(p => `<option value="${p}" ${p === l.priority ? 'selected' : ''}>${p}</option>`).join('')}
-          </select>
-          <button class="btn" onclick="saveLine(${l.id})">Save changes</button>
+        <div class="panel-col">
+          <div class="panel-lbl">Edit line</div>
+          <div class="panel-row">
+            <input type="number" class="qty" id="need-${l.id}" min="0" value="${l.qtyNeeded}" title="Qty needed">
+            <select id="prio-${l.id}">
+              ${PRIORITIES.map(p => `<option value="${p}" ${p === l.priority ? 'selected' : ''}>${p}</option>`).join('')}
+            </select>
+            <button class="btn btn-x" onclick="saveLine(${l.id})">Save</button>
+          </div>
         </div>
         ${allocHtml}
       </div>
-    </div>
-  `;
+    </td></tr>`;
 }
 
 function lineById(id) { return orderEntry.lines.find(l => l.id === id); }
@@ -478,6 +493,7 @@ grist.ready({ requiredAccess: 'full' });
 grist.onRecord((record) => {
   currentRecord = record;
   doneActions = {};
+  expandedLine = null;
   loadOrder(record);
 });
 </script>
