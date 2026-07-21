@@ -59,6 +59,8 @@ body {
 .cleanup-row { font-size: 11px; padding: 4px 6px; border-radius: 5px; margin-bottom: 3px; }
 .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
 .cleanup-keep { background: var(--teal-light); color: var(--teal); }
+.cleanup-stage { background: #1A1614; color: #F7F3EE; }
+.cleanup-stage .slot-tag { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
 .dye-action-row { margin-bottom: 8px; }
 .action-done-banner {
   display: flex; justify-content: space-between; align-items: center;
@@ -107,6 +109,19 @@ function getRefId(ref) {
 }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+
+// ── PREP TABLE CONFIG ──────────────────────────────────────────────
+// Must match PREP_ZONES in batch-planner.html. Staging advice is only given
+// when the next use of a dye is fewer than this many groups ahead — past that,
+// the slot has already rotated round to something else.
+const PREP_ZONES = 3;
+// ───────────────────────────────────────────────────────────────────
+
+// Grist Date columns store epoch seconds at UTC midnight of the calendar day.
+function todayEpochSeconds() {
+  const n = new Date();
+  return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
+}
 
 let currentEntry = null;
 let lastLoggedDelta = {}; // lineId -> amount just added, for undo
@@ -298,6 +313,53 @@ async function loadForRecipe(record) {
       return { bin: next, note: 'new bin' };
     }
 
+    // ── Today's saved plan (from Batch Planner's "Save Today's Plan") ──
+    // Lets us say "keep it out, stage at P2" instead of "put it in a bin",
+    // when the dye gets used again soon enough for a prep zone to still be free.
+    // Missing table / no plan saved = silently fall back to bin advice.
+    let planRows = [];
+    try {
+      const dpTable = await grist.docApi.fetchTable('Day_Plan');
+      const today = todayEpochSeconds();
+      (dpTable.id || []).forEach((id, i) => {
+        if (Number(columnAsArray(dpTable, 'Plan_Date')[i]) !== today) return;
+        const rid = getRefId(columnAsArray(dpTable, 'Recipe')[i]);
+        if (!rid) return;
+        planRows.push({
+          recipeId: rid,
+          seq: Number(columnAsArray(dpTable, 'Sequence')[i]) || 0,
+          slot: (columnAsArray(dpTable, 'Prep_Slot')[i] || '').toString().trim(),
+        });
+      });
+      planRows.sort((a, b) => a.seq - b.seq);
+      // Consecutive rows sharing a slot are one dye group occupying one zone.
+      let run = 0;
+      planRows.forEach((r, i) => {
+        if (i > 0 && r.slot !== planRows[i - 1].slot) run++;
+        r.run = run;
+      });
+    } catch (err) {
+      planRows = [];
+    }
+
+    function stagingFor(dyeId) {
+      if (!planRows.length) return null;
+      const meIdx = planRows.findIndex(r => r.recipeId === record.id);
+      if (meIdx < 0) return null;
+      const myRun = planRows[meIdx].run;
+      for (let i = meIdx + 1; i < planRows.length; i++) {
+        const r = planRows[i];
+        if (r.run === myRun) continue; // still this group's turn — dye hasn't moved yet
+        if (!(dyesByRecipeId[r.recipeId] || []).includes(dyeId)) continue;
+        return {
+          slot: r.slot,
+          recipeName: recipeNameById[r.recipeId] || `Recipe #${r.recipeId}`,
+          inReach: (r.run - myRun) < PREP_ZONES,
+        };
+      }
+      return null;
+    }
+
     const cleanupInfo = dyeIds.map(dyeId => {
       const others = [];
       pendingRecipeIds.forEach(rid => {
@@ -314,6 +376,7 @@ async function loadForRecipe(record) {
         others,
         suggestedBin: binSuggestion.bin,
         suggestedBinNote: binSuggestion.note,
+        staging: stagingFor(dyeId),
       };
     });
 
@@ -355,9 +418,18 @@ function render() {
     : `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
 
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
-    const flagHtml = c.isOneOff
-      ? `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`
-      : `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+    let flagHtml;
+    if (c.staging && c.staging.inReach) {
+      // Used again soon enough today that a prep zone will still be free for it.
+      flagHtml = `<div class="cleanup-row cleanup-stage"><strong>${c.dyeDetail}</strong> — Keep out. Stage at <span class="slot-tag">${c.staging.slot}</span> (used next in ${c.staging.recipeName}). Don't put it away.</div>`;
+    } else if (c.staging) {
+      // Needed later today, but too many groups out — the zone rotates before then.
+      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — needed again today in ${c.staging.recipeName}, but too far ahead to leave on the prep table. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+    } else if (c.isOneOff) {
+      flagHtml = `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+    } else {
+      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+    }
 
     const done = completedActions[idx];
     const actionBlock = done
@@ -367,6 +439,7 @@ function render() {
          </div>`
       : `<select id="action-${idx}" onchange="onDyeActionChange(${idx})">
            <option value="">What did you do with the leftover?</option>
+           ${c.staging && c.staging.inReach ? `<option value="stage">Left it out — staged at ${c.staging.slot}</option>` : ''}
            <option value="put_away">Put away in a bin</option>
            <option value="hold">Hold for later (no bin yet)</option>
            <option value="dump">Dump it</option>
@@ -501,6 +574,12 @@ async function onDyeActionChange(idx) {
         <button class="action-confirm-btn" onclick="${action === 'put_away' ? 'putAwayDye' : 'holdDye'}(${idx})">✓</button>
       </div>`;
     }
+  } else if (action === 'stage') {
+    const c = currentEntry.cleanupInfo[idx];
+    const slot = c.staging ? c.staging.slot : 'the prep table';
+    wrap.innerHTML = `<div class="action-fields">
+      <button class="action-confirm-btn" onclick="stageDye(${idx})" style="flex:1;">Confirm — left out at ${slot}</button>
+    </div>`;
   } else if (action === 'dump') {
     wrap.innerHTML = `<div class="action-fields">
       <button class="action-confirm-btn" onclick="dumpDye(${idx})" style="flex:1;">Confirm dumped</button>
@@ -508,6 +587,19 @@ async function onDyeActionChange(idx) {
   } else {
     wrap.innerHTML = '';
   }
+}
+
+// Staging writes nothing to Dye_Stock on purpose — the dye never left the bench,
+// so there's no stock location to record. It just closes out the row for the day.
+async function stageDye(idx) {
+  const c = currentEntry.cleanupInfo[idx];
+  const slot = c.staging ? c.staging.slot : 'prep table';
+  const next = c.staging ? ` for ${c.staging.recipeName}` : '';
+  completedActions[idx] = {
+    label: `Staged at ${slot}${next} — not put away`,
+    undo: async () => {},
+  };
+  render();
 }
 
 async function putAwayDye(idx) {

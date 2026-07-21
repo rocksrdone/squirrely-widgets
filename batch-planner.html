@@ -40,6 +40,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .badge.ready { background: var(--teal-light); color: var(--teal); }
 .badge.mix { background: var(--gold-light); color: var(--gold); }
 .badge.oneoff { background: var(--rule); color: #6B5E52; }
+.badge.slot { background: var(--ink); color: #F7F3EE; font-family: 'DM Mono', monospace; letter-spacing: .06em; }
 
 .line-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--rule); }
 .line-main { flex: 1; }
@@ -72,6 +73,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
     <label>Daily capacity</label>
     <input type="number" id="capacityInput" value="20" min="1">
     <button class="btn btn-teal" onclick="loadAll()">↻ Generate Today's Plan</button>
+    <button class="btn" id="savePlanBtn" onclick="saveTodaysPlan()">⤓ Save Today's Plan</button>
   </div>
 </div>
 
@@ -84,6 +86,15 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <div class="toast" id="toast"></div>
 
 <script>
+// ── PREP TABLE CONFIG ──────────────────────────────────────────────
+// How many physical staging zones the prep table has (P1..Pn).
+// Groups rotate through these slots; Batch Assignment will only tell you to
+// "stage at Pn" if the next use is fewer than PREP_ZONES groups away —
+// beyond that the slot would already be reused by something else.
+// Change this ONE number here and in batch-assignment.html if the bench changes.
+const PREP_ZONES = 3;
+// ───────────────────────────────────────────────────────────────────
+
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -142,6 +153,13 @@ let dyes = {};          // id -> {Dye_Name, Brand, Serial, Swatch_Hex, Shelf_Lif
 let dyeStockByDye = {}; // dyeId -> [{qty, mixedDate, binLocation}]
 let recipeDyes = {};    // recipeId -> [dyeId,...]
 let queueLines = [];    // [{id, recipeId, workOrderId, qtyNeeded, dueDate, priority, orderNumber, customerName}]
+let lastGroups = [];    // most recently rendered plan groups, in run order — what Save writes out
+
+// Grist Date columns store epoch seconds at UTC midnight of the calendar day.
+function todayEpochSeconds() {
+  const n = new Date();
+  return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
+}
 
 function resolvedColor(dyeId) {
   const d = dyes[dyeId];
@@ -379,8 +397,51 @@ function runPlan() {
   const capacity = Number(document.getElementById('capacityInput').value) || 20;
   const { selected, waiting } = selectToday(capacity);
   const groups = sequenceSelected(selected);
+  // Rotate groups through the physical prep zones. Group n reuses the slot that
+  // group n-PREP_ZONES was on, which by then is finished and cleared.
+  groups.forEach((g, i) => { g.prepSlot = 'P' + ((i % PREP_ZONES) + 1); });
+  lastGroups = groups;
   renderPlan(groups);
   renderWaiting(waiting);
+}
+
+async function saveTodaysPlan() {
+  if (!lastGroups.length) { showToast('Generate a plan first.'); return; }
+  const btn = document.getElementById('savePlanBtn');
+  btn.disabled = true;
+  const planDate = todayEpochSeconds();
+  try {
+    // Replace any plan already saved for today — this is a re-plan, not an append.
+    const existing = await grist.docApi.fetchTable('Day_Plan');
+    const ids = existing.id || [];
+    const dates = columnAsArray(existing, 'Plan_Date');
+    const stale = ids.filter((id, i) => Number(dates[i]) === planDate);
+
+    const actions = [];
+    if (stale.length) actions.push(['BulkRemoveRecord', 'Day_Plan', stale]);
+
+    let seq = 0;
+    lastGroups.forEach(g => {
+      g.lines.forEach(line => {
+        seq++;
+        actions.push(['AddRecord', 'Day_Plan', null, {
+          Plan_Date: planDate,
+          Work_Order_Line: line.id,
+          Recipe: line.recipeId,
+          Sequence: seq,
+          Prep_Slot: g.prepSlot,
+        }]);
+      });
+    });
+
+    await grist.docApi.applyUserActions(actions);
+    showToast(`Saved — ${seq} line${seq === 1 ? '' : 's'} across ${lastGroups.length} group${lastGroups.length === 1 ? '' : 's'}${stale.length ? ' (replaced earlier plan)' : ''}.`);
+  } catch (e) {
+    console.error('Failed to save day plan:', e);
+    showToast('Save failed — does the Day_Plan table exist? Check the console.');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function dueTagHtml(dueDate) {
@@ -417,6 +478,7 @@ function renderPlan(groups) {
     else if (g.stock.hasStock) badges.push('<span class="badge ready">Premade ready</span>');
     else badges.push('<span class="badge mix">Needs mixing</span>');
     if (g.isOneOff) badges.push('<span class="badge oneoff">One-off</span>');
+    if (g.prepSlot) badges.push(`<span class="badge slot">${g.prepSlot}</span>`);
 
     return `
       <div class="group-card">
