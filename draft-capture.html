@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Draft Capture</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=DM+Mono:wght@400;500&family=Karla:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f6f1e7;
+    --paper-deep:#ece4d6;
+    --ink:#2e2a24;
+    --ink-soft:#6b6355;
+    --rule:#d8cdb9;
+    --go:#41684a;
+    --warn:#9a4b2f;
+    --white:#fffdf8;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:Karla,system-ui,sans-serif;
+    font-size:16px;
+    padding:14px 14px 120px;
+  }
+  h1{font-family:'Libre Baskerville',Georgia,serif;font-size:19px;font-weight:700;margin:0 0 2px}
+  .sub{font-size:13px;color:var(--ink-soft);margin:0 0 14px}
+
+  .plate{
+    background:var(--ink);color:var(--paper);
+    border-radius:10px;padding:14px 16px;margin-bottom:16px;
+  }
+  .plate .lbl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.65}
+  .plate .code{font-family:'DM Mono',monospace;font-size:27px;font-weight:500;line-height:1.15}
+  .plate small{display:block;font-size:11px;opacity:.6;margin-top:4px}
+
+  section{margin-bottom:20px}
+  .shead{
+    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-soft);margin:0 0 8px;
+    display:flex;justify-content:space-between;align-items:baseline;
+  }
+  .shead .hint{letter-spacing:0;text-transform:none;font-size:12px}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{
+    border:1.5px solid var(--rule);background:var(--white);
+    border-radius:999px;padding:11px 15px;font-size:15px;
+    display:flex;align-items:center;gap:8px;cursor:pointer;
+    min-height:46px;user-select:none;
+  }
+  .chip.on{border-color:var(--ink);background:var(--ink);color:var(--paper)}
+  .chip .dot{width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,.25);flex:none}
+  .chip.small{padding:8px 13px;font-size:14px;min-height:38px}
+  .chip.mono{font-family:'DM Mono',monospace}
+
+  .dye-row{background:var(--white);border:1px solid var(--rule);border-radius:10px;padding:11px 12px;margin-bottom:9px}
+  .dye-row .top{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+  .dye-row .nm{font-weight:700;flex:1;font-size:15px}
+  .x{border:none;background:var(--paper-deep);color:var(--ink-soft);border-radius:8px;width:34px;height:34px;font-size:17px;cursor:pointer;flex:none}
+  .dil-custom{
+    border:1.5px solid var(--rule);border-radius:999px;padding:8px 12px;
+    font-family:'DM Mono',monospace;font-size:14px;width:96px;background:var(--white);
+    color:var(--ink);min-height:38px;
+  }
+
+  input[type=search],textarea{
+    width:100%;border:1.5px solid var(--rule);border-radius:10px;
+    padding:12px;font-family:Karla,sans-serif;font-size:16px;
+    background:var(--white);color:var(--ink);
+  }
+  textarea{min-height:110px;resize:vertical;line-height:1.45}
+  .drawer{max-height:230px;overflow:auto;margin-top:9px;border:1px solid var(--rule);border-radius:10px;background:var(--white)}
+  .drawer div{padding:12px;border-bottom:1px solid var(--paper-deep);display:flex;align-items:center;gap:9px;cursor:pointer}
+  .drawer div:last-child{border-bottom:none}
+
+  .stepper{display:flex;align-items:center;gap:12px;margin-bottom:9px}
+  .stepper button{width:52px;height:52px;border-radius:12px;border:1.5px solid var(--rule);background:var(--white);font-size:24px;color:var(--ink);cursor:pointer}
+  .stepper .val{font-family:'DM Mono',monospace;font-size:30px;min-width:60px;text-align:center}
+  .stepper .unit{font-size:13px;color:var(--ink-soft)}
+
+  .bar{
+    position:fixed;left:0;right:0;bottom:0;
+    padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(to top,var(--paper) 72%,rgba(246,241,231,0));
+  }
+  .save{width:100%;min-height:56px;border:none;border-radius:12px;background:var(--go);color:#fff;font-family:Karla,sans-serif;font-size:17px;font-weight:700;cursor:pointer}
+  .save[disabled]{background:var(--rule);color:var(--ink-soft)}
+
+  .banner{border:1.5px solid var(--warn);color:var(--warn);background:#fdf3ef;border-radius:10px;padding:11px 12px;font-size:13px;margin-bottom:14px;line-height:1.45}
+  .done{border:1.5px solid var(--go);background:#eef4ee;color:#2f4d36;border-radius:10px;padding:14px;margin-bottom:14px}
+  .done b{font-family:'DM Mono',monospace;font-size:20px;display:block;margin:3px 0 9px}
+  .undo{border:1.5px solid var(--go);background:transparent;color:#2f4d36;border-radius:9px;padding:10px 15px;font-size:14px;font-weight:700;cursor:pointer}
+  .hide{display:none}
+</style>
+</head>
+<body>
+
+<div id="banner" class="banner hide"></div>
+<div id="done" class="done hide"></div>
+
+<div id="form">
+  <h1>Quick draft</h1>
+  <p class="sub">Tag the hank with this code, then get it in the photo.</p>
+
+  <div class="plate">
+    <div class="lbl">Draft code</div>
+    <div class="code" id="code">...</div>
+    <small>write this on the tag</small>
+  </div>
+
+  <section>
+    <div class="shead">Fiber</div>
+    <div class="chips" id="fiber"></div>
+  </section>
+
+  <section>
+    <div class="shead"><span>Dyes used</span><span class="hint" id="dyehint"></span></div>
+    <div id="picked"></div>
+    <div class="chips" id="suggest"></div>
+    <input type="search" id="search" placeholder="Search all dyes..." autocomplete="off">
+    <div class="drawer hide" id="drawer"></div>
+  </section>
+
+  <section>
+    <div class="shead"><span>Spools made</span><span class="hint">by tie colour</span></div>
+    <div class="stepper">
+      <button type="button" id="minus">-</button>
+      <div class="val" id="spools">10</div>
+      <button type="button" id="plus">+</button>
+      <div class="unit">spools</div>
+    </div>
+    <div class="chips" id="spoolquick"></div>
+  </section>
+
+  <section>
+    <div class="shead"><span>How it was made</span><span class="hint">dictate it</span></div>
+    <textarea id="notes" placeholder="Dye order, powder sprinkled, anything you'll want later..."></textarea>
+  </section>
+</div>
+
+<div class="bar" id="bar">
+  <button class="save" id="save" disabled>Save draft</button>
+</div>
+
+<script>
+/* ============================================================
+   Squirrely Stash - draft-capture.html
+   Kettle-side capture of an unnamed dye run.
+   Writes: Recipes (draft) + Recipe_Dye_Components + Production_Lots
+   ============================================================ */
+
+var FIBERS = [
+  {code:'FFN', label:'FF Nylon',  yards:100},
+  {code:'FFC', label:'FF Cotton', yards:100},
+  {code:'EN',  label:'E Nylon',   yards:150}
+];
+var DILUTIONS = ['Full','1:2','1:4','1:8','1:16'];
+var SPOOL_QUICK = [5,10,15,20,25];
+var DRAFT_STATUS = 'Drying - Metal Rack';
+
+/* Grist hands refs back three different ways */
+function getRefId(v){
+  if(v==null) return null;
+  if(typeof v==='number') return v||null;
+  if(Array.isArray(v)&&v[0]==='R') return v[1]||null;
+  if(typeof v==='object'&&v.rowId!==undefined) return v.rowId||null;
+  return null;
+}
+function pickCol(tbl,cands){ for(var i=0;i<cands.length;i++){ if(tbl && cands[i] in tbl) return cands[i]; } return null; }
+function rows(tbl){
+  if(!tbl||!tbl.id) return [];
+  return tbl.id.map(function(id,i){
+    var o={id:id};
+    for(var k in tbl){ if(k!=='id') o[k]=tbl[k][i]; }
+    return o;
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'
