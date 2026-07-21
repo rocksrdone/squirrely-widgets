@@ -90,7 +90,7 @@
   .save{width:100%;min-height:56px;border:none;border-radius:12px;background:var(--go);color:#fff;font-family:Karla,sans-serif;font-size:17px;font-weight:700;cursor:pointer}
   .save[disabled]{background:var(--rule);color:var(--ink-soft)}
 
-  .banner{border:1.5px solid var(--warn);color:var(--warn);background:#fdf3ef;border-radius:10px;padding:11px 12px;font-size:13px;margin-bottom:14px;line-height:1.45}
+  .banner{border:1.5px solid var(--warn);color:var(--warn);background:#fdf3ef;border-radius:10px;padding:11px 12px;font-size:13px;margin-bottom:14px;line-height:1.45;word-break:break-word}
   .done{border:1.5px solid var(--go);background:#eef4ee;color:#2f4d36;border-radius:10px;padding:14px;margin-bottom:14px}
   .done b{font-family:'DM Mono',monospace;font-size:20px;display:block;margin:3px 0 9px}
   .undo{border:1.5px solid var(--go);background:transparent;color:#2f4d36;border-radius:9px;padding:10px 15px;font-size:14px;font-weight:700;cursor:pointer}
@@ -162,6 +162,13 @@ var DILUTIONS = ['Full','1:2','1:4','1:8','1:16'];
 var SPOOL_QUICK = [5,10,15,20,25];
 var DRAFT_STATUS = 'Drying - Metal Rack';
 
+function warn(html){
+  var b=document.getElementById('banner');
+  if(!b) return;
+  b.innerHTML=html;
+  b.classList.remove('hide');
+}
+
 /* Grist hands refs back three different ways */
 function getRefId(v){
   if(v==null) return null;
@@ -179,4 +186,293 @@ function rows(tbl){
     return o;
   });
 }
-function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+var S = { dyes:[], byId:{}, suggested:[], picked:[], fiber:'FFN', spools:10, code:'', cols:{}, saved:null, busy:false };
+
+function swatch(d){
+  var hex='#cfc6b4';
+  if(d&&typeof d.hex==='string'&&/^#?[0-9a-f]{6}$/i.test(d.hex)) hex=(d.hex.charAt(0)==='#'?d.hex:'#'+d.hex);
+  return '<span class="dot" style="background:'+hex+'"></span>';
+}
+
+function render(){
+  document.getElementById('code').textContent=S.code||'...';
+
+  document.getElementById('fiber').innerHTML=FIBERS.map(function(f){
+    return '<div class="chip '+(S.fiber===f.code?'on':'')+'" data-fiber="'+f.code+'">'+esc(f.label)+'</div>';
+  }).join('');
+
+  var pickedIds={};
+  S.picked.forEach(function(p){ pickedIds[p.id]=1; });
+  var sug=S.suggested.filter(function(id){ return !pickedIds[id]&&S.byId[id]; });
+  document.getElementById('dyehint').textContent = sug.length?"on today's plan":'';
+  document.getElementById('suggest').innerHTML=sug.map(function(id){
+    var d=S.byId[id];
+    return '<div class="chip small" data-add="'+id+'">'+swatch(d)+esc(d.name)+'</div>';
+  }).join('');
+
+  document.getElementById('picked').innerHTML=S.picked.map(function(p){
+    var d=S.byId[p.id];
+    var chips=DILUTIONS.map(function(x){
+      return '<div class="chip small mono '+(p.dilution===x?'on':'')+'" data-dil="'+p.id+'|'+x+'">'+x+'</div>';
+    }).join('');
+    var custom=DILUTIONS.indexOf(p.dilution)>=0?'':esc(p.dilution||'');
+    return '<div class="dye-row">'+
+      '<div class="top">'+swatch(d)+'<div class="nm">'+esc(d.name)+'</div>'+
+      '<button class="x" data-rm="'+p.id+'" aria-label="Remove">x</button></div>'+
+      '<div class="chips">'+chips+
+      '<input class="dil-custom" data-cust="'+p.id+'" placeholder="other" value="'+custom+'"></div></div>';
+  }).join('');
+
+  document.getElementById('spools').textContent=S.spools;
+  document.getElementById('spoolquick').innerHTML=SPOOL_QUICK.map(function(n){
+    return '<div class="chip small mono '+(S.spools===n?'on':'')+'" data-sp="'+n+'">'+n+'</div>';
+  }).join('');
+
+  var btn=document.getElementById('save');
+  btn.disabled=!(S.picked.length>0&&!S.busy);
+  btn.textContent=S.busy?'Saving...':'Save draft';
+}
+
+/* Dyes on today's plan, surfaced first. Derived straight from Day_Plan ->
+   Recipe_Dye_Components. Deliberately does NOT recompute prep zones: a third
+   copy of allocatePrepZones() would be a third thing to keep byte-identical. */
+function todaysDyes(planT, rdcT){
+  if(!planT||!rdcT) return [];
+  var d=new Date();
+  var today=Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/1000;
+  var dateCol=pickCol(planT,['Plan_Date']);
+  var recCol=pickCol(planT,['Recipe']);
+  var rdcRec=pickCol(rdcT,['Recipe','Recipe_ID']);
+  var rdcDye=pickCol(rdcT,['Dye_Name']);
+  if(!dateCol||!recCol||!rdcRec||!rdcDye) return [];
+
+  var recipeIds=new Set();
+  rows(planT).forEach(function(r){
+    if(Number(r[dateCol])===today){
+      var id=getRefId(r[recCol]);
+      if(id) recipeIds.add(id);
+    }
+  });
+  var out=[], seen=new Set();
+  rows(rdcT).forEach(function(r){
+    if(!recipeIds.has(getRefId(r[rdcRec]))) return;
+    var dyeId=getRefId(r[rdcDye]);
+    if(dyeId&&!seen.has(dyeId)){ seen.add(dyeId); out.push(dyeId); }
+  });
+  return out;
+}
+
+/* DR-YYMMDD-N, N counting drafts already logged today */
+function nextDraftCode(lotsT){
+  var d=new Date();
+  var p=function(n){ return String(n).padStart(2,'0'); };
+  var stamp=String(d.getFullYear()).slice(2)+p(d.getMonth()+1)+p(d.getDate());
+  var prefix='DR-'+stamp+'-';
+  var max=0;
+  if(lotsT&&S.cols.draft){
+    rows(lotsT).forEach(function(r){
+      var c=String(r[S.cols.draft]||'');
+      if(c.indexOf(prefix)===0){
+        var n=parseInt(c.slice(prefix.length),10);
+        if(!isNaN(n)&&n>max) max=n;
+      }
+    });
+  }
+  return prefix+(max+1);
+}
+
+async function init(){
+  var t = await Promise.all([
+    grist.docApi.fetchTable('Dyes').catch(function(){return null;}),
+    grist.docApi.fetchTable('Production_Lots').catch(function(){return null;}),
+    grist.docApi.fetchTable('Day_Plan').catch(function(){return null;}),
+    grist.docApi.fetchTable('Recipe_Dye_Components').catch(function(){return null;})
+  ]);
+  var dyesT=t[0], lotsT=t[1], planT=t[2], rdcT=t[3];
+
+  var problems = [];
+  if(!dyesT) problems.push('Dyes table not readable. Check the table ID in Raw Data and that widget access is Full document.');
+  if(!lotsT) problems.push('Production_Lots not readable.');
+
+  S.cols.dyeName  = pickCol(dyesT,['Name','Dye_Name','Dye','Title','Label','Dye_Label','Colour','Color']);
+  S.cols.swatch   = pickCol(dyesT,['Swatch_Hex','Hex','Colour_Hex','Color_Hex']);
+  S.cols.draft    = pickCol(lotsT,['Draft_Code']);
+  S.cols.lotRecipe= pickCol(lotsT,['Recipe','Recipe_ID']);
+  S.cols.lotStatus= pickCol(lotsT,['Drying_Status']);
+  S.cols.lotSpools= pickCol(lotsT,['Spools_Made','Total_Spools','Spool_Count','Qty_Spools','Spools']);
+  S.cols.lotFiber = pickCol(lotsT,['Fiber','Fiber_Type','Material','Form','Base']);
+  S.cols.lotDate  = pickCol(lotsT,['Date_Dyed','Dye_Date','Date_Created','Date']);
+  S.cols.rdcRecipe= pickCol(rdcT,['Recipe','Recipe_ID']);
+  S.cols.rdcDye   = pickCol(rdcT,['Dye_Name']);
+  S.cols.rdcDil   = pickCol(rdcT,['Dilution','Dilution_Ratio','Ratio','Strength']);
+
+  if(dyesT && !S.cols.dyeName){
+    problems.push('Dyes loaded but no name column matched. Columns present: '+esc(Object.keys(dyesT).join(', ')));
+  }
+  if(lotsT && !S.cols.draft) problems.push('Production_Lots has no Draft_Code column.');
+  if(rdcT && !S.cols.rdcDil) problems.push('No dilution column on Recipe_Dye_Components - dilutions will go into the recipe notes instead.');
+  if(lotsT && !S.cols.lotSpools) problems.push('No spool-count column on Production_Lots - spool count will not be stored.');
+  if(problems.length) warn(problems.join('<br>'));
+
+  S.dyes = rows(dyesT).map(function(r){
+    return { id:r.id, name:String(r[S.cols.dyeName]||('Dye '+r.id)), hex:S.cols.swatch?r[S.cols.swatch]:null };
+  }).filter(function(d){ return d.name.trim(); });
+  S.dyes.sort(function(a,b){ return a.name.localeCompare(b.name); });
+  S.dyes.forEach(function(d){ S.byId[d.id]=d; });
+
+  S.suggested = todaysDyes(planT, rdcT);
+  S.code = nextDraftCode(lotsT);
+  render();
+}
+
+document.addEventListener('click',function(e){
+  var t=e.target.closest('[data-fiber],[data-add],[data-rm],[data-dil],[data-sp],[data-pick]');
+  if(!t) return;
+  if(t.dataset.fiber){ S.fiber=t.dataset.fiber; }
+  else if(t.dataset.add){ addDye(+t.dataset.add); }
+  else if(t.dataset.pick){ addDye(+t.dataset.pick); closeDrawer(); }
+  else if(t.dataset.rm){
+    var rm=+t.dataset.rm;
+    S.picked=S.picked.filter(function(p){ return p.id!==rm; });
+  }
+  else if(t.dataset.dil){
+    var parts=t.dataset.dil.split('|');
+    var p=S.picked.filter(function(x){ return x.id===+parts[0]; })[0];
+    if(p) p.dilution=parts[1];
+  }
+  else if(t.dataset.sp){ S.spools=+t.dataset.sp; }
+  render();
+});
+document.addEventListener('input',function(e){
+  if(e.target.dataset&&e.target.dataset.cust){
+    var p=S.picked.filter(function(x){ return x.id===+e.target.dataset.cust; })[0];
+    if(p) p.dilution=e.target.value.trim();
+  }
+});
+function addDye(id){
+  if(!S.byId[id]) return;
+  if(S.picked.some(function(p){ return p.id===id; })) return;
+  S.picked.push({id:id,dilution:'Full'});
+}
+document.getElementById('minus').onclick=function(){ S.spools=Math.max(0,S.spools-1); render(); };
+document.getElementById('plus').onclick=function(){ S.spools+=1; render(); };
+
+var searchEl=document.getElementById('search'), drawer=document.getElementById('drawer');
+searchEl.addEventListener('input',function(){
+  var q=searchEl.value.trim().toLowerCase();
+  if(!q){ closeDrawer(); return; }
+  var hits=S.dyes.filter(function(d){ return d.name.toLowerCase().indexOf(q)>=0; }).slice(0,40);
+  drawer.innerHTML=hits.length
+    ? hits.map(function(d){ return '<div data-pick="'+d.id+'">'+swatch(d)+esc(d.name)+'</div>'; }).join('')
+    : '<div style="color:var(--ink-soft)">No dye by that name.</div>';
+  drawer.classList.remove('hide');
+});
+function closeDrawer(){ drawer.classList.add('hide'); searchEl.value=''; }
+
+document.getElementById('save').onclick=async function(){
+  if(S.busy||!S.picked.length) return;
+  S.busy=true; render();
+  try{ await save(); }
+  catch(err){ warn('Save failed: '+esc(err && err.message)+' - check Grist for partial rows.'); }
+  S.busy=false; render();
+};
+
+async function addRecord(table,fields){
+  var r=await grist.docApi.applyUserActions([['AddRecord',table,null,fields]]);
+  return r.retValues[0];
+}
+
+async function save(){
+  var notes=document.getElementById('notes').value.trim();
+  var created=[];
+
+  /* 1. draft recipe - named for the code, no colorway yet */
+  var recipeFields={Name:S.code};
+  if(notes) recipeFields.Notes=notes;
+  if(!S.cols.rdcDil){
+    var dilLine=S.picked.map(function(p){ return S.byId[p.id].name+' '+(p.dilution||'Full'); }).join(', ');
+    recipeFields.Notes=(notes?notes+'\n\n':'')+'Dilutions: '+dilLine;
+  }
+  var recipeId=await addRecord('Recipes',recipeFields);
+  created.push(['Recipes',recipeId]);
+
+  /* 2. dye components - Dye_Name is Ref:Dyes, numeric only, never text */
+  for(var i=0;i<S.picked.length;i++){
+    var p=S.picked[i];
+    var f={};
+    if(S.cols.rdcRecipe) f[S.cols.rdcRecipe]=recipeId;
+    if(S.cols.rdcDye) f[S.cols.rdcDye]=p.id;
+    if(S.cols.rdcDil) f[S.cols.rdcDil]=p.dilution||'Full';
+    var cid=await addRecord('Recipe_Dye_Components',f);
+    created.push(['Recipe_Dye_Components',cid]);
+  }
+
+  /* 3. the lot - onto the metal rack; rack slot filled in by whoever hangs it */
+  var lot={};
+  if(S.cols.draft) lot[S.cols.draft]=S.code;
+  if(S.cols.lotRecipe) lot[S.cols.lotRecipe]=recipeId;
+  if(S.cols.lotStatus) lot[S.cols.lotStatus]=DRAFT_STATUS;
+  if(S.cols.lotSpools) lot[S.cols.lotSpools]=S.spools;
+  if(S.cols.lotFiber) lot[S.cols.lotFiber]=S.fiber;
+  if(S.cols.lotDate){
+    var d=new Date();
+    lot[S.cols.lotDate]=Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/1000;
+  }
+  var lotId=await addRecord('Production_Lots',lot);
+  created.push(['Production_Lots',lotId]);
+
+  S.saved={code:S.code,created:created};
+  showDone();
+}
+
+function showDone(){
+  document.getElementById('form').classList.add('hide');
+  document.getElementById('bar').classList.add('hide');
+  var d=document.getElementById('done');
+  d.innerHTML='Draft saved. Tag the hank and photograph it:'+
+    '<b>'+esc(S.saved.code)+'</b>'+
+    '<button class="undo" id="undo">Undo this draft</button>'+
+    '<button class="undo" id="another" style="margin-left:8px">Start another</button>';
+  d.classList.remove('hide');
+  document.getElementById('undo').onclick=undo;
+  document.getElementById('another').onclick=function(){ reset(false); };
+}
+
+async function undo(){
+  var acts=S.saved.created.slice().reverse().map(function(pair){ return ['RemoveRecord',pair[0],pair[1]]; });
+  try{
+    await grist.docApi.applyUserActions(acts);
+    S.saved=null;
+    reset(true);
+  }catch(e){ warn('Undo failed: '+esc(e && e.message)+' - remove the rows in Grist.'); }
+}
+
+async function reset(wasUndone){
+  document.getElementById('done').classList.add('hide');
+  document.getElementById('form').classList.remove('hide');
+  document.getElementById('bar').classList.remove('hide');
+  if(!wasUndone){
+    S.picked=[];
+    S.spools=10;
+    document.getElementById('notes').value='';
+  }
+  var lotsT=await grist.docApi.fetchTable('Production_Lots').catch(function(){return null;});
+  S.code=nextDraftCode(lotsT);
+  S.saved=null;
+  render();
+}
+
+/* ---- startup: draw the form first, then talk to Grist ---- */
+render();
+try{
+  if(typeof grist==='undefined'){ throw new Error('grist-plugin-api.js did not load'); }
+  grist.ready({requiredAccess:'full'});
+  init().catch(function(e){ warn('Could not load: '+esc(e && e.message)); });
+}catch(e){
+  warn('Startup error: '+esc(e && e.message));
+}
+</script>
+</body>
+</html>
