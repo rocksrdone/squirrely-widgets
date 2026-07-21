@@ -49,6 +49,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .line-main { flex: 1; }
 .line-recipe { font-weight: 600; }
 .line-order { font-size: 11px; color: #8B7D72; }
+.merge-tag { font-size: 9px; font-family: 'DM Mono', monospace; padding: 1px 6px; border-radius: 8px; background: var(--gold-light); color: var(--gold); vertical-align: middle; }
 .line-due { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
 .line-due.soon { background: var(--accent-light); color: var(--accent); }
 .line-due.ok { background: var(--warm); color: #6B5E52; }
@@ -155,7 +156,8 @@ let recipes = {};      // id -> {Recipe_Name, SKU_Base, Cleanup_Order}
 let dyes = {};          // id -> {Dye_Name, Brand, Serial, Swatch_Hex, Shelf_Life_days, Cleanup_Order}
 let dyeStockByDye = {}; // dyeId -> [{qty, mixedDate, binLocation}]
 let recipeDyes = {};    // recipeId -> [dyeId,...]
-let queueLines = [];    // [{id, recipeId, workOrderId, qtyNeeded, dueDate, priority, orderNumber, customerName}]
+let queueLines = [];    // raw open order lines
+let queueJobs = [];     // lines merged by recipe — one job = one thing you actually dye
 let lastGroups = [];    // most recently rendered plan groups, in run order — what Save writes out
 let lastSequence = [];  // those groups flattened into the day's actual running order
 let zoneTagsByLine = {};// lineId -> [{slot, dyeId}] — which zone holds each of that recipe's dyes
@@ -184,6 +186,7 @@ async function loadAll() {
   dyeStockByDye = {};
   recipeDyes = {};
   queueLines = [];
+  queueJobs = [];
   document.getElementById('planStatus').textContent = 'Loading...';
   try {
     const woTable = await grist.docApi.fetchTable('Work_Orders');
@@ -303,8 +306,44 @@ async function loadAll() {
       });
     });
 
+    // Two customers ordering the same colorway is two order lines but ONE thing
+    // you dye. Merge by recipe so capacity counts sessions at the kettle, and so
+    // the zone allocator doesn't think a dye is needed again later when really
+    // both customers' spools come out of the same batch.
+    const PRIORITY_RANK = { Rush: 0, High: 1, Normal: 2, Low: 3 };
+    const jobsByRecipe = {};
+    queueLines.forEach(line => {
+      let job = jobsByRecipe[line.recipeId];
+      if (!job) {
+        job = jobsByRecipe[line.recipeId] = {
+          id: line.recipeId,        // a job IS a recipe, for today's purposes
+          recipeId: line.recipeId,
+          lines: [],
+          qtyRemaining: 0,
+          qtyNeeded: 0,
+          qtyDyed: 0,
+          priority: 'Low',
+          dueDate: null,
+          customers: [],
+        };
+      }
+      job.lines.push(line);
+      job.qtyRemaining += line.qtyRemaining || 0;
+      job.qtyNeeded += line.qtyNeeded || 0;
+      job.qtyDyed += line.qtyDyed || 0;
+      // Most urgent line wins for the whole job — you can't half-rush a batch.
+      if ((PRIORITY_RANK[line.priority] ?? 2) < (PRIORITY_RANK[job.priority] ?? 2)) job.priority = line.priority;
+      const ld = toEpochDays(line.dueDate);
+      if (ld !== null && (job.dueDate === null || ld < toEpochDays(job.dueDate))) job.dueDate = line.dueDate;
+      if (line.customerName) job.customers.push(line.customerName);
+    });
+    queueJobs = Object.values(jobsByRecipe);
+
+    const merged = queueLines.length - queueJobs.length;
     document.getElementById('planStatus').textContent =
-      `${queueLines.length} open line(s) in queue · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data loaded` +
+      `${queueJobs.length} colorway(s) to dye · from ${queueLines.length} open order line(s)` +
+      (merged ? ` (${merged} merged — repeat orders)` : '') +
+      ` · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data` +
       (doneButOpen ? ` · ${doneButOpen} fully-dyed line(s) skipped (still marked Open)` : '');
 
     runPlan();
@@ -317,7 +356,7 @@ async function loadAll() {
 function isGlobalOneOff(line) {
   const myDyes = recipeDyes[line.recipeId] || [];
   if (!myDyes.length) return true;
-  return !queueLines.some(other => other.id !== line.id && (recipeDyes[other.recipeId] || []).some(d => myDyes.includes(d)));
+  return !queueJobs.some(other => other.id !== line.id && (recipeDyes[other.recipeId] || []).some(d => myDyes.includes(d)));
 }
 
 function dyeReuseCountWithSelected(line, selected) {
@@ -331,16 +370,16 @@ function selectToday(capacity) {
   const selectedIds = new Set();
 
   // Tier 1: Rush
-  queueLines.filter(c => c.priority === 'Rush').forEach(c => { selected.push(c); selectedIds.add(c.id); });
+  queueJobs.filter(c => c.priority === 'Rush').forEach(c => { selected.push(c); selectedIds.add(c.id); });
 
   // Tier 2: due within 7 days, soonest first
-  const withinWeek = queueLines
+  const withinWeek = queueJobs
     .filter(c => !selectedIds.has(c.id) && daysFromToday(c.dueDate) !== null && daysFromToday(c.dueDate) <= 7)
     .sort((a, b) => daysFromToday(a.dueDate) - daysFromToday(b.dueDate));
   withinWeek.forEach(c => { if (selected.length < capacity) { selected.push(c); selectedIds.add(c.id); } });
 
   // Tier 3: fill remaining capacity
-  let remaining = queueLines.filter(c => !selectedIds.has(c.id));
+  let remaining = queueJobs.filter(c => !selectedIds.has(c.id));
   while (selected.length < capacity && remaining.length) {
     remaining.forEach(c => {
       c._reuseScore = dyeReuseCountWithSelected(c, selected);
@@ -360,7 +399,7 @@ function selectToday(capacity) {
     selected.push(next); selectedIds.add(next.id);
   }
 
-  return { selected, waiting: queueLines.filter(c => !selectedIds.has(c.id)) };
+  return { selected, waiting: queueJobs.filter(c => !selectedIds.has(c.id)) };
 }
 
 function stockInfoForDye(dyeId) {
@@ -504,9 +543,10 @@ async function saveTodaysPlan() {
     if (stale.length) actions.push(['BulkRemoveRecord', 'Day_Plan', stale]);
 
     let seq = 0;
-    lastSequence.forEach(line => {
+    let lineCount = 0;
+    lastSequence.forEach(job => {
       seq++;
-      const tags = zoneTagsByLine[line.id] || [];
+      const tags = zoneTagsByLine[job.id] || [];
       // Human-readable record of the bench at that moment, e.g.
       // "P1 Turquoise · P2 Hot Pink · P3 Deep Purple". Batch Assignment does NOT
       // read this — it recomputes from Sequence so there's only one source of
@@ -514,17 +554,22 @@ async function saveTodaysPlan() {
       const slotSummary = tags.length
         ? tags.map(t => `${t.slot} ${(dyes[t.dyeId] && dyes[t.dyeId].Dye_Name) || 'dye #' + t.dyeId}`).join(' · ')
         : '—';
-      actions.push(['AddRecord', 'Day_Plan', null, {
-        Plan_Date: planDate,
-        Work_Order_Line: line.id,
-        Recipe: line.recipeId,
-        Sequence: seq,
-        Prep_Slot: slotSummary,
-      }]);
+      // One row per real order line so each customer's order stays traceable,
+      // but every line of a job shares a Sequence — they're one trip to the kettle.
+      job.lines.forEach(line => {
+        lineCount++;
+        actions.push(['AddRecord', 'Day_Plan', null, {
+          Plan_Date: planDate,
+          Work_Order_Line: line.id,
+          Recipe: job.recipeId,
+          Sequence: seq,
+          Prep_Slot: slotSummary,
+        }]);
+      });
     });
 
     await grist.docApi.applyUserActions(actions);
-    showToast(`Saved — ${seq} line${seq === 1 ? '' : 's'} across ${lastGroups.length} group${lastGroups.length === 1 ? '' : 's'}${stale.length ? ' (replaced earlier plan)' : ''}.`);
+    showToast(`Saved — ${seq} colorway${seq === 1 ? '' : 's'} covering ${lineCount} order line${lineCount === 1 ? '' : 's'}${stale.length ? ' (replaced earlier plan)' : ''}.`);
   } catch (e) {
     console.error('Failed to save day plan:', e);
     const msg = (e && (e.message || e.toString())) || 'unknown error';
@@ -548,13 +593,20 @@ function dueTagHtml(dueDate) {
   return `<span class="line-due ${soon ? 'soon' : 'ok'}">${label}</span>`;
 }
 
-async function toggleRush(lineId, currentPriority) {
+async function toggleRush(recipeId, currentPriority) {
+  const job = queueJobs.find(j => j.recipeId === recipeId);
+  if (!job) return;
   const newPriority = currentPriority === 'Rush' ? 'Normal' : 'Rush';
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Order_Lines', lineId, { Production_Priority: newPriority }]]);
-    const line = queueLines.find(l => l.id === lineId);
-    if (line) line.priority = newPriority;
-    showToast(newPriority === 'Rush' ? 'Marked Rush.' : 'Rush cleared.');
+    // A job is one batch at the kettle, so every order line feeding it moves together.
+    await grist.docApi.applyUserActions(
+      job.lines.map(l => ['UpdateRecord', 'Work_Order_Lines', l.id, { Production_Priority: newPriority }])
+    );
+    job.lines.forEach(l => { l.priority = newPriority; });
+    job.priority = newPriority;
+    showToast(newPriority === 'Rush'
+      ? `Marked Rush${job.lines.length > 1 ? ` (${job.lines.length} order lines)` : ''}.`
+      : 'Rush cleared.');
     runPlan();
   } catch (e) {
     console.error(e);
@@ -599,18 +651,22 @@ function zoneTagsHtml(lineId) {
   ).join('') + `</div>`;
 }
 
-function lineRowHtml(line) {
-  const r = recipes[line.recipeId] || {};
+function lineRowHtml(job) {
+  const r = recipes[job.recipeId] || {};
+  const custCount = job.customers.length;
+  const custLabel = custCount > 1
+    ? `${custCount} customers: ${job.customers.join(', ')}`
+    : (job.customers[0] || '');
   return `
     <div class="line-row">
       <div class="line-main">
-        <div class="line-recipe">${r.Recipe_Name || '(unnamed)'} ${r.SKU_Base ? `<span style="color:#8B7D72;font-weight:400;">(${r.SKU_Base})</span>` : ''}</div>
-        <div class="line-order">${line.orderNumber || ''}${line.customerName ? ' — ' + line.customerName : ''} · qty ${line.qtyRemaining || line.qtyNeeded || '?'}${line.qtyDyed ? ` <span style="color:#B07D2A;">(${line.qtyDyed}/${line.qtyNeeded} already done)</span>` : ''}</div>
-        ${zoneTagsHtml(line.id)}
+        <div class="line-recipe">${r.Recipe_Name || '(unnamed)'} ${r.SKU_Base ? `<span style="color:#8B7D72;font-weight:400;">(${r.SKU_Base})</span>` : ''}${custCount > 1 ? ` <span class="merge-tag">×${custCount}</span>` : ''}</div>
+        <div class="line-order">${custLabel} · qty ${job.qtyRemaining || job.qtyNeeded || '?'}${job.qtyDyed ? ` <span style="color:#B07D2A;">(${job.qtyDyed}/${job.qtyNeeded} already done)</span>` : ''}</div>
+        ${zoneTagsHtml(job.id)}
       </div>
-      ${dueTagHtml(line.dueDate)}
-      <button class="btn btn-small btn-rush ${line.priority === 'Rush' ? 'active' : ''}" onclick="toggleRush(${line.id}, '${line.priority}')">
-        ${line.priority === 'Rush' ? '★ Rush' : 'Mark Rush'}
+      ${dueTagHtml(job.dueDate)}
+      <button class="btn btn-small btn-rush ${job.priority === 'Rush' ? 'active' : ''}" onclick="toggleRush(${job.recipeId}, '${job.priority}')">
+        ${job.priority === 'Rush' ? '★ Rush' : 'Mark Rush'}
       </button>
     </div>
   `;
@@ -628,13 +684,14 @@ function renderWaiting(waiting) {
   });
   document.getElementById('waitingOutput').innerHTML = `
     <div class="waiting-panel">
-      ${waiting.map(line => {
-        const r = recipes[line.recipeId] || {};
+      ${waiting.map(job => {
+        const r = recipes[job.recipeId] || {};
+        const custCount = job.customers.length;
         return `
           <div class="waiting-row">
-            <div style="flex:1;">${r.Recipe_Name || '(unnamed)'} <span style="color:#8B7D72;">${line.orderNumber || ''}</span></div>
-            ${dueTagHtml(line.dueDate)}
-            <button class="btn btn-small btn-rush" onclick="toggleRush(${line.id}, '${line.priority}')">Mark Rush</button>
+            <div style="flex:1;">${r.Recipe_Name || '(unnamed)'} <span style="color:#8B7D72;">${custCount > 1 ? `${custCount} customers` : (job.customers[0] || '')}</span></div>
+            ${dueTagHtml(job.dueDate)}
+            <button class="btn btn-small btn-rush" onclick="toggleRush(${job.recipeId}, '${job.priority}')">Mark Rush</button>
           </div>
         `;
       }).join('')}

@@ -376,22 +376,29 @@ async function loadForRecipe(record) {
       planRows = [];
     }
 
-    // Re-derive the bench state for the whole day, then ask a simple question
-    // per dye: between finishing here and its next use, does it ever get
-    // evicted? If not, it stays put and we name the zone. If it does, it has
-    // to go in a bin like anything else.
-    const zoneSteps = planRows.length
-      ? allocatePrepZones(planRows.map(r => r.recipeId), rid => dyesByRecipeId[rid] || [], PREP_ZONES)
+    // Day_Plan holds one row per order line, but several lines can share a
+    // Sequence when two customers ordered the same colorway — that's one batch
+    // at the kettle. Collapse to distinct recipes in running order, or the
+    // allocator would think a dye is needed again later and hold a zone for it.
+    const planRecipes = [];
+    planRows.forEach(r => {
+      if (planRecipes.length && planRecipes[planRecipes.length - 1] === r.recipeId) return;
+      if (planRecipes.indexOf(r.recipeId) >= 0) return;
+      planRecipes.push(r.recipeId);
+    });
+
+    const zoneSteps = planRecipes.length
+      ? allocatePrepZones(planRecipes, rid => dyesByRecipeId[rid] || [], PREP_ZONES)
       : [];
 
     function stagingFor(dyeId) {
       if (!zoneSteps.length) return null;
-      const meIdx = planRows.findIndex(r => r.recipeId === record.id);
+      const meIdx = planRecipes.indexOf(record.id);
       if (meIdx < 0) return null;
 
       let nextIdx = -1;
-      for (let i = meIdx + 1; i < planRows.length; i++) {
-        if ((dyesByRecipeId[planRows[i].recipeId] || []).includes(dyeId)) { nextIdx = i; break; }
+      for (let i = meIdx + 1; i < planRecipes.length; i++) {
+        if ((dyesByRecipeId[planRecipes[i]] || []).includes(dyeId)) { nextIdx = i; break; }
       }
       if (nextIdx < 0) return null; // not needed again today
 
@@ -403,7 +410,7 @@ async function loadForRecipe(record) {
 
       return {
         slot: stayed && zoneIdx >= 0 ? 'P' + (zoneIdx + 1) : null,
-        recipeName: recipeNameById[planRows[nextIdx].recipeId] || `Recipe #${planRows[nextIdx].recipeId}`,
+        recipeName: recipeNameById[planRecipes[nextIdx]] || `Recipe #${planRecipes[nextIdx]}`,
         gap: nextIdx - meIdx,
         inReach: stayed && zoneIdx >= 0,
       };
