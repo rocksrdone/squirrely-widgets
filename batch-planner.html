@@ -41,6 +41,9 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .badge.mix { background: var(--gold-light); color: var(--gold); }
 .badge.oneoff { background: var(--rule); color: #6B5E52; }
 .badge.slot { background: var(--ink); color: #F7F3EE; font-family: 'DM Mono', monospace; letter-spacing: .06em; }
+.zone-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.zone-tag { font-size: 10px; font-family: 'DM Mono', monospace; padding: 2px 7px; border-radius: 4px; background: var(--ink); color: #F7F3EE; }
+.zone-tag b { letter-spacing: .06em; margin-right: 3px; }
 
 .line-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--rule); }
 .line-main { flex: 1; }
@@ -154,6 +157,8 @@ let dyeStockByDye = {}; // dyeId -> [{qty, mixedDate, binLocation}]
 let recipeDyes = {};    // recipeId -> [dyeId,...]
 let queueLines = [];    // [{id, recipeId, workOrderId, qtyNeeded, dueDate, priority, orderNumber, customerName}]
 let lastGroups = [];    // most recently rendered plan groups, in run order — what Save writes out
+let lastSequence = [];  // those groups flattened into the day's actual running order
+let zoneTagsByLine = {};// lineId -> [{slot, dyeId}] — which zone holds each of that recipe's dyes
 
 // Grist Date columns store epoch seconds at UTC midnight of the calendar day.
 function todayEpochSeconds() {
@@ -406,20 +411,85 @@ function sequenceSelected(selected) {
   return groupList;
 }
 
+// ── PREP ZONE ALLOCATION ───────────────────────────────────────────
+// Keep this function byte-identical in batch-assignment.html. It's a pure
+// function of (running order, dyes per recipe, zone count), so both widgets
+// derive the same answer without either one storing it as a second source
+// of truth. The prep table holds dye containers, not recipes — a zone is
+// claimed by a dye and released only when it's evicted.
+//
+// Eviction picks whichever resident dye is needed furthest in the future
+// (or not again at all), which is optimal because the whole day is known
+// up front. A dye used by almost everything — Turquoise — simply never
+// gets evicted and lives on the bench all day, which is the real behaviour.
+function allocatePrepZones(recipeIds, dyesForRecipe, zoneCount) {
+  const zones = new Array(zoneCount).fill(null); // zone index -> dyeId
+  const steps = [];
+
+  function nextUseAtOrAfter(dyeId, fromIdx) {
+    for (let i = fromIdx; i < recipeIds.length; i++) {
+      if ((dyesForRecipe(recipeIds[i]) || []).includes(dyeId)) return i;
+    }
+    return Infinity;
+  }
+
+  recipeIds.forEach((rid, idx) => {
+    const needed = (dyesForRecipe(rid) || []).slice();
+    const overflow = [];
+    needed.forEach(dyeId => {
+      if (zones.indexOf(dyeId) >= 0) return; // already on the bench
+      let slotIdx = zones.indexOf(null);
+      if (slotIdx < 0) {
+        let worstZone = -1, worstNext = -1;
+        zones.forEach((resident, zi) => {
+          if (needed.indexOf(resident) >= 0) return; // still needed right now
+          const nu = nextUseAtOrAfter(resident, idx + 1);
+          if (nu > worstNext) { worstNext = nu; worstZone = zi; }
+        });
+        // More dyes in one recipe than there are zones — the extras just
+        // don't get a spot, and fall through to normal bin handling.
+        if (worstZone < 0) { overflow.push(dyeId); return; }
+        slotIdx = worstZone;
+      }
+      zones[slotIdx] = dyeId;
+    });
+    steps.push({ recipeId: rid, zones: zones.slice(), overflow });
+  });
+  return steps;
+}
+// ───────────────────────────────────────────────────────────────────
+
 function runPlan() {
   const capacity = Number(document.getElementById('capacityInput').value) || 20;
   const { selected, waiting } = selectToday(capacity);
   const groups = sequenceSelected(selected);
-  // Rotate groups through the physical prep zones. Group n reuses the slot that
-  // group n-PREP_ZONES was on, which by then is finished and cleared.
-  groups.forEach((g, i) => { g.prepSlot = 'P' + ((i % PREP_ZONES) + 1); });
   lastGroups = groups;
+
+  // The flat running order is what the prep table actually experiences.
+  lastSequence = [];
+  groups.forEach(g => g.lines.forEach(line => lastSequence.push(line)));
+  const steps = allocatePrepZones(
+    lastSequence.map(l => l.recipeId),
+    rid => recipeDyes[rid] || [],
+    PREP_ZONES
+  );
+
+  zoneTagsByLine = {};
+  lastSequence.forEach((line, i) => {
+    const mine = recipeDyes[line.recipeId] || [];
+    const tags = [];
+    steps[i].zones.forEach((dyeId, zi) => {
+      if (dyeId && mine.indexOf(dyeId) >= 0) tags.push({ slot: 'P' + (zi + 1), dyeId });
+    });
+    zoneTagsByLine[line.id] = tags;
+  });
+
   renderPlan(groups);
   renderWaiting(waiting);
 }
 
 async function saveTodaysPlan() {
-  if (!lastGroups.length) { showToast('Generate a plan first.'); return; }
+  if (!lastSequence.length) { showToast('Generate a plan first.'); return; }
   const btn = document.getElementById('savePlanBtn');
   btn.disabled = true;
   const planDate = todayEpochSeconds();
@@ -434,17 +504,23 @@ async function saveTodaysPlan() {
     if (stale.length) actions.push(['BulkRemoveRecord', 'Day_Plan', stale]);
 
     let seq = 0;
-    lastGroups.forEach(g => {
-      g.lines.forEach(line => {
-        seq++;
-        actions.push(['AddRecord', 'Day_Plan', null, {
-          Plan_Date: planDate,
-          Work_Order_Line: line.id,
-          Recipe: line.recipeId,
-          Sequence: seq,
-          Prep_Slot: g.prepSlot,
-        }]);
-      });
+    lastSequence.forEach(line => {
+      seq++;
+      const tags = zoneTagsByLine[line.id] || [];
+      // Human-readable record of the bench at that moment, e.g.
+      // "P1 Turquoise · P2 Hot Pink · P3 Deep Purple". Batch Assignment does NOT
+      // read this — it recomputes from Sequence so there's only one source of
+      // truth. This column is for you reading the table in Grist.
+      const slotSummary = tags.length
+        ? tags.map(t => `${t.slot} ${(dyes[t.dyeId] && dyes[t.dyeId].Dye_Name) || 'dye #' + t.dyeId}`).join(' · ')
+        : '—';
+      actions.push(['AddRecord', 'Day_Plan', null, {
+        Plan_Date: planDate,
+        Work_Order_Line: line.id,
+        Recipe: line.recipeId,
+        Sequence: seq,
+        Prep_Slot: slotSummary,
+      }]);
     });
 
     await grist.docApi.applyUserActions(actions);
@@ -498,7 +574,6 @@ function renderPlan(groups) {
     else if (g.stock.hasStock) badges.push('<span class="badge ready">Premade ready</span>');
     else badges.push('<span class="badge mix">Needs mixing</span>');
     if (g.isOneOff) badges.push('<span class="badge oneoff">One-off</span>');
-    if (g.prepSlot) badges.push(`<span class="badge slot">${g.prepSlot}</span>`);
 
     return `
       <div class="group-card">
@@ -516,6 +591,14 @@ function renderPlan(groups) {
   }).join('');
 }
 
+function zoneTagsHtml(lineId) {
+  const tags = zoneTagsByLine[lineId] || [];
+  if (!tags.length) return '';
+  return `<div class="zone-tags">` + tags.map(t =>
+    `<span class="zone-tag"><b>${t.slot}</b> ${(dyes[t.dyeId] && dyes[t.dyeId].Dye_Name) || 'dye #' + t.dyeId}</span>`
+  ).join('') + `</div>`;
+}
+
 function lineRowHtml(line) {
   const r = recipes[line.recipeId] || {};
   return `
@@ -523,6 +606,7 @@ function lineRowHtml(line) {
       <div class="line-main">
         <div class="line-recipe">${r.Recipe_Name || '(unnamed)'} ${r.SKU_Base ? `<span style="color:#8B7D72;font-weight:400;">(${r.SKU_Base})</span>` : ''}</div>
         <div class="line-order">${line.orderNumber || ''}${line.customerName ? ' — ' + line.customerName : ''} · qty ${line.qtyRemaining || line.qtyNeeded || '?'}${line.qtyDyed ? ` <span style="color:#B07D2A;">(${line.qtyDyed}/${line.qtyNeeded} already done)</span>` : ''}</div>
+        ${zoneTagsHtml(line.id)}
       </div>
       ${dueTagHtml(line.dueDate)}
       <button class="btn btn-small btn-rush ${line.priority === 'Rush' ? 'active' : ''}" onclick="toggleRush(${line.id}, '${line.priority}')">

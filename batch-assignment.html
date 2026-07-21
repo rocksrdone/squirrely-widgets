@@ -123,6 +123,46 @@ function todayEpochSeconds() {
   return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
 }
 
+// ── PREP ZONE ALLOCATION ───────────────────────────────────────────
+// Byte-identical copy of the function in batch-planner.html — keep them in sync.
+// See that file for the full explanation.
+function allocatePrepZones(recipeIds, dyesForRecipe, zoneCount) {
+  const zones = new Array(zoneCount).fill(null); // zone index -> dyeId
+  const steps = [];
+
+  function nextUseAtOrAfter(dyeId, fromIdx) {
+    for (let i = fromIdx; i < recipeIds.length; i++) {
+      if ((dyesForRecipe(recipeIds[i]) || []).includes(dyeId)) return i;
+    }
+    return Infinity;
+  }
+
+  recipeIds.forEach((rid, idx) => {
+    const needed = (dyesForRecipe(rid) || []).slice();
+    const overflow = [];
+    needed.forEach(dyeId => {
+      if (zones.indexOf(dyeId) >= 0) return; // already on the bench
+      let slotIdx = zones.indexOf(null);
+      if (slotIdx < 0) {
+        let worstZone = -1, worstNext = -1;
+        zones.forEach((resident, zi) => {
+          if (needed.indexOf(resident) >= 0) return; // still needed right now
+          const nu = nextUseAtOrAfter(resident, idx + 1);
+          if (nu > worstNext) { worstNext = nu; worstZone = zi; }
+        });
+        // More dyes in one recipe than there are zones — the extras just
+        // don't get a spot, and fall through to normal bin handling.
+        if (worstZone < 0) { overflow.push(dyeId); return; }
+        slotIdx = worstZone;
+      }
+      zones[slotIdx] = dyeId;
+    });
+    steps.push({ recipeId: rid, zones: zones.slice(), overflow });
+  });
+  return steps;
+}
+// ───────────────────────────────────────────────────────────────────
+
 let currentEntry = null;
 let lastLoggedDelta = {}; // lineId -> amount just added, for undo
 let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
@@ -332,32 +372,41 @@ async function loadForRecipe(record) {
         });
       });
       planRows.sort((a, b) => a.seq - b.seq);
-      // Consecutive rows sharing a slot are one dye group occupying one zone.
-      let run = 0;
-      planRows.forEach((r, i) => {
-        if (i > 0 && r.slot !== planRows[i - 1].slot) run++;
-        r.run = run;
-      });
     } catch (err) {
       planRows = [];
     }
 
+    // Re-derive the bench state for the whole day, then ask a simple question
+    // per dye: between finishing here and its next use, does it ever get
+    // evicted? If not, it stays put and we name the zone. If it does, it has
+    // to go in a bin like anything else.
+    const zoneSteps = planRows.length
+      ? allocatePrepZones(planRows.map(r => r.recipeId), rid => dyesByRecipeId[rid] || [], PREP_ZONES)
+      : [];
+
     function stagingFor(dyeId) {
-      if (!planRows.length) return null;
+      if (!zoneSteps.length) return null;
       const meIdx = planRows.findIndex(r => r.recipeId === record.id);
       if (meIdx < 0) return null;
-      const myRun = planRows[meIdx].run;
+
+      let nextIdx = -1;
       for (let i = meIdx + 1; i < planRows.length; i++) {
-        const r = planRows[i];
-        if (r.run === myRun) continue; // still this group's turn — dye hasn't moved yet
-        if (!(dyesByRecipeId[r.recipeId] || []).includes(dyeId)) continue;
-        return {
-          slot: r.slot,
-          recipeName: recipeNameById[r.recipeId] || `Recipe #${r.recipeId}`,
-          inReach: (r.run - myRun) < PREP_ZONES,
-        };
+        if ((dyesByRecipeId[planRows[i].recipeId] || []).includes(dyeId)) { nextIdx = i; break; }
       }
-      return null;
+      if (nextIdx < 0) return null; // not needed again today
+
+      let stayed = true;
+      for (let k = meIdx; k <= nextIdx; k++) {
+        if (zoneSteps[k].zones.indexOf(dyeId) < 0) { stayed = false; break; }
+      }
+      const zoneIdx = zoneSteps[nextIdx].zones.indexOf(dyeId);
+
+      return {
+        slot: stayed && zoneIdx >= 0 ? 'P' + (zoneIdx + 1) : null,
+        recipeName: recipeNameById[planRows[nextIdx].recipeId] || `Recipe #${planRows[nextIdx].recipeId}`,
+        gap: nextIdx - meIdx,
+        inReach: stayed && zoneIdx >= 0,
+      };
     }
 
     const cleanupInfo = dyeIds.map(dyeId => {
@@ -424,7 +473,7 @@ function render() {
       flagHtml = `<div class="cleanup-row cleanup-stage"><strong>${c.dyeDetail}</strong> — Keep out. Stage at <span class="slot-tag">${c.staging.slot}</span> (used next in ${c.staging.recipeName}). Don't put it away.</div>`;
     } else if (c.staging) {
       // Needed later today, but too many groups out — the zone rotates before then.
-      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — needed again today in ${c.staging.recipeName}, but too far ahead to leave on the prep table. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — needed again today in ${c.staging.recipeName} (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up before then. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
     } else if (c.isOneOff) {
       flagHtml = `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
     } else {
