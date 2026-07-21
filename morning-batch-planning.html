@@ -86,6 +86,15 @@
   .no-stock { color: #8B7D72; font-style: italic; }
   .peek-line { font-size: 11px; color: #6B5E52; padding: 1px 0; }
 
+  .recipe-row.planned { box-shadow: inset 3px 0 0 var(--teal); }
+  .plan-badge {
+    font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 700;
+    background: var(--teal); color: var(--paper); padding: 1px 6px; border-radius: 8px;
+    margin-left: 6px; vertical-align: middle; letter-spacing: .04em;
+  }
+  .plan-slots { font-size: 10px; font-family: 'DM Mono', monospace; color: var(--teal); margin-top: 2px; }
+  .not-planned { font-size: 9px; color: #A89C90; font-style: italic; margin-left: 6px; }
+
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
@@ -110,6 +119,11 @@
   <input class="search-input" id="searchBox" placeholder="Search colorway, SKU, or customer..." oninput="renderList()">
   <select class="filter-select" id="customerFilter" onchange="renderList()">
     <option value="">All customers</option>
+  </select>
+  <select class="filter-select" id="planFilter" onchange="renderList()">
+    <option value="">All pending work</option>
+    <option value="planned">Today's plan only</option>
+    <option value="unplanned">Not in today's plan</option>
   </select>
   <select class="filter-select" id="priorityFilter" onchange="renderList()">
     <option value="">All priorities</option>
@@ -138,6 +152,35 @@ function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
 
 let recipeData = [];
 let selectedRecipeId = null;
+let planByRecipe = {};  // recipeId -> {seq, slots} from today's saved Day_Plan
+
+// Grist Date columns store epoch seconds at UTC midnight of the calendar day.
+function todayEpochSeconds() {
+  const n = new Date();
+  return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
+}
+
+// Today's plan, as saved by Batch Planner. Read-only here — this widget shows
+// the plan, it never writes one. Missing table or no plan saved yet just means
+// nothing is marked, and everything behaves as it always did.
+async function loadTodaysPlan() {
+  planByRecipe = {};
+  try {
+    const dp = await grist.docApi.fetchTable('Day_Plan');
+    const today = todayEpochSeconds();
+    (dp.id || []).forEach((id, i) => {
+      if (Number(columnAsArray(dp, 'Plan_Date')[i]) !== today) return;
+      const rid = getRefId(columnAsArray(dp, 'Recipe')[i]);
+      if (!rid || planByRecipe[rid]) return; // repeat orders share a recipe — keep the first
+      planByRecipe[rid] = {
+        seq: Number(columnAsArray(dp, 'Sequence')[i]) || 0,
+        slots: (columnAsArray(dp, 'Prep_Slot')[i] || '').toString(),
+      };
+    });
+  } catch (e) {
+    planByRecipe = {};
+  }
+}
 
 function jumpToRecipe(recipeId) {
   selectedRecipeId = recipeId;
@@ -162,6 +205,8 @@ async function loadEverything() {
       grist.docApi.fetchTable('Dyes'),
       grist.docApi.fetchTable('Dye_Stock'),
     ]);
+
+    await loadTodaysPlan();
 
     const woIds = woTable.id || [];
     const woInfo = {};
@@ -288,8 +333,16 @@ async function loadEverything() {
         return { dyeName: d, others };
       }).filter(p => p.others.length > 0);
 
-      return { ...entry, totalQty, stock, peek };
-    }).sort((a, b) => priorityRank(a.bestPriority) - priorityRank(b.bestPriority) || b.totalQty - a.totalQty);
+      return { ...entry, totalQty, stock, peek, plan: planByRecipe[entry.recipe.id] || null };
+    }).sort((a, b) => {
+      // Anything committed to today comes first, in the order Batch Planner
+      // sequenced it — that's the running order at the kettle. Everything else
+      // keeps the old priority-then-size ordering underneath.
+      if (a.plan && b.plan) return a.plan.seq - b.plan.seq;
+      if (a.plan !== null && b.plan === null) return -1;
+      if (a.plan === null && b.plan !== null) return 1;
+      return priorityRank(a.bestPriority) - priorityRank(b.bestPriority) || b.totalQty - a.totalQty;
+    });
 
     // Populate customer filter dropdown
     const allCustomers = new Set();
@@ -300,7 +353,12 @@ async function loadEverything() {
       Array.from(allCustomers).sort().map(c => `<option value="${c}">${c}</option>`).join('');
     customerFilter.value = prevVal;
 
-    document.getElementById('headerSub').textContent = `${recipeData.length} colorways pending`;
+    const plannedCount = recipeData.filter(e => e.plan).length;
+    document.getElementById('headerSub').textContent =
+      `${recipeData.length} colorways pending` +
+      (plannedCount
+        ? ` · ${plannedCount} in today's plan`
+        : ` · no plan saved for today (use Batch Planner)`);
     renderList();
   } catch (e) {
     console.error('Failed to load morning batch planning:', e);
@@ -312,8 +370,11 @@ function renderList() {
   const search = normalize(document.getElementById('searchBox').value);
   const customerVal = document.getElementById('customerFilter').value;
   const priorityVal = document.getElementById('priorityFilter').value;
+  const planVal = document.getElementById('planFilter').value;
 
   let filtered = recipeData.filter(e => {
+    if (planVal === 'planned' && !e.plan) return false;
+    if (planVal === 'unplanned' && e.plan) return false;
     if (priorityVal && e.bestPriority !== priorityVal) return false;
     if (customerVal && !e.orders.some(o => o.customerName === customerVal)) return false;
     if (search) {
@@ -325,9 +386,11 @@ function renderList() {
 
   // Counter reflects the FILTERED set, so it's useful when narrowing by customer etc.
   const totalSpools = filtered.reduce((s, e) => s + e.totalQty, 0);
+  const plannedShown = filtered.filter(e => e.plan).length;
   document.getElementById('counterRow').innerHTML = `
     <div class="counter-chip">${totalSpools}<span>spools left</span></div>
     <div class="counter-chip">${filtered.length}<span>colorways</span></div>
+    ${plannedShown ? `<div class="counter-chip">${plannedShown}<span>planned today</span></div>` : ''}
   `;
 
   const content = document.getElementById('content');
@@ -350,12 +413,19 @@ function renderList() {
     ).join('') || '<div class="peek-line" style="color:#8B7D72;font-style:italic;">No overlap with other pending recipes</div>';
 
     const isSelected = e.recipe.id === selectedRecipeId;
+    const planBadge = e.plan
+      ? `<span class="plan-badge">#${e.plan.seq} today</span>`
+      : `<span class="not-planned">not in today's plan</span>`;
+    const planSlots = e.plan && e.plan.slots && e.plan.slots !== '—'
+      ? `<div class="plan-slots">${e.plan.slots}</div>`
+      : '';
 
     return `
-      <tr class="recipe-row ${isSelected ? 'selected' : ''}" onclick="jumpToRecipe(${e.recipe.id})">
+      <tr class="recipe-row ${isSelected ? 'selected' : ''} ${e.plan ? 'planned' : ''}" onclick="jumpToRecipe(${e.recipe.id})">
         <td>
-          <div class="recipe-name-cell">${e.recipe.name}</div>
+          <div class="recipe-name-cell">${e.recipe.name}${planBadge}</div>
           <div class="recipe-meta-cell">${e.recipe.sku || ''} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
+          ${planSlots}
         </td>
         <td><span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span></td>
         <td>${e.totalQty} spools</td>

@@ -192,11 +192,13 @@ async function loadAll() {
     const woTable = await grist.docApi.fetchTable('Work_Orders');
     const woc = (c) => findColumn(woTable, c);
     const woDueCol = woc(['Due_Date']);
+    const woStatusCol = woc(['Status']);
     const woCustCol = woc(['Customer_Name']);
     const woNumCol = woc(['Order_Number']);
     (woTable.id || []).forEach((id, i) => {
       workOrders[id] = {
         Due_Date: woDueCol ? columnAsArray(woTable, woDueCol)[i] : null,
+        active: woStatusCol ? (columnAsArray(woTable, woStatusCol)[i] || '').toString() === 'Active' : true,
         Customer_Name: woCustCol ? columnAsArray(woTable, woCustCol)[i] : '',
         Order_Number: woNumCol ? columnAsArray(woTable, woNumCol)[i] : '',
       };
@@ -276,21 +278,26 @@ async function loadAll() {
     const wDueCol = wc(['Due_Date']);
     queueLines = [];
     let doneButOpen = 0;
+    // Aligned with Morning Batch Planning: trust Work_Orders.Status === 'Active'
+    // plus the remaining count, NOT Work_Order_Lines.Queue_Status — that flag
+    // isn't reliably cleared when work finishes. Queue_Status is still consulted
+    // only to honour an explicit stop (cancelled / on hold).
+    const STOPPED_STATUSES = ['CANCELLED', 'CANCELED', 'ON HOLD', 'HOLD', 'CLOSED'];
     (wolTable.id || []).forEach((id, i) => {
-      const status = wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '';
-      if (status !== 'Open') return;
       const recipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
       if (!recipeId || !recipes[recipeId]) return;
 
-      // Queue_Status often stays 'Open' after the spools are actually dyed, so
-      // trust the counts rather than the status flag — same rule Batch Assignment
-      // uses, otherwise finished work keeps reappearing in the day's plan.
+      const workOrderId = getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]);
+      const wo = workOrders[workOrderId];
+      if (!wo || !wo.active) return;
+
+      const status = wStatusCol ? (columnAsArray(wolTable, wStatusCol)[i] || '').toString().trim().toUpperCase() : '';
+      if (STOPPED_STATUSES.includes(status)) return;
+
       const qtyNeeded = wQtyCol ? Number(columnAsArray(wolTable, wQtyCol)[i]) || 0 : 0;
       const qtyDyed = wQtyDyedCol ? Number(columnAsArray(wolTable, wQtyDyedCol)[i]) || 0 : 0;
       if (qtyNeeded > 0 && qtyDyed >= qtyNeeded) { doneButOpen++; return; }
 
-      const workOrderId = getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]);
-      const wo = workOrders[workOrderId] || {};
       const lineDue = wDueCol ? columnAsArray(wolTable, wDueCol)[i] : null;
       queueLines.push({
         id,
@@ -344,7 +351,7 @@ async function loadAll() {
       `${queueJobs.length} colorway(s) to dye · from ${queueLines.length} open order line(s)` +
       (merged ? ` (${merged} merged — repeat orders)` : '') +
       ` · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data` +
-      (doneButOpen ? ` · ${doneButOpen} fully-dyed line(s) skipped (still marked Open)` : '');
+      (doneButOpen ? ` · ${doneButOpen} fully-dyed line(s) skipped` : '');
 
     runPlan();
   } catch (e) {
