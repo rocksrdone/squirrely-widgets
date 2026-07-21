@@ -262,15 +262,25 @@ async function loadAll() {
     const wRecipeCol = wc(['Recipe']) || 'Recipe';
     const wWorkOrderCol = wc(['Work_Order']) || 'Work_Order';
     const wQtyCol = wc(['Qty_Needed']);
+    const wQtyDyedCol = wc(['Qty_Dyed']);
     const wStatusCol = wc(['Queue_Status']);
     const wPriorityCol = wc(['Production_Priority']);
     const wDueCol = wc(['Due_Date']);
     queueLines = [];
+    let doneButOpen = 0;
     (wolTable.id || []).forEach((id, i) => {
       const status = wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '';
       if (status !== 'Open') return;
       const recipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
       if (!recipeId || !recipes[recipeId]) return;
+
+      // Queue_Status often stays 'Open' after the spools are actually dyed, so
+      // trust the counts rather than the status flag — same rule Batch Assignment
+      // uses, otherwise finished work keeps reappearing in the day's plan.
+      const qtyNeeded = wQtyCol ? Number(columnAsArray(wolTable, wQtyCol)[i]) || 0 : 0;
+      const qtyDyed = wQtyDyedCol ? Number(columnAsArray(wolTable, wQtyDyedCol)[i]) || 0 : 0;
+      if (qtyNeeded > 0 && qtyDyed >= qtyNeeded) { doneButOpen++; return; }
+
       const workOrderId = getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]);
       const wo = workOrders[workOrderId] || {};
       const lineDue = wDueCol ? columnAsArray(wolTable, wDueCol)[i] : null;
@@ -278,7 +288,9 @@ async function loadAll() {
         id,
         recipeId,
         workOrderId,
-        qtyNeeded: wQtyCol ? columnAsArray(wolTable, wQtyCol)[i] : '',
+        qtyNeeded,
+        qtyDyed,
+        qtyRemaining: qtyNeeded > 0 ? qtyNeeded - qtyDyed : 0,
         priority: wPriorityCol ? (columnAsArray(wolTable, wPriorityCol)[i] || 'Normal') : 'Normal',
         dueDate: lineDue || wo.Due_Date || null,
         orderNumber: wo.Order_Number || '',
@@ -287,7 +299,8 @@ async function loadAll() {
     });
 
     document.getElementById('planStatus').textContent =
-      `${queueLines.length} open line(s) in queue · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data loaded`;
+      `${queueLines.length} open line(s) in queue · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data loaded` +
+      (doneButOpen ? ` · ${doneButOpen} fully-dyed line(s) skipped (still marked Open)` : '');
 
     runPlan();
   } catch (e) {
@@ -438,7 +451,14 @@ async function saveTodaysPlan() {
     showToast(`Saved — ${seq} line${seq === 1 ? '' : 's'} across ${lastGroups.length} group${lastGroups.length === 1 ? '' : 's'}${stale.length ? ' (replaced earlier plan)' : ''}.`);
   } catch (e) {
     console.error('Failed to save day plan:', e);
-    showToast('Save failed — does the Day_Plan table exist? Check the console.');
+    const msg = (e && (e.message || e.toString())) || 'unknown error';
+    if (/table|Day_Plan|not found|no such/i.test(msg)) {
+      showToast('Save failed — no Day_Plan table found in this doc. Create it first.');
+    } else if (/column|invalid|unknown field/i.test(msg)) {
+      showToast(`Save failed — column mismatch: ${msg.slice(0, 90)}`);
+    } else {
+      showToast(`Save failed: ${msg.slice(0, 110)}`);
+    }
   } finally {
     btn.disabled = false;
   }
@@ -502,7 +522,7 @@ function lineRowHtml(line) {
     <div class="line-row">
       <div class="line-main">
         <div class="line-recipe">${r.Recipe_Name || '(unnamed)'} ${r.SKU_Base ? `<span style="color:#8B7D72;font-weight:400;">(${r.SKU_Base})</span>` : ''}</div>
-        <div class="line-order">${line.orderNumber || ''}${line.customerName ? ' — ' + line.customerName : ''} · qty ${line.qtyNeeded || '?'}</div>
+        <div class="line-order">${line.orderNumber || ''}${line.customerName ? ' — ' + line.customerName : ''} · qty ${line.qtyRemaining || line.qtyNeeded || '?'}${line.qtyDyed ? ` <span style="color:#B07D2A;">(${line.qtyDyed}/${line.qtyNeeded} already done)</span>` : ''}</div>
       </div>
       ${dueTagHtml(line.dueDate)}
       <button class="btn btn-small btn-rush ${line.priority === 'Rush' ? 'active' : ''}" onclick="toggleRush(${line.id}, '${line.priority}')">
