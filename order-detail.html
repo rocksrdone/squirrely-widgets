@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Detail</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+
+.order-head { border-bottom: 2px solid var(--rule); padding-bottom: 10px; margin-bottom: 14px; }
+.order-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.order-meta { font-size: 11px; color: #8B7D72; margin-top: 3px; }
+.order-chips { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.chip { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 5px 11px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; }
+.chip span { font-family: 'Inter', sans-serif; font-weight: 500; font-size: 10px; color: #8B7D72; margin-left: 4px; }
+
+.line-card { background: white; border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.line-head { display: flex; align-items: center; gap: 10px; padding: 10px 13px; background: var(--warm); }
+.line-name { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
+.line-sku { font-size: 10px; color: #6B5E52; font-family: 'DM Mono', monospace; }
+.line-progress { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.line-progress.complete { color: var(--done-text); }
+
+.bar { height: 5px; background: var(--warm); }
+.bar-fill { height: 100%; background: var(--teal); }
+.bar-fill.complete { background: var(--done-text); }
+
+.line-body { padding: 11px 13px; }
+.row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 7px; }
+.row:last-child { margin-bottom: 0; }
+.row-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; font-weight: 700; width: 100%; }
+
+input[type="number"], input[type="text"], select {
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px;
+  font-family: 'Inter', sans-serif; background: white; color: var(--ink); color-scheme: light;
+}
+input[type="number"] { width: 92px; }
+select { max-width: 100%; }
+.btn { font-size: 12px; padding: 6px 12px; border-radius: 5px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
+.btn:hover { border-color: var(--accent); }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-gold { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.stock-note { font-size: 11px; color: #6B5E52; }
+.stock-none { font-size: 11px; color: #8B7D72; font-style: italic; }
+.divider { border-top: 1px dashed var(--rule); margin: 9px 0; }
+
+.alloc-line { font-size: 11px; padding: 3px 0; color: #6B5E52; display: flex; gap: 7px; align-items: center; }
+.alloc-tag { font-family: 'DM Mono', monospace; font-size: 10px; background: var(--teal-light); color: var(--teal); padding: 1px 6px; border-radius: 4px; }
+.alloc-status { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: var(--warm); color: #6B5E52; }
+
+.done-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #EAF3DE; color: var(--done-text); border-radius: 6px; padding: 7px 10px; font-size: 11px; margin-bottom: 7px;
+}
+.undo-link { text-decoration: underline; cursor: pointer; font-weight: 600; }
+
+.warn { background: var(--gold-light); color: var(--gold); border: 1px solid var(--gold); border-radius: 6px; padding: 8px 11px; font-size: 11px; margin-bottom: 12px; }
+.empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="content"><div class="empty-state">Select an order to see its lines.</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => normalize(k).replace(/[^A-Z0-9]/g, '') === normalize(cand).replace(/[^A-Z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString();
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+// Same spool maths as thread-lifecycle.html — keep in sync if fiber types change.
+const YARDS_PER_SPOOL = { 'FF NYLON': 100, 'E NYLON': 150, 'FF COTTON': 100, 'BLACKWING': 100 };
+function yardsPerSpool(fiberType) { return YARDS_PER_SPOOL[normalize(fiberType)] || 100; }
+
+const PRIORITIES = ['Rush', 'Urgent', 'High', 'Normal', 'Low'];
+
+let orderEntry = null;
+let doneActions = {};   // lineId -> {label, undo} for the last action on that line
+let hasLineLink = true; // whether Lot_Allocations has a Work_Order_Line column
+
+async function loadOrder(record) {
+  if (!record || !record.id) {
+    document.getElementById('content').innerHTML = `<div class="empty-state">Select an order to see its lines.</div>`;
+    orderEntry = null;
+    return;
+  }
+  document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
+
+  try {
+    const [wolTable, recipesTable, lotsTable, allocTable, custTable] = await Promise.all([
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Customers'),
+    ]);
+
+    // The new link column. If it's missing we still work, but fulfilling from
+    // stock can't be traced back to the order line — so say so loudly.
+    const allocLineCol = findColumn(allocTable, ['Work_Order_Line']);
+    hasLineLink = !!allocLineCol;
+
+    const recipeById = {};
+    (recipesTable.id || []).forEach((id, i) => {
+      recipeById[id] = {
+        name: columnAsArray(recipesTable, 'Recipe_Name')[i] || `Recipe #${id}`,
+        fiberType: columnAsArray(recipesTable, 'Fiber_Type')[i] || '',
+        sku: columnAsArray(recipesTable, 'SKU_Base')[i] || '',
+      };
+    });
+    const recipeIdBySku = {};
+    Object.entries(recipeById).forEach(([id, r]) => { if (r.sku) recipeIdBySku[normalize(r.sku)] = Number(id); });
+
+    // Resolve the order's customer — allocations need a Customer ref.
+    let customerId = getRefId(record.Customer);
+    if (!customerId && record.Customer_Name) {
+      (custTable.id || []).forEach((id, i) => {
+        if (normalize(columnAsArray(custTable, 'Customer_Name')[i]) === normalize(record.Customer_Name)) customerId = id;
+      });
+    }
+
+    // Every allocation, so we can compute what's actually spoken for per lot.
+    const allocations = (allocTable.id || []).map((id, i) => ({
+      id,
+      lotId: getRefId(columnAsArray(allocTable, 'Lot')[i]),
+      lineId: allocLineCol ? getRefId(columnAsArray(allocTable, allocLineCol)[i]) : null,
+      qty: Number(columnAsArray(allocTable, 'Qty_Spools')[i]) || 0,
+      status: columnAsArray(allocTable, 'Status')[i] || 'In Bin - Unwound',
+    }));
+
+    // Lots that are dry and have spools nobody has claimed. This is the back stock.
+    const lots = (lotsTable.id || []).map((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotsTable, 'Recipe')[i]);
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiberType: '' };
+      const totalSpools = Math.round((Number(columnAsArray(lotsTable, 'Total_Yards_Made')[i]) || 0) / yardsPerSpool(recipe.fiberType));
+      const allocated = allocations.filter(a => a.lotId === id).reduce((s, a) => s + a.qty, 0);
+      const general = Number(columnAsArray(lotsTable, 'General_Stock_Spools')[i]) || 0;
+      return {
+        id,
+        recipeId,
+        lotNumber: columnAsArray(lotsTable, 'Lot_Number')[i] || `Lot #${id}`,
+        dryingStatus: columnAsArray(lotsTable, 'Drying_Status')[i] || '',
+        totalSpools,
+        general,
+        unassigned: Math.max(0, totalSpools - allocated - general),
+      };
+    }).filter(l => l.dryingStatus === 'Ready to Assign' && (l.general + l.unassigned) > 0);
+
+    // This order's lines.
+    const lines = [];
+    (wolTable.id || []).forEach((id, i) => {
+      if (getRefId(columnAsArray(wolTable, 'Work_Order')[i]) !== record.id) return;
+      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      const recipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]) || recipeIdBySku[normalize(sku)] || null;
+      const recipe = recipeId ? recipeById[recipeId] : null;
+      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      lines.push({
+        id,
+        recipeId,
+        recipeName: recipe ? recipe.name : (sku || '(no recipe linked)'),
+        sku: sku || (recipe ? recipe.sku : ''),
+        qtyNeeded,
+        qtyDyed,
+        remaining: Math.max(0, qtyNeeded - qtyDyed),
+        priority: columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal',
+        queueStatus: columnAsArray(wolTable, 'Queue_Status')[i] || '',
+        allocs: allocations.filter(a => a.lineId === id),
+        stockLots: recipeId ? lots.filter(l => l.recipeId === recipeId) : [],
+      });
+    });
+
+    orderEntry = {
+      id: record.id,
+      orderNumber: record.Order_Number || `Order #${record.id}`,
+      customerName: record.Customer_Name || '',
+      customerId,
+      status: record.Status || '',
+      dueDate: record.Due_Date,
+      lines,
+      lotById: Object.fromEntries(lots.map(l => [l.id, l])),
+    };
+    doneActions = {};
+    render();
+  } catch (e) {
+    console.error('Failed to load order:', e);
+    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load — check table/column names.</div>`;
+  }
+}
+
+function render() {
+  if (!orderEntry) return;
+  const o = orderEntry;
+
+  const totalNeeded = o.lines.reduce((s, l) => s + l.qtyNeeded, 0);
+  const totalDyed = o.lines.reduce((s, l) => s + l.qtyDyed, 0);
+  const openLines = o.lines.filter(l => l.remaining > 0).length;
+
+  const warnHtml = hasLineLink ? '' :
+    `<div class="warn"><strong>Lot_Allocations has no Work_Order_Line column.</strong>
+     Fulfilling from stock will still adjust the counts, but nothing will record which lot
+     went to which order line. Add a Reference column named <code>Work_Order_Line</code>
+     pointing at Work_Order_Lines to get that traceability.</div>`;
+
+  const linesHtml = o.lines.length
+    ? o.lines.map(l => lineCardHtml(l)).join('')
+    : `<div class="empty-state">This order has no lines.</div>`;
+
+  document.getElementById('content').innerHTML = `
+    <div class="order-head">
+      <div class="order-title">${o.orderNumber}</div>
+      <div class="order-meta">${o.customerName || 'no customer'}${o.status ? ' · ' + o.status : ''}${o.dueDate ? ' · due ' + fmtDate(o.dueDate) : ''}</div>
+      <div class="order-chips">
+        <div class="chip">${o.lines.length}<span>lines</span></div>
+        <div class="chip">${totalDyed}/${totalNeeded}<span>spools done</span></div>
+        <div class="chip">${openLines}<span>still open</span></div>
+      </div>
+    </div>
+    ${warnHtml}
+    ${linesHtml}
+  `;
+}
+
+function lineCardHtml(l) {
+  const complete = l.qtyNeeded > 0 && l.qtyDyed >= l.qtyNeeded;
+  const pct = l.qtyNeeded > 0 ? Math.min(100, Math.round((l.qtyDyed / l.qtyNeeded) * 100)) : 0;
+  const done = doneActions[l.id];
+
+  const availableTotal = l.stockLots.reduce((s, lot) => s + lot.general + lot.unassigned, 0);
+  const stockHtml = l.stockLots.length
+    ? `
+      <div class="row">
+        <select id="lot-${l.id}">
+          ${l.stockLots.map(lot => {
+            const avail = lot.general + lot.unassigned;
+            return `<option value="${lot.id}">${lot.lotNumber} — ${avail} spool${avail === 1 ? '' : 's'} free${lot.general ? ` (${lot.general} back stock)` : ''}</option>`;
+          }).join('')}
+        </select>
+        <input type="number" id="stockqty-${l.id}" min="1" placeholder="spools" value="${Math.min(l.remaining || 1, availableTotal)}">
+        <button class="btn btn-gold" onclick="fulfilFromStock(${l.id})">Use back stock</button>
+      </div>
+      <div class="stock-note">${availableTotal} spool${availableTotal === 1 ? '' : 's'} already made and unclaimed for this colorway.</div>`
+    : `<div class="stock-none">No ready lots with spare spools for this colorway.</div>`;
+
+  const allocHtml = l.allocs.length
+    ? `<div class="divider"></div>
+       <div class="row-label">Filled from these lots</div>
+       ${l.allocs.map(a => {
+          const lot = orderEntry.lotById[a.lotId];
+          return `<div class="alloc-line">
+            <span class="alloc-tag">${lot ? lot.lotNumber : 'lot #' + a.lotId}</span>
+            ${a.qty} spool${a.qty === 1 ? '' : 's'}
+            <span class="alloc-status">${a.status}</span>
+          </div>`;
+        }).join('')}`
+    : '';
+
+  return `
+    <div class="line-card">
+      <div class="line-head">
+        <div>
+          <div class="line-name">${l.recipeName}</div>
+          <div class="line-sku">${l.sku || ''}</div>
+        </div>
+        <div class="line-progress ${complete ? 'complete' : ''}">${l.qtyDyed}/${l.qtyNeeded}${complete ? ' ✓' : ''}</div>
+      </div>
+      <div class="bar"><div class="bar-fill ${complete ? 'complete' : ''}" style="width:${pct}%"></div></div>
+      <div class="line-body">
+        ${done ? `<div class="done-banner"><span>✓ ${done.label}</span><span class="undo-link" onclick="undoLine(${l.id})">Undo</span></div>` : ''}
+
+        <div class="row-label">Just dyed some</div>
+        <div class="row">
+          <input type="number" id="dyed-${l.id}" min="1" placeholder="spools made">
+          <button class="btn btn-teal" onclick="logDyed(${l.id})">✓ Log dyed</button>
+        </div>
+
+        <div class="divider"></div>
+        <div class="row-label">Already made — pull from stock</div>
+        ${stockHtml}
+
+        <div class="divider"></div>
+        <div class="row-label">Edit this line</div>
+        <div class="row">
+          <input type="number" id="need-${l.id}" min="0" value="${l.qtyNeeded}" title="Qty needed">
+          <select id="prio-${l.id}">
+            ${PRIORITIES.map(p => `<option value="${p}" ${p === l.priority ? 'selected' : ''}>${p}</option>`).join('')}
+          </select>
+          <button class="btn" onclick="saveLine(${l.id})">Save changes</button>
+        </div>
+        ${allocHtml}
+      </div>
+    </div>
+  `;
+}
+
+function lineById(id) { return orderEntry.lines.find(l => l.id === id); }
+
+async function logDyed(lineId) {
+  const l = lineById(lineId);
+  const input = document.getElementById(`dyed-${lineId}`);
+  const amount = Number(input.value) || 0;
+  if (amount <= 0) { showToast('Enter how many spools you made'); return; }
+
+  const before = l.qtyDyed;
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: before + amount }]
+    ]);
+    doneActions[lineId] = {
+      label: `Logged ${amount} spool${amount === 1 ? '' : 's'} dyed`,
+      undo: async () => {
+        await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: before }]]);
+      },
+    };
+    await refresh();
+  } catch (e) {
+    console.error('Failed to log dyed:', e);
+    showToast('Failed — check the console');
+  }
+}
+
+// Fulfilling from stock does three things: claim the spools on the lot, record
+// that claim against this order line, and move the line's count forward.
+// Qty_Dyed means "accounted for", not "dyed today" — every planning widget reads
+// it as Qty_Needed - Qty_Dyed > 0, so stock-filled spools have to count here or
+// the line stays pending forever. The Lot_Allocations row is what preserves the
+// distinction: it says these spools came from an existing lot.
+async function fulfilFromStock(lineId) {
+  const l = lineById(lineId);
+  const lotId = Number(document.getElementById(`lot-${lineId}`).value);
+  const qty = Number(document.getElementById(`stockqty-${lineId}`).value) || 0;
+  const lot = orderEntry.lotById[lotId];
+
+  if (!lot) { showToast('Pick a lot'); return; }
+  if (qty <= 0) { showToast('Enter how many spools'); return; }
+  const available = lot.general + lot.unassigned;
+  if (qty > available) { showToast(`Only ${available} spool${available === 1 ? '' : 's'} free on ${lot.lotNumber}`); return; }
+  if (!orderEntry.customerId) { showToast("Can't match this order to a customer row — allocation needs one"); return; }
+
+  // Draw down the general back-stock bucket first; the rest comes from spools
+  // on the lot that were never assigned to anyone.
+  const fromGeneral = Math.min(qty, lot.general);
+  const beforeDyed = l.qtyDyed;
+  const beforeGeneral = lot.general;
+
+  const fields = {
+    Lot: lotId,
+    Customer: orderEntry.customerId,
+    Qty_Spools: qty,
+    Status: 'In Bin - Unwound',
+  };
+  if (hasLineLink) fields.Work_Order_Line = lineId;
+
+  try {
+    const result = await grist.docApi.applyUserActions([['AddRecord', 'Lot_Allocations', null, fields]]);
+    const newAllocId = result.retValues[0];
+
+    const followUp = [['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: beforeDyed + qty }]];
+    if (fromGeneral > 0) {
+      followUp.push(['UpdateRecord', 'Production_Lots', lotId, { General_Stock_Spools: beforeGeneral - fromGeneral }]);
+    }
+    await grist.docApi.applyUserActions(followUp);
+
+    doneActions[lineId] = {
+      label: `Pulled ${qty} spool${qty === 1 ? '' : 's'} from ${lot.lotNumber}${fromGeneral ? ` (${fromGeneral} from back stock)` : ''}`,
+      undo: async () => {
+        const reverse = [
+          ['RemoveRecord', 'Lot_Allocations', newAllocId],
+          ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: beforeDyed }],
+        ];
+        if (fromGeneral > 0) {
+          reverse.push(['UpdateRecord', 'Production_Lots', lotId, { General_Stock_Spools: beforeGeneral }]);
+        }
+        await grist.docApi.applyUserActions(reverse);
+      },
+    };
+    await refresh();
+  } catch (e) {
+    console.error('Failed to fulfil from stock:', e);
+    showToast('Failed — check the Lot_Allocations table');
+  }
+}
+
+async function saveLine(lineId) {
+  const l = lineById(lineId);
+  const newNeeded = Number(document.getElementById(`need-${lineId}`).value);
+  const newPrio = document.getElementById(`prio-${lineId}`).value;
+  if (isNaN(newNeeded) || newNeeded < 0) { showToast('Qty needed must be a number'); return; }
+  if (newNeeded === l.qtyNeeded && newPrio === l.priority) { showToast('Nothing changed'); return; }
+
+  const beforeNeeded = l.qtyNeeded, beforePrio = l.priority;
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Needed: newNeeded, Production_Priority: newPrio }]
+    ]);
+    doneActions[lineId] = {
+      label: `Line updated — ${newNeeded} needed, ${newPrio}`,
+      undo: async () => {
+        await grist.docApi.applyUserActions([
+          ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Needed: beforeNeeded, Production_Priority: beforePrio }]
+        ]);
+      },
+    };
+    await refresh();
+  } catch (e) {
+    console.error('Failed to save line:', e);
+    showToast('Failed — check the console');
+  }
+}
+
+async function undoLine(lineId) {
+  const done = doneActions[lineId];
+  if (!done) return;
+  try {
+    await done.undo();
+    delete doneActions[lineId];
+    showToast('Undone');
+    await refresh(true);
+  } catch (e) {
+    console.error('Undo failed:', e);
+    showToast('Undo failed — check the console');
+  }
+}
+
+// Reload from Grist but keep the done-banners, so undo stays available after
+// the numbers refresh.
+let currentRecord = null;
+async function refresh(clearBanners) {
+  const keep = clearBanners ? {} : doneActions;
+  await loadOrder(currentRecord);
+  doneActions = keep;
+  render();
+}
+
+grist.ready({ requiredAccess: 'full' });
+
+grist.onRecord((record) => {
+  currentRecord = record;
+  doneActions = {};
+  loadOrder(record);
+});
+</script>
+</body>
+</html>
