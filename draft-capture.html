@@ -288,9 +288,10 @@ async function init(){
     grist.docApi.fetchTable('Dyes').catch(function(){return null;}),
     grist.docApi.fetchTable('Production_Lots').catch(function(){return null;}),
     grist.docApi.fetchTable('Day_Plan').catch(function(){return null;}),
-    grist.docApi.fetchTable('Recipe_Dye_Components').catch(function(){return null;})
+    grist.docApi.fetchTable('Recipe_Dye_Components').catch(function(){return null;}),
+    grist.docApi.fetchTable('Recipes').catch(function(){return null;})
   ]);
-  var dyesT=t[0], lotsT=t[1], planT=t[2], rdcT=t[3];
+  var dyesT=t[0], lotsT=t[1], planT=t[2], rdcT=t[3], recT=t[4];
 
   var problems = [];
   if(!dyesT) problems.push('Dyes table not readable. Check the table ID in Raw Data and that widget access is Full document.');
@@ -304,9 +305,19 @@ async function init(){
   S.cols.lotSpools= pickCol(lotsT,['Spools_Made','Total_Spools','Spool_Count','Qty_Spools','Spools']);
   S.cols.lotFiber = pickCol(lotsT,['Fiber','Fiber_Type','Material','Form','Base']);
   S.cols.lotDate  = pickCol(lotsT,['Date_Dyed','Dye_Date','Date_Created','Date']);
+  S.cols.lotNotes = pickCol(lotsT,['Notes','Note','Description','Comments']);
   S.cols.rdcRecipe= pickCol(rdcT,['Recipe','Recipe_ID']);
   S.cols.rdcDye   = pickCol(rdcT,['Dye_Name']);
   S.cols.rdcDil   = pickCol(rdcT,['Dilution','Dilution_Ratio','Ratio','Strength']);
+  S.cols.recName  = pickCol(recT,['Name','Recipe_Name','Colorway_Name','Title','Label','SKU_Base']);
+  S.cols.recNotes = pickCol(recT,['Notes','Note','Description','Comments','Method']);
+
+  if(recT && !S.cols.recName){
+    problems.push('Recipes has no name-like column. Columns present: '+esc(Object.keys(recT).join(', '))+' - the draft code will live only on the lot.');
+  }
+  if(recT && !S.cols.recNotes){
+    problems.push('Recipes has no notes column - your notes will be saved on the lot instead.');
+  }
 
   if(dyesT && !S.cols.dyeName){
     problems.push('Dyes loaded but no name column matched. Columns present: '+esc(Object.keys(dyesT).join(', ')));
@@ -389,12 +400,14 @@ async function save(){
   var created=[];
 
   /* 1. draft recipe - named for the code, no colorway yet */
-  var recipeFields={Name:S.code};
-  if(notes) recipeFields.Notes=notes;
+  var noteText=notes;
   if(!S.cols.rdcDil){
     var dilLine=S.picked.map(function(p){ return S.byId[p.id].name+' '+(p.dilution||'Full'); }).join(', ');
-    recipeFields.Notes=(notes?notes+'\n\n':'')+'Dilutions: '+dilLine;
+    noteText=(notes?notes+'\n\n':'')+'Dilutions: '+dilLine;
   }
+  var recipeFields={};
+  if(S.cols.recName) recipeFields[S.cols.recName]=S.code;
+  if(S.cols.recNotes && noteText) recipeFields[S.cols.recNotes]=noteText;
   var recipeId=await addRecord('Recipes',recipeFields);
   created.push(['Recipes',recipeId]);
 
@@ -416,6 +429,7 @@ async function save(){
   if(S.cols.lotStatus) lot[S.cols.lotStatus]=DRAFT_STATUS;
   if(S.cols.lotSpools) lot[S.cols.lotSpools]=S.spools;
   if(S.cols.lotFiber) lot[S.cols.lotFiber]=S.fiber;
+  if(!S.cols.recNotes && noteText && S.cols.lotNotes) lot[S.cols.lotNotes]=noteText;
   if(S.cols.lotDate){
     var d=new Date();
     lot[S.cols.lotDate]=Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/1000;
