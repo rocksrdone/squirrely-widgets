@@ -32,12 +32,12 @@
     font-family: 'Inter', sans-serif;
     font-size: 13px;
     line-height: 1.5;
-    padding: 18px;
+    padding: 13px;
   }
 
   .top-bar {
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 16px; flex-wrap: wrap; gap: 10px;
+    margin-bottom: 12px; flex-wrap: wrap; gap: 10px;
   }
   .name-input {
     font-family: 'Libre Baskerville', serif; font-size: 24px; font-weight: 700;
@@ -63,11 +63,11 @@
 
   .section {
     background: white; border: 1px solid var(--rule); border-radius: 10px;
-    padding: 16px; margin-bottom: 14px;
+    padding: 12px 13px; margin-bottom: 10px;
   }
   .section-title {
     font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
-    color: #8B7D72; margin-bottom: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+    color: #8B7D72; margin-bottom: 9px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
     user-select: none;
   }
   .section-title:hover { color: var(--accent); }
@@ -75,7 +75,7 @@
   .section-chevron.collapsed { transform: rotate(-90deg); }
   .section-body.collapsed { display: none; }
 
-  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; }
   .field-wrap { display: flex; flex-direction: column; gap: 4px; }
   .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .field-input, .field-select, .field-textarea {
@@ -294,8 +294,8 @@
   </div>
 
   <div class="section">
-    <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron" id="chevron-photos">▾</span></div>
-    <div class="section-body" id="body-photos">
+    <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron collapsed" id="chevron-photos">▾</span></div>
+    <div class="section-body collapsed" id="body-photos">
     <div class="photo-grid">
       <div class="photo-slot">
         <div class="photo-slot-label">Step 1</div>
@@ -405,6 +405,10 @@ function findColumn(tableData, candidates) {
   return null;
 }
 
+// Escape Grist text before it enters innerHTML — a stray < in a name/note
+// otherwise opens a phantom tag and swallows following markup.
+function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
 let currentHistoryEntries = [];
 
 async function loadHistory(recipeId) {
@@ -509,6 +513,7 @@ function vendorCodeFromExistingSku(skuBase) {
 
 let currentRecipeId = null;
 let allVendors = [];   // {name, code}
+let customerNameById = {};   // id -> name, for the Linked Customer select + record load
 let allOtherSkus = [];  // {id, sku, recipeName}
 let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder, water, dilution, position, technique, notes}
 let deletedDyeIds = [];
@@ -528,34 +533,64 @@ function clearUnsaved() {
 }
 
 async function loadVendorsList() {
-  if (allVendors.length) return;
+  // Cache: once either list is built the DOM options persist, nothing to redo.
+  if (allVendors.length || Object.keys(customerNameById).length) return;
   try {
     const customersTable = await grist.docApi.fetchTable('Customers');
-    const nameCol = findColumn(customersTable, ['Name', 'Customer_Name', 'Vendor_Name']);
+    // Customer_Name is the canonical name column in this doc (the picker and
+    // order-lines both read it). Resolve it FIRST — a stray/blank `Name`
+    // column would otherwise win and leave every option empty.
+    const nameCol = findColumn(customersTable, ['Customer_Name', 'Name', 'Vendor_Name']);
     const codeCol = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
     const typeCol = findColumn(customersTable, ['Type', 'Customer_Type']);
-    if (!nameCol || !codeCol) return;
+    if (!nameCol) return;
     const ids = customersTable.id || [];
-    allVendors = ids.map((id, i) => ({
-      id,
-      name: columnAsArray(customersTable, nameCol)[i],
-      code: columnAsArray(customersTable, codeCol)[i],
-      type: typeCol ? columnAsArray(customersTable, typeCol)[i] : '',
-    })).filter(v => v.name && v.code && (!v.type || v.type === 'Wholesale Vendor'));
+    const names = columnAsArray(customersTable, nameCol);
 
-    const select = document.getElementById('reservedFor');
-    select.innerHTML = '<option value="">— pick vendor —</option>' +
-      allVendors.map(v => `<option value="${v.code}">${v.name} (${v.code})</option>`).join('');
+    // id -> name map: powers the Linked Customer options and the record-load
+    // fallback below.
+    customerNameById = {};
+    ids.forEach((id, i) => { if (names[i]) customerNameById[id] = names[i]; });
 
+    // Reserved-For vendor dropdown needs codes; build it only if a code column
+    // exists — but this must NOT gate the Linked Customer list below.
+    if (codeCol) {
+      allVendors = ids.map((id, i) => ({
+        id,
+        name: names[i],
+        code: columnAsArray(customersTable, codeCol)[i],
+        type: typeCol ? columnAsArray(customersTable, typeCol)[i] : '',
+      })).filter(v => v.name && v.code && (!v.type || v.type === 'Wholesale Vendor'));
+
+      const select = document.getElementById('reservedFor');
+      select.innerHTML = '<option value="">— pick vendor —</option>' +
+        allVendors.map(v => `<option value="${esc(v.code)}">${esc(v.name)} (${esc(v.code)})</option>`).join('');
+    }
+
+    // Linked Customer = every customer with a name (individuals included),
+    // independent of vendor codes.
     const linkedSelect = document.getElementById('linkedCustomer');
     linkedSelect.innerHTML = '<option value="">— none —</option>' +
-      ids.map((id, i) => {
-        const nm = columnAsArray(customersTable, nameCol)[i];
-        return nm ? `<option value="${id}">${nm}</option>` : '';
-      }).join('');
+      ids.map((id, i) => names[i] ? `<option value="${id}">${esc(names[i])}</option>` : '').join('');
   } catch (e) {
-    console.error('Could not load vendor list:', e);
+    console.error('Could not load customer list:', e);
   }
+}
+
+// Set the Linked Customer select to a stored ref, injecting the option if it
+// isn't already present (customer filtered out, list not built yet, etc.) so a
+// saved link always displays.
+function setLinkedCustomerValue(id) {
+  const sel = document.getElementById('linkedCustomer');
+  if (!id) { sel.value = ''; return; }
+  const val = String(id);
+  if (!Array.from(sel.options).some(o => o.value === val)) {
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = customerNameById[id] || `Customer #${id}`;
+    sel.appendChild(opt);
+  }
+  sel.value = val;
 }
 
 let allOrderLines = []; // {lineId, orderNumber, customerName, productName, sku, qtyNeeded, orderDate}
@@ -847,7 +882,7 @@ async function loadRecipe(record) {
   selectedOrderLine = linkedOrderLineId ? allOrderLines.find(l => l.lineId === linkedOrderLineId) || null : null;
   renderLinkedOrderBanner();
   const linkedCustomerId = getRefId(record.Linked_Customer);
-  document.getElementById('linkedCustomer').value = linkedCustomerId || '';
+  setLinkedCustomerValue(linkedCustomerId);
   onScopeChange();
   const existingVendor = vendorCodeFromExistingSku(record.SKU_Base || record.Shopify_SKU);
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
