@@ -53,7 +53,6 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .badge.scope-custom { background: var(--accent-light); color: var(--accent); }
 .badge.status { background: var(--warm); color: #6B5E52; }
 .rc-meta-row { font-size: 11px; color: #8B7D72; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
-.rc-notes { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .load-more-wrap { text-align: center; margin-top: 14px; }
 .btn { font-size: 12px; padding: 8px 16px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); }
@@ -123,12 +122,6 @@ function getRefId(ref) {
   if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
   return null;
 }
-function fmtDate(dateVal) {
-  if (!dateVal) return '';
-  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
-  if (!ms || isNaN(ms)) return '';
-  return new Date(ms).toISOString().slice(0, 10);
-}
 function scopeClass(scope) {
   const s = (scope || '').toLowerCase();
   if (s === 'general') return 'scope-general';
@@ -156,7 +149,6 @@ async function loadRecipes() {
     const skuCol = c(['SKU_Base']);
     const statusCol = c(['Status']);
     const colorwayCol = c(['Colorway']);
-    const notesCol = c(['Notes']);
     const createdCol = c(['Created_Date']);
     const cleanupCol = c(['Cleanup_Order']);
     const custRefCol = c(['Linked_Customer']);
@@ -191,7 +183,6 @@ async function loadRecipes() {
           const cwId = getRefId(raw);
           return cwId ? (colorwayNameById[cwId] || '') : (typeof raw === 'string' ? raw : '');
         })(),
-        notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
         createdDate: createdCol ? columnAsArray(table, createdCol)[i] : null,
         cleanupOrder: cleanupCol ? columnAsArray(table, cleanupCol)[i] : '',
         customerName: custId ? (custNameById[custId] || '') : '',
@@ -296,7 +287,7 @@ function cardHtml(r) {
   const scopeCls = scopeClass(r.scope);
   const name = esc(r.name), sku = esc(r.sku), fiber = esc(r.fiberType),
         scope = esc(r.scope), status = esc(r.status), colorway = esc(r.colorway),
-        customer = esc(r.customerName), notes = esc(r.notes);
+        customer = esc(r.customerName);
   return `
     <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" data-id="${r.id}" onclick="selectRecipe(${r.id})">
       <div class="rc-stripe" style="background:${guessColor(r.name)}"></div>
@@ -313,9 +304,7 @@ function cardHtml(r) {
         <div class="rc-meta-row">
           ${colorway && colorway !== name ? `<span>Colorway: ${colorway}</span>` : ''}
           ${customer ? `<span>For: ${customer}</span>` : ''}
-          ${r.createdDate ? `<span>Created ${fmtDate(r.createdDate)}</span>` : ''}
         </div>
-        ${notes ? `<div class="rc-notes">${notes}</div>` : ''}
       </div>
     </div>
   `;
