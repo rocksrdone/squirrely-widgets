@@ -21,9 +21,6 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   position: sticky; top: 0; z-index: 5; background: var(--paper);
   margin: -10px -10px 8px; padding: 10px 10px 8px; border-bottom: 1px solid var(--rule);
 }
-.top-bar { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.count { font-size: 11px; color: #8B7D72; }
-
 .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .search-input { flex: 1 1 100%; min-width: 120px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
 .sel { flex: 1 1 auto; min-width: 92px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
@@ -64,9 +61,6 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <body>
 
 <div class="header">
-  <div class="top-bar">
-    <span class="count" id="resultCount"></span>
-  </div>
   <div class="controls">
     <input class="search-input" id="searchBox" placeholder="Search name, SKU, colorway, customer..." oninput="onFilterChange()">
     <select class="sel" id="scopeSelect" onchange="onFilterChange()"></select>
@@ -256,8 +250,6 @@ function onFilterChange() {
 }
 
 function renderList() {
-  document.getElementById('resultCount').textContent = `${filteredCache.length} recipe${filteredCache.length === 1 ? '' : 's'}`;
-
   const box = document.getElementById('recipeList');
   if (!filteredCache.length) {
     box.innerHTML = `<div class="empty-state">No recipes match.</div>`;
