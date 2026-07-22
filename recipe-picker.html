@@ -279,6 +279,7 @@ function renderList() {
   }
 
   const visible = filteredCache.slice(0, visibleCount);
+  box.replaceChildren();
   box.innerHTML = visible.map(cardHtml).join('');
 
   const remaining = filteredCache.length - visible.length;
@@ -302,7 +303,7 @@ function cardHtml(r) {
   const key = r.id;
   const scopeCls = scopeClass(r.scope);
   return `
-    <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" onclick="selectRecipe(${r.id})">
+    <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" data-id="${r.id}" onclick="selectRecipe(${r.id})">
       <div class="rc-thumb" id="thumb-${key}">
         ${r.photoUrl
           ? `<img class="lazy-thumb" data-src="${r.photoUrl}" alt="${r.name}" onerror="this.style.display='none'">`
@@ -352,7 +353,11 @@ function loadOneThumb(img) {
 
 async function selectRecipe(id) {
   selectedId = id;
-  renderList();
+  // Update selection styling in place — re-rendering the whole list on every
+  // click was leaving ghost cards stacked when the list length changed.
+  document.querySelectorAll('.recipe-card.selected').forEach(el => el.classList.remove('selected'));
+  const card = document.querySelector(`.recipe-card[data-id="${id}"]`);
+  if (card) card.classList.add('selected');
   try {
     await grist.setCursorPos({ rowId: id });
   } catch (e) {
