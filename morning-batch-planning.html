@@ -147,6 +147,30 @@ function getRefId(ref) {
 }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+// Matches a column id ignoring case and non-alphanumerics, trying each candidate.
+// Keep in sync with the copy in batch-assignment/batch-planner.
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+// Resolve a table's columns; push "Table.FirstCand" into `missing` for any REQUIRED
+// column not found, so we can banner instead of silently reading an empty column.
+// spec value is either ['Cand'] (required) or { cands:[...], required:false }.
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
 const PRIORITY_RANK = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 };
 function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
 
@@ -167,14 +191,21 @@ async function loadTodaysPlan() {
   planByRecipe = {};
   try {
     const dp = await grist.docApi.fetchTable('Day_Plan');
+    // Day_Plan is optional (it only adds "in today's plan" marking). Resolve its
+    // columns but never banner — a rename here just leaves nothing marked.
+    const dpMissing = [];
+    const DP = resolveCols(dp, 'Day_Plan', {
+      planDate: ['Plan_Date'], recipe: ['Recipe'], sequence: ['Sequence'], slot: ['Prep_Slot'],
+    }, dpMissing);
+    if (dpMissing.length) throw new Error('Day_Plan columns changed');
     const today = todayEpochSeconds();
     (dp.id || []).forEach((id, i) => {
-      if (Number(columnAsArray(dp, 'Plan_Date')[i]) !== today) return;
-      const rid = getRefId(columnAsArray(dp, 'Recipe')[i]);
+      if (Number(columnAsArray(dp, DP.planDate)[i]) !== today) return;
+      const rid = getRefId(columnAsArray(dp, DP.recipe)[i]);
       if (!rid || planByRecipe[rid]) return; // repeat orders share a recipe — keep the first
       planByRecipe[rid] = {
-        seq: Number(columnAsArray(dp, 'Sequence')[i]) || 0,
-        slots: (columnAsArray(dp, 'Prep_Slot')[i] || '').toString(),
+        seq: Number(columnAsArray(dp, DP.sequence)[i]) || 0,
+        slots: (columnAsArray(dp, DP.slot)[i] || '').toString(),
       };
     });
   } catch (e) {
@@ -208,13 +239,45 @@ async function loadEverything() {
 
     await loadTodaysPlan();
 
+    // ── Resolve every column id up front (rename-proofing) ──────────────
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const WO = resolveCols(woTable, 'Work_Orders', {
+      status: ['Status'], orderNumber: opt(['Order_Number']), customerName: opt(['Customer_Name']),
+    }, missing);
+    const REC = resolveCols(recipesTable, 'Recipes', {
+      name: ['Recipe_Name'], sku: opt(['SKU_Base']),
+    }, missing);
+    const DYE = resolveCols(dyesTable, 'Dyes', {
+      name: ['Dye_Name'], powderLoc: opt(['Powder_Location']),
+    }, missing);
+    const COMP = resolveCols(compTable, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'],
+    }, missing);
+    const STOCK = resolveCols(stockTable, 'Dye_Stock', {
+      dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']),
+    }, missing);
+    const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], qtyDyed: ['Qty_Dyed'],
+      sku: opt(['SKU']), recipe: opt(['Recipe']), priority: opt(['Production_Priority']),
+    }, missing);
+
+    if (missing.length) {
+      document.getElementById('headerSub').textContent =
+        'Missing columns: ' + [...new Set(missing)].join(', ') + ' — a table/column was likely renamed';
+      recipeData = [];
+      renderList();
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     const woIds = woTable.id || [];
     const woInfo = {};
     woIds.forEach((id, i) => {
       woInfo[id] = {
-        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
-        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
-        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+        active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
+        customerName: columnAsArray(woTable, WO.customerName)[i],
       };
     });
 
@@ -222,7 +285,7 @@ async function loadEverything() {
     const recipeById = {};
     const recipeBySku = {};
     rIds.forEach((id, i) => {
-      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i], sku: columnAsArray(recipesTable, 'SKU_Base')[i] };
+      const rec = { id, name: columnAsArray(recipesTable, REC.name)[i], sku: columnAsArray(recipesTable, REC.sku)[i] };
       recipeById[id] = rec;
       const sku = normalize(rec.sku);
       if (sku) recipeBySku[sku] = rec;
@@ -232,13 +295,13 @@ async function loadEverything() {
     // a Ref:Dyes reference, not text.
     const dIds = dyesTable.id || [];
     const dyeNameById = {};
-    dIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
+    dIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, DYE.name)[i] || ''; });
 
     const cIds = compTable.id || [];
     const dyesByRecipe = {};
     cIds.forEach((id, i) => {
-      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const rawDyeVal = columnAsArray(compTable, 'Dye_Name')[i];
+      const recipeRef = getRefId(columnAsArray(compTable, COMP.recipe)[i]);
+      const rawDyeVal = columnAsArray(compTable, COMP.dye)[i];
       const dyeRefId = getRefId(rawDyeVal);
       const dyeName = dyeRefId ? dyeNameById[dyeRefId] : (typeof rawDyeVal === 'string' ? rawDyeVal : '');
       if (!recipeRef || !dyeName) return;
@@ -248,22 +311,22 @@ async function loadEverything() {
 
     const powderLocationByDye = {};
     dIds.forEach((id, i) => {
-      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
-      if (name) powderLocationByDye[name] = columnAsArray(dyesTable, 'Powder_Location')[i] || '';
+      const name = normalize(columnAsArray(dyesTable, DYE.name)[i]);
+      if (name) powderLocationByDye[name] = columnAsArray(dyesTable, DYE.powderLoc)[i] || '';
     });
 
     const sIds = stockTable.id || [];
     const stockByDyeName = {};
     sIds.forEach((id, i) => {
-      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      const dyeRef = getRefId(columnAsArray(stockTable, STOCK.dye)[i]);
       if (!dyeRef) return;
       const dyeIdx = dIds.indexOf(dyeRef);
-      const dyeName = dyeIdx !== -1 ? normalize(columnAsArray(dyesTable, 'Dye_Name')[dyeIdx]) : null;
+      const dyeName = dyeIdx !== -1 ? normalize(columnAsArray(dyesTable, DYE.name)[dyeIdx]) : null;
       if (!dyeName) return;
       if (!stockByDyeName[dyeName]) stockByDyeName[dyeName] = [];
       stockByDyeName[dyeName].push({
-        qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
-        binLocation: columnAsArray(stockTable, 'Bin_Location')[i] || '',
+        qty: Number(columnAsArray(stockTable, STOCK.quantity)[i]) || 0,
+        binLocation: columnAsArray(stockTable, STOCK.bin)[i] || '',
       });
     });
 
@@ -271,23 +334,23 @@ async function loadEverything() {
     const pendingByRecipe = {};
 
     for (let i = 0; i < wolIds.length; i++) {
-      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
       const info = woInfo[woId];
       if (!info || !info.active) continue;
 
-      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
+      const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, WOL.qtyDyed)[i]) || 0;
       const remaining = qtyNeeded - qtyDyed;
       if (remaining <= 0) continue;
 
-      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      const sku = columnAsArray(wolTable, WOL.sku)[i] || '';
       let recipe = null;
-      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      const directRecipeId = getRefId(columnAsArray(wolTable, WOL.recipe)[i]);
       if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
       else recipe = recipeBySku[normalize(sku)] || null;
       if (!recipe) continue;
 
-      const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
+      const priority = columnAsArray(wolTable, WOL.priority)[i] || 'Normal';
 
       if (!pendingByRecipe[recipe.id]) {
         pendingByRecipe[recipe.id] = {
@@ -362,7 +425,8 @@ async function loadEverything() {
     renderList();
   } catch (e) {
     console.error('Failed to load morning batch planning:', e);
-    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('headerSub').textContent = 'Failed to load — ' + msg;
   }
 }
 
