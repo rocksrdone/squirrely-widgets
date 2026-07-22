@@ -229,12 +229,17 @@ async function loadForRecipe(record) {
     Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
 
     // recipeId -> [dyeId, dyeId, ...] — dyeId is the real Dyes row id, resolved via getRefId
+    // Is_Powder = sprinkled dry. Powder dyes come off an alphabetical rack, not the
+    // prep bench: no zone, no reuse grouping, no bin. Skip them here so this map
+    // stays identical to batch-planner's, and allocatePrepZones agrees across both.
     const cIds = compTable.id || [];
+    const compPowderCol = findColumn(compTable, ['Is_Powder', 'Powder']);
     const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
       const dyeRef = getRefId(columnAsArray(compTable, 'Dye_Name')[i]);
       if (!recipeRef || !dyeRef) return;
+      if (compPowderCol && columnAsArray(compTable, compPowderCol)[i]) return;
       if (!dyesByRecipeId[recipeRef]) dyesByRecipeId[recipeRef] = [];
       if (!dyesByRecipeId[recipeRef].includes(dyeRef)) dyesByRecipeId[recipeRef].push(dyeRef);
     });

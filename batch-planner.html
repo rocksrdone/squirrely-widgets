@@ -259,10 +259,15 @@ async function loadAll() {
     const rdcc = (c) => findColumn(rdcTable, c);
     const rdcRecipeCol = rdcc(['Recipe']) || 'Recipe';
     const rdcDyeCol = rdcc(['Dye_Name']) || 'Dye_Name';
+    // Is_Powder = sprinkled dry. Powder dyes come off an alphabetical rack, not
+    // the prep bench — they occupy no zone and are no reason to group two jobs.
+    // Skip them entirely so they never affect zone allocation or reuse scoring.
+    const rdcPowderCol = rdcc(['Is_Powder', 'Powder']);
     (rdcTable.id || []).forEach((id, i) => {
       const recipeId = getRefId(columnAsArray(rdcTable, rdcRecipeCol)[i]);
       const dyeId = getRefId(columnAsArray(rdcTable, rdcDyeCol)[i]);
       if (!recipeId || !dyeId) return;
+      if (rdcPowderCol && columnAsArray(rdcTable, rdcPowderCol)[i]) return;
       if (!recipeDyes[recipeId]) recipeDyes[recipeId] = [];
       if (!recipeDyes[recipeId].includes(dyeId)) recipeDyes[recipeId].push(dyeId);
     });
