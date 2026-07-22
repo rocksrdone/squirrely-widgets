@@ -109,6 +109,16 @@ function getRefId(ref) {
 }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+// Byte-identical copy of the helper in batch-planner.html — keep them in sync.
+// Matches a column id ignoring case and non-alphanumerics, trying each candidate.
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
 
 // ── PREP TABLE CONFIG ──────────────────────────────────────────────
 // Must match PREP_ZONES in batch-planner.html. Staging advice is only given
