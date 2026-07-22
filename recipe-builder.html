@@ -45,7 +45,8 @@
     border-bottom: 2px solid transparent; padding: 2px 0; flex: 1; min-width: 200px;
   }
   .name-input:focus { border-bottom-color: var(--accent); }
-  .top-actions { display: flex; gap: 8px; }
+  .top-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+  .tb-title { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; min-width: 0; }
   .btn {
     font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--rule); background: white; color: var(--ink);
@@ -140,10 +141,17 @@
   .dye-suggestion-row:hover { background: var(--warm); }
 
   .add-dye-btn {
-    width: 100%; padding: 10px; border-radius: 6px; border: 1.5px dashed var(--rule);
-    background: transparent; color: #6B5E52; cursor: pointer; font-size: 12px; font-weight: 500;
+    width: 100%; padding: 11px; border-radius: 7px; border: 1px solid var(--teal);
+    background: var(--teal); color: #fff; cursor: pointer; font-size: 12px; font-weight: 700;
+    letter-spacing: .02em; margin-top: 6px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
   }
-  .add-dye-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .add-dye-btn::before {
+    content: '+'; display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%; background: rgba(255,255,255,.22);
+    font-size: 15px; font-weight: 700; line-height: 1;
+  }
+  .add-dye-btn:hover { opacity: .9; }
 
   .no-dyes { text-align: center; color: #8B7D72; font-style: italic; padding: 16px; }
 
@@ -182,13 +190,14 @@
 
 <div id="content" style="display:none">
   <div class="top-bar">
-    <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:200px;">
-      <span id="draftBadge" style="display:none; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:3px 9px; border-radius:10px; background:var(--gold-light); color:var(--gold); border:1px solid #D4B07A;">Draft</span>
-      <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();" style="flex:1;">
-      <span id="createdDateLabel" style="font-size:10px; color:#8B7D72; white-space:nowrap;"></span>
-      <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
+    <div class="tb-title">
+      <span id="draftBadge" style="display:none; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:3px 9px; border-radius:10px; background:var(--gold-light); color:var(--gold); border:1px solid #D4B07A; flex-shrink:0;">Draft</span>
+      <input class="name-input" id="nameInput" placeholder="Recipe name..." oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();" style="flex:1; min-width:0;">
     </div>
     <div class="top-actions">
+      <span id="createdDateLabel" style="font-size:10px; color:#8B7D72; white-space:nowrap;"></span>
+      <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
+      <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Mark as Active">✓ Finalize</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -262,20 +271,11 @@
     </div>
   </div>
 
-  <div class="section" id="finalizeSection" style="display:none">
-    <div class="section-title" onclick="toggleSection('finalize')"><span>Finalize</span><span class="section-chevron" id="chevron-finalize">▾</span></div>
-    <div class="section-body" id="body-finalize">
-    <div style="font-size:12px; color:#6B5E52; margin-bottom:8px;">Once this is ready to become a real, sellable recipe:</div>
-    <button class="btn btn-teal" id="finalizeBtn" onclick="finalizeRecipe()" disabled style="width:100%;">✓ Finalize — mark as Active</button>
-    <div id="finalizeGateMsg" style="font-size:11px; color:#8B7D72; margin-top:6px;"></div>
-    </div>
-  </div>
-
   <div class="section">
     <div class="section-title" onclick="toggleSection('dyesteps')"><span>Dye Steps</span><span class="section-chevron" id="chevron-dyesteps">▾</span></div>
     <div class="section-body" id="body-dyesteps">
     <div id="dyeRowsWrap"></div>
-    <button class="add-dye-btn" onclick="addDyeRow()">+ Add dye step</button>
+    <button class="add-dye-btn" onclick="addDyeRow()">Add dye step</button>
     </div>
   </div>
 
@@ -873,7 +873,7 @@ async function loadRecipe(record) {
   } else {
     badge.style.display = 'none';
   }
-  document.getElementById('finalizeSection').style.display = (status === 'Researching' || status === 'Working') ? 'block' : 'none';
+  document.getElementById('finalizeTopBtn').style.display = (status === 'Researching' || status === 'Working') ? 'inline-block' : 'none';
 
   await loadVendorsList();
   await loadAllSkus();
@@ -1109,8 +1109,7 @@ function syncLinkedCustomerFromVendor() {
 }
 
 function updateFinalizeGate() {
-  const btn = document.getElementById('finalizeBtn');
-  const msg = document.getElementById('finalizeGateMsg');
+  const btn = document.getElementById('finalizeTopBtn');
   if (!btn) return;
 
   const missing = [];
@@ -1120,10 +1119,10 @@ function updateFinalizeGate() {
 
   if (missing.length) {
     btn.disabled = true;
-    msg.textContent = `Still needed: ${missing.join(', ')}`;
+    btn.title = `Still needed before finalizing: ${missing.join(', ')}`;
   } else {
     btn.disabled = false;
-    msg.textContent = '';
+    btn.title = 'Mark as Active';
   }
 }
 
@@ -1134,7 +1133,7 @@ async function finalizeRecipe() {
       ['UpdateRecord', 'Recipes', currentRecipeId, { Status: 'Active' }]
     ]);
     document.getElementById('draftBadge').style.display = 'none';
-    document.getElementById('finalizeSection').style.display = 'none';
+    document.getElementById('finalizeTopBtn').style.display = 'none';
     showToast('Finalized — now Active ✓');
   } catch (e) {
     console.error('Failed to finalize:', e);
