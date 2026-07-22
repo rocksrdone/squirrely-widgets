@@ -815,7 +815,7 @@ function renderLeft() {
       <td><span class="amt">${calcTsp(c['Std_Powder_tsp_'])}</span></td>
       <td><span class="amt">${calcMl(c['Std_Water_mL_'])}</span></td>
       <td><span class="amt">${calcMl(c['Effective_mL_per_100_yd'] || c['Default_mL_per_100_yds'])}</span></td>
-      <td>${c.Dilution_Ratio ? `<span class="dil">${c.Dilution_Ratio}</span>` : ''}</td>
+      <td>${c.Is_Powder ? `<span class="dil" style="background:#EFE7D8;color:#8A6D2A;">powder</span>` : (c.Dilution_Ratio ? `<span class="dil">${c.Dilution_Ratio}</span>` : '')}</td>
     </tr>`;
   }).join('');
 
@@ -845,7 +845,7 @@ function renderLeft() {
         <div class="step-num">${i+1}</div>
         <div class="step-content">
           ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>` : ''}
-          <div class="step-text">${c.Application_Notes || ''}</div>
+          <div class="step-text">${c.Is_Powder ? '<b>Sprinkle dry powder.</b> ' : ''}${c.Application_Notes || ''}</div>
           ${c.Position ? `<div class="step-pos">📍 ${c.Position}</div>` : ''}
           ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
         </div>
@@ -1107,6 +1107,7 @@ grist.onRecord(async (record) => {
         'Default_mL_per_100_yds': get('Default_mL_per_100_yds'),
         'Effective_mL_per_100_yd': get('Effective_mL_per_100_yd'),
         Dilution_Ratio: get('Dilution') || get('Dilution_Ratio'),
+        Is_Powder: !!get('Is_Powder'),
         Step_Order: get('Step_Order'),
         Step_Number: get('Step_Number'),
         Application_Notes: get('Application_Notes'),

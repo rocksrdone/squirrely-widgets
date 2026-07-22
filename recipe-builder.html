@@ -879,6 +879,7 @@ async function loadRecipe(record) {
         dilution: (columnAsArray(compTable, 'Dilution')[i] || columnAsArray(compTable, 'Dilution_Ratio')[i]) || '',
         technique: columnAsArray(compTable, 'Technique')[i] || '',
         notes: columnAsArray(compTable, 'Application_Notes')[i] || '',
+        isPowder: !!columnAsArray(compTable, 'Is_Powder')[i],
         stepOrder: columnAsArray(compTable, 'Step_Number')[i] ?? 999,
       });
     }
@@ -899,7 +900,7 @@ function addDyeRow() {
     rowId: null,
     clientKey: nextClientKey++,
     dyeId: null,
-    Dye_Name: '', Dye_Full: '', powder: '', water: '', dilution: '', technique: '', notes: '',
+    Dye_Name: '', Dye_Full: '', powder: '', water: '', dilution: '', technique: '', notes: '', isPowder: false,
   });
   markUnsaved();
   renderDyeRows();
@@ -997,6 +998,13 @@ function renderDyeRows() {
         <div class="field-wrap">
           <span class="field-label">Dilution</span>
           <input class="field-input" value="${row.dilution || ''}" oninput="updateDyeField(${row.clientKey}, 'dilution', this.value)">
+        </div>
+        <div class="field-wrap">
+          <span class="field-label">Powder?</span>
+          <label style="display:flex;align-items:center;gap:6px;height:32px;font-size:12px;cursor:pointer;">
+            <input type="checkbox" ${row.isPowder ? 'checked' : ''} onchange="updateDyeField(${row.clientKey}, 'isPowder', this.checked)" style="width:16px;height:16px;cursor:pointer;">
+            <span style="color:#6B5E52;">Sprinkled dry (skips prep bench)</span>
+          </label>
         </div>
         <div class="field-wrap">
           <span class="field-label">Technique</span>
@@ -1189,6 +1197,7 @@ async function saveRecipe() {
         'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
         'Std_Water_mL_': row.water === '' ? null : Number(row.water),
         Dilution: row.dilution,
+        Is_Powder: !!row.isPowder,
         Technique: row.technique,
         Application_Notes: row.notes,
         Step_Number: i + 1,
