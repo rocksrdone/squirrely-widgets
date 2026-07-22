@@ -514,6 +514,7 @@ function vendorCodeFromExistingSku(skuBase) {
 let currentRecipeId = null;
 let allVendors = [];   // {name, code}
 let customerNameById = {};   // id -> name, for the Linked Customer select + record load
+let customerIdByName = {};   // name -> id, fallback when a ref arrives as a display name
 let allOtherSkus = [];  // {id, sku, recipeName}
 let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder, water, dilution, position, technique, notes}
 let deletedDyeIds = [];
@@ -550,7 +551,10 @@ async function loadVendorsList() {
     // id -> name map: powers the Linked Customer options and the record-load
     // fallback below.
     customerNameById = {};
-    ids.forEach((id, i) => { if (names[i]) customerNameById[id] = names[i]; });
+    customerIdByName = {};
+    ids.forEach((id, i) => {
+      if (names[i]) { customerNameById[id] = names[i]; customerIdByName[String(names[i]).trim()] = id; }
+    });
 
     // Reserved-For vendor dropdown needs codes; build it only if a code column
     // exists — but this must NOT gate the Linked Customer list below.
@@ -575,6 +579,33 @@ async function loadVendorsList() {
   } catch (e) {
     console.error('Could not load customer list:', e);
   }
+}
+
+// Resolve the linked customer's row id from a record, tolerant of however
+// Grist hands us the reference: a row-id int, an ['R', id]/{rowId} wrapper, a
+// display-name string, or (last resort) by reading it straight from the
+// Recipes table, where a stored ref is always the target row id.
+async function resolveLinkedCustomerId(record) {
+  let id = getRefId(record.Linked_Customer);
+  if (id) return id;
+
+  const raw = record.Linked_Customer;
+  if (typeof raw === 'string' && customerIdByName[raw.trim()]) return customerIdByName[raw.trim()];
+
+  try {
+    const recs = await grist.docApi.fetchTable('Recipes');
+    const col = findColumn(recs, ['Linked_Customer']);
+    const rowIdx = (recs.id || []).indexOf(record.id);
+    if (col && rowIdx !== -1) {
+      const cell = columnAsArray(recs, col)[rowIdx];
+      const cid = getRefId(cell);
+      if (cid) return cid;
+      if (typeof cell === 'string' && customerIdByName[cell.trim()]) return customerIdByName[cell.trim()];
+    }
+  } catch (e) {
+    console.error('Linked customer table fallback failed:', e);
+  }
+  return null;
 }
 
 // Set the Linked Customer select to a stored ref, injecting the option if it
@@ -881,7 +912,8 @@ async function loadRecipe(record) {
   const linkedOrderLineId = getRefId(record.Linked_Order_Line);
   selectedOrderLine = linkedOrderLineId ? allOrderLines.find(l => l.lineId === linkedOrderLineId) || null : null;
   renderLinkedOrderBanner();
-  const linkedCustomerId = getRefId(record.Linked_Customer);
+  console.log('[linkedCustomer] raw =', record.Linked_Customer, '| typeof =', typeof record.Linked_Customer);
+  const linkedCustomerId = await resolveLinkedCustomerId(record);
   setLinkedCustomerValue(linkedCustomerId);
   onScopeChange();
   const existingVendor = vendorCodeFromExistingSku(record.SKU_Base || record.Shopify_SKU);
