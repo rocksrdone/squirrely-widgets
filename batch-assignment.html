@@ -119,6 +119,28 @@ function findColumn(t, candidates) {
   }
   return null;
 }
+// Resolve a table's columns by trying candidate ids. spec maps a logical key to
+// either ['Cand1','Cand2'] (required) or { cands:[...], required:false } (optional).
+// Returns { key: actualColId|null }; pushes "Table.FirstCand" into `missing` for any
+// REQUIRED column that isn't found, so the widget can banner instead of silently
+// reading an empty column after a rename.
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+// Resolved Dye_Stock column ids, stashed at load time so the put/hold/dump/undo
+// actions (which run later, outside loadForRecipe's scope) use the same ids.
+let RC_STOCK = null;
+// Resolved Dye_Stock column id for a logical key, falling back to the canonical
+// name (so a brand-new doc missing an optional column can still have it created).
+function stockCol(key, fallback) { return (RC_STOCK && RC_STOCK[key]) || fallback; }
 
 // ── PREP TABLE CONFIG ──────────────────────────────────────────────
 // Must match PREP_ZONES in batch-planner.html. Staging advice is only given
@@ -195,6 +217,42 @@ async function loadForRecipe(record) {
       grist.docApi.fetchTable('Dye_Stock'),
     ]);
 
+    // ── Resolve every column id up front (rename-proofing) ──────────────
+    // Required columns missing => named banner, not a silently-empty widget.
+    // Optional (display-only / fallback-path) columns just degrade quietly.
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const DYE = resolveCols(dyesTable, 'Dyes', {
+      name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']), dyeType: opt(['Dye_Type']),
+    }, missing);
+    const WO = resolveCols(woTable, 'Work_Orders', {
+      status: ['Status'], orderNumber: opt(['Order_Number']), customerName: opt(['Customer_Name']),
+    }, missing);
+    const REC = resolveCols(recipesTable, 'Recipes', {
+      name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']),
+    }, missing);
+    const COMP = resolveCols(compTable, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'], powder: opt(['Is_Powder', 'Powder']),
+    }, missing);
+    const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], qtyDyed: ['Qty_Dyed'],
+      recipe: opt(['Recipe']), sku: opt(['SKU']),
+    }, missing);
+    const STOCK = resolveCols(stockTableUpfront, 'Dye_Stock', {
+      dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']), mixedDate: opt(['Mixed_Date']),
+    }, missing);
+    RC_STOCK = STOCK; // used later by put/hold/dump/undo
+
+    if (missing.length) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty-state">Can't load — these expected columns are missing:<br><br>` +
+        `<strong>${[...new Set(missing)].join('<br>')}</strong><br><br>` +
+        `<span style="font-size:10px;color:#8B7D72">A table or column was likely renamed. Fix the name in Grist, or update the widget.</span></div>`;
+      currentEntry = null;
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve it through
     // this table to get the actual name/brand/serial/type, rather than displaying
     // the raw row id.
@@ -202,10 +260,10 @@ async function loadForRecipe(record) {
     const dyeInfoById = {};
     dIds.forEach((id, i) => {
       dyeInfoById[id] = {
-        name: columnAsArray(dyesTable, 'Dye_Name')[i] || '',
-        brand: columnAsArray(dyesTable, 'Brand')[i] || '',
-        serial: columnAsArray(dyesTable, 'Serial')[i] || '',
-        dyeType: columnAsArray(dyesTable, 'Dye_Type')[i] || '',
+        name: columnAsArray(dyesTable, DYE.name)[i] || '',
+        brand: columnAsArray(dyesTable, DYE.brand)[i] || '',
+        serial: columnAsArray(dyesTable, DYE.serial)[i] || '',
+        dyeType: columnAsArray(dyesTable, DYE.dyeType)[i] || '',
       };
     });
     function dyeShortName(dyeId) {
@@ -222,18 +280,20 @@ async function loadForRecipe(record) {
     const woInfo = {};
     woIds.forEach((id, i) => {
       woInfo[id] = {
-        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
-        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
-        customerName: columnAsArray(woTable, 'Customer_Name')[i],
+        active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
+        customerName: columnAsArray(woTable, WO.customerName)[i],
       };
     });
 
     const rIds = recipesTable.id || [];
     const recipeNameById = {};
     const recipeSkuById = {};
+    const recipeFiberById = {};
     rIds.forEach((id, i) => {
-      recipeNameById[id] = columnAsArray(recipesTable, 'Recipe_Name')[i];
-      recipeSkuById[id] = normalize(columnAsArray(recipesTable, 'SKU_Base')[i] || '');
+      recipeNameById[id] = columnAsArray(recipesTable, REC.name)[i];
+      recipeSkuById[id] = normalize(columnAsArray(recipesTable, REC.sku)[i] || '');
+      recipeFiberById[id] = columnAsArray(recipesTable, REC.fiber)[i];
     });
     const recipeIdBySku = {};
     Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
@@ -243,13 +303,12 @@ async function loadForRecipe(record) {
     // prep bench: no zone, no reuse grouping, no bin. Skip them here so this map
     // stays identical to batch-planner's, and allocatePrepZones agrees across both.
     const cIds = compTable.id || [];
-    const compPowderCol = findColumn(compTable, ['Is_Powder', 'Powder']);
     const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
-      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
-      const dyeRef = getRefId(columnAsArray(compTable, 'Dye_Name')[i]);
+      const recipeRef = getRefId(columnAsArray(compTable, COMP.recipe)[i]);
+      const dyeRef = getRefId(columnAsArray(compTable, COMP.dye)[i]);
       if (!recipeRef || !dyeRef) return;
-      if (compPowderCol && columnAsArray(compTable, compPowderCol)[i]) return;
+      if (COMP.powder && columnAsArray(compTable, COMP.powder)[i]) return;
       if (!dyesByRecipeId[recipeRef]) dyesByRecipeId[recipeRef] = [];
       if (!dyesByRecipeId[recipeRef].includes(dyeRef)) dyesByRecipeId[recipeRef].push(dyeRef);
     });
@@ -264,21 +323,23 @@ async function loadForRecipe(record) {
     });
 
     const dyeIds = dyesByRecipeId[record.id] || [];
-    const recipeSku = normalize(record.SKU_Base || '');
+    // Read the selected recipe's SKU from the resolved Recipes table rather than the
+    // raw onRecord payload, so a SKU_Base rename doesn't silently break matching.
+    const recipeSku = recipeSkuById[record.id] || '';
 
     const wolIds = wolTable.id || [];
     const orders = [];
     const pendingRecipeIds = new Set();
 
     for (let i = 0; i < wolIds.length; i++) {
-      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
       const info = woInfo[woId];
       if (!info || !info.active) continue;
 
-      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
-      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
-      const sku = normalize(columnAsArray(wolTable, 'SKU')[i] || '');
+      const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, WOL.qtyDyed)[i]) || 0;
+      const directRecipeId = getRefId(columnAsArray(wolTable, WOL.recipe)[i]);
+      const sku = normalize(columnAsArray(wolTable, WOL.sku)[i] || '');
       const lineRecipeId = directRecipeId || recipeIdBySku[sku] || null;
       if (lineRecipeId) pendingRecipeIds.add(lineRecipeId);
 
@@ -302,8 +363,8 @@ async function loadForRecipe(record) {
     const stockEntries = [];
     (stockTableUpfront.id || []).forEach((id, i) => {
       stockEntries.push({
-        dyeRef: getRefId(columnAsArray(stockTableUpfront, 'Dye')[i]),
-        bin: columnAsArray(stockTableUpfront, 'Bin_Location')[i] || '',
+        dyeRef: getRefId(columnAsArray(stockTableUpfront, STOCK.dye)[i]),
+        bin: columnAsArray(stockTableUpfront, STOCK.bin)[i] || '',
       });
     });
     function isTrueOneOff(dyeId) {
@@ -375,15 +436,22 @@ async function loadForRecipe(record) {
     let planRows = [];
     try {
       const dpTable = await grist.docApi.fetchTable('Day_Plan');
+      // Day_Plan is a bonus (staging advice); resolve its columns but never banner —
+      // a missing/renamed column here just drops back to plain bin advice.
+      const dpMissing = [];
+      const DP = resolveCols(dpTable, 'Day_Plan', {
+        planDate: ['Plan_Date'], recipe: ['Recipe'], sequence: ['Sequence'], slot: ['Prep_Slot'],
+      }, dpMissing);
+      if (dpMissing.length) throw new Error('Day_Plan columns changed: ' + dpMissing.join(', '));
       const today = todayEpochSeconds();
       (dpTable.id || []).forEach((id, i) => {
-        if (Number(columnAsArray(dpTable, 'Plan_Date')[i]) !== today) return;
-        const rid = getRefId(columnAsArray(dpTable, 'Recipe')[i]);
+        if (Number(columnAsArray(dpTable, DP.planDate)[i]) !== today) return;
+        const rid = getRefId(columnAsArray(dpTable, DP.recipe)[i]);
         if (!rid) return;
         planRows.push({
           recipeId: rid,
-          seq: Number(columnAsArray(dpTable, 'Sequence')[i]) || 0,
-          slot: (columnAsArray(dpTable, 'Prep_Slot')[i] || '').toString().trim(),
+          seq: Number(columnAsArray(dpTable, DP.sequence)[i]) || 0,
+          slot: (columnAsArray(dpTable, DP.slot)[i] || '').toString().trim(),
         });
       });
       planRows.sort((a, b) => a.seq - b.seq);
@@ -451,12 +519,19 @@ async function loadForRecipe(record) {
       };
     });
 
-    currentEntry = { recipeId: record.id, recipeName: record.Recipe_Name, fiberType: record.Fiber_Type, dyeCount: dyeIds.length, orders, cleanupInfo };
+    currentEntry = {
+      recipeId: record.id,
+      recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
+      fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
+      dyeCount: dyeIds.length, orders, cleanupInfo,
+    };
     completedActions = {};
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
-    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load — check table/column names</div>`;
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('content').innerHTML =
+      `<div class="empty-state">Failed to load.<br><span style="font-size:10px;color:#8B7D72">${msg}</span></div>`;
   }
 }
 
@@ -595,13 +670,13 @@ async function onDyeActionChange(idx) {
         const stockTable = await grist.docApi.fetchTable('Dye_Stock');
         const sIds = stockTable.id || [];
         sIds.forEach((id, i) => {
-          const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+          const dyeRef = getRefId(columnAsArray(stockTable, stockCol('dye','Dye'))[i]);
           if (dyeRef !== c.dyeId) return;
           existing.push({
             id,
-            qty: Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0,
-            bin: columnAsArray(stockTable, 'Bin_Location')[i] || '(no bin)',
-            mixedDate: columnAsArray(stockTable, 'Mixed_Date')[i],
+            qty: Number(columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[i]) || 0,
+            bin: columnAsArray(stockTable, stockCol('bin','Bin_Location'))[i] || '(no bin)',
+            mixedDate: columnAsArray(stockTable, stockCol('mixedDate','Mixed_Date'))[i],
           });
         });
       } catch (e) {
@@ -687,7 +762,7 @@ async function putAwayDye(idx) {
   try {
     if (which === 'new') {
       const result = await grist.docApi.applyUserActions([
-        ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Bin_Location: bin, Mixed_Date: Math.floor(Date.now() / 1000) }]
+        ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: c.dyeId, [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
       ]);
       const newRowId = result.retValues[0];
       completedActions[idx] = {
@@ -699,16 +774,16 @@ async function putAwayDye(idx) {
     } else {
       const stockTable = await grist.docApi.fetchTable('Dye_Stock');
       const rowIdx = (stockTable.id || []).indexOf(Number(which));
-      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, 'Quantity_mL')[rowIdx] : null;
-      const originalBin = rowIdx >= 0 ? columnAsArray(stockTable, 'Bin_Location')[rowIdx] : null;
+      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx] : null;
+      const originalBin = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('bin','Bin_Location'))[rowIdx] : null;
 
       await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty, Bin_Location: bin }]
+        ['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin }]
       ]);
       completedActions[idx] = {
         label: `Put away — existing stock updated to ${qty}mL in bin ${bin}`,
         undo: async () => {
-          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: originalQty, Bin_Location: originalBin }]]);
+          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: originalQty, [stockCol('bin','Bin_Location')]: originalBin }]]);
         },
       };
     }
@@ -731,7 +806,7 @@ async function holdDye(idx) {
   try {
     if (which === 'new') {
       const result = await grist.docApi.applyUserActions([
-        ['AddRecord', 'Dye_Stock', null, { Dye: c.dyeId, Quantity_mL: qty, Mixed_Date: Math.floor(Date.now() / 1000) }]
+        ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: c.dyeId, [stockCol('quantity','Quantity_mL')]: qty, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
       ]);
       const newRowId = result.retValues[0];
       completedActions[idx] = {
@@ -743,15 +818,15 @@ async function holdDye(idx) {
     } else {
       const stockTable = await grist.docApi.fetchTable('Dye_Stock');
       const rowIdx = (stockTable.id || []).indexOf(Number(which));
-      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, 'Quantity_mL')[rowIdx] : null;
+      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx] : null;
 
       await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: qty }]
+        ['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: qty }]
       ]);
       completedActions[idx] = {
         label: `Held — existing stock updated to ${qty}mL`,
         undo: async () => {
-          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { Quantity_mL: originalQty }]]);
+          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: originalQty }]]);
         },
       };
     }
@@ -775,14 +850,14 @@ async function dumpDye(idx) {
     const stockTable = await grist.docApi.fetchTable('Dye_Stock');
     const sIds = stockTable.id || [];
     sIds.forEach((id, i) => {
-      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      const dyeRef = getRefId(columnAsArray(stockTable, stockCol('dye','Dye'))[i]);
       if (dyeRef !== c.dyeId) return;
       existing.push({
         id,
         dye: c.dyeId,
-        qty: columnAsArray(stockTable, 'Quantity_mL')[i],
-        bin: columnAsArray(stockTable, 'Bin_Location')[i],
-        mixedDate: columnAsArray(stockTable, 'Mixed_Date')[i],
+        qty: columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[i],
+        bin: columnAsArray(stockTable, stockCol('bin','Bin_Location'))[i],
+        mixedDate: columnAsArray(stockTable, stockCol('mixedDate','Mixed_Date'))[i],
       });
     });
   } catch (e) {
@@ -803,7 +878,7 @@ async function dumpDye(idx) {
     completedActions[idx] = {
       label: `Dumped — removed ${totalQty}mL from stock`,
       undo: async () => {
-        await grist.docApi.applyUserActions(existing.map(e => ['AddRecord', 'Dye_Stock', null, { Dye: e.dye, Quantity_mL: e.qty, Bin_Location: e.bin, Mixed_Date: e.mixedDate }]));
+        await grist.docApi.applyUserActions(existing.map(e => ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: e.dye, [stockCol('quantity','Quantity_mL')]: e.qty, [stockCol('bin','Bin_Location')]: e.bin, [stockCol('mixedDate','Mixed_Date')]: e.mixedDate }]));
       },
     };
     render();
