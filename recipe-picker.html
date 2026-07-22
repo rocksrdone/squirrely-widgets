@@ -105,6 +105,7 @@ function guessColor(name) {
   return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
 }
 function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function findColumn(t, candidates) {
   const keys = Object.keys(t);
@@ -279,7 +280,6 @@ function renderList() {
   }
 
   const visible = filteredCache.slice(0, visibleCount);
-  box.replaceChildren();
   box.innerHTML = visible.map(cardHtml).join('');
 
   const remaining = filteredCache.length - visible.length;
@@ -302,29 +302,32 @@ function loadMore() {
 function cardHtml(r) {
   const key = r.id;
   const scopeCls = scopeClass(r.scope);
+  const name = esc(r.name), sku = esc(r.sku), fiber = esc(r.fiberType),
+        scope = esc(r.scope), status = esc(r.status), colorway = esc(r.colorway),
+        customer = esc(r.customerName), notes = esc(r.notes), photo = esc(r.photoUrl);
   return `
     <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" data-id="${r.id}" onclick="selectRecipe(${r.id})">
       <div class="rc-thumb" id="thumb-${key}">
-        ${r.photoUrl
-          ? `<img class="lazy-thumb" data-src="${r.photoUrl}" alt="${r.name}" onerror="this.style.display='none'">`
+        ${photo
+          ? `<img class="lazy-thumb" data-src="${photo}" alt="${name}" onerror="this.style.display='none'">`
           : `<span class="rc-swatch-dot" style="background:${guessColor(r.name)}"></span>`}
       </div>
       <div class="rc-body">
         <div class="rc-top-row">
-          <span class="rc-name">${r.name}</span>
-          <span class="rc-sku">${r.sku}</span>
+          <span class="rc-name">${name}</span>
+          <span class="rc-sku">${sku}</span>
           <div class="rc-badges">
-            ${r.fiberType ? `<span class="badge fiber">${r.fiberType}</span>` : ''}
-            ${r.scope ? `<span class="badge ${scopeCls}">${r.scope}</span>` : ''}
-            ${r.status ? `<span class="badge status">${r.status}</span>` : ''}
+            ${fiber ? `<span class="badge fiber">${fiber}</span>` : ''}
+            ${scope ? `<span class="badge ${scopeCls}">${scope}</span>` : ''}
+            ${status ? `<span class="badge status">${status}</span>` : ''}
           </div>
         </div>
         <div class="rc-meta-row">
-          ${r.colorway && r.colorway !== r.name ? `<span>Colorway: ${r.colorway}</span>` : ''}
-          ${r.customerName ? `<span>For: ${r.customerName}</span>` : ''}
+          ${colorway && colorway !== name ? `<span>Colorway: ${colorway}</span>` : ''}
+          ${customer ? `<span>For: ${customer}</span>` : ''}
           ${r.createdDate ? `<span>Created ${fmtDate(r.createdDate)}</span>` : ''}
         </div>
-        ${r.notes ? `<div class="rc-notes">${r.notes}</div>` : ''}
+        ${notes ? `<div class="rc-notes">${notes}</div>` : ''}
       </div>
     </div>
   `;
