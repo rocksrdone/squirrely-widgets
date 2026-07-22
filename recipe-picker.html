@@ -13,39 +13,40 @@
   --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
-.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
-.controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
-.search-input { flex: 1; min-width: 160px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
-.sort-select { padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
-.filter-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-.filter-chip { font-size: 11px; padding: 5px 10px; border-radius: 12px; border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; }
-.filter-chip.active { background: var(--ink); border-color: var(--ink); color: white; }
-.result-count { font-size: 11px; color: #8B7D72; margin-bottom: 10px; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 10px; }
 
-.recipe-list { display: flex; flex-direction: column; gap: 8px; }
+/* Sticky header spans full width under the body padding and keeps the
+   controls pinned while only the card list scrolls. */
+.header {
+  position: sticky; top: 0; z-index: 5; background: var(--paper);
+  margin: -10px -10px 8px; padding: 10px 10px 8px; border-bottom: 1px solid var(--rule);
+}
+.top-bar { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.count { font-size: 11px; color: #8B7D72; }
+
+.controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.search-input { flex: 1 1 100%; min-width: 120px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.sel { flex: 1 1 auto; min-width: 92px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
+
+.recipe-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
 .recipe-card {
-  background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 10px 12px;
-  cursor: pointer; transition: border-color .12s; display: flex; gap: 12px; align-items: center;
+  background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 7px 9px;
+  cursor: pointer; transition: border-color .12s; display: flex; gap: 9px; align-items: stretch;
 }
 .recipe-card:hover { border-color: var(--accent); }
 .recipe-card.selected { border-color: var(--accent); background: var(--accent-light); }
 
-.rc-thumb {
-  width: 52px; height: 52px; border-radius: 6px; flex-shrink: 0; overflow: hidden;
-  background: var(--warm); border: 1px solid var(--rule); display: flex; align-items: center; justify-content: center;
-}
-.rc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .2s; }
-.rc-thumb img.loaded { opacity: 1; }
-.rc-swatch-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+/* Thin color cue in place of the photo thumbnail — computed locally from the
+   name, so zero network calls (photo previews were overloading the n8n webhook
+   and aren't needed in the picker). */
+.rc-stripe { width: 5px; flex-shrink: 0; border-radius: 3px; align-self: stretch; border: 1px solid rgba(0,0,0,.08); }
 
 .rc-body { flex: 1; min-width: 0; }
 .rc-top-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rc-name { font-weight: 700; font-size: 14px; }
 .rc-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
-.rc-badges { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
-.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.rc-badges { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+.badge { font-size: 9px; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
 .badge.fiber { background: var(--teal-light); color: var(--teal); }
 .badge.scope-general { background: var(--done-bg); color: var(--done-text); }
 .badge.scope-reserved { background: var(--gold-light); color: var(--gold); }
@@ -63,22 +64,23 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 </head>
 <body>
 
-<div class="top-bar"><div class="title">Recipes</div></div>
-
-<div class="controls">
-  <input class="search-input" id="searchBox" placeholder="Search name, SKU, colorway, customer..." oninput="onFilterChange()">
-  <select class="sort-select" id="sortSelect" onchange="onFilterChange()">
-    <option value="name">Sort: Name A–Z</option>
-    <option value="created">Sort: Created (newest)</option>
-    <option value="cleanup">Sort: Cleanup order</option>
-  </select>
+<div class="header">
+  <div class="top-bar">
+    <span class="count" id="resultCount"></span>
+  </div>
+  <div class="controls">
+    <input class="search-input" id="searchBox" placeholder="Search name, SKU, colorway, customer..." oninput="onFilterChange()">
+    <select class="sel" id="scopeSelect" onchange="onFilterChange()"></select>
+    <select class="sel" id="fiberSelect" onchange="onFilterChange()"></select>
+    <select class="sel" id="statusSelect" onchange="onFilterChange()"></select>
+    <select class="sel" id="sortSelect" onchange="onFilterChange()">
+      <option value="name">Sort: Name A–Z</option>
+      <option value="created">Sort: Created (newest)</option>
+      <option value="cleanup">Sort: Cleanup order</option>
+    </select>
+  </div>
 </div>
 
-<div class="filter-row" id="scopeFilters"></div>
-<div class="filter-row" id="fiberFilters"></div>
-<div class="filter-row" id="statusFilters"></div>
-
-<div class="result-count" id="resultCount"></div>
 <div id="recipeList" class="recipe-list"></div>
 <div class="load-more-wrap" id="loadMoreWrap" style="display:none;">
   <button class="btn" onclick="loadMore()">Load more</button>
@@ -136,9 +138,6 @@ function scopeClass(scope) {
 }
 
 let allRecipes = [];
-let scopeFilter = 'ALL';
-let fiberFilter = 'ALL';
-let statusFilter = 'ALL';
 let selectedId = null;
 let visibleCount = 30;
 let filteredCache = [];
@@ -159,7 +158,6 @@ async function loadRecipes() {
     const colorwayCol = c(['Colorway']);
     const notesCol = c(['Notes']);
     const createdCol = c(['Created_Date']);
-    const photoCol = c(['Photo_Finished']);
     const cleanupCol = c(['Cleanup_Order']);
     const custRefCol = c(['Linked_Customer']);
 
@@ -195,7 +193,6 @@ async function loadRecipes() {
         })(),
         notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
         createdDate: createdCol ? columnAsArray(table, createdCol)[i] : null,
-        photoUrl: photoCol ? (columnAsArray(table, photoCol)[i] || '') : '',
         cleanupOrder: cleanupCol ? columnAsArray(table, cleanupCol)[i] : '',
         customerName: custId ? (custNameById[custId] || '') : '',
       };
@@ -209,39 +206,37 @@ async function loadRecipes() {
   }
 }
 
+// Populate the filter dropdowns from the values actually present. The status
+// select gets a "No Status" option (value __NONE__) whenever any blank-status
+// recipe exists — this is the incomplete/draft bucket, keyed on blank (safe),
+// not on the untrusted 'Research' value.
+function fillSelect(el, values, allLabel, extra) {
+  const opts = [`<option value="ALL">${allLabel}</option>`];
+  values.forEach(v => { opts.push(`<option value="${esc(v)}">${esc(v)}</option>`); });
+  if (extra) opts.push(`<option value="${extra.value}">${extra.label}</option>`);
+  el.innerHTML = opts.join('');
+}
+
 function renderFilters() {
   const scopes = [...new Set(allRecipes.map(r => r.scope).filter(Boolean))];
-  document.getElementById('scopeFilters').innerHTML = ['ALL', ...scopes].map(s => `
-    <button class="filter-chip ${scopeFilter === s ? 'active' : ''}" onclick="setFilter('scope','${s}')">${s === 'ALL' ? 'All Scopes' : s}</button>
-  `).join('');
+  fillSelect(document.getElementById('scopeSelect'), scopes, 'All Scopes');
 
   const fibers = [...new Set(allRecipes.map(r => r.fiberType).filter(Boolean))];
-  document.getElementById('fiberFilters').innerHTML = ['ALL', ...fibers].map(f => `
-    <button class="filter-chip ${fiberFilter === f ? 'active' : ''}" onclick="setFilter('fiber','${f}')">${f === 'ALL' ? 'All Fibers' : f}</button>
-  `).join('');
+  fillSelect(document.getElementById('fiberSelect'), fibers, 'All Fibers');
 
   const statuses = [...new Set(allRecipes.map(r => r.status).filter(Boolean))];
   const hasBlank = allRecipes.some(r => !r.status);
-  const statusChips = ['ALL', ...statuses];
-  if (hasBlank) statusChips.push('__NONE__');
-  document.getElementById('statusFilters').innerHTML = statusChips.map(s => {
-    const label = s === 'ALL' ? 'All Statuses' : (s === '__NONE__' ? 'No Status' : s);
-    return `<button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setFilter('status','${s}')">${label}</button>`;
-  }).join('');
-}
-
-function setFilter(kind, value) {
-  if (kind === 'scope') scopeFilter = value;
-  if (kind === 'fiber') fiberFilter = value;
-  if (kind === 'status') statusFilter = value;
-  renderFilters();
-  onFilterChange();
+  fillSelect(document.getElementById('statusSelect'), statuses, 'All Statuses',
+    hasBlank ? { value: '__NONE__', label: 'No Status' } : null);
 }
 
 function onFilterChange() {
   visibleCount = 30;
   const q = normalize(document.getElementById('searchBox').value);
   const sortMode = document.getElementById('sortSelect').value;
+  const scopeFilter = document.getElementById('scopeSelect').value;
+  const fiberFilter = document.getElementById('fiberSelect').value;
+  const statusFilter = document.getElementById('statusSelect').value;
 
   let list = allRecipes.filter(r => {
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
@@ -290,8 +285,6 @@ function renderList() {
   } else {
     loadMoreWrap.style.display = 'none';
   }
-
-  loadThumbnailsInBatches();
 }
 
 function loadMore() {
@@ -300,18 +293,13 @@ function loadMore() {
 }
 
 function cardHtml(r) {
-  const key = r.id;
   const scopeCls = scopeClass(r.scope);
   const name = esc(r.name), sku = esc(r.sku), fiber = esc(r.fiberType),
         scope = esc(r.scope), status = esc(r.status), colorway = esc(r.colorway),
-        customer = esc(r.customerName), notes = esc(r.notes), photo = esc(r.photoUrl);
+        customer = esc(r.customerName), notes = esc(r.notes);
   return `
     <div class="recipe-card ${r.id === selectedId ? 'selected' : ''}" data-id="${r.id}" onclick="selectRecipe(${r.id})">
-      <div class="rc-thumb" id="thumb-${key}">
-        ${photo
-          ? `<img class="lazy-thumb" data-src="${photo}" alt="${name}" onerror="this.style.display='none'">`
-          : `<span class="rc-swatch-dot" style="background:${guessColor(r.name)}"></span>`}
-      </div>
+      <div class="rc-stripe" style="background:${guessColor(r.name)}"></div>
       <div class="rc-body">
         <div class="rc-top-row">
           <span class="rc-name">${name}</span>
@@ -331,27 +319,6 @@ function cardHtml(r) {
       </div>
     </div>
   `;
-}
-
-// Load thumbnails a couple at a time rather than all at once — firing many
-// simultaneous requests at the photo-serving webhook can trip n8n's crash
-// detection and auto-disable the workflow (seen before with Photo Inbox).
-async function loadThumbnailsInBatches() {
-  const images = Array.from(document.querySelectorAll('img.lazy-thumb:not(.loaded)'));
-  const BATCH_SIZE = 2;
-  for (let i = 0; i < images.length; i += BATCH_SIZE) {
-    const batch = images.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(loadOneThumb));
-  }
-}
-function loadOneThumb(img) {
-  return new Promise(resolve => {
-    const src = img.getAttribute('data-src');
-    if (!src) { resolve(); return; }
-    img.onload = () => { img.classList.add('loaded'); resolve(); };
-    img.onerror = () => { img.style.display = 'none'; resolve(); };
-    img.src = src;
-  });
 }
 
 async function selectRecipe(id) {
