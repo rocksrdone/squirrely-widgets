@@ -220,9 +220,13 @@ function renderFilters() {
   `).join('');
 
   const statuses = [...new Set(allRecipes.map(r => r.status).filter(Boolean))];
-  document.getElementById('statusFilters').innerHTML = ['ALL', ...statuses].map(s => `
-    <button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setFilter('status','${s}')">${s === 'ALL' ? 'All Statuses' : s}</button>
-  `).join('');
+  const hasBlank = allRecipes.some(r => !r.status);
+  const statusChips = ['ALL', ...statuses];
+  if (hasBlank) statusChips.push('__NONE__');
+  document.getElementById('statusFilters').innerHTML = statusChips.map(s => {
+    const label = s === 'ALL' ? 'All Statuses' : (s === '__NONE__' ? 'No Status' : s);
+    return `<button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setFilter('status','${s}')">${label}</button>`;
+  }).join('');
 }
 
 function setFilter(kind, value) {
@@ -241,7 +245,8 @@ function onFilterChange() {
   let list = allRecipes.filter(r => {
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
     if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
-    if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
+    if (statusFilter === '__NONE__') { if (r.status) return false; }
+    else if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (q) {
       const hay = normalize(r.name + ' ' + r.sku + ' ' + r.colorway + ' ' + r.customerName);
       if (!hay.includes(q)) return false;
