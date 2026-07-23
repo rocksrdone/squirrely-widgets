@@ -157,10 +157,20 @@ let RC_STOCK = null;
 // name (so a brand-new doc missing an optional column can still have it created).
 function stockCol(key, fallback) { return (RC_STOCK && RC_STOCK[key]) || fallback; }
 
-// Spools -> yards for lot stock math. FFN/FFC = 100 yд/spool, EN = 150.
-// (Mirrors yardsPerSpool() in thread-lifecycle.html / order-detail.html.)
+// Recipes.Fiber_Type holds long names ("FF Nylon"); Production_Lots.Fiber holds
+// codes (FFN/FFC/EN/BW). Same map used in recipe-builder / photo-inbox / kettle-calc.
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s; // already a code, or unknown
+}
+// Spools -> yards. E Nylon is 150 yд/spool, the rest 100. Works off the CODE, so
+// it's correct whether the recipe stored "E Nylon" or "EN".
 function yardsPerSpool(fiber) {
-  return (fiber || '').toString().toUpperCase() === 'EN' ? 150 : 100;
+  return fiberCode(fiber) === 'EN' ? 150 : 100;
 }
 function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
 
@@ -756,7 +766,7 @@ async function logPot() {
     if (LOT.yardsMade) lotFields[LOT.yardsMade] = spools * yds;
     if (LOT.spoolsMade) lotFields[LOT.spoolsMade] = spools;
     if (LOT.dryingStatus) lotFields[LOT.dryingStatus] = 'Drying - Metal Rack';
-    if (LOT.fiber && e.fiberType) lotFields[LOT.fiber] = e.fiberType;
+    if (LOT.fiber && e.fiberType) lotFields[LOT.fiber] = fiberCode(e.fiberType);
     if (LOT.date) lotFields[LOT.date] = todayEpochSeconds();
     if (leftover > 0) {
       const col = bucket === 'vendor' ? (LOT.vendorStock || LOT.generalStock)
