@@ -91,6 +91,21 @@ body {
   opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
+.pot-panel { background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
+.pot-method { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.method-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 10px; }
+.method-hand { background: #F0E4D4; color: #8B3A2A; }
+.method-kettle { background: var(--teal-light); color: var(--teal); }
+.method-unknown { background: #EEE; color: #8B7D72; }
+.method-note { font-size: 10px; color: #8B7D72; font-style: italic; }
+.pot-row { display: flex; gap: 5px; align-items: center; }
+.pot-row input { flex: 1; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 4px; font-size: 13px; }
+.pot-dest { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 11px; color: var(--ink); }
+.pot-dest label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.pot-store { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #8B7D72; }
+.pot-store select { padding: 3px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; background: white; color: var(--ink); }
+.running-total { font-size: 11px; color: var(--done-text); background: var(--done-bg); border: 1px solid var(--done-text); border-radius: 5px; padding: 5px 8px; margin-bottom: 4px; }
+.pot-done { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink); background: #F7F3EE; border: 1px solid var(--rule); border-radius: 5px; padding: 4px 8px; margin-bottom: 3px; }
 </style>
 </head>
 <body>
@@ -141,6 +156,18 @@ let RC_STOCK = null;
 // Resolved Dye_Stock column id for a logical key, falling back to the canonical
 // name (so a brand-new doc missing an optional column can still have it created).
 function stockCol(key, fallback) { return (RC_STOCK && RC_STOCK[key]) || fallback; }
+
+// Spools -> yards for lot stock math. FFN/FFC = 100 yд/spool, EN = 150.
+// (Mirrors yardsPerSpool() in thread-lifecycle.html / order-detail.html.)
+function yardsPerSpool(fiber) {
+  return (fiber || '').toString().toUpperCase() === 'EN' ? 150 : 100;
+}
+function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
+
+// Qty_Dyed column id on Work_Order_Lines, stashed at load for logPot/undoPot.
+let RC_QTYDYED = null;
+// Pots logged for the currently-selected colorway this session (for running total + undo).
+let sessionPots = [];
 
 // ── PREP TABLE CONFIG ──────────────────────────────────────────────
 // Must match PREP_ZONES in batch-planner.html. Staging advice is only given
@@ -196,7 +223,6 @@ function allocatePrepZones(recipeIds, dyesForRecipe, zoneCount) {
 // ───────────────────────────────────────────────────────────────────
 
 let currentEntry = null;
-let lastLoggedDelta = {}; // lineId -> amount just added, for undo
 let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
 
 async function loadForRecipe(record) {
@@ -226,10 +252,12 @@ async function loadForRecipe(record) {
       name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']), dyeType: opt(['Dye_Type']),
     }, missing);
     const WO = resolveCols(woTable, 'Work_Orders', {
-      status: ['Status'], orderNumber: opt(['Order_Number']), customerName: opt(['Customer_Name']),
+      status: ['Status'], orderNumber: opt(['Order_Number']),
+      customerName: opt(['Customer_Name']), dueDate: opt(['Due_Date']),
     }, missing);
     const REC = resolveCols(recipesTable, 'Recipes', {
       name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']),
+      method: opt(['Dye_Method']),
     }, missing);
     const COMP = resolveCols(compTable, 'Recipe_Dye_Components', {
       recipe: ['Recipe'], dye: ['Dye_Name'], powder: opt(['Is_Powder', 'Powder']),
@@ -242,6 +270,7 @@ async function loadForRecipe(record) {
       dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']), mixedDate: opt(['Mixed_Date']),
     }, missing);
     RC_STOCK = STOCK; // used later by put/hold/dump/undo
+    RC_QTYDYED = WOL.qtyDyed; // used later by logPot/undoPot
 
     if (missing.length) {
       document.getElementById('content').innerHTML =
@@ -283,6 +312,7 @@ async function loadForRecipe(record) {
         active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
         orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
         customerName: columnAsArray(woTable, WO.customerName)[i],
+        dueDate: columnAsArray(woTable, WO.dueDate)[i],
       };
     });
 
@@ -290,10 +320,12 @@ async function loadForRecipe(record) {
     const recipeNameById = {};
     const recipeSkuById = {};
     const recipeFiberById = {};
+    const recipeMethodById = {};
     rIds.forEach((id, i) => {
       recipeNameById[id] = columnAsArray(recipesTable, REC.name)[i];
       recipeSkuById[id] = normalize(columnAsArray(recipesTable, REC.sku)[i] || '');
       recipeFiberById[id] = columnAsArray(recipesTable, REC.fiber)[i];
+      recipeMethodById[id] = columnAsArray(recipesTable, REC.method)[i];
     });
     const recipeIdBySku = {};
     Object.entries(recipeSkuById).forEach(([id, sku]) => { if (sku) recipeIdBySku[sku] = Number(id); });
@@ -353,6 +385,7 @@ async function loadForRecipe(record) {
         customerName: info.customerName,
         qtyNeeded,
         qtyDyed,
+        dueDate: info.dueDate,
       });
     }
 
@@ -523,6 +556,7 @@ async function loadForRecipe(record) {
       recipeId: record.id,
       recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
       fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
+      method: recipeMethodById[record.id] || record.Dye_Method || '',
       dyeCount: dyeIds.length, orders, cleanupInfo,
     };
     completedActions = {};
@@ -542,26 +576,58 @@ function render() {
   }
   const e = currentEntry;
 
+  const isHandDye = /hand/i.test(e.method);
+  const isKettle = /kettle/i.test(e.method);
+  const methodLabel = e.method || 'Method not set';
+  const methodClass = isHandDye ? 'method-hand' : (isKettle ? 'method-kettle' : 'method-unknown');
+  const methodNote = isHandDye
+    ? 'each pot = its own dye lot · photograph separately'
+    : (isKettle ? 'pots are interchangeable' : 'set Dye_Method on the recipe — treated as hand-dye for now');
+
+  const totalRemaining = e.orders.reduce((s, o) => s + Math.max(0, o.qtyNeeded - o.qtyDyed), 0);
+
   const ordersHtml = e.orders.length
     ? e.orders.map(o => {
         const complete = o.qtyDyed >= o.qtyNeeded;
-        const confirmMsg = lastLoggedDelta[o.lineId]
-          ? `<div class="order-confirm"><span>✓ Registered +${lastLoggedDelta[o.lineId]}</span><span class="undo-link" onclick="undoLast(${o.lineId})">↺ undo</span></div>`
-          : '';
         return `
           <div class="order-card">
             <div class="order-top">
               <span class="order-customer">${o.customerName || '—'}</span>
               <span class="order-progress ${complete ? 'complete' : ''}">${o.qtyDyed}/${o.qtyNeeded} spools</span>
             </div>
-            <div class="order-log-row">
-              <input type="number" id="made-${o.lineId}" placeholder="Spools just made" min="0">
-              <button class="log-btn" onclick="logProgress(${o.lineId})">✓ Log</button>
-            </div>
-            ${confirmMsg}
           </div>`;
       }).join('')
-    : `<div class="empty-state">🎉 Nothing pending for this recipe right now.</div>`;
+    : `<div class="empty-state">No open orders for this colorway — anything you make goes to back stock.</div>`;
+
+  const sessionSpools = sessionPots.reduce((s, p) => s + p.spools, 0);
+  const runningHtml = sessionPots.length
+    ? `<div class="running-total">This colorway so far: <strong>${sessionSpools} spool${sessionSpools === 1 ? '' : 's'}</strong> across ${sessionPots.length} lot${sessionPots.length === 1 ? '' : 's'}</div>` +
+      sessionPots.map((p, i) => `
+        <div class="pot-done">
+          <span>✓ <strong>${p.lotNumber}</strong> — ${p.spools} spool${p.spools === 1 ? '' : 's'}${p.toOrders ? ` · ${p.toOrders} to orders` : ''}${p.leftover ? ` · ${p.leftover} to ${p.bucket} stock` : ''}</span>
+          <span class="undo-link" onclick="undoPot(${i})">↺ undo</span>
+        </div>`).join('')
+    : '';
+
+  const potPanelHtml = `
+    <div class="pot-panel">
+      <div class="pot-method"><span class="method-badge ${methodClass}">${methodLabel}</span><span class="method-note">${methodNote}</span></div>
+      <div class="pot-row">
+        <input type="number" id="pot-spools" placeholder="Spools this pot" min="1">
+        <button class="log-btn" onclick="logPot()">✓ Log pot</button>
+      </div>
+      <div class="pot-dest">
+        <label><input type="radio" name="pot-dest" value="cover" checked> Cover orders${totalRemaining ? ` (${totalRemaining} still needed)` : ''}, extra to stock</label>
+        <label><input type="radio" name="pot-dest" value="stock"> All to back stock</label>
+      </div>
+      <div class="pot-store">
+        <span>Leftover / stock bucket:</span>
+        <select id="pot-store">
+          <option value="store">Store stock</option>
+          <option value="vendor">Vendor stock</option>
+        </select>
+      </div>
+    </div>`;
 
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
     let flagHtml;
@@ -607,53 +673,137 @@ function render() {
 
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
-    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}</div>
-    <div class="section-title">Log progress per customer</div>
+    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
+    <div class="section-title">Log a pot</div>
+    ${potPanelHtml}
+    ${runningHtml}
+    <div class="section-title">Orders for this colorway</div>
     ${ordersHtml}
     ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}${draftActionHtml}` : ''}
   `;
 }
 
-async function logProgress(lineId) {
-  const input = document.getElementById(`made-${lineId}`);
-  const amount = Number(input.value) || 0;
-  if (amount <= 0) { showToast('Enter how many spools you just made'); return; }
+// Next dye-lot number: LOT-YYMMDD-N, N counting lots already made today.
+function nextLotNumber(lotsTable, lotNumberCol) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const prefix = 'LOT-' + String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()) + '-';
+  let max = 0;
+  const scan = v => {
+    const s = (v || '').toString();
+    if (s.indexOf(prefix) === 0) {
+      const n = parseInt(s.slice(prefix.length), 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+  };
+  (columnAsArray(lotsTable, lotNumberCol) || []).forEach(scan);
+  sessionPots.forEach(p2 => scan(p2.lotNumber)); // belt-and-suspenders within a session
+  return prefix + (max + 1);
+}
 
-  const order = currentEntry.orders.find(o => o.lineId === lineId);
-  const newQtyDyed = order.qtyDyed + amount;
+// Log one pot = one dye lot. Creates a Production_Lots row, covers pending orders
+// (soonest-due first) by bumping Qty_Dyed, and sends any leftover to a stock bucket.
+// Per-customer physical assignment is deferred to winding — no allocations here.
+async function logPot() {
+  const spoolsInput = document.getElementById('pot-spools');
+  const spools = Number(spoolsInput.value) || 0;
+  if (spools <= 0) { showToast('Enter how many spools this pot made'); return; }
+
+  const e = currentEntry;
+  const modeEl = document.querySelector('input[name="pot-dest"]:checked');
+  const mode = modeEl ? modeEl.value : 'cover';
+  const bucketEl = document.getElementById('pot-store');
+  const bucket = bucketEl ? bucketEl.value : 'store';
+  const yds = yardsPerSpool(e.fiberType);
+
+  // Split the pot between orders (soonest-due first) and stock.
+  const pending = e.orders.filter(o => o.qtyDyed < o.qtyNeeded)
+    .slice().sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate));
+  const totalRemaining = pending.reduce((s, o) => s + (o.qtyNeeded - o.qtyDyed), 0);
+  const toOrders = mode === 'stock' ? 0 : Math.min(spools, totalRemaining);
+  const leftover = spools - toOrders;
+
+  const bumps = [];
+  let rem = toOrders;
+  for (const o of pending) {
+    if (rem <= 0) break;
+    const room = o.qtyNeeded - o.qtyDyed;
+    if (room <= 0) continue;
+    const take = Math.min(room, rem);
+    bumps.push({ lineId: o.lineId, delta: take, before: o.qtyDyed });
+    rem -= take;
+  }
 
   try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: newQtyDyed }]
-    ]);
-    lastLoggedDelta[lineId] = amount;
-    order.qtyDyed = newQtyDyed;
-    input.value = '';
+    // Resolve Production_Lots columns fresh (rename-proof) and mint a lot number.
+    const lotsTable = await grist.docApi.fetchTable('Production_Lots');
+    const lm = [];
+    const opt = cands => ({ cands, required: false });
+    const LOT = resolveCols(lotsTable, 'Production_Lots', {
+      lotNumber: ['Lot_Number'], recipe: opt(['Recipe']),
+      yardsMade: opt(['Total_Yards_Made']), spoolsMade: opt(['Spools_Made']),
+      dryingStatus: opt(['Drying_Status']), fiber: opt(['Fiber', 'Form', 'Fiber_Type']),
+      date: opt(['Date_Dyed', 'Lot_Date', 'Date']),
+      storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
+      generalStock: opt(['General_Stock_Spools']),
+    }, lm);
+    if (lm.length) { showToast('Production_Lots missing ' + lm.join(', ')); return; }
+
+    const lotNumber = nextLotNumber(lotsTable, LOT.lotNumber);
+    const lotFields = {};
+    lotFields[LOT.lotNumber] = lotNumber;
+    if (LOT.recipe) lotFields[LOT.recipe] = e.recipeId;
+    if (LOT.yardsMade) lotFields[LOT.yardsMade] = spools * yds;
+    if (LOT.spoolsMade) lotFields[LOT.spoolsMade] = spools;
+    if (LOT.dryingStatus) lotFields[LOT.dryingStatus] = 'Drying - Metal Rack';
+    if (LOT.fiber && e.fiberType) lotFields[LOT.fiber] = e.fiberType;
+    if (LOT.date) lotFields[LOT.date] = todayEpochSeconds();
+    if (leftover > 0) {
+      const col = bucket === 'vendor' ? (LOT.vendorStock || LOT.generalStock)
+                                      : (LOT.storeStock || LOT.generalStock);
+      if (col) lotFields[col] = leftover;
+    }
+
+    const addRes = await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, lotFields]]);
+    const newLotId = addRes.retValues[0];
+
+    if (bumps.length) {
+      await grist.docApi.applyUserActions(
+        bumps.map(b => ['UpdateRecord', 'Work_Order_Lines', b.lineId, { [RC_QTYDYED]: b.before + b.delta }])
+      );
+      bumps.forEach(b => {
+        const o = e.orders.find(x => x.lineId === b.lineId);
+        if (o) o.qtyDyed = b.before + b.delta;
+      });
+    }
+
+    sessionPots.push({ lotId: newLotId, lotNumber, spools, toOrders, leftover, bucket, bumps });
+    spoolsInput.value = '';
     render();
-    showToast(`Registered +${amount} for ${order.customerName} ✓`);
-  } catch (e) {
-    console.error('Failed to log progress:', e);
-    showToast('Failed to log — check Work_Order_Lines table');
+    showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'} ✓`);
+  } catch (err) {
+    console.error('Failed to log pot:', err);
+    showToast('Failed — check Production_Lots / Work_Order_Lines');
   }
 }
 
-async function undoLast(lineId) {
-  const amount = lastLoggedDelta[lineId];
-  if (!amount) return;
-  const order = currentEntry.orders.find(o => o.lineId === lineId);
-  const revertedQtyDyed = Math.max(0, order.qtyDyed - amount);
-
+async function undoPot(idx) {
+  const pot = sessionPots[idx];
+  if (!pot) return;
   try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Dyed: revertedQtyDyed }]
-    ]);
-    order.qtyDyed = revertedQtyDyed;
-    delete lastLoggedDelta[lineId];
+    const actions = [['RemoveRecord', 'Production_Lots', pot.lotId]];
+    pot.bumps.forEach(b => actions.push(['UpdateRecord', 'Work_Order_Lines', b.lineId, { [RC_QTYDYED]: b.before }]));
+    await grist.docApi.applyUserActions(actions);
+    pot.bumps.forEach(b => {
+      const o = currentEntry.orders.find(x => x.lineId === b.lineId);
+      if (o) o.qtyDyed = b.before;
+    });
+    sessionPots.splice(idx, 1);
     render();
-    showToast('Undone ✓');
-  } catch (e) {
-    console.error('Failed to undo:', e);
-    showToast('Failed to undo — check Work_Order_Lines table');
+    showToast('Pot undone ✓');
+  } catch (err) {
+    console.error('Failed to undo pot:', err);
+    showToast('Undo failed — check Production_Lots');
   }
 }
 
@@ -930,7 +1080,7 @@ grist.ready({
 });
 
 grist.onRecord((record) => {
-  lastLoggedDelta = {};
+  sessionPots = [];
   loadForRecipe(record);
 });
 </script>
