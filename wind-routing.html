@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --done-bg: #E8F3E8; --done-text: #2D6A2D;
+    --warn-bg: #FBF0E4; --warn-text: #8B5A2A;
+    --broken-bg: #F3EAF5; --broken-text: #6B3A7A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+  .header-title { font-size: 15px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; }
+  .section-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #8B7D72; margin: 10px 0 4px;
+  }
+  .empty-state { text-align: center; color: #8B7D72; padding: 18px 10px; font-size: 12px; line-height: 1.5; }
+
+  .lot-card {
+    background: white; border: 1px solid var(--rule); border-radius: 6px;
+    padding: 7px 9px; margin-bottom: 4px; cursor: pointer;
+  }
+  .lot-card:hover { border-color: var(--teal); }
+  .lot-card.active { border-color: var(--teal); background: var(--teal-light); }
+  .lot-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .lot-number { font-weight: 700; font-size: 13px; }
+  .lot-avail { font-size: 12px; font-weight: 700; color: var(--teal); white-space: nowrap; }
+  .lot-meta { font-size: 10px; color: #8B7D72; margin-top: 1px; }
+
+  .panel { background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 9px; margin-bottom: 6px; }
+  .badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 10px; background: #F0E4D4; color: #8B3A2A;
+  }
+  .badge.kettle { background: var(--teal-light); color: var(--teal); }
+  .note { font-size: 10px; color: #8B7D72; font-style: italic; }
+
+  .alloc-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
+  .alloc-row:last-child { border-bottom: none; }
+  .alloc-who { flex: 1; min-width: 0; }
+  .alloc-name { font-weight: 600; font-size: 12px; }
+  .alloc-meta { font-size: 10px; color: #8B7D72; }
+  .alloc-row input {
+    width: 58px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 13px; text-align: center;
+  }
+  .alloc-need { font-size: 10px; color: #8B7D72; white-space: nowrap; min-width: 52px; text-align: right; }
+
+  .broken-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 7px; padding: 6px 8px;
+    background: var(--broken-bg); border-radius: 5px; font-size: 11px; color: var(--broken-text);
+  }
+  .broken-row input {
+    width: 58px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 13px; text-align: center;
+  }
+  .tally { font-size: 11px; margin-top: 7px; padding: 6px 8px; border-radius: 5px; }
+  .tally.ok { background: var(--done-bg); color: var(--done-text); }
+  .tally.over { background: var(--warn-bg); color: var(--warn-text); }
+
+  button.go {
+    width: 100%; margin-top: 8px; padding: 9px; border: none; border-radius: 5px;
+    background: var(--teal); color: white; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  button.go:disabled { background: #C3BCB2; cursor: not-allowed; }
+
+  .done-line {
+    display: flex; justify-content: space-between; align-items: center; font-size: 11px;
+    background: var(--done-bg); color: var(--done-text); border-radius: 5px;
+    padding: 5px 8px; margin-bottom: 3px;
+  }
+  .undo-link { color: var(--teal); cursor: pointer; text-decoration: underline; font-size: 10px; white-space: nowrap; }
+  .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 5px; padding: 6px 8px; font-size: 11px; margin-bottom: 6px; }
+
+  #toast {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 14px; border-radius: 5px;
+    font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="content"><div class="empty-state">Loading...</div></div>
+<div id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (ref == null) return null;
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref.rowId) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString();
+}
+
+// Match a column id ignoring case and non-alphanumerics.
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+
+// The allocation Status to write when spools are wound + labelled + boxed.
+// The doc and the live widgets disagree on the exact strings, so rather than
+// hardcode one, pick whichever "wound/packed" value already exists in the data.
+// Falls back to the value thread-lifecycle writes today.
+const WOUND_CANDIDATES = ['Packed', 'Wound - Needs Labels', 'Wound', 'Packaged - Shipped'];
+function pickWoundStatus(existingValues) {
+  for (const c of WOUND_CANDIDATES) if (existingValues.has(c)) return c;
+  return 'Wound - Needs Labels';
+}
+
+let S = { lots: [], selected: null, woundStatus: '', brokenCol: null, hasLineLink: true, done: [] };
+
+async function loadEverything() {
+  document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
+  try {
+    const [lotsT, recipesT, allocT, wolT, woT, custT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Customers'),
+    ]);
+
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const LOT = resolveCols(lotsT, 'Production_Lots', {
+      lotNumber: ['Lot_Number'], recipe: ['Recipe'],
+      spoolsMade: opt(['Spools_Made']), yardsMade: opt(['Total_Yards_Made']),
+      drying: opt(['Drying_Status']), fiber: opt(['Fiber']),
+      storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
+      generalStock: opt(['General_Stock_Spools']),
+      broken: opt(['Broken_Spools', 'Broken_Spool_Count']),
+      date: opt(['Date_Dyed']),
+    }, missing);
+    const REC = resolveCols(recipesT, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
+      method: opt(['Dye_Method']),
+    }, missing);
+    const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
+      lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
+      customer: opt(['Customer']), line: opt(['Work_Order_Line']),
+    }, missing);
+    const WOL = resolveCols(wolT, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
+      recipe: opt(['Recipe']), sku: opt(['SKU']),
+    }, missing);
+    const WO = resolveCols(woT, 'Work_Orders', {
+      status: ['Status'], orderNumber: opt(['Order_Number']),
+      customerName: opt(['Customer_Name']), customer: opt(['Customer']), dueDate: opt(['Due_Date']),
+    }, missing);
+    const CUST = resolveCols(custT, 'Customers', { name: opt(['Customer_Name']) }, missing);
+
+    if (missing.length) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty-state">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].join('<br>')}</strong></div>`;
+      return;
+    }
+
+    S.brokenCol = LOT.broken;
+    S.hasLineLink = !!ALLOC.line;
+    S.cols = { LOT, REC, ALLOC, WOL, WO, CUST };
+
+    // Recipes
+    const recipeById = {};
+    (recipesT.id || []).forEach((id, i) => {
+      recipeById[id] = {
+        name: columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`,
+        fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
+        sku: normalize(columnAsArray(recipesT, REC.sku)[i] || ''),
+        method: columnAsArray(recipesT, REC.method)[i] || '',
+      };
+    });
+    const recipeIdBySku = {};
+    Object.entries(recipeById).forEach(([id, r]) => { if (r.sku) recipeIdBySku[r.sku] = Number(id); });
+
+    // Customers
+    const custIdByName = {};
+    (custT.id || []).forEach((id, i) => {
+      const n = normalize(columnAsArray(custT, CUST.name)[i]);
+      if (n) custIdByName[n] = id;
+    });
+
+    // Existing allocations — used both for "already spoken for" and status detection
+    const statusValues = new Set();
+    const allocs = (allocT.id || []).map((id, i) => {
+      const st = columnAsArray(allocT, ALLOC.status)[i] || '';
+      if (st) statusValues.add(st.toString());
+      return {
+        id,
+        lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
+        lineId: ALLOC.line ? getRefId(columnAsArray(allocT, ALLOC.line)[i]) : null,
+        qty: Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0,
+        status: st,
+      };
+    });
+    S.woundStatus = pickWoundStatus(statusValues);
+
+    // Work orders
+    const woInfo = {};
+    (woT.id || []).forEach((id, i) => {
+      woInfo[id] = {
+        active: (columnAsArray(woT, WO.status)[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woT, WO.orderNumber)[i],
+        customerName: columnAsArray(woT, WO.customerName)[i] || '',
+        customerId: getRefId(columnAsArray(woT, WO.customer)[i]),
+        dueDate: columnAsArray(woT, WO.dueDate)[i],
+      };
+    });
+
+    // Order lines still needing spools physically handed over (allocation-based,
+    // NOT Qty_Dyed — pot logging already bumped Qty_Dyed for coverage).
+    const linesByRecipe = {};
+    (wolT.id || []).forEach((id, i) => {
+      const woId = getRefId(columnAsArray(wolT, WOL.workOrder)[i]);
+      const info = woInfo[woId];
+      if (!info || !info.active) return;
+      const sku = normalize(columnAsArray(wolT, WOL.sku)[i] || '');
+      const recipeId = getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null;
+      if (!recipeId) return;
+      const qtyNeeded = Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0;
+      const allocated = allocs.filter(a => a.lineId === id).reduce((s, a) => s + a.qty, 0);
+      const outstanding = Math.max(0, qtyNeeded - allocated);
+      if (outstanding <= 0) return;
+      const customerId = info.customerId || custIdByName[normalize(info.customerName)] || null;
+      (linesByRecipe[recipeId] = linesByRecipe[recipeId] || []).push({
+        lineId: id, recipeId, qtyNeeded, allocated, outstanding,
+        customerId, customerName: info.customerName,
+        orderNumber: info.orderNumber, dueDate: info.dueDate,
+      });
+    });
+    Object.values(linesByRecipe).forEach(arr => arr.sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate)));
+
+    // Lots with spools nobody has been handed yet
+    S.lots = (lotsT.id || []).map((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
+      let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
+      if (!total && LOT.yardsMade) {
+        total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
+      }
+      const allocated = allocs.filter(a => a.lotId === id).reduce((s, a) => s + a.qty, 0);
+      const store = Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0;
+      const vendor = Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0;
+      const general = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
+      const broken = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
+      return {
+        id, recipeId, recipe,
+        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+        drying: columnAsArray(lotsT, LOT.drying)[i] || '',
+        fiber: columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber,
+        date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null,
+        total, allocated, store, vendor, general, broken,
+        unassigned: Math.max(0, total - allocated - store - vendor - general - broken),
+        waiting: linesByRecipe[recipeId] || [],
+      };
+    }).filter(l => l.unassigned > 0)
+      .sort((a, b) => (b.waiting.length ? 1 : 0) - (a.waiting.length ? 1 : 0) || String(a.lotNumber).localeCompare(String(b.lotNumber)));
+
+    render();
+  } catch (e) {
+    console.error('Failed to load wind routing:', e);
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load.<br><span style="font-size:10px">${msg}</span></div>`;
+  }
+}
+
+function selectLot(id) {
+  S.selected = S.selected === id ? null : id;
+  render();
+}
+
+// Suggested split: fill the soonest-due orders first from what's on this lot.
+function suggestSplit(lot) {
+  let left = lot.unassigned;
+  const out = {};
+  for (const w of lot.waiting) {
+    if (left <= 0) break;
+    const take = Math.min(w.outstanding, left);
+    out[w.lineId] = take;
+    left -= take;
+  }
+  return out;
+}
+
+function render() {
+  const c = document.getElementById('content');
+  if (!S.lots.length) {
+    c.innerHTML = `<div class="header-title">Wind &amp; Box</div>
+      <div class="empty-state">No lots with unwound spools.<br>Log a pot in Batch Assignment first.</div>`;
+    return;
+  }
+
+  const doneHtml = S.done.map((d, i) => `
+    <div class="done-line">
+      <span>✓ <strong>${esc(d.lotNumber)}</strong> — ${esc(d.summary)}</span>
+      <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
+    </div>`).join('');
+
+  const lotsHtml = S.lots.map(l => {
+    const waiting = l.waiting.length;
+    return `
+      <div class="lot-card ${S.selected === l.id ? 'active' : ''}" onclick="selectLot(${l.id})">
+        <div class="lot-top">
+          <span class="lot-number">${esc(l.lotNumber)}</span>
+          <span class="lot-avail">${l.unassigned} unwound</span>
+        </div>
+        <div class="lot-meta">${esc(l.recipe.name)}${l.fiber ? ' · ' + esc(fiberCode(l.fiber)) : ''}${l.drying ? ' · ' + esc(l.drying) : ''}</div>
+        <div class="lot-meta">${waiting ? `${waiting} order${waiting === 1 ? '' : 's'} waiting` : 'no orders waiting — back stock'}</div>
+      </div>`;
+  }).join('');
+
+  let detail = '';
+  const lot = S.lots.find(l => l.id === S.selected);
+  if (lot) {
+    const isHand = /hand/i.test(lot.recipe.method);
+    const suggested = suggestSplit(lot);
+
+    const rows = lot.waiting.length
+      ? lot.waiting.map(w => `
+          <div class="alloc-row">
+            <div class="alloc-who">
+              <div class="alloc-name">${esc(w.customerName || '—')}</div>
+              <div class="alloc-meta">${esc(w.orderNumber || '')}${w.dueDate ? ' · due ' + fmtDate(w.dueDate) : ''}${w.customerId ? '' : ' · ⚠ no customer row'}</div>
+            </div>
+            <span class="alloc-need">needs ${w.outstanding}</span>
+            <input type="number" min="0" id="give-${w.lineId}" value="${suggested[w.lineId] || 0}" oninput="updateTally()">
+          </div>`).join('')
+      : `<div class="note" style="padding:6px 0;">No open orders for this colorway — wind to stock or broken spools.</div>`;
+
+    const brokenHtml = S.brokenCol
+      ? `<div class="broken-row">
+           <span style="flex:1;">Broken / tied-off spools from this wind</span>
+           <input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()">
+         </div>`
+      : `<div class="broken-row"><span style="flex:1;">Add a <strong>Broken_Spools</strong> numeric column to Production_Lots to record tied-off spools here.</span></div>`;
+
+    detail = `
+      <div class="section-title">Wind ${esc(lot.lotNumber)}</div>
+      <div class="panel">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+          <span class="badge ${isHand ? '' : 'kettle'}">${esc(lot.recipe.method || 'method not set')}</span>
+          <span class="note">${lot.unassigned} unwound on this lot${isHand ? ' · own dye lot, don\'t mix' : ''}</span>
+        </div>
+        ${rows}
+        ${brokenHtml}
+        <div id="tally" class="tally ok"></div>
+        <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; box these</button>
+        <div class="note" style="display:block;margin-top:5px;text-align:center;">
+          writes status "${esc(S.woundStatus)}"${S.hasLineLink ? '' : ' · ⚠ no Work_Order_Line column — can\'t link to the line'}
+        </div>
+      </div>`;
+  }
+
+  c.innerHTML = `
+    <div class="header-title">Wind &amp; Box</div>
+    <div class="header-sub">Pick a lot, confirm who gets what, box it.</div>
+    ${doneHtml}
+    <div class="section-title">Lots with unwound spools</div>
+    ${lotsHtml}
+    ${detail}
+  `;
+  if (lot) updateTally();
+}
+
+function currentPlan() {
+  const lot = S.lots.find(l => l.id === S.selected);
+  if (!lot) return null;
+  const gives = lot.waiting.map(w => ({
+    ...w, qty: Math.max(0, Number((document.getElementById(`give-${w.lineId}`) || {}).value) || 0),
+  })).filter(g => g.qty > 0);
+  const brokenEl = document.getElementById('broken-qty');
+  const broken = brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0;
+  const used = gives.reduce((s, g) => s + g.qty, 0) + broken;
+  return { lot, gives, broken, used, left: lot.unassigned - used };
+}
+
+function updateTally() {
+  const p = currentPlan();
+  if (!p) return;
+  const t = document.getElementById('tally');
+  const btn = document.getElementById('confirmBtn');
+  if (!t) return;
+  const over = p.used > p.lot.unassigned;
+  t.className = 'tally ' + (over ? 'over' : 'ok');
+  t.innerHTML = over
+    ? `Over by ${p.used - p.lot.unassigned} — this lot only has ${p.lot.unassigned} unwound.`
+    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
+  if (btn) btn.disabled = over || p.used === 0;
+}
+
+async function confirmWind() {
+  const p = currentPlan();
+  if (!p || p.used === 0) { showToast('Nothing to assign'); return; }
+  if (p.used > p.lot.unassigned) { showToast('More than the lot has'); return; }
+  const noCust = p.gives.filter(g => !g.customerId);
+  if (noCust.length) { showToast(`No customer row for ${noCust[0].customerName || 'an order'} — allocation needs one`); return; }
+
+  const { ALLOC, LOT } = S.cols;
+  try {
+    const actions = p.gives.map(g => {
+      const f = {};
+      f[ALLOC.lot] = p.lot.id;
+      f[ALLOC.qty] = g.qty;
+      f[ALLOC.status] = S.woundStatus;
+      if (ALLOC.customer) f[ALLOC.customer] = g.customerId;
+      if (ALLOC.line) f[ALLOC.line] = g.lineId;
+      return ['AddRecord', 'Lot_Allocations', null, f];
+    });
+    const res = await grist.docApi.applyUserActions(actions);
+    const newIds = res.retValues || [];
+
+    let brokenBefore = null;
+    if (p.broken > 0 && S.brokenCol) {
+      brokenBefore = p.lot.broken;
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Production_Lots', p.lot.id, { [S.brokenCol]: brokenBefore + p.broken }]
+      ]);
+    }
+
+    S.done.unshift({
+      lotId: p.lot.id, lotNumber: p.lot.lotNumber, allocIds: newIds,
+      brokenBefore, brokenAdded: p.broken,
+      summary: p.gives.map(g => `${g.qty}→${g.customerName || 'order'}`).join(', ') + (p.broken ? ` · ${p.broken} broken` : ''),
+    });
+    showToast('Boxed ✓');
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to wind:', e);
+    showToast('Failed — check Lot_Allocations');
+  }
+}
+
+async function undoWind(i) {
+  const d = S.done[i];
+  if (!d) return;
+  try {
+    const actions = d.allocIds.map(id => ['RemoveRecord', 'Lot_Allocations', id]);
+    if (d.brokenAdded > 0 && S.brokenCol && d.brokenBefore != null) {
+      actions.push(['UpdateRecord', 'Production_Lots', d.lotId, { [S.brokenCol]: d.brokenBefore }]);
+    }
+    await grist.docApi.applyUserActions(actions);
+    S.done.splice(i, 1);
+    showToast('Undone ✓');
+    await loadEverything();
+  } catch (e) {
+    console.error('Failed to undo wind:', e);
+    showToast('Undo failed');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadEverything();
+</script>
+</body>
+</html>
