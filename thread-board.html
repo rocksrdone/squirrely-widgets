@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --wet-bg: #E8F0F7; --wet-text: #2A5B8B;
+    --dry-bg: #F5EFE4; --dry-text: #8B6A2A;
+    --done-bg: #E8F3E8; --done-text: #2D6A2D;
+    --warn-bg: #FBF0E4; --warn-text: #8B5A2A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+  .title { font-size: 15px; font-weight: 700; }
+  .sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; }
+
+  .stage { margin-bottom: 12px; }
+  .stage-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    padding: 4px 8px; border-radius: 4px; margin-bottom: 5px;
+  }
+  .stage-wet { background: var(--wet-bg); color: var(--wet-text); }
+  .stage-dry { background: var(--dry-bg); color: var(--dry-text); }
+  .stage-other { background: #EEE9E2; color: #6B6157; }
+  .stage-count { font-weight: 700; }
+
+  .card {
+    background: white; border: 1px solid var(--rule); border-radius: 6px;
+    padding: 8px 9px; margin-bottom: 5px;
+  }
+  .card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .lot-no { font-weight: 700; font-size: 13px; }
+  .spools { font-size: 12px; font-weight: 700; color: var(--teal); white-space: nowrap; }
+  .card-meta { font-size: 10px; color: #8B7D72; margin-top: 1px; }
+  .waiting { font-size: 10px; color: var(--teal); font-weight: 600; margin-top: 2px; }
+  .aged { color: var(--warn-text); font-weight: 600; }
+
+  .card-actions { display: flex; align-items: center; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
+  .pos-field { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 130px; }
+  .pos-field label { font-size: 10px; color: #8B7D72; white-space: nowrap; }
+  .pos-field input {
+    flex: 1; min-width: 60px; padding: 4px 6px; border: 1px solid var(--rule);
+    border-radius: 4px; font-size: 12px;
+  }
+  button {
+    padding: 6px 11px; border: none; border-radius: 4px; font-size: 12px;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .btn-next { background: var(--teal); color: white; }
+  .btn-back { background: #EEE9E2; color: #6B6157; padding: 6px 8px; }
+  .btn-save { background: var(--teal-light); color: var(--teal); }
+
+  .empty-stage { font-size: 11px; color: #A99C8E; font-style: italic; padding: 4px 2px 8px; }
+  .empty-state { text-align: center; color: #8B7D72; padding: 20px 10px; font-size: 12px; line-height: 1.6; }
+  .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 5px; padding: 7px 9px; font-size: 11px; margin-bottom: 8px; }
+
+  #toast {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 14px; border-radius: 5px;
+    font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="content"><div class="empty-state">Loading...</div></div>
+<div id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (ref == null) return null;
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref.rowId) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+
+// ── The two racks. Wet = a few hours until mostly dry. Dry = finishes there and
+// lives there until wound, so there's no separate "ready" click — the board shows
+// how long it's been sitting and you judge by looking.
+const WET = 'Drying - Wet Rack';
+const DRY = 'Drying - Dry Rack';
+// Older/other spellings that have appeared in this doc, mapped to the two racks so
+// nothing gets stranded off the board.
+const ALIASES = {
+  'DRYING - WET RACK': WET, 'DRYING - METAL RACK': WET, 'DRYING - DAY RACK': WET,
+  'DRYING - DRY RACK': DRY, 'DRYING - WOOD RACK': DRY, 'DRYING - OVERNIGHT': DRY,
+  'READY TO ASSIGN': DRY,
+};
+function stageOf(raw) {
+  const s = (raw || '').toString().trim();
+  if (!s) return WET; // nothing recorded yet — it just came off the kettle
+  return ALIASES[s.toUpperCase()] || null; // null = unrecognised, shown separately
+}
+function daysSince(v) {
+  if (!v) return null;
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return null;
+  return Math.floor((Date.now() - ms) / 86400000);
+}
+function ageLabel(d) {
+  if (d == null) return '';
+  if (d <= 0) return 'today';
+  if (d === 1) return 'since yesterday';
+  return `${d} days`;
+}
+
+let S = { lots: [], cols: null, hasPos: true };
+
+async function loadBoard() {
+  try {
+    const [lotsT, recipesT, allocT, wolT, woT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Work_Orders'),
+    ]);
+
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const LOT = resolveCols(lotsT, 'Production_Lots', {
+      lotNumber: ['Lot_Number'], recipe: ['Recipe'], drying: ['Drying_Status'],
+      position: opt(['Rack_Position']), spoolsMade: opt(['Spools_Made']),
+      yardsMade: opt(['Total_Yards_Made']), fiber: opt(['Fiber']),
+      date: opt(['Date_Dyed']), draft: opt(['Draft_Code']),
+      storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
+      generalStock: opt(['General_Stock_Spools']), broken: opt(['Broken_Spools']),
+    }, missing);
+    const REC = resolveCols(recipesT, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
+    }, missing);
+    const ALLOC = resolveCols(allocT, 'Lot_Allocations', { lot: ['Lot'], qty: ['Qty_Spools'] }, missing);
+    const WOL = resolveCols(wolT, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
+      recipe: opt(['Recipe']), sku: opt(['SKU']),
+    }, missing);
+    const WO = resolveCols(woT, 'Work_Orders', { status: ['Status'] }, missing);
+
+    if (missing.length) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty-state">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].join('<br>')}</strong></div>`;
+      return;
+    }
+    S.cols = { LOT, REC, ALLOC, WOL, WO };
+    S.hasPos = !!LOT.position;
+
+    const recipeById = {};
+    (recipesT.id || []).forEach((id, i) => {
+      recipeById[id] = {
+        name: columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`,
+        fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
+        sku: normalize(columnAsArray(recipesT, REC.sku)[i] || ''),
+      };
+    });
+    const recipeIdBySku = {};
+    Object.entries(recipeById).forEach(([id, r]) => { if (r.sku) recipeIdBySku[r.sku] = Number(id); });
+
+    const allocByLot = {};
+    (allocT.id || []).forEach((id, i) => {
+      const lotId = getRefId(columnAsArray(allocT, ALLOC.lot)[i]);
+      allocByLot[lotId] = (allocByLot[lotId] || 0) + (Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0);
+    });
+
+    // How many orders are waiting on each colorway (active orders only)
+    const activeWo = {};
+    (woT.id || []).forEach((id, i) => {
+      activeWo[id] = (columnAsArray(woT, WO.status)[i] || '').toString() === 'Active';
+    });
+    const waitingByRecipe = {};
+    (wolT.id || []).forEach((id, i) => {
+      if (!activeWo[getRefId(columnAsArray(wolT, WOL.workOrder)[i])]) return;
+      const sku = normalize(columnAsArray(wolT, WOL.sku)[i] || '');
+      const rid = getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null;
+      if (!rid) return;
+      waitingByRecipe[rid] = (waitingByRecipe[rid] || 0) + 1;
+    });
+
+    S.lots = (lotsT.id || []).map((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      const recipe = recipeById[recipeId] || { name: '', fiber: '' };
+      let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
+      if (!total && LOT.yardsMade) {
+        total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
+      }
+      const spoken = (allocByLot[id] || 0)
+        + (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0)
+        + (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0)
+        + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0)
+        + (LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0);
+      const rawStatus = columnAsArray(lotsT, LOT.drying)[i] || '';
+      const draft = LOT.draft ? (columnAsArray(lotsT, LOT.draft)[i] || '') : '';
+      return {
+        id, recipeId,
+        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || draft || `Lot #${id}`,
+        name: recipe.name || (draft ? 'draft — not named yet' : ''),
+        fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
+        position: LOT.position ? (columnAsArray(lotsT, LOT.position)[i] || '') : '',
+        rawStatus, stage: stageOf(rawStatus),
+        total, unwound: Math.max(0, total - spoken),
+        days: daysSince(LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null),
+        waiting: waitingByRecipe[recipeId] || 0,
+        isDraft: !!draft && !recipe.name,
+      };
+    }).filter(l => l.unwound > 0); // once every spool is spoken for, it leaves the board
+
+    render();
+  } catch (e) {
+    console.error('Failed to load thread board:', e);
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load.<br><span style="font-size:10px">${msg}</span></div>`;
+  }
+}
+
+function cardHtml(l) {
+  const posPlaceholder = l.stage === WET ? 'W-C4' : 'D-B7';
+  const posField = S.hasPos
+    ? `<div class="pos-field">
+         <label>where</label>
+         <input id="pos-${l.id}" value="${esc(l.position)}" placeholder="${posPlaceholder}"
+                onkeydown="if(event.key==='Enter')savePosition(${l.id})">
+         <button class="btn-save" onclick="savePosition(${l.id})">save</button>
+       </div>`
+    : '';
+  const nextBtn = l.stage === WET
+    ? `<button class="btn-next" onclick="moveTo(${l.id},'dry')">→ dry rack</button>`
+    : (l.stage === DRY
+        ? `<button class="btn-back" onclick="moveTo(${l.id},'wet')">← wet rack</button>`
+        : `<button class="btn-next" onclick="moveTo(${l.id},'wet')">→ wet rack</button>
+           <button class="btn-next" onclick="moveTo(${l.id},'dry')">→ dry rack</button>`);
+
+  const aged = l.stage === WET && l.days != null && l.days >= 1;
+  const meta = [
+    l.name ? esc(l.name) : null,
+    l.fiber || null,
+    l.days != null ? `<span class="${aged ? 'aged' : ''}">${ageLabel(l.days)}</span>` : null,
+    l.position ? `at ${esc(l.position)}` : null,
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <div class="card">
+      <div class="card-top">
+        <span class="lot-no">${esc(l.lotNumber)}</span>
+        <span class="spools">${l.unwound}${l.unwound !== l.total ? ` of ${l.total}` : ''} spool${l.unwound === 1 ? '' : 's'}</span>
+      </div>
+      <div class="card-meta">${meta}</div>
+      ${l.stage === DRY && l.waiting ? `<div class="waiting">${l.waiting} order${l.waiting === 1 ? '' : 's'} waiting — ready to wind</div>` : ''}
+      ${l.isDraft ? `<div class="card-meta" style="color:var(--warn-text);">draft — name it in Recipe Builder</div>` : ''}
+      <div class="card-actions">${posField}${nextBtn}</div>
+    </div>`;
+}
+
+function render() {
+  const c = document.getElementById('content');
+  if (!S.lots.length) {
+    c.innerHTML = `<div class="title">Thread Board</div>
+      <div class="empty-state">Nothing on the racks.<br>Log a pot in Batch Assignment and it shows up here.</div>`;
+    return;
+  }
+  const wet = S.lots.filter(l => l.stage === WET);
+  const dry = S.lots.filter(l => l.stage === DRY);
+  const other = S.lots.filter(l => l.stage === null);
+
+  // Oldest first within each rack — what's been waiting longest needs moving first.
+  const byAge = (a, b) => (b.days == null ? -1 : b.days) - (a.days == null ? -1 : a.days);
+  wet.sort(byAge); dry.sort(byAge); other.sort(byAge);
+
+  const posWarn = S.hasPos ? '' :
+    `<div class="warn">No <strong>Rack_Position</strong> column on Production_Lots — add a Text column with that name to record where each hank is hanging.</div>`;
+
+  const section = (list, cls, label, emptyMsg) => `
+    <div class="stage">
+      <div class="stage-head ${cls}"><span>${label}</span><span class="stage-count">${list.length}</span></div>
+      ${list.length ? list.map(cardHtml).join('') : `<div class="empty-stage">${emptyMsg}</div>`}
+    </div>`;
+
+  c.innerHTML = `
+    <div class="head"><span class="title">Thread Board</span></div>
+    <div class="sub">Everything on the racks right now.</div>
+    ${posWarn}
+    ${section(wet, 'stage-wet', 'Wet rack', 'nothing drying')}
+    ${section(dry, 'stage-dry', 'Dry rack', 'nothing finished')}
+    ${other.length ? section(other, 'stage-other', 'Unrecognised status', '') : ''}
+  `;
+}
+
+async function savePosition(lotId) {
+  if (!S.hasPos) return;
+  const el = document.getElementById(`pos-${lotId}`);
+  const val = (el.value || '').trim();
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Production_Lots', lotId, { [S.cols.LOT.position]: val }]
+    ]);
+    const lot = S.lots.find(l => l.id === lotId);
+    if (lot) lot.position = val;
+    showToast(val ? `Saved — ${val} ✓` : 'Position cleared');
+    render();
+  } catch (e) {
+    console.error('Failed to save position:', e);
+    showToast('Failed to save position');
+  }
+}
+
+async function moveTo(lotId, which) {
+  const lot = S.lots.find(l => l.id === lotId);
+  const target = which === 'dry' ? DRY : WET;
+  // Moving racks means it physically moved — the old position is no longer true.
+  const fields = { [S.cols.LOT.drying]: target };
+  if (S.hasPos) fields[S.cols.LOT.position] = '';
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, fields]]);
+    showToast(`${lot ? lot.lotNumber : 'Lot'} → ${which === 'dry' ? 'dry rack' : 'wet rack'} ✓`);
+    await loadBoard();
+  } catch (e) {
+    console.error('Failed to move lot:', e);
+    showToast('Failed — check Drying_Status choices in Grist');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadBoard();
+</script>
+</body>
+</html>
