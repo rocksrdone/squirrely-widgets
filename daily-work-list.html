@@ -196,6 +196,29 @@ function normalize(s) {
   return (s || '').toString().trim().toUpperCase();
 }
 
+// Match a column id ignoring case and non-alphanumerics, trying each candidate.
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+// Resolve columns; push "Table.FirstCand" into `missing` for any REQUIRED column not
+// found. spec value: ['Cand'] (required) or { cands:[...], required:false } (optional).
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -203,7 +226,7 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-let allLines = []; // flat per-line data: {lineId, sku, colorwayName, productName, qtyNeeded, qtyDyed, qtyWound, qtyPacked, priority, orderNumber, customerName, dueDate}
+let allLines = []; // flat per-line data: {lineId, sku, colorwayName, productName, qtyNeeded, qtyDyed, boxed, priority, orderNumber, customerName, dueDate}
 let batches = [];   // grouped by SKU: {sku, colorwayName, lines[], totalNeeded, totalDyed, totalWound, totalPacked, priority, dueDate}
 
 async function loadEverything() {
@@ -216,13 +239,64 @@ async function loadEverything() {
       grist.docApi.fetchTable('Recipes'),
     ]);
 
+    // ── Resolve every column id up front (rename-proofing) ──────────────
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const REC = resolveCols(recipesTable, 'Recipes', {
+      name: opt(['Recipe_Name']), skuBase: opt(['SKU_Base']), shopifySku: opt(['Shopify_SKU']),
+    }, missing);
+    const WO = resolveCols(woTable, 'Work_Orders', {
+      status: ['Status'], orderNumber: opt(['Order_Number']),
+      customerName: opt(['Customer_Name']), dueDate: opt(['Due_Date']),
+    }, missing);
+    // Qty_Packed is OPTIONAL and read-only here: it's deprecated in favour of
+    // Lot_Allocations, kept only so historic lines keep their boxed count until
+    // the column is deleted. Nothing in this widget writes it.
+    const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], qtyDyed: ['Qty_Dyed'],
+      qtyPacked: opt(['Qty_Packed']), sku: opt(['SKU']),
+      productName: opt(['Product_Name']), priority: opt(['Production_Priority']),
+    }, missing);
+
+    if (missing.length) {
+      document.getElementById('headerSub').textContent =
+        'Missing columns: ' + [...new Set(missing)].join(', ') + ' — a table/column was likely renamed';
+      allLines = []; batches = []; buildBatches();
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
+    // Winding/boxing is recorded in Lot_Allocations by the Wind & Box widget —
+    // a line can be filled from several lots, so a per-line count can't say which
+    // bag the spools came from. Winding, labelling and boxing are one act here, so
+    // any allocation past "in bin" counts as boxed. Legacy Qty_Packed is still
+    // honoured (whichever is higher) until that column is deleted.
+    const allocBoxedByLine = {};
+    try {
+      const allocTable = await grist.docApi.fetchTable('Lot_Allocations');
+      const aLineCol = findColumn(allocTable, ['Work_Order_Line']);
+      const aQtyCol = findColumn(allocTable, ['Qty_Spools']);
+      const aStatusCol = findColumn(allocTable, ['Status']);
+      if (aLineCol && aQtyCol) {
+        (allocTable.id || []).forEach((id, i) => {
+          const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
+          if (!lineId) return;
+          const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
+          if (/unwound|in bin/i.test(status.toString())) return;
+          allocBoxedByLine[lineId] = (allocBoxedByLine[lineId] || 0) + (Number(columnAsArray(allocTable, aQtyCol)[i]) || 0);
+        });
+      }
+    } catch (e) {
+      console.warn('Lot_Allocations unavailable — falling back to Qty_Packed', e);
+    }
+
     // Build SKU -> colorway name lookup from Recipes
     const rIds = recipesTable.id || [];
     const skuToName = {};
     rIds.forEach((id, i) => {
-      const name = columnAsArray(recipesTable, 'Recipe_Name')[i];
-      const skuBase = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
-      const shopifySku = normalize(columnAsArray(recipesTable, 'Shopify_SKU')[i]);
+      const name = columnAsArray(recipesTable, REC.name)[i];
+      const skuBase = normalize(columnAsArray(recipesTable, REC.skuBase)[i]);
+      const shopifySku = normalize(columnAsArray(recipesTable, REC.shopifySku)[i]);
       if (skuBase) skuToName[skuBase] = name;
       if (shopifySku) skuToName[shopifySku] = name;
     });
@@ -231,37 +305,37 @@ async function loadEverything() {
     const woIds = woTable.id || [];
     const woActive = {};
     woIds.forEach((id, i) => {
-      const status = columnAsArray(woTable, 'Status')[i];
+      const status = columnAsArray(woTable, WO.status)[i];
       woActive[id] = {
         active: (status || '').toString() === 'Active',
-        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
-        customerName: columnAsArray(woTable, 'Customer_Name')[i],
-        dueDate: columnAsArray(woTable, 'Due_Date')[i],
+        orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
+        customerName: columnAsArray(woTable, WO.customerName)[i],
+        dueDate: columnAsArray(woTable, WO.dueDate)[i],
       };
     });
 
     const lIds = wolTable.id || [];
     const items = [];
     for (let i = 0; i < lIds.length; i++) {
-      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
       const woInfo = woActive[woId];
       if (!woInfo || !woInfo.active) continue;
 
-      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
-      const qtyWound = Number(columnAsArray(wolTable, 'Qty_Wound')[i]) || 0;
-      const qtyPacked = Number(columnAsArray(wolTable, 'Qty_Packed')[i]) || 0;
+      const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
+      const qtyDyed = Number(columnAsArray(wolTable, WOL.qtyDyed)[i]) || 0;
+      const legacyPacked = Number(columnAsArray(wolTable, WOL.qtyPacked)[i]) || 0;
+      const boxed = Math.max(allocBoxedByLine[lIds[i]] || 0, legacyPacked);
 
-      if (qtyPacked >= qtyNeeded && qtyNeeded > 0) continue; // fully complete, hide
+      if (boxed >= qtyNeeded && qtyNeeded > 0) continue; // fully boxed, hide
 
-      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      const sku = columnAsArray(wolTable, WOL.sku)[i] || '';
       items.push({
         lineId: lIds[i],
         sku,
         colorwayName: skuToName[normalize(sku)] || null,
-        productName: columnAsArray(wolTable, 'Product_Name')[i] || '',
-        qtyNeeded, qtyDyed, qtyWound, qtyPacked,
-        priority: columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal',
+        productName: columnAsArray(wolTable, WOL.productName)[i] || '',
+        qtyNeeded, qtyDyed, boxed,
+        priority: columnAsArray(wolTable, WOL.priority)[i] || 'Normal',
         orderNumber: woInfo.orderNumber,
         customerName: woInfo.customerName,
         dueDate: woInfo.dueDate,
@@ -276,7 +350,8 @@ async function loadEverything() {
     renderList();
   } catch (e) {
     console.error('Failed to load work list:', e);
-    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('headerSub').textContent = 'Failed to load — ' + msg;
   }
 }
 
@@ -300,8 +375,7 @@ function buildBatches() {
 
     const totalNeeded = g.lines.reduce((s, l) => s + l.qtyNeeded, 0);
     const totalDyed = g.lines.reduce((s, l) => s + l.qtyDyed, 0);
-    const totalWound = g.lines.reduce((s, l) => s + l.qtyWound, 0);
-    const totalPacked = g.lines.reduce((s, l) => s + l.qtyPacked, 0);
+    const totalBoxed = g.lines.reduce((s, l) => s + l.boxed, 0);
 
     let bestPriority = g.lines[0].priority;
     g.lines.forEach(l => { if (priorityRank(l.priority) < priorityRank(bestPriority)) bestPriority = l.priority; });
@@ -315,7 +389,7 @@ function buildBatches() {
 
     return {
       sku: g.sku, colorwayName: g.colorwayName, lines: g.lines,
-      totalNeeded, totalDyed, totalWound, totalPacked,
+      totalNeeded, totalDyed, totalBoxed,
       priority: bestPriority, dueDate: earliestDue,
     };
   });
@@ -366,7 +440,7 @@ function renderList() {
 
     const ordersRows = batch.lines.map(l => {
       const lDue = l.dueDate ? new Date(Number(l.dueDate) * 1000).toLocaleDateString() : '—';
-      const packPct = l.qtyWound > 0 ? Math.min(100, (l.qtyPacked / l.qtyWound) * 100) : 0;
+      const packPct = l.qtyNeeded > 0 ? Math.min(100, (l.boxed / l.qtyNeeded) * 100) : 0;
       return `
         <div class="order-row-block">
           <div class="order-row">
@@ -374,11 +448,9 @@ function renderList() {
             <span>${l.qtyNeeded} needed · due ${lDue}</span>
           </div>
           <div class="line-pack-row">
-            <span class="line-pack-label">Pack</span>
+            <span class="line-pack-label">Boxed</span>
             <div class="line-pack-track"><div class="line-pack-fill" style="width:${packPct}%"></div></div>
-            <input class="line-pack-input" type="number" min="0" max="${l.qtyWound}" value="${l.qtyPacked}"
-              onclick="event.stopPropagation()" onchange="setLinePack(${l.lineId}, this.value, ${l.qtyWound})">
-            <span class="line-pack-cap">/${l.qtyWound} wound</span>
+            <span class="line-pack-cap">${l.boxed}/${l.qtyNeeded}</span>
           </div>
         </div>
       `;
@@ -393,13 +465,13 @@ function renderList() {
         <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
         <td class="due-cell">${dueLabel}</td>
         <td class="stage-cell">${miniStage(idx, batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}</td>
-        <td class="stage-cell">${miniStage(idx, batch.totalWound, batch.totalDyed, 'Qty_Wound')}</td>
-        <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'} · ${batch.totalPacked}/${batch.totalNeeded} packed</td>
+        <td class="stage-cell" style="color:#8B7D72;">${batch.totalBoxed}/${batch.totalNeeded}</td>
+        <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'}</td>
       </tr>
       <tr class="detail-row" id="${rowId}">
         <td colspan="6">
           <div class="detail-wrap">
-            <div class="pack-summary">Pack progress per order:</div>
+            <div class="pack-summary">Boxed per order (recorded in Wind &amp; Box):</div>
             ${ordersRows}
           </div>
         </td>
@@ -415,8 +487,8 @@ function renderList() {
           <th>Priority</th>
           <th>Due</th>
           <th>Dye</th>
-          <th>Wind</th>
-          <th style="text-align:right">Orders / Pack</th>
+          <th>Boxed</th>
+          <th style="text-align:right">Orders</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -425,16 +497,14 @@ function renderList() {
 }
 
 function stageFieldKey(field) {
-  return { Qty_Dyed: 'qtyDyed', Qty_Wound: 'qtyWound', Qty_Packed: 'qtyPacked' }[field];
+  return { Qty_Dyed: 'qtyDyed' }[field];
 }
 function stageCapForLine(line, field) {
   if (field === 'Qty_Dyed') return line.qtyNeeded;
-  if (field === 'Qty_Wound') return line.qtyDyed;
-  if (field === 'Qty_Packed') return line.qtyWound;
   return 0;
 }
 function batchTotalKey(field) {
-  return { Qty_Dyed: 'totalDyed', Qty_Wound: 'totalWound', Qty_Packed: 'totalPacked' }[field];
+  return { Qty_Dyed: 'totalDyed' }[field];
 }
 
 function distributeDelta(batch, field, delta) {
@@ -469,8 +539,7 @@ function distributeDelta(batch, field, delta) {
 
 function recomputeBatchTotals(batch) {
   batch.totalDyed = batch.lines.reduce((s, l) => s + l.qtyDyed, 0);
-  batch.totalWound = batch.lines.reduce((s, l) => s + l.qtyWound, 0);
-  batch.totalPacked = batch.lines.reduce((s, l) => s + l.qtyPacked, 0);
+  batch.totalBoxed = batch.lines.reduce((s, l) => s + l.boxed, 0);
 }
 
 async function adjustBatchStage(batchIdx, field, delta) {
@@ -496,32 +565,6 @@ async function adjustBatchStage(batchIdx, field, delta) {
   }
 }
 
-async function setLinePack(lineId, rawValue, cap) {
-  const line = allLines.find(l => l.lineId === lineId);
-  if (!line) return;
-
-  const oldVal = line.qtyPacked;
-  const newVal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
-  if (newVal === oldVal) { renderList(); return; }
-
-  line.qtyPacked = newVal;
-  const batch = batches.find(b => b.lines.includes(line));
-  if (batch) recomputeBatchTotals(batch);
-  renderList();
-
-  try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Work_Order_Lines', lineId, { Qty_Packed: newVal }]
-    ]);
-    showToast(`Packed set to ${newVal} for order #${line.orderNumber || ''}`);
-  } catch (e) {
-    console.error('Failed to update:', e);
-    showToast('Update failed — check widget access level');
-    line.qtyPacked = oldVal;
-    if (batch) recomputeBatchTotals(batch);
-    renderList();
-  }
-}
 
 async function setBatchStage(batchIdx, field, rawValue, cap) {
   const batch = batches[batchIdx];
