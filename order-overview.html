@@ -135,9 +135,9 @@ function lineStage(line) {
 function stageBadgeHtml(line) {
   const stage = lineStage(line);
   const map = {
-    'packed': ['packed', 'Packed ✓'],
-    'packed-partial': ['wound', 'Packing...'],
-    'wound': ['wound', 'Wound ✓'],
+    'packed': ['packed', 'Wound &amp; boxed ✓'],
+    'packed-partial': ['wound', 'Winding...'],
+    'wound': ['wound', 'Wound &amp; boxed ✓'],
     'wound-partial': ['dyed', 'Winding...'],
     'dyed': ['dyed', 'Dyed ✓'],
     'dyed-partial': ['dyed', 'Dyeing...'],
@@ -187,6 +187,35 @@ async function loadCoreData() {
   });
 
   const wolTable = await grist.docApi.fetchTable('Work_Order_Lines');
+
+  // ── Winding/packing now lives in Lot_Allocations, not on the line ──────────
+  // Qty_Wound/Qty_Packed on Work_Order_Lines are deprecated: one line can be
+  // filled from several lots, so a single per-line number can't say which bag
+  // the spools came from. Allocation rows can. Because winding, labelling and
+  // boxing are a single physical act here, an allocation past "in bin" counts
+  // as BOTH wound and packed.
+  // Legacy Qty_Wound/Qty_Packed values are still honoured (whichever is higher)
+  // so historic orders keep their stage until those columns are deleted.
+  const allocWoundByLine = {};
+  try {
+    const allocTable = await grist.docApi.fetchTable('Lot_Allocations');
+    const aLineCol = findColumn(allocTable, ['Work_Order_Line']);
+    const aQtyCol = findColumn(allocTable, ['Qty_Spools']);
+    const aStatusCol = findColumn(allocTable, ['Status']);
+    if (aLineCol && aQtyCol) {
+      (allocTable.id || []).forEach((id, i) => {
+        const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
+        if (!lineId) return;
+        const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
+        // "In bin / unwound" means it exists but nobody has wound it yet.
+        if (/unwound|in bin/i.test(status.toString())) return;
+        allocWoundByLine[lineId] = (allocWoundByLine[lineId] || 0) + (Number(columnAsArray(allocTable, aQtyCol)[i]) || 0);
+      });
+    }
+  } catch (e) {
+    console.warn('Lot_Allocations unavailable — falling back to per-line quantities', e);
+  }
+
   const wc = (c) => findColumn(wolTable, c);
   const wWorkOrderCol = wc(['Work_Order']) || 'Work_Order';
   const wRecipeCol = wc(['Recipe']) || 'Recipe';
@@ -201,14 +230,17 @@ async function loadCoreData() {
     const directRecipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
     const sku = wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '';
     const recipeId = directRecipeId || recipeIdBySku[normalize(sku || '')] || null;
+    const fromAlloc = allocWoundByLine[id] || 0;
+    const legacyWound = wWoundCol ? Number(columnAsArray(wolTable, wWoundCol)[i]) || 0 : 0;
+    const legacyPacked = wPackedCol ? Number(columnAsArray(wolTable, wPackedCol)[i]) || 0 : 0;
     return {
     id,
     workOrderId: getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]),
     recipeId,
     qtyNeeded: wNeededCol ? columnAsArray(wolTable, wNeededCol)[i] : 0,
     qtyDyed: wDyedCol ? columnAsArray(wolTable, wDyedCol)[i] : 0,
-    qtyWound: wWoundCol ? columnAsArray(wolTable, wWoundCol)[i] : 0,
-    qtyPacked: wPackedCol ? columnAsArray(wolTable, wPackedCol)[i] : 0,
+    qtyWound: Math.max(fromAlloc, legacyWound),
+    qtyPacked: Math.max(fromAlloc, legacyPacked),
     queueStatus: wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '',
     priority: wPriorityCol ? columnAsArray(wolTable, wPriorityCol)[i] : '',
     sku: wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '',
@@ -313,7 +345,6 @@ function renderOrderDetail(workOrderId) {
       <tr>
         <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe or SKU on this line)')} ${r.SKU_Base && r.Recipe_Name ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
         <td class="qty-cell ${Number(line.qtyDyed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyDyed ? 'zero' : '')}">${line.qtyDyed || 0}/${line.qtyNeeded || 0}</td>
-        <td class="qty-cell ${Number(line.qtyWound) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyWound ? 'zero' : '')}">${line.qtyWound || 0}/${line.qtyNeeded || 0}</td>
         <td class="qty-cell ${Number(line.qtyPacked) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyPacked ? 'zero' : '')}">${line.qtyPacked || 0}/${line.qtyNeeded || 0}</td>
         <td>${stageBadgeHtml(line)}</td>
         <td style="font-size:11px; color:#8B7D72;">${line.queueStatus || ''}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
@@ -332,12 +363,11 @@ function renderOrderDetail(workOrderId) {
       </div>
       <div class="stage-summary">
         ${stageBox('Dyed', p.dyed)}
-        ${stageBox('Wound', p.wound)}
-        ${stageBox('Packed', p.packed)}
+        ${stageBox('Wound &amp; boxed', p.packed)}
       </div>
     </div>
     <table class="lines-table">
-      <thead><tr><th>Recipe / SKU</th><th>Dyed</th><th>Wound</th><th>Packed</th><th>Stage</th><th>Queue</th></tr></thead>
+      <thead><tr><th>Recipe / SKU</th><th>Dyed</th><th>Wound &amp; boxed</th><th>Stage</th><th>Queue</th></tr></thead>
       <tbody>${linesHtml}</tbody>
     </table>
   `;
