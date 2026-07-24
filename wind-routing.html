@@ -63,6 +63,12 @@
     width: 58px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px;
     font-size: 13px; text-align: center;
   }
+  .stock-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 7px; padding: 6px 8px;
+    background: var(--teal-light); border-radius: 5px; font-size: 11px; color: var(--teal);
+  }
+  .stock-row input { width: 58px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 13px; text-align: center; }
+  .stock-row select { padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; background: white; color: var(--teal); }
   .tally { font-size: 11px; margin-top: 7px; padding: 6px 8px; border-radius: 5px; }
   .tally.ok { background: var(--done-bg); color: var(--done-text); }
   .tally.over { background: var(--warn-bg); color: var(--warn-text); }
@@ -405,6 +411,16 @@ function render() {
          </div>`
       : `<div class="broken-row"><span style="flex:1;">Add a <strong>Broken_Spools</strong> numeric column to Production_Lots to record tied-off spools here.</span></div>`;
 
+    const stockHtml = `
+      <div class="stock-row">
+        <span style="flex:1;">Good spools going to back stock</span>
+        <select id="stock-bucket">
+          <option value="store">store</option>
+          <option value="vendor">vendor</option>
+        </select>
+        <input type="number" min="0" id="stock-qty" value="0" oninput="updateTally()">
+      </div>`;
+
     detail = `
       <div class="section-title">Wind ${esc(lot.lotNumber)}</div>
       <div class="panel">
@@ -413,6 +429,7 @@ function render() {
           <span class="note">${lot.unassigned} unwound on this lot${isHand ? ' · own dye lot, don\'t mix' : ''}</span>
         </div>
         ${rows}
+        ${stockHtml}
         ${brokenHtml}
         <div id="tally" class="tally ok"></div>
         <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; box these</button>
@@ -441,8 +458,11 @@ function currentPlan() {
   })).filter(g => g.qty > 0);
   const brokenEl = document.getElementById('broken-qty');
   const broken = brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0;
-  const used = gives.reduce((s, g) => s + g.qty, 0) + broken;
-  return { lot, gives, broken, used, left: lot.unassigned - used };
+  const stockEl = document.getElementById('stock-qty');
+  const stock = stockEl ? Math.max(0, Number(stockEl.value) || 0) : 0;
+  const stockBucket = (document.getElementById('stock-bucket') || {}).value || 'store';
+  const used = gives.reduce((s, g) => s + g.qty, 0) + broken + stock;
+  return { lot, gives, broken, stock, stockBucket, used, left: lot.unassigned - used };
 }
 
 function updateTally() {
@@ -455,7 +475,7 @@ function updateTally() {
   t.className = 'tally ' + (over ? 'over' : 'ok');
   t.innerHTML = over
     ? `Over by ${p.used - p.lot.unassigned} — this lot only has ${p.lot.unassigned} unwound.`
-    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
+    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.stock ? ` · ${p.stock} to ${p.stockBucket} stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
   if (btn) btn.disabled = over || p.used === 0;
 }
 
@@ -481,17 +501,33 @@ async function confirmWind() {
     const newIds = res.retValues || [];
 
     let brokenBefore = null;
+    const lotUpdate = {};
     if (p.broken > 0 && S.brokenCol) {
       brokenBefore = p.lot.broken;
-      await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Production_Lots', p.lot.id, { [S.brokenCol]: brokenBefore + p.broken }]
-      ]);
+      lotUpdate[S.brokenCol] = brokenBefore + p.broken;
+    }
+    let stockBefore = null, stockCol = null;
+    if (p.stock > 0) {
+      stockCol = p.stockBucket === 'vendor'
+        ? (LOT.vendorStock || LOT.generalStock)
+        : (LOT.storeStock || LOT.generalStock);
+      if (stockCol) {
+        stockBefore = p.stockBucket === 'vendor' ? p.lot.vendor : p.lot.store;
+        if (!LOT.storeStock && !LOT.vendorStock) stockBefore = p.lot.general; // both fell back to general
+        lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
+      }
+    }
+    if (Object.keys(lotUpdate).length) {
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', p.lot.id, lotUpdate]]);
     }
 
     S.done.unshift({
       lotId: p.lot.id, lotNumber: p.lot.lotNumber, allocIds: newIds,
       brokenBefore, brokenAdded: p.broken,
-      summary: p.gives.map(g => `${g.qty}→${g.customerName || 'order'}`).join(', ') + (p.broken ? ` · ${p.broken} broken` : ''),
+      stockCol, stockBefore, stockAdded: p.stock,
+      summary: p.gives.map(g => `${g.qty}→${g.customerName || 'order'}`).join(', ')
+        + (p.stock ? ` · ${p.stock} ${p.stockBucket} stock` : '')
+        + (p.broken ? ` · ${p.broken} broken` : ''),
     });
     showToast('Boxed ✓');
     await loadEverything();
@@ -506,9 +542,10 @@ async function undoWind(i) {
   if (!d) return;
   try {
     const actions = d.allocIds.map(id => ['RemoveRecord', 'Lot_Allocations', id]);
-    if (d.brokenAdded > 0 && S.brokenCol && d.brokenBefore != null) {
-      actions.push(['UpdateRecord', 'Production_Lots', d.lotId, { [S.brokenCol]: d.brokenBefore }]);
-    }
+    const revert = {};
+    if (d.brokenAdded > 0 && S.brokenCol && d.brokenBefore != null) revert[S.brokenCol] = d.brokenBefore;
+    if (d.stockAdded > 0 && d.stockCol && d.stockBefore != null) revert[d.stockCol] = d.stockBefore;
+    if (Object.keys(revert).length) actions.push(['UpdateRecord', 'Production_Lots', d.lotId, revert]);
     await grist.docApi.applyUserActions(actions);
     S.done.splice(i, 1);
     showToast('Undone ✓');
