@@ -414,10 +414,6 @@ function render() {
     const stockHtml = `
       <div class="stock-row">
         <span style="flex:1;">Good spools going to back stock</span>
-        <select id="stock-bucket">
-          <option value="store">store</option>
-          <option value="vendor">vendor</option>
-        </select>
         <input type="number" min="0" id="stock-qty" value="0" oninput="updateTally()">
       </div>`;
 
@@ -460,9 +456,8 @@ function currentPlan() {
   const broken = brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0;
   const stockEl = document.getElementById('stock-qty');
   const stock = stockEl ? Math.max(0, Number(stockEl.value) || 0) : 0;
-  const stockBucket = (document.getElementById('stock-bucket') || {}).value || 'store';
   const used = gives.reduce((s, g) => s + g.qty, 0) + broken + stock;
-  return { lot, gives, broken, stock, stockBucket, used, left: lot.unassigned - used };
+  return { lot, gives, broken, stock, used, left: lot.unassigned - used };
 }
 
 function updateTally() {
@@ -475,7 +470,7 @@ function updateTally() {
   t.className = 'tally ' + (over ? 'over' : 'ok');
   t.innerHTML = over
     ? `Over by ${p.used - p.lot.unassigned} — this lot only has ${p.lot.unassigned} unwound.`
-    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.stock ? ` · ${p.stock} to ${p.stockBucket} stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
+    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.stock ? ` · ${p.stock} to back stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
   if (btn) btn.disabled = over || p.used === 0;
 }
 
@@ -508,12 +503,11 @@ async function confirmWind() {
     }
     let stockBefore = null, stockCol = null;
     if (p.stock > 0) {
-      stockCol = p.stockBucket === 'vendor'
-        ? (LOT.vendorStock || LOT.generalStock)
-        : (LOT.storeStock || LOT.generalStock);
+      // One back-stock bucket. Prefer General_Stock_Spools (the column that exists);
+      // fall back to Store_Stock_Spools only if a future doc renames it.
+      stockCol = LOT.generalStock || LOT.storeStock;
       if (stockCol) {
-        stockBefore = p.stockBucket === 'vendor' ? p.lot.vendor : p.lot.store;
-        if (!LOT.storeStock && !LOT.vendorStock) stockBefore = p.lot.general; // both fell back to general
+        stockBefore = LOT.generalStock ? p.lot.general : p.lot.store;
         lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
       }
     }
@@ -526,7 +520,7 @@ async function confirmWind() {
       brokenBefore, brokenAdded: p.broken,
       stockCol, stockBefore, stockAdded: p.stock,
       summary: p.gives.map(g => `${g.qty}→${g.customerName || 'order'}`).join(', ')
-        + (p.stock ? ` · ${p.stock} ${p.stockBucket} stock` : '')
+        + (p.stock ? ` · ${p.stock} to stock` : '')
         + (p.broken ? ` · ${p.broken} broken` : ''),
     });
     showToast('Boxed ✓');

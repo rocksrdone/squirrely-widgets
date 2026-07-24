@@ -91,6 +91,8 @@ body {
   opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
+.pull-row { display:flex; align-items:center; gap:8px; justify-content:space-between; background:var(--teal-light,#E4F0EF); border:1px solid #2A6B6B; border-radius:5px; padding:6px 9px; margin-bottom:6px; font-size:11px; color:#2A6B6B; }
+.pull-btn { background:#2A6B6B; color:white; border:none; border-radius:4px; padding:5px 10px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
 .coverage { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:11px; color:var(--ink); background:#F7F3EE; border:1px solid var(--rule); border-radius:5px; padding:6px 9px; margin-bottom:6px; }
 .coverage .make-more { color:#8B5A2A; font-weight:700; }
 .coverage .make-none { color:var(--done-text); font-weight:700; }
@@ -179,6 +181,11 @@ function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : In
 
 // Pots logged for the currently-selected colorway this session (for running total + undo).
 let sessionPots = [];
+// Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
+let RC_STOCKBUCKET = null;
+let RC_ALLOC = null, RC_WOL = null;
+let S_COLS = { ALLOC: {} };  // resolved Lot_Allocations column ids for stock fulfillment
+let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status string
 
 // ── PREP TABLE CONFIG ──────────────────────────────────────────────
 // Must match PREP_ZONES in batch-planner.html. Staging advice is only given
@@ -258,7 +265,7 @@ async function loadForRecipe(record) {
     // been allocated to them, minus unwound spools still sitting in lots. A stored
     // "dyed" guess made at the kettle goes stale the moment winding assigns the
     // spools differently, so we compute it from physical records instead.
-    let allocByLine = {}, unwoundByRecipe = {};
+    let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null;
     try {
       const [lotsT, allocT] = await Promise.all([
         grist.docApi.fetchTable('Production_Lots'),
@@ -267,6 +274,13 @@ async function loadForRecipe(record) {
       const aLine = findColumn(allocT, ['Work_Order_Line']);
       const aQty = findColumn(allocT, ['Qty_Spools']);
       const aLot = findColumn(allocT, ['Lot']);
+      const aStatus = findColumn(allocT, ['Status']);
+      const aCustomer = findColumn(allocT, ['Customer']);
+      S_COLS = { ALLOC: { lot: aLot, qty: aQty, status: aStatus, customer: aCustomer, line: aLine } };
+      // Pick the "boxed" status the doc already uses, else the live default.
+      const seen = new Set();
+      if (aStatus) (allocT.id || []).forEach((id, i) => { const v = columnAsArray(allocT, aStatus)[i]; if (v) seen.add(v.toString()); });
+      S.woundStatus = ['Packed', 'Wound - Needs Labels', 'Wound', 'Packaged - Shipped'].find(v => seen.has(v)) || 'Wound - Needs Labels';
       const allocByLot = {};
       (allocT.id || []).forEach((id, i) => {
         const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
@@ -281,8 +295,11 @@ async function loadForRecipe(record) {
       const lStore = findColumn(lotsT, ['Store_Stock_Spools']);
       const lVendor = findColumn(lotsT, ['Vendor_Stock_Spools']);
       const lGeneral = findColumn(lotsT, ['General_Stock_Spools']);
+      const lNumber = findColumn(lotsT, ['Lot_Number']);
+      const lDate = findColumn(lotsT, ['Date_Dyed']);
       const lBroken = findColumn(lotsT, ['Broken_Spools']);
       const lFiber = findColumn(lotsT, ['Fiber']);
+      stockColId = lGeneral || lStore; // the single back-stock bucket we read/write
       const num = (col, i) => col ? (Number(columnAsArray(lotsT, col)[i]) || 0) : 0;
       (lotsT.id || []).forEach((id, i) => {
         const rid = lRecipe ? getRefId(columnAsArray(lotsT, lRecipe)[i]) : null;
@@ -292,12 +309,23 @@ async function loadForRecipe(record) {
           const f = lFiber ? columnAsArray(lotsT, lFiber)[i] : '';
           total = Math.round(num(lYards, i) / yardsPerSpool(f));
         }
-        const free = total - (allocByLot[id] || 0) - num(lStore, i) - num(lVendor, i) - num(lGeneral, i) - num(lBroken, i);
+        const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
+        const free = total - (allocByLot[id] || 0) - stock - num(lBroken, i);
         if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+        if (stock > 0 && stockColId) {
+          stockByRecipe[rid] = (stockByRecipe[rid] || 0) + stock;
+          (stockLotsByRecipe[rid] = stockLotsByRecipe[rid] || []).push({
+            lotId: id, lotNumber: lNumber ? columnAsArray(lotsT, lNumber)[i] : `Lot #${id}`,
+            stock, date: lDate ? columnAsArray(lotsT, lDate)[i] : 0,
+          });
+        }
       });
+      // oldest stock first — clear the bin's oldest thread before newer
+      Object.values(stockLotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0)));
     } catch (err) {
       console.warn('Lots/allocations unavailable — coverage will show needs only', err);
     }
+    RC_STOCKBUCKET = stockColId;
 
     // ── Resolve every column id up front (rename-proofing) ──────────────
     // Required columns missing => named banner, not a silently-empty widget.
@@ -309,7 +337,7 @@ async function loadForRecipe(record) {
     }, missing);
     const WO = resolveCols(woTable, 'Work_Orders', {
       status: ['Status'], orderNumber: opt(['Order_Number']),
-      customerName: opt(['Customer_Name']), dueDate: opt(['Due_Date']),
+      customerName: opt(['Customer_Name']), customer: opt(['Customer']), dueDate: opt(['Due_Date']),
     }, missing);
     const REC = resolveCols(recipesTable, 'Recipes', {
       name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']),
@@ -367,6 +395,7 @@ async function loadForRecipe(record) {
         active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
         orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
         customerName: columnAsArray(woTable, WO.customerName)[i],
+        customerId: getRefId(columnAsArray(woTable, WO.customer)[i]),
         dueDate: columnAsArray(woTable, WO.dueDate)[i],
       };
     });
@@ -438,6 +467,7 @@ async function loadForRecipe(record) {
         lineId: wolIds[i],
         orderNumber: info.orderNumber,
         customerName: info.customerName,
+        customerId: info.customerId,
         qtyNeeded,
         allocated,
         dueDate: info.dueDate,
@@ -609,13 +639,16 @@ async function loadForRecipe(record) {
 
     const outstanding = orders.reduce((s, o) => s + Math.max(0, o.qtyNeeded - o.allocated), 0);
     const inBins = unwoundByRecipe[record.id] || 0;
+    const inStock = stockByRecipe[record.id] || 0;
     currentEntry = {
       recipeId: record.id,
       recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
       fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
       method: recipeMethodById[record.id] || record.Dye_Method || '',
       dyeCount: dyeIds.length, orders, cleanupInfo,
-      outstanding, inBins, stillToMake: Math.max(0, outstanding - inBins),
+      outstanding, inBins, inStock,
+      stockLots: stockLotsByRecipe[record.id] || [],
+      stillToMake: Math.max(0, outstanding - inBins - inStock),
     };
     completedActions = {};
     render();
@@ -642,14 +675,24 @@ function render() {
     ? 'each pot = its own dye lot · photograph separately'
     : (isKettle ? 'pots are interchangeable' : 'set Dye_Method on the recipe — treated as hand-dye for now');
 
+  const canPull = e.inStock > 0 && e.outstanding > 0;
+  const pullHtml = canPull
+    ? `<div class="pull-row">
+         <span>${Math.min(e.inStock, e.outstanding)} spool${Math.min(e.inStock, e.outstanding) === 1 ? '' : 's'} in the bin can fill waiting orders now</span>
+         <button class="pull-btn" onclick="fulfillFromStock()">Pull from stock →</button>
+       </div>`
+    : '';
+
   const coverageHtml = `
     <div class="coverage">
-      <span><strong>${e.outstanding}</strong> still owed to orders</span>
+      <span><strong>${e.outstanding}</strong> owed</span>
       <span>·</span>
-      <span><strong>${e.inBins}</strong> unwound in bins</span>
+      <span><strong>${e.inBins}</strong> in bins</span>
+      ${e.inStock ? `<span>·</span><span><strong>${e.inStock}</strong> in stock</span>` : ''}
       <span>·</span>
-      <span class="${e.stillToMake > 0 ? 'make-more' : 'make-none'}">${e.stillToMake > 0 ? `make ${e.stillToMake} more` : 'enough made ✓'}</span>
-    </div>`;
+      <span class="${e.stillToMake > 0 ? 'make-more' : 'make-none'}">${e.stillToMake > 0 ? `make ${e.stillToMake} more` : 'enough ✓'}</span>
+    </div>
+    ${pullHtml}`;
 
   const ordersHtml = e.orders.length
     ? e.orders.map(o => {
@@ -749,7 +792,70 @@ function render() {
   `;
 }
 
-// Next dye-lot number: LOT-YYMMDD-N, N counting lots already made today.
+// Pull existing back-stock spools to cover waiting orders, instead of dyeing new.
+// Creates allocations (boxed) from stock lots — oldest bin first — and decrements
+// each lot's back-stock bucket. Prefers filling whole orders, like winding does.
+async function fulfillFromStock() {
+  const e = currentEntry;
+  const bucket = RC_STOCKBUCKET;
+  if (!bucket) { showToast('No stock bucket column found'); return; }
+
+  // Orders still owed, soonest-due first
+  const need = e.orders
+    .map(o => ({ ...o, want: Math.max(0, o.qtyNeeded - o.allocated) }))
+    .filter(o => o.want > 0)
+    .sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate));
+  if (!need.length) { showToast('No open orders to fill'); return; }
+  const noCust = need.find(o => !o.customerId && !o.customerName);
+  // (allocations still work off the line link; customer is set if the column exists)
+
+  // Stock lots, oldest first, each with spools to give
+  const lots = e.stockLots.map(l => ({ ...l, left: l.stock })).filter(l => l.left > 0);
+  const totalStock = lots.reduce((s, l) => s + l.left, 0);
+  if (totalStock <= 0) { showToast('No stock left'); return; }
+
+  const { ALLOC } = S_COLS;
+  const allocActions = [];   // AddRecord Lot_Allocations
+  const lotDelta = {};       // lotId -> spools removed from its bucket
+
+  // Walk orders; for each, draw from stock lots (oldest first) until filled.
+  let li = 0;
+  for (const o of need) {
+    let want = o.want;
+    while (want > 0 && li < lots.length) {
+      const lot = lots[li];
+      if (lot.left <= 0) { li++; continue; }
+      const take = Math.min(want, lot.left);
+      const f = {};
+      f[ALLOC.lot] = lot.lotId;
+      f[ALLOC.qty] = take;
+      f[ALLOC.status] = S.woundStatus || 'Wound - Needs Labels';
+      if (ALLOC.customer && o.customerId) f[ALLOC.customer] = o.customerId;
+      if (ALLOC.line) f[ALLOC.line] = o.lineId;
+      allocActions.push(['AddRecord', 'Lot_Allocations', null, f]);
+      lotDelta[lot.lotId] = (lotDelta[lot.lotId] || 0) + take;
+      lot.left -= take;
+      want -= take;
+      if (lot.left <= 0) li++;
+    }
+    if (li >= lots.length) break; // stock exhausted
+  }
+
+  if (!allocActions.length) { showToast('Nothing to pull'); return; }
+
+  try {
+    // Decrement each stock lot's bucket
+    const lotActions = e.stockLots
+      .filter(l => lotDelta[l.lotId])
+      .map(l => ['UpdateRecord', 'Production_Lots', l.lotId, { [bucket]: Math.max(0, l.stock - lotDelta[l.lotId]) }]);
+    await grist.docApi.applyUserActions([...allocActions, ...lotActions]);
+    showToast(`Pulled ${allocActions.reduce((s, a) => s + a[3][ALLOC.qty], 0)} from stock ✓`);
+    await loadForRecipe({ id: e.recipeId });
+  } catch (err) {
+    console.error('Failed to fulfill from stock:', err);
+    showToast('Failed — check Lot_Allocations');
+  }
+}
 function nextLotNumber(lotsTable, lotNumberCol) {
   const d = new Date();
   const p = n => String(n).padStart(2, '0');
