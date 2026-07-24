@@ -424,11 +424,11 @@ function renderList() {
     return;
   }
 
-  const miniStage = (idx, current, cap, field) => `
+  // Read-only. All production is recorded in Batch Assignment (which mints a dye
+  // lot) — entering it here would mark orders covered with no lot behind them.
+  const miniStage = (current, cap) => `
     <div class="mini-track"><div class="mini-fill" style="width:${cap > 0 ? Math.min(100, (current / cap) * 100) : 0}%"></div></div>
-    <input class="stage-input-table" type="number" min="0" max="${cap}" value="${current}"
-      onclick="event.stopPropagation()" onchange="setBatchStage(${idx}, '${field}', this.value, ${cap})">
-    <span class="cap-text">/${cap}</span>
+    <span class="cap-text">${current}/${cap}</span>
   `;
 
   const rows = filtered.map(({ b: batch, idx }) => {
@@ -464,8 +464,8 @@ function renderList() {
         </td>
         <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
         <td class="due-cell">${dueLabel}</td>
-        <td class="stage-cell">${miniStage(idx, batch.totalDyed, batch.totalNeeded, 'Qty_Dyed')}</td>
-        <td class="stage-cell" style="color:#8B7D72;">${batch.totalBoxed}/${batch.totalNeeded}</td>
+        <td class="stage-cell">${miniStage(batch.totalDyed, batch.totalNeeded)}</td>
+        <td class="stage-cell">${miniStage(batch.totalBoxed, batch.totalNeeded)}</td>
         <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'}</td>
       </tr>
       <tr class="detail-row" id="${rowId}">
@@ -496,93 +496,16 @@ function renderList() {
   `;
 }
 
-function stageFieldKey(field) {
-  return { Qty_Dyed: 'qtyDyed' }[field];
-}
-function stageCapForLine(line, field) {
-  if (field === 'Qty_Dyed') return line.qtyNeeded;
-  return 0;
-}
-function batchTotalKey(field) {
-  return { Qty_Dyed: 'totalDyed' }[field];
-}
-
-function distributeDelta(batch, field, delta) {
-  const key = stageFieldKey(field);
-  const changes = [];
-  let remaining = delta;
-
-  if (delta > 0) {
-    for (const line of batch.lines) {
-      if (remaining <= 0) break;
-      const cap = stageCapForLine(line, field);
-      const room = cap - line[key];
-      if (room <= 0) continue;
-      const take = Math.min(room, remaining);
-      line[key] += take;
-      remaining -= take;
-      changes.push({ lineId: line.lineId, field, newVal: line[key] });
-    }
-  } else if (delta < 0) {
-    let toRemove = -delta;
-    for (let i = batch.lines.length - 1; i >= 0 && toRemove > 0; i--) {
-      const line = batch.lines[i];
-      const take = Math.min(line[key], toRemove);
-      if (take <= 0) continue;
-      line[key] -= take;
-      toRemove -= take;
-      changes.push({ lineId: line.lineId, field, newVal: line[key] });
-    }
-  }
-  return changes;
-}
-
-function recomputeBatchTotals(batch) {
-  batch.totalDyed = batch.lines.reduce((s, l) => s + l.qtyDyed, 0);
-  batch.totalBoxed = batch.lines.reduce((s, l) => s + l.boxed, 0);
-}
-
-async function adjustBatchStage(batchIdx, field, delta) {
-  const batch = batches[batchIdx];
-  if (!batch) return;
-
-  const changes = distributeDelta(batch, field, delta);
-  if (!changes.length) return;
-
-  recomputeBatchTotals(batch);
-  renderList();
-
-  try {
-    await grist.docApi.applyUserActions(
-      changes.map(c => ['UpdateRecord', 'Work_Order_Lines', c.lineId, { [c.field]: c.newVal }])
-    );
-  } catch (e) {
-    console.error('Failed to update:', e);
-    showToast('Update failed — check widget access level');
-    distributeDelta(batch, field, -delta);
-    recomputeBatchTotals(batch);
-    renderList();
-  }
-}
 
 
-async function setBatchStage(batchIdx, field, rawValue, cap) {
-  const batch = batches[batchIdx];
-  if (!batch) return;
 
-  const totalKey = batchTotalKey(field);
-  const currentTotal = batch[totalKey];
-  const newTotal = Math.max(0, Math.min(cap, parseInt(rawValue, 10) || 0));
-  const delta = newTotal - currentTotal;
 
-  if (delta === 0) { renderList(); return; }
-  await adjustBatchStage(batchIdx, field, delta);
-  showToast(`${field.replace('Qty_', '')} set to ${newTotal}`);
-}
+
 
 // ── GRIST INTEGRATION ──
 grist.ready({
-  requiredAccess: 'full'
+  // Read-only widget: production is recorded in Batch Assignment / Wind & Box.
+  requiredAccess: 'read table'
 });
 
 loadEverything();
