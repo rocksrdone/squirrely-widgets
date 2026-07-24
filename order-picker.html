@@ -193,11 +193,34 @@ async function loadOrders() {
     }));
 
     // Per-order production summary from Work_Order_Lines
+    // "Packed" now comes from Lot_Allocations: a line can be filled from several
+    // lots, so the per-line Qty_Packed can't say which bag the spools came from.
+    // Winding, labelling and boxing are one physical act here, so any allocation
+    // past "in bin" counts as boxed. Legacy Qty_Packed is still honoured
+    // (whichever is higher) until that column is deleted.
+    const allocBoxedByLine = {};
+    try {
+      const allocTable = await grist.docApi.fetchTable('Lot_Allocations');
+      const aLineCol = findColumn(allocTable, ['Work_Order_Line']);
+      const aQtyCol = findColumn(allocTable, ['Qty_Spools']);
+      const aStatusCol = findColumn(allocTable, ['Status']);
+      if (aLineCol && aQtyCol) {
+        (allocTable.id || []).forEach((id, i) => {
+          const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
+          if (!lineId) return;
+          const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
+          if (/unwound|in bin/i.test(status.toString())) return;
+          allocBoxedByLine[lineId] = (allocBoxedByLine[lineId] || 0) + (Number(columnAsArray(allocTable, aQtyCol)[i]) || 0);
+        });
+      }
+    } catch (e) {
+      console.warn('Lot_Allocations unavailable — falling back to Qty_Packed', e);
+    }
+
     const lc = (cands) => findColumn(linesTable, cands);
     const lWoCol = lc(['Work_Order']) || 'Work_Order';
     const lNeededCol = lc(['Qty_Needed']);
     const lDyedCol = lc(['Qty_Dyed']);
-    const lWoundCol = lc(['Qty_Wound']);
     const lPackedCol = lc(['Qty_Packed']);
     const lPriorityCol = lc(['Production_Priority']);
     const lSkuCol = lc(['SKU']);
@@ -206,13 +229,14 @@ async function loadOrders() {
     (linesTable.id || []).forEach((id, i) => {
       const woId = getRefId(columnAsArray(linesTable, lWoCol)[i]);
       if (!woId) return;
-      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, wound: 0, packed: 0, hasRush: false, skus: [] };
+      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, packed: 0, hasRush: false, skus: [] };
       const d = orderLineData[woId];
       const needed = lNeededCol ? Number(columnAsArray(linesTable, lNeededCol)[i]) || 0 : 0;
       d.needed += needed;
       d.dyed += Math.min(lDyedCol ? Number(columnAsArray(linesTable, lDyedCol)[i]) || 0 : 0, needed || Infinity);
-      d.wound += Math.min(lWoundCol ? Number(columnAsArray(linesTable, lWoundCol)[i]) || 0 : 0, needed || Infinity);
-      d.packed += Math.min(lPackedCol ? Number(columnAsArray(linesTable, lPackedCol)[i]) || 0 : 0, needed || Infinity);
+      const legacyPacked = lPackedCol ? Number(columnAsArray(linesTable, lPackedCol)[i]) || 0 : 0;
+      const boxed = Math.max(allocBoxedByLine[id] || 0, legacyPacked);
+      d.packed += Math.min(boxed, needed || Infinity);
       if (lPriorityCol && columnAsArray(linesTable, lPriorityCol)[i] === 'Rush') d.hasRush = true;
       if (lSkuCol) { const sku = columnAsArray(linesTable, lSkuCol)[i]; if (sku) d.skus.push(sku); }
     });
