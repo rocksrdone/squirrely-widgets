@@ -315,15 +315,40 @@ function selectLot(id) {
   render();
 }
 
-// Suggested split: fill the soonest-due orders first from what's on this lot.
+// Suggested split. Splitting one pot across two customers means each gets spools
+// from two different dye lots — bad for hand-dye, where pots genuinely differ. So
+// prefer orders this lot can satisfy COMPLETELY (largest first, to use the lot
+// well), and only fall back to a partial fill when nothing fits whole.
 function suggestSplit(lot) {
   let left = lot.unassigned;
   const out = {};
-  for (const w of lot.waiting) {
-    if (left <= 0) break;
-    const take = Math.min(w.outstanding, left);
-    out[w.lineId] = take;
-    left -= take;
+  const remaining = lot.waiting.slice();
+
+  // Pass 1: whole fills only.
+  let progress = true;
+  while (progress && left > 0) {
+    progress = false;
+    const fits = remaining.filter(w => !out[w.lineId] && w.outstanding <= left);
+    if (!fits.length) break;
+    // Biggest order that still fits whole; ties break to the soonest due,
+    // which is the order `waiting` already arrives in.
+    fits.sort((a, b) => b.outstanding - a.outstanding);
+    const pick = fits[0];
+    out[pick.lineId] = pick.outstanding;
+    left -= pick.outstanding;
+    progress = true;
+  }
+
+  // Pass 2: nothing fits whole — part-fill the soonest-due order rather than
+  // leaving the lot idle.
+  if (left > 0) {
+    for (const w of remaining) {
+      if (left <= 0) break;
+      if (out[w.lineId]) continue;
+      out[w.lineId] = Math.min(w.outstanding, left);
+      left -= out[w.lineId];
+      break; // one partial only — don't scatter the lot
+    }
   }
   return out;
 }

@@ -91,6 +91,9 @@ body {
   opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
+.coverage { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:11px; color:var(--ink); background:#F7F3EE; border:1px solid var(--rule); border-radius:5px; padding:6px 9px; margin-bottom:6px; }
+.coverage .make-more { color:#8B5A2A; font-weight:700; }
+.coverage .make-none { color:var(--done-text); font-weight:700; }
 .pot-panel { background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
 .pot-method { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .method-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 10px; }
@@ -174,8 +177,6 @@ function yardsPerSpool(fiber) {
 }
 function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
 
-// Qty_Dyed column id on Work_Order_Lines, stashed at load for logPot/undoPot.
-let RC_QTYDYED = null;
 // Pots logged for the currently-selected colorway this session (for running total + undo).
 let sessionPots = [];
 
@@ -253,6 +254,51 @@ async function loadForRecipe(record) {
       grist.docApi.fetchTable('Dye_Stock'),
     ]);
 
+    // Coverage is DERIVED, never stored: what orders need, minus what's already
+    // been allocated to them, minus unwound spools still sitting in lots. A stored
+    // "dyed" guess made at the kettle goes stale the moment winding assigns the
+    // spools differently, so we compute it from physical records instead.
+    let allocByLine = {}, unwoundByRecipe = {};
+    try {
+      const [lotsT, allocT] = await Promise.all([
+        grist.docApi.fetchTable('Production_Lots'),
+        grist.docApi.fetchTable('Lot_Allocations'),
+      ]);
+      const aLine = findColumn(allocT, ['Work_Order_Line']);
+      const aQty = findColumn(allocT, ['Qty_Spools']);
+      const aLot = findColumn(allocT, ['Lot']);
+      const allocByLot = {};
+      (allocT.id || []).forEach((id, i) => {
+        const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
+        const lineId = aLine ? getRefId(columnAsArray(allocT, aLine)[i]) : null;
+        if (lineId) allocByLine[lineId] = (allocByLine[lineId] || 0) + q;
+        const lotId = aLot ? getRefId(columnAsArray(allocT, aLot)[i]) : null;
+        if (lotId) allocByLot[lotId] = (allocByLot[lotId] || 0) + q;
+      });
+      const lRecipe = findColumn(lotsT, ['Recipe']);
+      const lSpools = findColumn(lotsT, ['Spools_Made']);
+      const lYards = findColumn(lotsT, ['Total_Yards_Made']);
+      const lStore = findColumn(lotsT, ['Store_Stock_Spools']);
+      const lVendor = findColumn(lotsT, ['Vendor_Stock_Spools']);
+      const lGeneral = findColumn(lotsT, ['General_Stock_Spools']);
+      const lBroken = findColumn(lotsT, ['Broken_Spools']);
+      const lFiber = findColumn(lotsT, ['Fiber']);
+      const num = (col, i) => col ? (Number(columnAsArray(lotsT, col)[i]) || 0) : 0;
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = lRecipe ? getRefId(columnAsArray(lotsT, lRecipe)[i]) : null;
+        if (!rid) return;
+        let total = num(lSpools, i);
+        if (!total && lYards) {
+          const f = lFiber ? columnAsArray(lotsT, lFiber)[i] : '';
+          total = Math.round(num(lYards, i) / yardsPerSpool(f));
+        }
+        const free = total - (allocByLot[id] || 0) - num(lStore, i) - num(lVendor, i) - num(lGeneral, i) - num(lBroken, i);
+        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+      });
+    } catch (err) {
+      console.warn('Lots/allocations unavailable — coverage will show needs only', err);
+    }
+
     // ── Resolve every column id up front (rename-proofing) ──────────────
     // Required columns missing => named banner, not a silently-empty widget.
     // Optional (display-only / fallback-path) columns just degrade quietly.
@@ -273,14 +319,13 @@ async function loadForRecipe(record) {
       recipe: ['Recipe'], dye: ['Dye_Name'], powder: opt(['Is_Powder', 'Powder']),
     }, missing);
     const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
-      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], qtyDyed: ['Qty_Dyed'],
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
       recipe: opt(['Recipe']), sku: opt(['SKU']),
     }, missing);
     const STOCK = resolveCols(stockTableUpfront, 'Dye_Stock', {
       dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']), mixedDate: opt(['Mixed_Date']),
     }, missing);
     RC_STOCK = STOCK; // used later by put/hold/dump/undo
-    RC_QTYDYED = WOL.qtyDyed; // used later by logPot/undoPot
 
     if (missing.length) {
       document.getElementById('content').innerHTML =
@@ -379,7 +424,7 @@ async function loadForRecipe(record) {
       if (!info || !info.active) continue;
 
       const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, WOL.qtyDyed)[i]) || 0;
+      const allocated = allocByLine[wolIds[i]] || 0;
       const directRecipeId = getRefId(columnAsArray(wolTable, WOL.recipe)[i]);
       const sku = normalize(columnAsArray(wolTable, WOL.sku)[i] || '');
       const lineRecipeId = directRecipeId || recipeIdBySku[sku] || null;
@@ -387,14 +432,14 @@ async function loadForRecipe(record) {
 
       const matches = directRecipeId === record.id || (recipeSku && sku === recipeSku);
       if (!matches) continue;
-      if (qtyDyed >= qtyNeeded) continue; // fully done, don't clutter the list
+      if (allocated >= qtyNeeded) continue; // fully handed over, don't clutter the list
 
       orders.push({
         lineId: wolIds[i],
         orderNumber: info.orderNumber,
         customerName: info.customerName,
         qtyNeeded,
-        qtyDyed,
+        allocated,
         dueDate: info.dueDate,
       });
     }
@@ -562,12 +607,15 @@ async function loadForRecipe(record) {
       };
     });
 
+    const outstanding = orders.reduce((s, o) => s + Math.max(0, o.qtyNeeded - o.allocated), 0);
+    const inBins = unwoundByRecipe[record.id] || 0;
     currentEntry = {
       recipeId: record.id,
       recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
       fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
       method: recipeMethodById[record.id] || record.Dye_Method || '',
       dyeCount: dyeIds.length, orders, cleanupInfo,
+      outstanding, inBins, stillToMake: Math.max(0, outstanding - inBins),
     };
     completedActions = {};
     render();
@@ -594,16 +642,23 @@ function render() {
     ? 'each pot = its own dye lot · photograph separately'
     : (isKettle ? 'pots are interchangeable' : 'set Dye_Method on the recipe — treated as hand-dye for now');
 
-  const totalRemaining = e.orders.reduce((s, o) => s + Math.max(0, o.qtyNeeded - o.qtyDyed), 0);
+  const coverageHtml = `
+    <div class="coverage">
+      <span><strong>${e.outstanding}</strong> still owed to orders</span>
+      <span>·</span>
+      <span><strong>${e.inBins}</strong> unwound in bins</span>
+      <span>·</span>
+      <span class="${e.stillToMake > 0 ? 'make-more' : 'make-none'}">${e.stillToMake > 0 ? `make ${e.stillToMake} more` : 'enough made ✓'}</span>
+    </div>`;
 
   const ordersHtml = e.orders.length
     ? e.orders.map(o => {
-        const complete = o.qtyDyed >= o.qtyNeeded;
+        const complete = o.allocated >= o.qtyNeeded;
         return `
           <div class="order-card">
             <div class="order-top">
               <span class="order-customer">${o.customerName || '—'}</span>
-              <span class="order-progress ${complete ? 'complete' : ''}">${o.qtyDyed}/${o.qtyNeeded} spools</span>
+              <span class="order-progress ${complete ? 'complete' : ''}">${o.allocated}/${o.qtyNeeded} boxed</span>
             </div>
           </div>`;
       }).join('')
@@ -614,7 +669,7 @@ function render() {
     ? `<div class="running-total">This colorway so far: <strong>${sessionSpools} spool${sessionSpools === 1 ? '' : 's'}</strong> across ${sessionPots.length} lot${sessionPots.length === 1 ? '' : 's'}</div>` +
       sessionPots.map((p, i) => `
         <div class="pot-done">
-          <span>✓ <strong>${p.lotNumber}</strong> — ${p.spools} spool${p.spools === 1 ? '' : 's'}${p.toOrders ? ` · ${p.toOrders} to orders` : ''}${p.leftover ? ` · ${p.leftover} to ${p.bucket} stock` : ''}</span>
+          <span>✓ <strong>${p.lotNumber}</strong> — ${p.spools} spool${p.spools === 1 ? '' : 's'}${p.leftover ? ` · to ${p.bucket} stock` : ''}</span>
           <span class="undo-link" onclick="undoPot(${i})">↺ undo</span>
         </div>`).join('')
     : '';
@@ -627,7 +682,7 @@ function render() {
         <button class="log-btn" onclick="logPot()">✓ Log pot</button>
       </div>
       <div class="pot-dest">
-        <label><input type="radio" name="pot-dest" value="cover" checked> Cover orders${totalRemaining ? ` (${totalRemaining} still needed)` : ''}, extra to stock</label>
+        <label><input type="radio" name="pot-dest" value="cover" checked> Keep for orders — decide who gets what when you wind</label>
         <label><input type="radio" name="pot-dest" value="stock"> All to back stock</label>
       </div>
       <div class="pot-store">
@@ -684,6 +739,7 @@ function render() {
   document.getElementById('content').innerHTML = `
     <div class="header-title">${e.recipeName}</div>
     <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
+    ${coverageHtml}
     <div class="section-title">Log a pot</div>
     ${potPanelHtml}
     ${runningHtml}
@@ -726,23 +782,10 @@ async function logPot() {
   const bucket = bucketEl ? bucketEl.value : 'store';
   const yds = yardsPerSpool(e.fiberType);
 
-  // Split the pot between orders (soonest-due first) and stock.
-  const pending = e.orders.filter(o => o.qtyDyed < o.qtyNeeded)
-    .slice().sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate));
-  const totalRemaining = pending.reduce((s, o) => s + (o.qtyNeeded - o.qtyDyed), 0);
-  const toOrders = mode === 'stock' ? 0 : Math.min(spools, totalRemaining);
-  const leftover = spools - toOrders;
-
-  const bumps = [];
-  let rem = toOrders;
-  for (const o of pending) {
-    if (rem <= 0) break;
-    const room = o.qtyNeeded - o.qtyDyed;
-    if (room <= 0) continue;
-    const take = Math.min(room, rem);
-    bumps.push({ lineId: o.lineId, delta: take, before: o.qtyDyed });
-    rem -= take;
-  }
+  // Nothing is assigned to a customer here. Who gets which spools is decided at
+  // winding, when the real yield is known — so the pot either stays free for
+  // orders (unassigned on the lot) or goes straight to a stock bucket.
+  const leftover = mode === 'stock' ? spools : 0;
 
   try {
     // Resolve Production_Lots columns fresh (rename-proof) and mint a lot number.
@@ -777,19 +820,9 @@ async function logPot() {
     const addRes = await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, lotFields]]);
     const newLotId = addRes.retValues[0];
 
-    if (bumps.length) {
-      await grist.docApi.applyUserActions(
-        bumps.map(b => ['UpdateRecord', 'Work_Order_Lines', b.lineId, { [RC_QTYDYED]: b.before + b.delta }])
-      );
-      bumps.forEach(b => {
-        const o = e.orders.find(x => x.lineId === b.lineId);
-        if (o) o.qtyDyed = b.before + b.delta;
-      });
-    }
-
-    sessionPots.push({ lotId: newLotId, lotNumber, spools, toOrders, leftover, bucket, bumps });
+    sessionPots.push({ lotId: newLotId, lotNumber, spools, leftover, bucket });
     spoolsInput.value = '';
-    render();
+    await loadForRecipe({ id: e.recipeId }); // recompute coverage from the new lot
     showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'} ✓`);
   } catch (err) {
     console.error('Failed to log pot:', err);
@@ -801,15 +834,9 @@ async function undoPot(idx) {
   const pot = sessionPots[idx];
   if (!pot) return;
   try {
-    const actions = [['RemoveRecord', 'Production_Lots', pot.lotId]];
-    pot.bumps.forEach(b => actions.push(['UpdateRecord', 'Work_Order_Lines', b.lineId, { [RC_QTYDYED]: b.before }]));
-    await grist.docApi.applyUserActions(actions);
-    pot.bumps.forEach(b => {
-      const o = currentEntry.orders.find(x => x.lineId === b.lineId);
-      if (o) o.qtyDyed = b.before;
-    });
+    await grist.docApi.applyUserActions([['RemoveRecord', 'Production_Lots', pot.lotId]]);
     sessionPots.splice(idx, 1);
-    render();
+    await loadForRecipe({ id: currentEntry.recipeId });
     showToast('Pot undone ✓');
   } catch (err) {
     console.error('Failed to undo pot:', err);

@@ -239,6 +239,39 @@ async function loadEverything() {
 
     await loadTodaysPlan();
 
+    // Coverage is derived, not stored: a "dyed" count written at the kettle goes
+    // stale as soon as winding assigns those spools to a different customer.
+    const allocByLine = {}, unwoundByRecipe = {};
+    try {
+      const [allocT, lotsT] = await Promise.all([
+        grist.docApi.fetchTable('Lot_Allocations'),
+        grist.docApi.fetchTable('Production_Lots'),
+      ]);
+      const aLine = findColumn(allocT, ['Work_Order_Line']);
+      const aQty = findColumn(allocT, ['Qty_Spools']);
+      const aLot = findColumn(allocT, ['Lot']);
+      const byLot = {};
+      (allocT.id || []).forEach((id, i) => {
+        const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
+        const li = aLine ? getRefId(columnAsArray(allocT, aLine)[i]) : null;
+        if (li) allocByLine[li] = (allocByLine[li] || 0) + q;
+        const lo = aLot ? getRefId(columnAsArray(allocT, aLot)[i]) : null;
+        if (lo) byLot[lo] = (byLot[lo] || 0) + q;
+      });
+      const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
+      const buckets = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'General_Stock_Spools', 'Broken_Spools']
+        .map(c => findColumn(lotsT, [c]));
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
+        if (!rid) return;
+        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
+        buckets.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+      });
+    } catch (e) {
+      console.warn('Lots/allocations unavailable — planning will show full order need', e);
+    }
+
     // ── Resolve every column id up front (rename-proofing) ──────────────
     const missing = [];
     const opt = cands => ({ cands, required: false });
@@ -258,7 +291,7 @@ async function loadEverything() {
       dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']),
     }, missing);
     const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
-      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], qtyDyed: ['Qty_Dyed'],
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
       sku: opt(['SKU']), recipe: opt(['Recipe']), priority: opt(['Production_Priority']),
     }, missing);
 
@@ -339,8 +372,7 @@ async function loadEverything() {
       if (!info || !info.active) continue;
 
       const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, WOL.qtyDyed)[i]) || 0;
-      const remaining = qtyNeeded - qtyDyed;
+      const remaining = qtyNeeded - (allocByLine[wolIds[i]] || 0);
       if (remaining <= 0) continue;
 
       const sku = columnAsArray(wolTable, WOL.sku)[i] || '';
@@ -396,7 +428,9 @@ async function loadEverything() {
         return { dyeName: d, others };
       }).filter(p => p.others.length > 0);
 
-      return { ...entry, totalQty, stock, peek, plan: planByRecipe[entry.recipe.id] || null };
+      const inBins = unwoundByRecipe[entry.recipe.id] || 0;
+      const stillToMake = Math.max(0, totalQty - inBins);
+      return { ...entry, totalQty, inBins, stillToMake, stock, peek, plan: planByRecipe[entry.recipe.id] || null };
     }).sort((a, b) => {
       // Anything committed to today comes first, in the order Batch Planner
       // sequenced it — that's the running order at the kettle. Everything else
@@ -449,7 +483,7 @@ function renderList() {
   });
 
   // Counter reflects the FILTERED set, so it's useful when narrowing by customer etc.
-  const totalSpools = filtered.reduce((s, e) => s + e.totalQty, 0);
+  const totalSpools = filtered.reduce((s, e) => s + e.stillToMake, 0);
   const plannedShown = filtered.filter(e => e.plan).length;
   document.getElementById('counterRow').innerHTML = `
     <div class="counter-chip">${totalSpools}<span>spools left</span></div>
@@ -492,7 +526,7 @@ function renderList() {
           ${planSlots}
         </td>
         <td><span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span></td>
-        <td>${e.totalQty} spools</td>
+        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to make` : '<span style="color:#2D6A2D">enough ✓</span>'}${e.inBins ? `<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed · ${e.inBins} in bins</div>` : ` <span style="font-size:9px;color:#8B7D72">of ${e.totalQty}</span>`}</td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>
       </tr>

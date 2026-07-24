@@ -290,16 +290,45 @@ async function loadEverything() {
       console.warn('Lot_Allocations unavailable — falling back to Qty_Packed', e);
     }
 
+    // Unwound spools sitting in lots, per colorway. "Still to make" is derived:
+    // what orders need, minus what's allocated, minus what's already in a bin.
+    const unwoundByRecipe = {};
+    try {
+      const lotsT = await grist.docApi.fetchTable('Production_Lots');
+      const allocT2 = await grist.docApi.fetchTable('Lot_Allocations');
+      const a2Lot = findColumn(allocT2, ['Lot']), a2Qty = findColumn(allocT2, ['Qty_Spools']);
+      const byLot = {};
+      (allocT2.id || []).forEach((id, i) => {
+        const lid = getRefId(columnAsArray(allocT2, a2Lot)[i]);
+        if (lid) byLot[lid] = (byLot[lid] || 0) + (Number(columnAsArray(allocT2, a2Qty)[i]) || 0);
+      });
+      const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
+      const cols = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'General_Stock_Spools', 'Broken_Spools']
+        .map(c => findColumn(lotsT, [c]));
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
+        if (!rid) return;
+        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
+        cols.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+      });
+    } catch (e) {
+      console.warn('Production_Lots unavailable — "in bins" will show 0', e);
+    }
+    window.__unwoundByRecipe = unwoundByRecipe;
+
     // Build SKU -> colorway name lookup from Recipes
     const rIds = recipesTable.id || [];
     const skuToName = {};
+    const skuToRecipeId = {};
     rIds.forEach((id, i) => {
       const name = columnAsArray(recipesTable, REC.name)[i];
       const skuBase = normalize(columnAsArray(recipesTable, REC.skuBase)[i]);
       const shopifySku = normalize(columnAsArray(recipesTable, REC.shopifySku)[i]);
-      if (skuBase) skuToName[skuBase] = name;
-      if (shopifySku) skuToName[shopifySku] = name;
+      if (skuBase) { skuToName[skuBase] = name; skuToRecipeId[skuBase] = id; }
+      if (shopifySku) { skuToName[shopifySku] = name; skuToRecipeId[shopifySku] = id; }
     });
+    window.__skuToRecipeId = skuToRecipeId;
 
     // Active work orders only
     const woIds = woTable.id || [];
@@ -376,6 +405,10 @@ function buildBatches() {
     const totalNeeded = g.lines.reduce((s, l) => s + l.qtyNeeded, 0);
     const totalDyed = g.lines.reduce((s, l) => s + l.qtyDyed, 0);
     const totalBoxed = g.lines.reduce((s, l) => s + l.boxed, 0);
+    const rid = (window.__skuToRecipeId || {})[normalize(g.sku)];
+    const inBins = (window.__unwoundByRecipe || {})[rid] || 0;
+    const outstanding = g.lines.reduce((s, l) => s + Math.max(0, l.qtyNeeded - l.boxed), 0);
+    const stillToMake = Math.max(0, outstanding - inBins);
 
     let bestPriority = g.lines[0].priority;
     g.lines.forEach(l => { if (priorityRank(l.priority) < priorityRank(bestPriority)) bestPriority = l.priority; });
@@ -389,7 +422,7 @@ function buildBatches() {
 
     return {
       sku: g.sku, colorwayName: g.colorwayName, lines: g.lines,
-      totalNeeded, totalDyed, totalBoxed,
+      totalNeeded, totalDyed, totalBoxed, inBins, outstanding, stillToMake,
       priority: bestPriority, dueDate: earliestDue,
     };
   });
@@ -464,7 +497,9 @@ function renderList() {
         </td>
         <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
         <td class="due-cell">${dueLabel}</td>
-        <td class="stage-cell">${miniStage(batch.totalDyed, batch.totalNeeded)}</td>
+        <td class="stage-cell">${batch.stillToMake > 0
+          ? `<strong style="color:#8B5A2A">make ${batch.stillToMake}</strong>`
+          : `<span style="color:var(--done-text)">enough ✓</span>`}${batch.inBins ? `<div style="font-size:9px;color:#8B7D72">${batch.inBins} in bins</div>` : ''}</td>
         <td class="stage-cell">${miniStage(batch.totalBoxed, batch.totalNeeded)}</td>
         <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'}</td>
       </tr>
@@ -486,7 +521,7 @@ function renderList() {
           <th>Colorway</th>
           <th>Priority</th>
           <th>Due</th>
-          <th>Dye</th>
+          <th>To make</th>
           <th>Boxed</th>
           <th style="text-align:right">Orders</th>
         </tr>
