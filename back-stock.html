@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --done-bg: #E8F3E8; --done-text: #2D6A2D;
+    --warn-bg: #FBF0E4; --warn-text: #8B5A2A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+  .header-title { font-size: 15px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; }
+  .search-input { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+  .total-line { font-size: 11px; color: var(--teal); font-weight: 600; margin-bottom: 8px; }
+
+  .color-card { background: white; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 5px; overflow: hidden; }
+  .color-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 9px; cursor: pointer;
+  }
+  .color-head:hover { background: #FAF7F2; }
+  .color-name { font-weight: 700; font-size: 13px; }
+  .color-meta { font-size: 10px; color: #8B7D72; margin-top: 1px; }
+  .color-total { font-size: 13px; font-weight: 700; color: var(--teal); white-space: nowrap; }
+
+  .lot-rows { border-top: 1px solid var(--rule); padding: 4px 9px 8px; }
+  .lot-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F0EAE1; }
+  .lot-row:last-child { border-bottom: none; }
+  .lot-info { flex: 1; min-width: 0; }
+  .lot-no { font-weight: 600; font-size: 12px; }
+  .lot-sub { font-size: 10px; color: #8B7D72; }
+  .lot-adjust { display: flex; align-items: center; gap: 4px; }
+  .lot-adjust button {
+    width: 26px; height: 26px; border: 1px solid var(--rule); background: white;
+    border-radius: 5px; font-size: 15px; font-weight: 700; cursor: pointer; color: var(--teal); line-height: 1;
+  }
+  .lot-adjust button:active { background: var(--teal-light); }
+  .lot-adjust input {
+    width: 46px; padding: 4px; border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 13px; text-align: center;
+  }
+  .lot-adjust .save {
+    width: auto; padding: 0 9px; font-size: 11px; font-weight: 700;
+    background: var(--teal); color: white; border: none;
+  }
+  .lot-adjust .save:disabled { background: #C3BCB2; cursor: default; }
+
+  .empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; line-height: 1.6; }
+  #toast {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 14px; border-radius: 5px;
+    font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="content"><div class="empty-state">Loading...</div></div>
+<div id="toast"></div>
+
+<script>
+function getRefId(ref) {
+  if (ref == null) return null;
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref.rowId) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString();
+}
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
+}
+
+let S = { colors: [], search: '', open: {}, stockCol: null };
+
+async function loadStock() {
+  try {
+    const [lotsT, recipesT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const LOT = resolveCols(lotsT, 'Production_Lots', {
+      lotNumber: ['Lot_Number'], recipe: ['Recipe'],
+      store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']),
+      general: opt(['General_Stock_Spools']),
+      fiber: opt(['Fiber']), date: opt(['Date_Dyed']),
+    }, missing);
+    const REC = resolveCols(recipesT, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']),
+    }, missing);
+    if (missing.length) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty-state">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].join('<br>')}</strong></div>`;
+      return;
+    }
+    // Single back-stock bucket (you collapsed store/vendor into General_Stock_Spools).
+    S.stockCol = LOT.general || LOT.store || LOT.vendor;
+
+    const recipeById = {};
+    (recipesT.id || []).forEach((id, i) => {
+      recipeById[id] = {
+        name: columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`,
+        fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
+        method: columnAsArray(recipesT, REC.method)[i] || '',
+      };
+    });
+
+    // Group lots that hold back stock, by colorway
+    const byRecipe = {};
+    (lotsT.id || []).forEach((id, i) => {
+      const stock = (Number(columnAsArray(lotsT, LOT.store)[i]) || 0)
+        + (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0)
+        + (LOT.general ? (Number(columnAsArray(lotsT, LOT.general)[i]) || 0) : 0);
+      if (stock <= 0) return;
+      const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
+      (byRecipe[recipeId] = byRecipe[recipeId] || { recipeId, recipe, lots: [], total: 0 });
+      byRecipe[recipeId].lots.push({
+        lotId: id,
+        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+        fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
+        date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
+        stock,
+      });
+      byRecipe[recipeId].total += stock;
+    });
+
+    S.colors = Object.values(byRecipe)
+      .map(c => { c.lots.sort((a, b) => (a.date || 0) - (b.date || 0)); return c; })
+      .sort((a, b) => a.recipe.name.localeCompare(b.recipe.name));
+
+    render();
+  } catch (e) {
+    console.error('Failed to load back stock:', e);
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('content').innerHTML = `<div class="empty-state">Failed to load.<br><span style="font-size:10px">${msg}</span></div>`;
+  }
+}
+
+function onSearch(v) { S.search = v; renderList(); }
+function toggle(rid) { S.open[rid] = !S.open[rid]; renderList(); }
+
+function colorCard(c) {
+  const isOpen = !!S.open[c.recipeId];
+  const fibers = [...new Set(c.lots.map(l => l.fiber).filter(Boolean))].join(', ');
+  const lotRows = c.lots.map(l => `
+    <div class="lot-row">
+      <div class="lot-info">
+        <div class="lot-no">${esc(l.lotNumber)}</div>
+        <div class="lot-sub">${l.fiber ? esc(l.fiber) : ''}${l.date ? (l.fiber ? ' · ' : '') + 'made ' + fmtDate(l.date) : ''}</div>
+      </div>
+      <div class="lot-adjust">
+        <button onclick="event.stopPropagation();step(${l.lotId},-1)">−</button>
+        <input type="number" min="0" id="q-${l.lotId}" value="${l.stock}" data-orig="${l.stock}"
+               onclick="event.stopPropagation()" oninput="dirty(${l.lotId})">
+        <button onclick="event.stopPropagation();step(${l.lotId},1)">+</button>
+        <button class="save" id="save-${l.lotId}" disabled onclick="event.stopPropagation();saveLot(${l.lotId})">save</button>
+      </div>
+    </div>`).join('');
+
+  return `
+    <div class="color-card">
+      <div class="color-head" onclick="toggle(${c.recipeId})">
+        <div>
+          <div class="color-name">${esc(c.recipe.name)}</div>
+          <div class="color-meta">${c.lots.length} lot${c.lots.length === 1 ? '' : 's'}${fibers ? ' · ' + esc(fibers) : ''}${/hand/i.test(c.recipe.method) ? ' · hand-dye' : (/kettle/i.test(c.recipe.method) ? ' · kettle' : '')}</div>
+        </div>
+        <span class="color-total">${c.total} spool${c.total === 1 ? '' : 's'}</span>
+      </div>
+      ${isOpen ? `<div class="lot-rows">${lotRows}</div>` : ''}
+    </div>`;
+}
+
+function renderList() {
+  const q = normalize(S.search);
+  const list = S.colors.filter(c => !q || normalize(c.recipe.name).includes(q));
+  const total = list.reduce((s, c) => s + c.total, 0);
+  const el = document.getElementById('list');
+  const totalEl = document.getElementById('total');
+  if (totalEl) totalEl.textContent = `${total} spool${total === 1 ? '' : 's'} in back stock · ${list.length} colorway${list.length === 1 ? '' : 's'}`;
+  if (!el) return;
+  el.innerHTML = list.length
+    ? list.map(colorCard).join('')
+    : `<div class="empty-state">${q ? 'No back stock matches that search.' : 'No back stock yet.<br>Surplus spools land here when you wind more than an order needs.'}</div>`;
+}
+
+function render() {
+  document.getElementById('content').innerHTML = `
+    <div class="header-title">Back Stock</div>
+    <div class="header-sub">Unassigned spools in the bin. Tap a colorway to see and fix lot counts.</div>
+    <input class="search-input" id="searchBox" placeholder="Search colorway..." value="${esc(S.search)}" oninput="onSearch(this.value)">
+    <div class="total-line" id="total"></div>
+    <div id="list"></div>
+  `;
+  renderList();
+}
+
+function step(lotId, delta) {
+  const el = document.getElementById(`q-${lotId}`);
+  el.value = Math.max(0, (Number(el.value) || 0) + delta);
+  dirty(lotId);
+}
+function dirty(lotId) {
+  const el = document.getElementById(`q-${lotId}`);
+  const btn = document.getElementById(`save-${lotId}`);
+  const changed = String(Math.max(0, Number(el.value) || 0)) !== el.dataset.orig;
+  if (btn) btn.disabled = !changed;
+}
+
+async function saveLot(lotId) {
+  const el = document.getElementById(`q-${lotId}`);
+  const val = Math.max(0, Number(el.value) || 0);
+  if (!S.stockCol) { showToast('No stock column to write to'); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.stockCol]: val }]]);
+    showToast(`Saved — ${val} spool${val === 1 ? '' : 's'} ✓`);
+    // update local model so totals stay right without a full reload flicker
+    for (const c of S.colors) {
+      const lot = c.lots.find(l => l.lotId === lotId);
+      if (lot) { c.total += (val - lot.stock); lot.stock = val; break; }
+    }
+    // drop lots/colors that hit zero
+    S.colors.forEach(c => { c.lots = c.lots.filter(l => l.stock > 0); });
+    S.colors = S.colors.filter(c => c.total > 0 && c.lots.length);
+    renderList();
+  } catch (e) {
+    console.error('Failed to save stock:', e);
+    showToast('Failed to save — check Production_Lots');
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadStock();
+</script>
+</body>
+</html>
