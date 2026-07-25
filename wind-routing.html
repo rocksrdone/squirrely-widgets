@@ -87,6 +87,34 @@
   .undo-link { color: var(--teal); cursor: pointer; text-decoration: underline; font-size: 10px; white-space: nowrap; }
   .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 5px; padding: 6px 8px; font-size: 11px; margin-bottom: 6px; }
 
+
+  .section-title.muted { color:#B0A596; }
+  .line-card { background:white; border:1px solid var(--rule); border-radius:6px; padding:8px 9px; margin-bottom:4px; cursor:pointer; }
+  .line-card:hover { border-color:var(--teal); }
+  .line-card.active { border-color:var(--teal); background:var(--teal-light); }
+  .line-card.not-ready { opacity:.7; cursor:default; background:#FBF9F5; }
+  .line-top { display:flex; justify-content:space-between; align-items:baseline; gap:6px; }
+  .line-who { display:flex; flex-direction:column; min-width:0; }
+  .line-cust { font-weight:700; font-size:13px; }
+  .line-color { font-size:11px; color:var(--teal); }
+  .line-qty { font-size:12px; font-weight:700; color:var(--teal); white-space:nowrap; }
+  .line-sub { font-size:10px; color:#8B7D72; margin-top:2px; }
+  .drying-note { color:var(--wet-text,#2A5B8B); }
+  .tag { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:1px 6px; border-radius:9px; margin-left:4px; }
+  .tag.past { background:#F5D8DC; color:#A01830; }
+  .tag.bump { background:#FBECC9; color:#8B6A00; }
+  .fill-panel { background:var(--teal-light); border:1px solid var(--teal); border-radius:6px; padding:9px; margin:-2px 0 6px; }
+  .lot-line { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 0; border-bottom:1px solid #D6E5E4; }
+  .lot-line:last-of-type { border-bottom:none; }
+  .lot-line-info { display:flex; flex-direction:column; }
+  .lot-line-no { font-weight:700; font-size:12px; }
+  .lot-line-src { font-size:10px; color:#5B7B7B; }
+  .lot-line input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
+  .mix-warn { background:#FBECC9; color:#8B5A2A; font-size:10px; border-radius:4px; padding:5px 7px; margin-top:6px; }
+  .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
+  .extra-row.stock { background:white; color:var(--teal); }
+  .extra-row input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
+  .tally.partial { background:var(--warn-bg); color:var(--warn-text); }
   #toast {
     position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 14px; border-radius: 5px;
@@ -148,6 +176,10 @@ function fiberCode(v) {
   return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
 }
 function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+function todayEpochSeconds() {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
 
 // The allocation Status to write when spools are wound + labelled + boxed.
 // The doc and the live widgets disagree on the exact strings, so rather than
@@ -159,7 +191,7 @@ function pickWoundStatus(existingValues) {
   return 'Wound - Needs Labels';
 }
 
-let S = { lots: [], selected: null, woundStatus: '', brokenCol: null, hasLineLink: true, done: [] };
+let S = { lines: [], selected: null, draw: {}, woundStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
 
 async function loadEverything() {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
@@ -198,7 +230,8 @@ async function loadEverything() {
     }, missing);
     const WO = resolveCols(woT, 'Work_Orders', {
       status: ['Status'], orderNumber: opt(['Order_Number']),
-      customerName: opt(['Customer_Name']), customer: opt(['Customer']), dueDate: opt(['Due_Date']),
+      customerName: opt(['Customer_Name']), customer: opt(['Customer']),
+      dueDate: opt(['Due_Date']), bump: opt(['Priority_Bump']),
     }, missing);
     const CUST = resolveCols(custT, 'Customers', { name: opt(['Customer_Name']) }, missing);
 
@@ -256,12 +289,53 @@ async function loadEverything() {
         customerName: columnAsArray(woT, WO.customerName)[i] || '',
         customerId: getRefId(columnAsArray(woT, WO.customer)[i]),
         dueDate: columnAsArray(woT, WO.dueDate)[i],
+        bump: WO.bump ? !!columnAsArray(woT, WO.bump)[i] : false,
       };
     });
 
-    // Order lines still needing spools physically handed over (allocation-based,
-    // NOT Qty_Dyed — pot logging already bumped Qty_Dyed for coverage).
-    const linesByRecipe = {};
+    // Per-lot free spools, split by rack. Only DRY-rack (or stock) spools are
+    // windable; wet-rack spools are shown as "drying", never assignable.
+    const DRY = /dry rack|wood rack|overnight|ready to assign/i;
+    const WET = /wet rack|metal rack|day rack/i;
+    const lotsByRecipe = {};
+    (lotsT.id || []).forEach((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      if (!recipeId) return;
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
+      let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
+      if (!total && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
+      const alloc = allocs.filter(a => a.lotId === id).reduce((s, a) => s + a.qty, 0);
+      const store = Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0;
+      const vendor = Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0;
+      const general = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
+      const stock = store + vendor + general;
+      const broken = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
+      const unwound = Math.max(0, total - alloc - stock - broken); // fresh spools not yet spoken for
+      const rawStatus = (columnAsArray(lotsT, LOT.drying)[i] || '').toString();
+      const isDry = DRY.test(rawStatus) || (!WET.test(rawStatus) && !!rawStatus); // unknown non-wet => treat dry
+      const windableFresh = unwound > 0 && isDry;
+      if (unwound <= 0 && stock <= 0) return;
+      (lotsByRecipe[recipeId] = lotsByRecipe[recipeId] || []).push({
+        lotId: id, recipeId,
+        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+        fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
+        method: recipe.method,
+        rawStatus, isDry,
+        date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
+        // "available to wind now" = dry fresh spools + already-made stock (stock is
+        // ready regardless of rack, since it was set aside deliberately)
+        freshDry: windableFresh ? unwound : 0,
+        freshWet: (unwound > 0 && !isDry) ? unwound : 0,
+        stock,
+        storeCol: LOT.generalStock || LOT.storeStock,
+        storeVal: general || store,
+      });
+    });
+    Object.values(lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0))); // oldest first
+
+    // Build one windable row per order LINE. A line is "ready" only when its
+    // colorway has enough dry-rack + stock spools to fill it completely.
+    S.lines = [];
     (wolT.id || []).forEach((id, i) => {
       const woId = getRefId(columnAsArray(wolT, WOL.workOrder)[i]);
       const info = woInfo[woId];
@@ -270,43 +344,31 @@ async function loadEverything() {
       const recipeId = getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null;
       if (!recipeId) return;
       const qtyNeeded = Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0;
-      const allocated = allocs.filter(a => a.lineId === id).reduce((s, a) => s + a.qty, 0);
-      const outstanding = Math.max(0, qtyNeeded - allocated);
-      if (outstanding <= 0) return;
-      const customerId = info.customerId || custIdByName[normalize(info.customerName)] || null;
-      (linesByRecipe[recipeId] = linesByRecipe[recipeId] || []).push({
-        lineId: id, recipeId, qtyNeeded, allocated, outstanding,
-        customerId, customerName: info.customerName,
-        orderNumber: info.orderNumber, dueDate: info.dueDate,
+      const already = allocs.filter(a => a.lineId === id).reduce((s, a) => s + a.qty, 0);
+      const outstanding = qtyNeeded - already;
+      if (outstanding <= 0) return; // fully boxed
+      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, method: '' };
+      const lots = lotsByRecipe[recipeId] || [];
+      const availNow = lots.reduce((s, l) => s + l.freshDry + l.stock, 0);
+      const drying = lots.reduce((s, l) => s + l.freshWet, 0);
+      const ready = availNow >= outstanding;         // fully windable now
+      const shortByDrying = !ready && (availNow + drying) >= outstanding; // only wet thread is holding it up
+      S.lines.push({
+        lineId: id, recipeId, recipeName: recipe.name, method: recipe.method,
+        customerId: info.customerId || custIdByName[normalize(info.customerName)] || null,
+        customerName: info.customerName, orderNumber: info.orderNumber, dueDate: info.dueDate,
+        bump: !!info.bump,
+        qtyNeeded, outstanding, availNow, drying, ready, shortByDrying,
+        lots,
       });
     });
-    Object.values(linesByRecipe).forEach(arr => arr.sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate)));
 
-    // Lots with spools nobody has been handed yet
-    S.lots = (lotsT.id || []).map((id, i) => {
-      const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
-      const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
-      let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
-      if (!total && LOT.yardsMade) {
-        total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
-      }
-      const allocated = allocs.filter(a => a.lotId === id).reduce((s, a) => s + a.qty, 0);
-      const store = Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0;
-      const vendor = Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0;
-      const general = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
-      const broken = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
-      return {
-        id, recipeId, recipe,
-        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
-        drying: columnAsArray(lotsT, LOT.drying)[i] || '',
-        fiber: columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber,
-        date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null,
-        total, allocated, store, vendor, general, broken,
-        unassigned: Math.max(0, total - allocated - store - vendor - general - broken),
-        waiting: linesByRecipe[recipeId] || [],
-      };
-    }).filter(l => l.unassigned > 0)
-      .sort((a, b) => (b.waiting.length ? 1 : 0) - (a.waiting.length ? 1 : 0) || String(a.lotNumber).localeCompare(String(b.lotNumber)));
+    // Sort: past-due first, then Priority_Bump, then soonest due.
+    const today = todayEpochSeconds ? todayEpochSeconds() : Math.floor(Date.now() / 1000);
+    S.lines.forEach(l => { l.pastDue = l.dueDate && dueValue(l.dueDate) < today; });
+    S.lines.sort((a, b) =>
+      (b.pastDue - a.pastDue) || (b.bump - a.bump) || (dueValue(a.dueDate) - dueValue(b.dueDate))
+    );
 
     render();
   } catch (e) {
@@ -316,148 +378,141 @@ async function loadEverything() {
   }
 }
 
-function selectLot(id) {
+function selectLine(id) {
   S.selected = S.selected === id ? null : id;
-  render();
-}
-
-// Suggested split. Splitting one pot across two customers means each gets spools
-// from two different dye lots — bad for hand-dye, where pots genuinely differ. So
-// prefer orders this lot can satisfy COMPLETELY (largest first, to use the lot
-// well), and only fall back to a partial fill when nothing fits whole.
-function suggestSplit(lot) {
-  let left = lot.unassigned;
-  const out = {};
-  const remaining = lot.waiting.slice();
-
-  // Pass 1: whole fills only.
-  let progress = true;
-  while (progress && left > 0) {
-    progress = false;
-    const fits = remaining.filter(w => !out[w.lineId] && w.outstanding <= left);
-    if (!fits.length) break;
-    // Biggest order that still fits whole; ties break to the soonest due,
-    // which is the order `waiting` already arrives in.
-    fits.sort((a, b) => b.outstanding - a.outstanding);
-    const pick = fits[0];
-    out[pick.lineId] = pick.outstanding;
-    left -= pick.outstanding;
-    progress = true;
-  }
-
-  // Pass 2: nothing fits whole — part-fill the soonest-due order rather than
-  // leaving the lot idle.
-  if (left > 0) {
-    for (const w of remaining) {
-      if (left <= 0) break;
-      if (out[w.lineId]) continue;
-      out[w.lineId] = Math.min(w.outstanding, left);
-      left -= out[w.lineId];
-      break; // one partial only — don't scatter the lot
+  // pre-fill draw suggestion: oldest dry lots + stock first, up to outstanding
+  if (S.selected != null) {
+    const line = S.lines.find(l => l.lineId === id);
+    S.draw = {};
+    if (line) {
+      let need = line.outstanding;
+      for (const lot of line.lots) {
+        if (need <= 0) break;
+        const avail = lot.freshDry + lot.stock;
+        if (avail <= 0) continue;
+        const take = Math.min(avail, need);
+        S.draw[lot.lotId] = take;
+        need -= take;
+      }
     }
   }
-  return out;
+  render();
 }
 
 function render() {
   const c = document.getElementById('content');
-  if (!S.lots.length) {
+  if (!S.lines.length) {
     c.innerHTML = `<div class="header-title">Wind &amp; Box</div>
-      <div class="empty-state">No lots with unwound spools.<br>Log a pot in Batch Assignment first.</div>`;
+      <div class="empty-state">Nothing to wind.<br>Orders show up here once their thread is on the dry rack.</div>`;
     return;
   }
 
   const doneHtml = S.done.map((d, i) => `
     <div class="done-line">
-      <span>✓ <strong>${esc(d.lotNumber)}</strong> — ${esc(d.summary)}</span>
+      <span>✓ <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)}</span>
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
     </div>`).join('');
 
-  const lotsHtml = S.lots.map(l => {
-    const waiting = l.waiting.length;
+  // Two groups: windable now, and made-but-drying (view-only)
+  const ready = S.lines.filter(l => l.ready);
+  const waiting = S.lines.filter(l => !l.ready);
+
+  const rowHtml = (l) => {
+    const open = S.selected === l.lineId;
+    const tag = l.pastDue ? `<span class="tag past">past due</span>`
+      : (l.bump ? `<span class="tag bump">bumped</span>` : '');
+    const due = l.dueDate ? `due ${fmtDate(l.dueDate)}` : 'no due date';
+    const sub = l.ready
+      ? `${due}${l.drying ? ` · ${l.drying} more drying` : ''}`
+      : (l.shortByDrying
+          ? `${due} · <span class="drying-note">${l.availNow} ready, ${l.outstanding - l.availNow} still on wet rack</span>`
+          : `${due} · only ${l.availNow} of ${l.outstanding} made`);
     return `
-      <div class="lot-card ${S.selected === l.id ? 'active' : ''}" onclick="selectLot(${l.id})">
-        <div class="lot-top">
-          <span class="lot-number">${esc(l.lotNumber)}</span>
-          <span class="lot-avail">${l.unassigned} unwound</span>
+      <div class="line-card ${open ? 'active' : ''} ${l.ready ? '' : 'not-ready'}" onclick="selectLine(${l.lineId})">
+        <div class="line-top">
+          <div class="line-who">
+            <span class="line-cust">${esc(l.customerName || '—')}</span>
+            <span class="line-color">${esc(l.recipeName)}</span>
+          </div>
+          <span class="line-qty">${l.outstanding} spool${l.outstanding === 1 ? '' : 's'}</span>
         </div>
-        <div class="lot-meta">${esc(l.recipe.name)}${l.fiber ? ' · ' + esc(fiberCode(l.fiber)) : ''}${l.drying ? ' · ' + esc(l.drying) : ''}</div>
-        <div class="lot-meta">${waiting ? `${waiting} order${waiting === 1 ? '' : 's'} waiting` : 'no orders waiting — back stock'}</div>
-      </div>`;
-  }).join('');
+        <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
+      </div>
+      ${open && l.ready ? fillPanel(l) : ''}`;
+  };
 
-  let detail = '';
-  const lot = S.lots.find(l => l.id === S.selected);
-  if (lot) {
-    const isHand = /hand/i.test(lot.recipe.method);
-    const suggested = suggestSplit(lot);
-
-    const rows = lot.waiting.length
-      ? lot.waiting.map(w => `
-          <div class="alloc-row">
-            <div class="alloc-who">
-              <div class="alloc-name">${esc(w.customerName || '—')}</div>
-              <div class="alloc-meta">${esc(w.orderNumber || '')}${w.dueDate ? ' · due ' + fmtDate(w.dueDate) : ''}${w.customerId ? '' : ' · ⚠ no customer row'}</div>
-            </div>
-            <span class="alloc-need">needs ${w.outstanding}</span>
-            <input type="number" min="0" id="give-${w.lineId}" value="${suggested[w.lineId] || 0}" oninput="updateTally()">
-          </div>`).join('')
-      : `<div class="note" style="padding:6px 0;">No open orders for this colorway — wind to stock or broken spools.</div>`;
-
-    const brokenHtml = S.brokenCol
-      ? `<div class="broken-row">
-           <span style="flex:1;">Broken / tied-off spools from this wind</span>
-           <input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()">
-         </div>`
-      : `<div class="broken-row"><span style="flex:1;">Add a <strong>Broken_Spools</strong> numeric column to Production_Lots to record tied-off spools here.</span></div>`;
-
-    const stockHtml = `
-      <div class="stock-row">
-        <span style="flex:1;">Good spools going to back stock</span>
-        <input type="number" min="0" id="stock-qty" value="0" oninput="updateTally()">
-      </div>`;
-
-    detail = `
-      <div class="section-title">Wind ${esc(lot.lotNumber)}</div>
-      <div class="panel">
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-          <span class="badge ${isHand ? '' : 'kettle'}">${esc(lot.recipe.method || 'method not set')}</span>
-          <span class="note">${lot.unassigned} unwound on this lot${isHand ? ' · own dye lot, don\'t mix' : ''}</span>
-        </div>
-        ${rows}
-        ${stockHtml}
-        ${brokenHtml}
-        <div id="tally" class="tally ok"></div>
-        <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; box these</button>
-        <div class="note" style="display:block;margin-top:5px;text-align:center;">
-          writes status "${esc(S.woundStatus)}"${S.hasLineLink ? '' : ' · ⚠ no Work_Order_Line column — can\'t link to the line'}
-        </div>
-      </div>`;
-  }
+  const section = (list, label, cls) => list.length
+    ? `<div class="section-title ${cls}">${label}</div>${list.map(rowHtml).join('')}`
+    : '';
 
   c.innerHTML = `
     <div class="header-title">Wind &amp; Box</div>
-    <div class="header-sub">Pick a lot, confirm who gets what, box it.</div>
+    <div class="header-sub">Most urgent first. Pick a line, draw spools from its lots.</div>
     ${doneHtml}
-    <div class="section-title">Lots with unwound spools</div>
-    ${lotsHtml}
-    ${detail}
+    ${section(ready, 'Ready to wind', '')}
+    ${section(waiting, 'Made — still drying / short', 'muted')}
   `;
-  if (lot) updateTally();
+  if (S.selected != null) updateTally();
+}
+
+function fillPanel(l) {
+  const isHand = /hand/i.test(l.method);
+  const lotsWithSpools = l.lots.filter(lot => (lot.freshDry + lot.stock) > 0);
+  const usedLots = lotsWithSpools.filter(lot => (S.draw[lot.lotId] || 0) > 0).length;
+  const lotRows = lotsWithSpools.map(lot => {
+    const cap = lot.freshDry + lot.stock;
+    const src = lot.stock > 0 && lot.freshDry === 0 ? 'back stock'
+      : (lot.stock > 0 ? `${lot.freshDry} dry + ${lot.stock} stock` : 'dry rack');
+    return `
+      <div class="lot-line">
+        <div class="lot-line-info">
+          <span class="lot-line-no">${esc(lot.lotNumber)}</span>
+          <span class="lot-line-src">${src} · ${cap} avail</span>
+        </div>
+        <input type="number" min="0" max="${cap}" id="draw-${lot.lotId}"
+               value="${S.draw[lot.lotId] || 0}" oninput="onDraw(${lot.lotId}, ${cap})">
+      </div>`;
+  }).join('');
+
+  const mixWarn = (isHand && usedLots > 1)
+    ? `<div class="mix-warn">Mixing ${usedLots} lots on a hand-dyed order — check they match before winding.</div>` : '';
+
+  const brokenHtml = S.brokenCol
+    ? `<div class="extra-row"><span>Broken / tied-off spools</span><input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()"></div>`
+    : '';
+  const stockHtml = `<div class="extra-row stock"><span>Extra good spools → back stock</span><input type="number" min="0" id="stock-qty" value="0" oninput="updateTally()"></div>`;
+
+  return `
+    <div class="fill-panel">
+      ${lotRows}
+      ${mixWarn}
+      ${brokenHtml}
+      ${stockHtml}
+      <div id="tally" class="tally ok"></div>
+      <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; box for ${esc(l.customerName || 'order')}</button>
+    </div>`;
+}
+
+function onDraw(lotId, cap) {
+  const el = document.getElementById(`draw-${lotId}`);
+  let v = Math.max(0, Math.min(cap, Number(el.value) || 0));
+  S.draw[lotId] = v;
+  updateTally();
 }
 
 function currentPlan() {
-  const lot = S.lots.find(l => l.id === S.selected);
-  if (!lot) return null;
-  const gives = lot.waiting.map(w => ({
-    ...w, qty: Math.max(0, Number((document.getElementById(`give-${w.lineId}`) || {}).value) || 0),
-  })).filter(g => g.qty > 0);
+  const line = S.lines.find(l => l.lineId === S.selected);
+  if (!line) return null;
+  const draws = line.lots
+    .map(lot => ({ lot, qty: Math.max(0, Number((document.getElementById(`draw-${lot.lotId}`) || {}).value) || 0) }))
+    .filter(d => d.qty > 0);
+  const toOrder = draws.reduce((s, d) => s + d.qty, 0);
   const brokenEl = document.getElementById('broken-qty');
   const broken = brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0;
   const stockEl = document.getElementById('stock-qty');
   const stock = stockEl ? Math.max(0, Number(stockEl.value) || 0) : 0;
-  const used = gives.reduce((s, g) => s + g.qty, 0) + broken + stock;
-  return { lot, gives, broken, stock, used, left: lot.unassigned - used };
+  // over-draw check is per-lot (handled by max), here we check the ORDER need
+  return { line, draws, toOrder, broken, stock };
 }
 
 function updateTally() {
@@ -466,63 +521,64 @@ function updateTally() {
   const t = document.getElementById('tally');
   const btn = document.getElementById('confirmBtn');
   if (!t) return;
-  const over = p.used > p.lot.unassigned;
-  t.className = 'tally ' + (over ? 'over' : 'ok');
+  const over = p.toOrder > p.line.outstanding;
+  t.className = 'tally ' + (over ? 'over' : (p.toOrder === p.line.outstanding ? 'ok' : 'partial'));
   t.innerHTML = over
-    ? `Over by ${p.used - p.lot.unassigned} — this lot only has ${p.lot.unassigned} unwound.`
-    : `${p.used} of ${p.lot.unassigned} assigned${p.left > 0 ? ` · ${p.left} stay in the bin` : ''}${p.stock ? ` · ${p.stock} to back stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
-  if (btn) btn.disabled = over || p.used === 0;
+    ? `Over by ${p.toOrder - p.line.outstanding} — this order needs ${p.line.outstanding}.`
+    : `${p.toOrder} of ${p.line.outstanding} for this order${p.toOrder < p.line.outstanding ? ' (partial — rest stays open)' : ''}${p.stock ? ` · ${p.stock} to stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
+  if (btn) btn.disabled = over || p.toOrder === 0;
 }
 
 async function confirmWind() {
   const p = currentPlan();
-  if (!p || p.used === 0) { showToast('Nothing to assign'); return; }
-  if (p.used > p.lot.unassigned) { showToast('More than the lot has'); return; }
-  const noCust = p.gives.filter(g => !g.customerId);
-  if (noCust.length) { showToast(`No customer row for ${noCust[0].customerName || 'an order'} — allocation needs one`); return; }
+  if (!p || p.toOrder === 0) { showToast('Draw some spools first'); return; }
+  if (p.toOrder > p.line.outstanding) { showToast('More than this order needs'); return; }
+  if (!p.line.customerId) { showToast(`No customer row for ${p.line.customerName || 'this order'} — allocation needs one`); return; }
 
-  const { ALLOC, LOT } = S.cols;
+  const { ALLOC } = S.cols;
   try {
-    const actions = p.gives.map(g => {
+    // One allocation per lot drawn from
+    const actions = p.draws.map(d => {
       const f = {};
-      f[ALLOC.lot] = p.lot.id;
-      f[ALLOC.qty] = g.qty;
+      f[ALLOC.lot] = d.lot.lotId;
+      f[ALLOC.qty] = d.qty;
       f[ALLOC.status] = S.woundStatus;
-      if (ALLOC.customer) f[ALLOC.customer] = g.customerId;
-      if (ALLOC.line) f[ALLOC.line] = g.lineId;
+      if (ALLOC.customer) f[ALLOC.customer] = p.line.customerId;
+      if (ALLOC.line) f[ALLOC.line] = p.line.lineId;
       return ['AddRecord', 'Lot_Allocations', null, f];
     });
+
+    // Extra good spools -> back stock on the FIRST lot drawn (or first lot with spools)
+    const anchor = p.draws[0] ? p.draws[0].lot : (p.line.lots[0] || null);
+    let stockBefore = null, stockCol = null, stockLotId = null;
+    if (p.stock > 0 && anchor && anchor.storeCol) {
+      stockCol = anchor.storeCol; stockLotId = anchor.lotId; stockBefore = anchor.storeVal || 0;
+    }
+    let brokenBefore = null, brokenLotId = null;
+    if (p.broken > 0 && S.brokenCol && anchor) {
+      brokenLotId = anchor.lotId; brokenBefore = anchor.broken || 0;
+    }
+
     const res = await grist.docApi.applyUserActions(actions);
     const newIds = res.retValues || [];
 
-    let brokenBefore = null;
     const lotUpdate = {};
-    if (p.broken > 0 && S.brokenCol) {
-      brokenBefore = p.lot.broken;
-      lotUpdate[S.brokenCol] = brokenBefore + p.broken;
-    }
-    let stockBefore = null, stockCol = null;
-    if (p.stock > 0) {
-      // One back-stock bucket. Prefer General_Stock_Spools (the column that exists);
-      // fall back to Store_Stock_Spools only if a future doc renames it.
-      stockCol = LOT.generalStock || LOT.storeStock;
-      if (stockCol) {
-        stockBefore = LOT.generalStock ? p.lot.general : p.lot.store;
-        lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
-      }
-    }
+    if (stockCol) lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
+    if (brokenLotId != null && S.brokenCol) lotUpdate[S.brokenCol] = (brokenBefore || 0) + p.broken;
     if (Object.keys(lotUpdate).length) {
-      await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', p.lot.id, lotUpdate]]);
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]]);
     }
 
     S.done.unshift({
-      lotId: p.lot.id, lotNumber: p.lot.lotNumber, allocIds: newIds,
-      brokenBefore, brokenAdded: p.broken,
-      stockCol, stockBefore, stockAdded: p.stock,
-      summary: p.gives.map(g => `${g.qty}→${g.customerName || 'order'}`).join(', ')
+      customerName: p.line.customerName, allocIds: newIds,
+      stockCol, stockLotId, stockBefore, stockAdded: p.stock,
+      brokenLotId, brokenBefore, brokenAdded: p.broken,
+      summary: `${p.toOrder} spool${p.toOrder === 1 ? '' : 's'} ${esc(p.line.recipeName)}`
+        + (p.draws.length > 1 ? ` (${p.draws.length} lots)` : '')
         + (p.stock ? ` · ${p.stock} to stock` : '')
         + (p.broken ? ` · ${p.broken} broken` : ''),
     });
+    S.selected = null; S.draw = {};
     showToast('Boxed ✓');
     await loadEverything();
   } catch (e) {
@@ -535,11 +591,13 @@ async function undoWind(i) {
   const d = S.done[i];
   if (!d) return;
   try {
-    const actions = d.allocIds.map(id => ['RemoveRecord', 'Lot_Allocations', id]);
-    const revert = {};
-    if (d.brokenAdded > 0 && S.brokenCol && d.brokenBefore != null) revert[S.brokenCol] = d.brokenBefore;
-    if (d.stockAdded > 0 && d.stockCol && d.stockBefore != null) revert[d.stockCol] = d.stockBefore;
-    if (Object.keys(revert).length) actions.push(['UpdateRecord', 'Production_Lots', d.lotId, revert]);
+    const actions = (d.allocIds || []).map(id => ['RemoveRecord', 'Lot_Allocations', id]);
+    if (d.stockAdded > 0 && d.stockCol && d.stockLotId != null && d.stockBefore != null) {
+      actions.push(['UpdateRecord', 'Production_Lots', d.stockLotId, { [d.stockCol]: d.stockBefore }]);
+    }
+    if (d.brokenAdded > 0 && S.brokenCol && d.brokenLotId != null && d.brokenBefore != null) {
+      actions.push(['UpdateRecord', 'Production_Lots', d.brokenLotId, { [S.brokenCol]: d.brokenBefore }]);
+    }
     await grist.docApi.applyUserActions(actions);
     S.done.splice(i, 1);
     showToast('Undone ✓');
