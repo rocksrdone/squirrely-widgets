@@ -179,6 +179,7 @@ let selectedRecipeId = null;
 let planByRecipe = {};  // recipeId -> {seq, slots} from today's saved Day_Plan
 
 // Grist Date columns store epoch seconds at UTC midnight of the calendar day.
+function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
 function todayEpochSeconds() {
   const n = new Date();
   return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
@@ -277,6 +278,7 @@ async function loadEverything() {
     const opt = cands => ({ cands, required: false });
     const WO = resolveCols(woTable, 'Work_Orders', {
       status: ['Status'], orderNumber: opt(['Order_Number']), customerName: opt(['Customer_Name']),
+      dueDate: opt(['Due_Date']), bump: opt(['Priority_Bump']),
     }, missing);
     const REC = resolveCols(recipesTable, 'Recipes', {
       name: ['Recipe_Name'], sku: opt(['SKU_Base']),
@@ -311,6 +313,8 @@ async function loadEverything() {
         active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
         orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
         customerName: columnAsArray(woTable, WO.customerName)[i],
+        dueDate: WO.dueDate ? columnAsArray(woTable, WO.dueDate)[i] : null,
+        bump: WO.bump ? !!columnAsArray(woTable, WO.bump)[i] : false,
       };
     });
 
@@ -390,14 +394,21 @@ async function loadEverything() {
           dyes: dyesByRecipe[recipe.id] || [],
           orders: [],
           bestPriority: priority,
+          soonestDue: Infinity,
+          anyBump: false,
         };
       }
       const entry = pendingByRecipe[recipe.id];
       if (priorityRank(priority) < priorityRank(entry.bestPriority)) entry.bestPriority = priority;
+      const due = dueValue(info.dueDate);
+      if (due < entry.soonestDue) entry.soonestDue = due;
+      if (info.bump) entry.anyBump = true;
       entry.orders.push({
         orderNumber: info.orderNumber,
         customerName: info.customerName,
         qty: remaining,
+        dueDate: info.dueDate,
+        bump: info.bump,
       });
     }
 
@@ -430,15 +441,19 @@ async function loadEverything() {
 
       const inBins = unwoundByRecipe[entry.recipe.id] || 0;
       const stillToMake = Math.max(0, totalQty - inBins);
-      return { ...entry, totalQty, inBins, stillToMake, stock, peek, plan: planByRecipe[entry.recipe.id] || null };
+      const pastDue = entry.soonestDue < todayEpochSeconds();
+      return { ...entry, totalQty, inBins, stillToMake, stock, peek, pastDue, plan: planByRecipe[entry.recipe.id] || null };
     }).sort((a, b) => {
-      // Anything committed to today comes first, in the order Batch Planner
-      // sequenced it — that's the running order at the kettle. Everything else
-      // keeps the old priority-then-size ordering underneath.
+      // Committed-to-today first, in the sequence Batch Planner set. Everything
+      // else: past-due, then Priority_Bump, then soonest due — the SAME order
+      // Wind & Box uses, so "important" means one thing across both.
       if (a.plan && b.plan) return a.plan.seq - b.plan.seq;
       if (a.plan !== null && b.plan === null) return -1;
       if (a.plan === null && b.plan !== null) return 1;
-      return priorityRank(a.bestPriority) - priorityRank(b.bestPriority) || b.totalQty - a.totalQty;
+      return (b.pastDue - a.pastDue)
+        || (b.anyBump - a.anyBump)
+        || (a.soonestDue - b.soonestDue)
+        || (b.totalQty - a.totalQty);
     });
 
     // Populate customer filter dropdown
@@ -525,7 +540,7 @@ function renderList() {
           <div class="recipe-meta-cell">${e.recipe.sku || ''} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
           ${planSlots}
         </td>
-        <td><span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span></td>
+        <td>${e.pastDue ? '<span class="priority-pill" style="background:#F5D8DC;color:#A01830;">past due</span>' : (e.anyBump ? '<span class="priority-pill" style="background:#FBECC9;color:#8B6A00;">bumped</span>' : `<span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span>`)}</td>
         <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to make` : '<span style="color:#2D6A2D">enough ✓</span>'}${e.inBins ? `<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed · ${e.inBins} in bins</div>` : ` <span style="font-size:9px;color:#8B7D72">of ${e.totalQty}</span>`}</td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>
