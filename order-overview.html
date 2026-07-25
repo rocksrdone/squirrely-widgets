@@ -55,6 +55,7 @@ table.lines-table thead th { text-align: left; font-size: 9px; text-transform: u
 table.lines-table tbody tr:nth-child(even) { background: var(--paper); }
 table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
 .qty-cell { font-family: 'DM Mono', monospace; text-align: center; }
+.fiber-tag { font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF; padding: 1px 5px; border-radius: 8px; }
 .qty-cell.complete { color: var(--done-text); font-weight: 700; }
 .qty-cell.zero { color: #8B7D72; }
 .line-stage-badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
@@ -100,6 +101,14 @@ table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); 
 
 <script>
 function normalize(s) { return (s || '').toString().toLowerCase().trim().replace(/[^a-z0-9]/g, ''); }
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
+}
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function findColumn(t, candidates) {
   const keys = Object.keys(t);
@@ -174,6 +183,7 @@ async function loadCoreData() {
   const rc = (c) => findColumn(recipesTable, c);
   const rNameCol = rc(['Recipe_Name']) || 'Recipe_Name';
   const rSkuCol = rc(['SKU_Base']);
+  const rFiberCol = rc(['Fiber_Type']);
   recipes = {};
   recipeIdBySku = {};
   (recipesTable.id || []).forEach((id, i) => {
@@ -181,6 +191,7 @@ async function loadCoreData() {
     recipes[id] = {
       Recipe_Name: columnAsArray(recipesTable, rNameCol)[i] || '',
       SKU_Base: sku || '',
+      Fiber: rFiberCol ? columnAsArray(recipesTable, rFiberCol)[i] || '' : '',
     };
     const skuKey = normalize(sku || '');
     if (skuKey) recipeIdBySku[skuKey] = id;
@@ -339,11 +350,16 @@ function renderOrderDetail(workOrderId) {
     </div>
   `;
 
-  const linesHtml = lines.length ? lines.map(line => {
+  const linesHtml = lines.length ? lines.slice().sort((a, b) => {
+      const an = (recipes[a.recipeId] || {}).Recipe_Name || a.sku || '';
+      const bn = (recipes[b.recipeId] || {}).Recipe_Name || b.sku || '';
+      return an.localeCompare(bn);
+    }).map(line => {
     const r = recipes[line.recipeId] || {};
+    const fib = fiberCode(r.Fiber);
     return `
       <tr>
-        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe or SKU on this line)')} ${r.SKU_Base && r.Recipe_Name ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
+        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe or SKU on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''} ${r.SKU_Base && r.Recipe_Name ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
         <td class="qty-cell ${Number(line.qtyDyed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyDyed ? 'zero' : '')}">${line.qtyDyed || 0}/${line.qtyNeeded || 0}</td>
         <td class="qty-cell ${Number(line.qtyPacked) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyPacked ? 'zero' : '')}">${line.qtyPacked || 0}/${line.qtyNeeded || 0}</td>
         <td>${stageBadgeHtml(line)}</td>
