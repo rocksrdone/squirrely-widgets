@@ -44,6 +44,7 @@
   }
   tbody td { padding: 6px; border-bottom: 1px solid #F0EAE1; font-size: 12px; vertical-align: top; }
   .col-name { font-weight: 600; }
+  .fiber-tag { font-size: 9px; font-weight: 700; color: var(--teal); background: var(--teal-light); padding: 1px 5px; border-radius: 8px; vertical-align: middle; }
   .col-sub { font-size: 10px; color: #8B7D72; }
   .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .stage {
@@ -116,7 +117,7 @@ const STAGES = {
 };
 const STAGE_ORDER = ['make', 'wind', 'dry', 'none', 'done'];
 
-let S = { lines: [], search: '', stageFilter: '', dyesByRecipe: {} };
+let S = { lines: [], search: '', stageFilter: '', dyesByRecipe: {}, sort: 'urgency' };
 
 async function loadAll() {
   try {
@@ -268,6 +269,7 @@ async function loadAll() {
 
       lines.push({
         lineId: id, recipeId: rid, recipeName: recipe.name, method: recipe.method,
+        fiber: fiberCode(recipe.fiber),
         customerName: info.customerName, orderNumber: info.orderNumber,
         dueDate: info.dueDate, bump: info.bump,
         pastDue: info.dueDate && dueValue(info.dueDate) < today,
@@ -275,8 +277,6 @@ async function loadAll() {
       });
     });
 
-    // sort: past-due, bump, due date
-    lines.sort((a, b) => (b.pastDue - a.pastDue) || (b.bump - a.bump) || (dueValue(a.dueDate) - dueValue(b.dueDate)));
     S.lines = lines;
     render();
   } catch (e) {
@@ -288,15 +288,23 @@ async function loadAll() {
 
 function onSearch(v) { S.search = v; renderTable(); }
 function setStage(st) { S.stageFilter = S.stageFilter === st ? '' : st; render(); }
+function setSort(mode) { S.sort = mode; render(); }
+
+function sortLines(arr) {
+  const byName = (a, b) => a.recipeName.localeCompare(b.recipeName) || (dueValue(a.dueDate) - dueValue(b.dueDate));
+  const byUrgency = (a, b) => (b.pastDue - a.pastDue) || (b.bump - a.bump) || (dueValue(a.dueDate) - dueValue(b.dueDate)) || a.recipeName.localeCompare(b.recipeName);
+  return arr.slice().sort(S.sort === 'alpha' ? byName : byUrgency);
+}
 
 function filtered() {
   const q = normalize(S.search);
-  return S.lines.filter(l => {
+  const rows = S.lines.filter(l => {
     if (S.stageFilter && l.stage !== S.stageFilter) return false;
     if (!q) return true;
     const dyes = (S.dyesByRecipe[l.recipeId] || []).join(' ');
     return normalize(`${l.recipeName} ${l.customerName} ${l.orderNumber || ''} ${dyes}`).includes(q);
   });
+  return sortLines(rows);
 }
 
 function rowHtml(l) {
@@ -306,7 +314,7 @@ function rowHtml(l) {
   return `
     <tr>
       <td>
-        <div class="col-name">${esc(l.recipeName)}</div>
+        <div class="col-name">${esc(l.recipeName)}${l.fiber ? ` <span class="fiber-tag">${esc(l.fiber)}</span>` : ''}</div>
         <div class="col-sub">${esc(l.customerName || '—')}${l.orderNumber ? ' · ' + esc(l.orderNumber) : ''}</div>
       </td>
       <td class="num">${prog}</td>
@@ -341,6 +349,10 @@ function render() {
     <div class="header-sub">Every active order line and where it stands.</div>
     <div class="controls">
       <input class="search-input" id="searchBox" placeholder="Search colorway, customer, order, or dye..." value="${esc(S.search)}" oninput="onSearch(this.value)">
+      <select class="filter-select" onchange="setSort(this.value)">
+        <option value="urgency" ${S.sort === 'urgency' ? 'selected' : ''}>By urgency</option>
+        <option value="alpha" ${S.sort === 'alpha' ? 'selected' : ''}>Alphabetical</option>
+      </select>
     </div>
     <div class="summary">${chips}</div>
     <div id="tableWrap"></div>
