@@ -88,6 +88,7 @@
   .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 5px; padding: 6px 8px; font-size: 11px; margin-bottom: 6px; }
 
 
+  .search-input { width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:6px; font-size:13px; margin-bottom:8px; }
   .section-title.muted { color:#B0A596; }
   .line-card { background:white; border:1px solid var(--rule); border-radius:6px; padding:8px 9px; margin-bottom:4px; cursor:pointer; }
   .line-card:hover { border-color:var(--teal); }
@@ -95,8 +96,8 @@
   .line-card.not-ready { opacity:.7; cursor:default; background:#FBF9F5; }
   .line-top { display:flex; justify-content:space-between; align-items:baseline; gap:6px; }
   .line-who { display:flex; flex-direction:column; min-width:0; }
-  .line-cust { font-weight:700; font-size:13px; }
-  .line-color { font-size:11px; color:var(--teal); }
+  .line-cust { font-weight:700; font-size:14px; }
+  .line-color { font-size:11px; color:#8B7D72; margin-top:1px; }
   .line-qty { font-size:12px; font-weight:700; color:var(--teal); white-space:nowrap; }
   .line-sub { font-size:10px; color:#8B7D72; margin-top:2px; }
   .drying-note { color:var(--wet-text,#2A5B8B); }
@@ -378,6 +379,22 @@ async function loadEverything() {
   }
 }
 
+function onSearch(v) {
+  S.search = v;
+  // Re-filter without a full re-render so the search box keeps focus/cursor.
+  const q = normalize(v || '');
+  const match = l => !q || normalize(`${l.recipeName} ${l.customerName || ''} ${l.orderNumber || ''}`).includes(q);
+  const ready = S.lines.filter(l => l.ready && match(l));
+  const waiting = S.lines.filter(l => !l.ready && match(l));
+  const secEl = document.getElementById('lineSections');
+  if (secEl) {
+    const sec = (list, label, cls) => list.length
+      ? `<div class="section-title ${cls}">${label}</div>${list.map(rowHtml).join('')}` : '';
+    secEl.innerHTML = sec(ready, 'Ready to wind', '') + sec(waiting, 'Made — still drying / short', 'muted');
+  }
+  if (S.selected != null) updateTally();
+}
+
 function selectLine(id) {
   S.selected = S.selected === id ? null : id;
   // pre-fill draw suggestion: oldest dry lots + stock first, up to outstanding
@@ -399,6 +416,30 @@ function selectLine(id) {
   render();
 }
 
+function rowHtml(l) {
+  const open = S.selected === l.lineId;
+  const tag = l.pastDue ? `<span class="tag past">past due</span>`
+    : (l.bump ? `<span class="tag bump">bumped</span>` : '');
+  const due = l.dueDate ? `due ${fmtDate(l.dueDate)}` : 'no due date';
+  const sub = l.ready
+    ? `${due}${l.drying ? ` · ${l.drying} more drying` : ''}`
+    : (l.shortByDrying
+        ? `${due} · <span class="drying-note">${l.availNow} ready, ${l.outstanding - l.availNow} still on wet rack</span>`
+        : `${due} · only ${l.availNow} of ${l.outstanding} made`);
+  return `
+    <div class="line-card ${open ? 'active' : ''} ${l.ready ? '' : 'not-ready'}" onclick="selectLine(${l.lineId})">
+      <div class="line-top">
+        <div class="line-who">
+          <span class="line-cust">${esc(l.recipeName)}</span>
+          <span class="line-color">${esc(l.customerName || '—')}</span>
+        </div>
+        <span class="line-qty">${l.outstanding} spool${l.outstanding === 1 ? '' : 's'}</span>
+      </div>
+      <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
+    </div>
+    ${open && l.ready ? fillPanel(l) : ''}`;
+}
+
 function render() {
   const c = document.getElementById('content');
   if (!S.lines.length) {
@@ -413,33 +454,10 @@ function render() {
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
     </div>`).join('');
 
-  // Two groups: windable now, and made-but-drying (view-only)
-  const ready = S.lines.filter(l => l.ready);
-  const waiting = S.lines.filter(l => !l.ready);
-
-  const rowHtml = (l) => {
-    const open = S.selected === l.lineId;
-    const tag = l.pastDue ? `<span class="tag past">past due</span>`
-      : (l.bump ? `<span class="tag bump">bumped</span>` : '');
-    const due = l.dueDate ? `due ${fmtDate(l.dueDate)}` : 'no due date';
-    const sub = l.ready
-      ? `${due}${l.drying ? ` · ${l.drying} more drying` : ''}`
-      : (l.shortByDrying
-          ? `${due} · <span class="drying-note">${l.availNow} ready, ${l.outstanding - l.availNow} still on wet rack</span>`
-          : `${due} · only ${l.availNow} of ${l.outstanding} made`);
-    return `
-      <div class="line-card ${open ? 'active' : ''} ${l.ready ? '' : 'not-ready'}" onclick="selectLine(${l.lineId})">
-        <div class="line-top">
-          <div class="line-who">
-            <span class="line-cust">${esc(l.customerName || '—')}</span>
-            <span class="line-color">${esc(l.recipeName)}</span>
-          </div>
-          <span class="line-qty">${l.outstanding} spool${l.outstanding === 1 ? '' : 's'}</span>
-        </div>
-        <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
-      </div>
-      ${open && l.ready ? fillPanel(l) : ''}`;
-  };
+  const q = normalize(S.search || '');
+  const match = l => !q || normalize(`${l.recipeName} ${l.customerName || ''} ${l.orderNumber || ''}`).includes(q);
+  const ready = S.lines.filter(l => l.ready && match(l));
+  const waiting = S.lines.filter(l => !l.ready && match(l));
 
   const section = (list, label, cls) => list.length
     ? `<div class="section-title ${cls}">${label}</div>${list.map(rowHtml).join('')}`
@@ -448,9 +466,12 @@ function render() {
   c.innerHTML = `
     <div class="header-title">Wind &amp; Box</div>
     <div class="header-sub">Most urgent first. Pick a line, draw spools from its lots.</div>
+    <input class="search-input" id="searchBox" placeholder="Search colorway, order, or customer..." value="${esc(S.search || '')}" oninput="onSearch(this.value)">
     ${doneHtml}
-    ${section(ready, 'Ready to wind', '')}
-    ${section(waiting, 'Made — still drying / short', 'muted')}
+    <div id="lineSections">
+      ${section(ready, 'Ready to wind', '')}
+      ${section(waiting, 'Made — still drying / short', 'muted')}
+    </div>
   `;
   if (S.selected != null) updateTally();
 }
