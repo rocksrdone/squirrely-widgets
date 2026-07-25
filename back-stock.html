@@ -19,6 +19,13 @@
   .header-title { font-size: 15px; font-weight: 700; }
   .header-sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; }
   .search-input { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+  .add-panel { background: var(--teal-light); border: 1px solid var(--teal); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  .add-row { display: flex; gap: 5px; }
+  .add-color { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px; font-size: 13px; }
+  .add-qty { width: 68px; padding: 7px; border: 1px solid var(--rule); border-radius: 5px; font-size: 13px; text-align: center; }
+  .add-btn { padding: 0 12px; border: none; border-radius: 5px; background: var(--teal); color: white; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .add-btn:disabled { background: #A9C3C3; cursor: default; }
+  .add-hint { font-size: 10px; color: #8B7D72; margin-top: 5px; }
   .total-line { font-size: 11px; color: var(--teal); font-weight: 600; margin-bottom: 8px; }
 
   .color-card { background: white; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 5px; overflow: hidden; }
@@ -111,7 +118,7 @@ function fiberCode(v) {
   return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
 }
 
-let S = { colors: [], search: '', open: {}, stockCol: null };
+let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false };
 
 async function loadStock() {
   try {
@@ -126,6 +133,8 @@ async function loadStock() {
       store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']),
       general: opt(['General_Stock_Spools']),
       fiber: opt(['Fiber']), date: opt(['Date_Dyed']),
+      drying: opt(['Drying_Status']), spoolsMade: opt(['Spools_Made']),
+      yardsMade: opt(['Total_Yards_Made']),
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']),
@@ -137,15 +146,21 @@ async function loadStock() {
     }
     // Single back-stock bucket (you collapsed store/vendor into General_Stock_Spools).
     S.stockCol = LOT.general || LOT.store || LOT.vendor;
+    S.lotCols = LOT;
 
     const recipeById = {};
+    const allRecipes = [];
     (recipesT.id || []).forEach((id, i) => {
-      recipeById[id] = {
+      const rec = {
+        id,
         name: columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`,
         fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
         method: columnAsArray(recipesT, REC.method)[i] || '',
       };
+      recipeById[id] = rec;
+      allRecipes.push(rec);
     });
+    S.allRecipes = allRecipes.sort((a, b) => a.name.localeCompare(b.name));
 
     // Group lots that hold back stock, by colorway
     const byRecipe = {};
@@ -227,14 +242,88 @@ function renderList() {
 }
 
 function render() {
+  const recipeOptions = S.allRecipes.map(r =>
+    `<option value="${esc(r.name)}${r.fiber ? ' — ' + esc(fiberCode(r.fiber)) : ''}">`).join('');
   document.getElementById('content').innerHTML = `
     <div class="header-title">Back Stock</div>
     <div class="header-sub">Unassigned spools in the bin. Tap a colorway to see and fix lot counts.</div>
+    <div class="add-panel">
+      <div class="add-row">
+        <input list="recipeList" id="add-color" class="add-color" placeholder="Colorway to add stock for..." oninput="onAddColorInput()">
+        <input type="number" id="add-qty" class="add-qty" min="1" placeholder="spools" oninput="onAddColorInput()">
+        <button class="add-btn" id="add-btn" onclick="addStock()" disabled>+ Add</button>
+      </div>
+      <datalist id="recipeList">${recipeOptions}</datalist>
+      <div class="add-hint" id="add-hint">Pick any colorway — no order needed. Creates a lot in back stock.</div>
+    </div>
     <input class="search-input" id="searchBox" placeholder="Search colorway..." value="${esc(S.search)}" oninput="onSearch(this.value)">
     <div class="total-line" id="total"></div>
     <div id="list"></div>
   `;
   renderList();
+}
+
+// Match the typed value ("Fern Green — FFN") back to a recipe.
+function matchedRecipe() {
+  const raw = (document.getElementById('add-color').value || '').trim();
+  if (!raw) return null;
+  const name = raw.split(' — ')[0].trim().toUpperCase();
+  return S.allRecipes.find(r => r.name.toUpperCase() === name) || null;
+}
+function onAddColorInput() {
+  const r = matchedRecipe();
+  const hint = document.getElementById('add-hint');
+  const btn = document.getElementById('add-btn');
+  const qty = Number((document.getElementById('add-qty') || {}).value) || 0;
+  if (r) {
+    hint.textContent = `${r.name}${r.fiber ? ' · ' + fiberCode(r.fiber) : ''}${/hand/i.test(r.method) ? ' · hand-dye (own lot)' : ''}`;
+    hint.style.color = 'var(--teal)';
+  } else {
+    hint.textContent = 'Pick any colorway — no order needed. Creates a lot in back stock.';
+    hint.style.color = '#8B7D72';
+  }
+  if (btn) btn.disabled = !(r && qty > 0);
+}
+
+function nextLotNumber(existing) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const prefix = 'LOT-' + String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()) + '-';
+  let max = 0;
+  existing.forEach(v => {
+    const s = (v || '').toString();
+    if (s.indexOf(prefix) === 0) { const n = parseInt(s.slice(prefix.length), 10); if (!isNaN(n) && n > max) max = n; }
+  });
+  return prefix + (max + 1);
+}
+
+async function addStock() {
+  const r = matchedRecipe();
+  const qty = Math.max(0, Number((document.getElementById('add-qty') || {}).value) || 0);
+  if (!r || qty <= 0) { showToast('Pick a colorway and a spool count'); return; }
+  const LOT = S.lotCols;
+  const bucket = S.stockCol;
+  if (!bucket) { showToast('No stock column to write to'); return; }
+  try {
+    // Need current lot numbers to mint the next one.
+    const lotsT = await grist.docApi.fetchTable('Production_Lots');
+    const lotNumber = nextLotNumber(columnAsArray(lotsT, LOT.lotNumber));
+    const fields = {};
+    fields[LOT.lotNumber] = lotNumber;
+    if (LOT.recipe) fields[LOT.recipe] = r.id;
+    fields[bucket] = qty;                       // spools land straight in back stock
+    if (LOT.spoolsMade) fields[LOT.spoolsMade] = qty;
+    if (LOT.yardsMade) fields[LOT.yardsMade] = qty * (fiberCode(r.fiber) === 'EN' ? 150 : 100);
+    if (LOT.fiber && r.fiber) fields[LOT.fiber] = fiberCode(r.fiber);
+    if (LOT.drying) fields[LOT.drying] = 'Drying - Dry Rack'; // ready, not on a rack to move
+    if (LOT.date) fields[LOT.date] = Math.floor(Date.now() / 1000);
+    await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, fields]]);
+    showToast(`Added ${qty} ${r.name} → ${lotNumber} ✓`);
+    await loadStock();
+  } catch (e) {
+    console.error('Failed to add stock:', e);
+    showToast('Failed to add — check Production_Lots');
+  }
 }
 
 function step(lotId, delta) {
