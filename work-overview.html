@@ -45,6 +45,7 @@
   tbody td { padding: 6px; border-bottom: 1px solid #F0EAE1; font-size: 12px; vertical-align: top; }
   .col-name { font-weight: 600; }
   .fiber-tag { font-size: 9px; font-weight: 700; color: var(--teal); background: var(--teal-light); padding: 1px 5px; border-radius: 8px; vertical-align: middle; }
+  .fiber-tag.none { color: #A99C8E; background: #F0EAE1; font-weight: 600; }
   .col-sub { font-size: 10px; color: #8B7D72; }
   .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .stage {
@@ -314,7 +315,7 @@ function rowHtml(l) {
   return `
     <tr>
       <td>
-        <div class="col-name">${esc(l.recipeName)}${l.fiber ? ` <span class="fiber-tag">${esc(l.fiber)}</span>` : ''}</div>
+        <div class="col-name">${esc(l.recipeName)} ${l.fiber ? `<span class="fiber-tag">${esc(l.fiber)}</span>` : `<span class="fiber-tag none">no fiber</span>`}</div>
         <div class="col-sub">${esc(l.customerName || '—')}${l.orderNumber ? ' · ' + esc(l.orderNumber) : ''}</div>
       </td>
       <td class="num">${prog}</td>

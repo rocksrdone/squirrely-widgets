@@ -130,29 +130,40 @@ let allLines = [];        // {id, workOrderId, recipeId, qtyNeeded, qtyDyed, qty
 let recipes = {};         // id -> {Recipe_Name, SKU_Base}
 let recipeIdBySku = {};   // normalized SKU -> recipe id, fallback when Work_Order_Lines.Recipe is unset
 let currentView = 'one';
+let dryByRecipe = {}, wetByRecipe = {};
 
-function lineStage(line) {
+// Five stages matching Work Overview: notstarted → make → drying → wind → boxed.
+// `pool` is a per-render working copy of dry/wet availability, drawn down soonest
+// -first so two lines of one colorway don't both claim the same spools.
+function computeLineStage(line, pool) {
   const needed = Number(line.qtyNeeded) || 0;
-  if (needed > 0 && Number(line.qtyPacked) >= needed) return 'packed';
-  if (Number(line.qtyPacked) > 0) return 'packed-partial';
-  if (needed > 0 && Number(line.qtyWound) >= needed) return 'wound';
-  if (Number(line.qtyWound) > 0) return 'wound-partial';
-  if (needed > 0 && Number(line.qtyDyed) >= needed) return 'dyed';
-  if (Number(line.qtyDyed) > 0) return 'dyed-partial';
+  const boxed = Number(line.boxed) || 0;
+  const outstanding = Math.max(0, needed - boxed);
+  if (outstanding <= 0 && needed > 0) return 'boxed';
+  const rid = line.recipeId;
+  const dryAvail = pool.dry[rid] || 0;
+  const takeDry = Math.min(outstanding, dryAvail);
+  pool.dry[rid] = dryAvail - takeDry;
+  let rem = outstanding - takeDry;
+  const wetAvail = pool.wet[rid] || 0;
+  const takeWet = Math.min(rem, wetAvail);
+  pool.wet[rid] = wetAvail - takeWet;
+  if (takeDry >= outstanding) return 'wind';
+  if (takeDry + takeWet >= outstanding) return 'drying';
+  if (boxed > 0 || takeDry > 0 || takeWet > 0) return 'make';
   return 'notstarted';
 }
-function stageBadgeHtml(line) {
-  const stage = lineStage(line);
-  const map = {
-    'packed': ['packed', 'Wound &amp; boxed ✓'],
-    'packed-partial': ['wound', 'Winding...'],
-    'wound': ['wound', 'Wound &amp; boxed ✓'],
-    'wound-partial': ['dyed', 'Winding...'],
-    'dyed': ['dyed', 'Dyed ✓'],
-    'dyed-partial': ['dyed', 'Dyeing...'],
-    'notstarted': ['notstarted', 'Not started'],
-  };
-  const [cls, label] = map[stage];
+function freshPool() { return { dry: { ...dryByRecipe }, wet: { ...wetByRecipe } }; }
+
+const STAGE_BADGE = {
+  boxed:     ['packed', 'Wound &amp; boxed ✓'],
+  wind:      ['wound', 'Ready to wind'],
+  drying:    ['dyed', 'Drying'],
+  make:      ['dyed', 'To make'],
+  notstarted:['notstarted', 'Not started'],
+};
+function stageBadgeHtml(stage) {
+  const [cls, label] = STAGE_BADGE[stage] || STAGE_BADGE.notstarted;
   return `<span class="line-stage-badge ${cls}">${label}</span>`;
 }
 
@@ -227,6 +238,50 @@ async function loadCoreData() {
     console.warn('Lot_Allocations unavailable — falling back to per-line quantities', e);
   }
 
+  // ── Rack availability, so stages can show Drying / Ready to wind like the
+  // Work Overview widget does (both now read the physical racks). ──────────
+  const allocBoxedByLine = allocWoundByLine; // same map: spools past "in bin"
+  dryByRecipe = {}; wetByRecipe = {};
+  try {
+    const [lotsTable, allocTable2] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+    ]);
+    const lRecipe = findColumn(lotsTable, ['Recipe']);
+    const lSpools = findColumn(lotsTable, ['Spools_Made']);
+    const lYards = findColumn(lotsTable, ['Total_Yards_Made']);
+    const lDry = findColumn(lotsTable, ['Drying_Status']);
+    const lStore = findColumn(lotsTable, ['Store_Stock_Spools']);
+    const lVendor = findColumn(lotsTable, ['Vendor_Stock_Spools']);
+    const lGeneral = findColumn(lotsTable, ['General_Stock_Spools']);
+    const lBroken = findColumn(lotsTable, ['Broken_Spools']);
+    const lFiber = findColumn(lotsTable, ['Fiber']);
+    const aLot = findColumn(allocTable2, ['Lot']);
+    const aQty = findColumn(allocTable2, ['Qty_Spools']);
+    const allocByLot = {};
+    (allocTable2.id || []).forEach((id, i) => {
+      const lotId = getRefId(columnAsArray(allocTable2, aLot)[i]);
+      if (lotId) allocByLot[lotId] = (allocByLot[lotId] || 0) + (Number(columnAsArray(allocTable2, aQty)[i]) || 0);
+    });
+    const DRY = /dry rack|wood rack|overnight|ready to assign/i;
+    const WET = /wet rack|metal rack|day rack/i;
+    const num = (col, i) => col ? (Number(columnAsArray(lotsTable, col)[i]) || 0) : 0;
+    (lotsTable.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(lotsTable, lRecipe)[i]);
+      if (!rid) return;
+      let total = num(lSpools, i);
+      if (!total && lYards) total = Math.round(num(lYards, i) / (fiberCode(columnAsArray(lotsTable, lFiber)[i]) === 'EN' ? 150 : 100));
+      const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
+      const free = Math.max(0, total - (allocByLot[id] || 0) - stock - num(lBroken, i));
+      const status = (columnAsArray(lotsTable, lDry)[i] || '').toString();
+      const isDry = DRY.test(status) || (!WET.test(status) && !!status);
+      if (free > 0) { if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free; else wetByRecipe[rid] = (wetByRecipe[rid] || 0) + free; }
+      if (stock > 0) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + stock; // stock is windable now
+    });
+  } catch (e) {
+    console.warn('Production_Lots unavailable — stages fall back to boxed-only', e);
+  }
+
   const wc = (c) => findColumn(wolTable, c);
   const wWorkOrderCol = wc(['Work_Order']) || 'Work_Order';
   const wRecipeCol = wc(['Recipe']) || 'Recipe';
@@ -250,8 +305,7 @@ async function loadCoreData() {
     recipeId,
     qtyNeeded: wNeededCol ? columnAsArray(wolTable, wNeededCol)[i] : 0,
     qtyDyed: wDyedCol ? columnAsArray(wolTable, wDyedCol)[i] : 0,
-    qtyWound: Math.max(fromAlloc, legacyWound),
-    qtyPacked: Math.max(fromAlloc, legacyPacked),
+    boxed: Math.max(fromAlloc, legacyPacked),
     queueStatus: wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '',
     priority: wPriorityCol ? columnAsArray(wolTable, wPriorityCol)[i] : '',
     sku: wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '',
@@ -325,10 +379,8 @@ function selectBrowsed(workOrderId) {
 function orderProgress(workOrderId) {
   const lines = allLines.filter(l => l.workOrderId === workOrderId);
   const needed = lines.reduce((s, l) => s + (Number(l.qtyNeeded) || 0), 0);
-  const dyed = lines.reduce((s, l) => s + Math.min(Number(l.qtyDyed) || 0, Number(l.qtyNeeded) || Infinity), 0);
-  const wound = lines.reduce((s, l) => s + Math.min(Number(l.qtyWound) || 0, Number(l.qtyNeeded) || Infinity), 0);
-  const packed = lines.reduce((s, l) => s + Math.min(Number(l.qtyPacked) || 0, Number(l.qtyNeeded) || Infinity), 0);
-  return { needed, dyed, wound, packed, lineCount: lines.length };
+  const packed = lines.reduce((s, l) => s + Math.min(Number(l.boxed) || 0, Number(l.qtyNeeded) || Infinity), 0);
+  return { needed, packed, lineCount: lines.length };
 }
 
 function renderOrderDetail(workOrderId) {
@@ -338,18 +390,12 @@ function renderOrderDetail(workOrderId) {
 
   const p = orderProgress(workOrderId);
   const overallBadge = p.needed === 0 ? ['notstarted', 'No quantities set']
-    : p.packed >= p.needed ? ['ready', 'Ready to ship']
-    : p.dyed === 0 ? ['notstarted', 'Not started']
+    : p.packed >= p.needed ? ['ready', 'All wound &amp; boxed']
+    : p.packed === 0 ? ['notstarted', 'Nothing boxed yet']
     : ['progress', 'In progress'];
 
-  const stageBox = (label, count) => `
-    <div class="stage-box">
-      <div class="stage-label">${label}</div>
-      <div class="stage-count">${count}/${p.needed}</div>
-      <div class="stage-bar"><div class="stage-bar-fill" style="width:${p.needed ? Math.round(count / p.needed * 100) : 0}%"></div></div>
-    </div>
-  `;
 
+  const pool = freshPool();
   const linesHtml = lines.length ? lines.slice().sort((a, b) => {
       const an = (recipes[a.recipeId] || {}).Recipe_Name || a.sku || '';
       const bn = (recipes[b.recipeId] || {}).Recipe_Name || b.sku || '';
@@ -357,16 +403,16 @@ function renderOrderDetail(workOrderId) {
     }).map(line => {
     const r = recipes[line.recipeId] || {};
     const fib = fiberCode(r.Fiber);
+    const stage = computeLineStage(line, pool);
     return `
       <tr>
-        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe or SKU on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''} ${r.SKU_Base && r.Recipe_Name ? `<span style="color:#8B7D72;">(${r.SKU_Base})</span>` : ''}</td>
-        <td class="qty-cell ${Number(line.qtyDyed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyDyed ? 'zero' : '')}">${line.qtyDyed || 0}/${line.qtyNeeded || 0}</td>
-        <td class="qty-cell ${Number(line.qtyPacked) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.qtyPacked ? 'zero' : '')}">${line.qtyPacked || 0}/${line.qtyNeeded || 0}</td>
-        <td>${stageBadgeHtml(line)}</td>
+        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''}</td>
+        <td class="qty-cell ${Number(line.boxed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.boxed ? 'zero' : '')}">${line.boxed || 0}/${line.qtyNeeded || 0}</td>
+        <td>${stageBadgeHtml(stage)}</td>
         <td style="font-size:11px; color:#8B7D72;">${line.queueStatus || ''}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
       </tr>
     `;
-  }).join('') : `<tr><td colspan="6" style="text-align:center; color:#8B7D72; font-style:italic;">No line items on this order.</td></tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center; color:#8B7D72; font-style:italic;">No line items on this order.</td></tr>`;
 
   document.getElementById('orderDetail').innerHTML = `
     <div class="order-header">
@@ -378,12 +424,15 @@ function renderOrderDetail(workOrderId) {
         <span class="overall-badge ${overallBadge[0]}">${overallBadge[1]}</span>
       </div>
       <div class="stage-summary">
-        ${stageBox('Dyed', p.dyed)}
-        ${stageBox('Wound &amp; boxed', p.packed)}
+        <div class="stage-box">
+          <div class="stage-label">Wound &amp; boxed</div>
+          <div class="stage-count">${p.packed}/${p.needed}</div>
+          <div class="stage-bar"><div class="stage-bar-fill" style="width:${p.needed ? Math.round(p.packed / p.needed * 100) : 0}%"></div></div>
+        </div>
       </div>
     </div>
     <table class="lines-table">
-      <thead><tr><th>Recipe / SKU</th><th>Dyed</th><th>Wound &amp; boxed</th><th>Stage</th><th>Queue</th></tr></thead>
+      <thead><tr><th>Colorway</th><th>Boxed</th><th>Stage</th><th>Queue</th></tr></thead>
       <tbody>${linesHtml}</tbody>
     </table>
   `;
@@ -399,7 +448,7 @@ function renderAllOrders() {
   const rows = active.map(o => {
     const p = orderProgress(o.id);
     const pct = p.needed ? Math.round(p.packed / p.needed * 100) : 0;
-    const label = p.needed === 0 ? '—' : p.packed >= p.needed ? 'Ready to ship' : p.dyed === 0 ? 'Not started' : 'In progress';
+    const label = p.needed === 0 ? '—' : p.packed >= p.needed ? 'All boxed' : p.packed === 0 ? 'Not started' : 'In progress';
     return `
       <tr onclick="jumpToOrder(${o.id})">
         <td><strong>${o.orderNumber}</strong></td>
@@ -432,6 +481,7 @@ function jumpToOrder(workOrderId) {
 grist.ready({ requiredAccess: 'full' });
 loadCoreData().then(() => {
   document.getElementById('statusMsg').textContent = `${allWorkOrders.length} orders, ${allLines.length} line items loaded.`;
+  setView('all'); // default to the full open-orders list
 });
 </script>
 </body>
