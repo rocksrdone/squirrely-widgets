@@ -404,6 +404,28 @@ function findColumn(tableData, candidates) {
   }
   return null;
 }
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required && missing) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+// Read a field off a Grist row/record by trying candidate ids, matched ignoring
+// case and non-alphanumerics — so a column rename doesn't silently return blank.
+function rowField(row, candidates) {
+  if (!row) return undefined;
+  const keys = Object.keys(row);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return row[hit];
+  }
+  return undefined;
+}
 
 // Escape Grist text before it enters innerHTML — a stray < in a name/note
 // otherwise opens a phantom tag and swallows following markup.
@@ -414,14 +436,17 @@ let currentHistoryEntries = [];
 async function loadHistory(recipeId) {
   try {
     const table = await grist.docApi.fetchTable('Recipe_Change_Log');
+    const CL = resolveCols(table, 'Recipe_Change_Log', {
+      recipe: ['Recipe'], date: ['Change_Date'], note: ['Change_Note'],
+    }, null);
     const ids = table.id || [];
-    const refs = table.Recipe || [];
+    const refs = columnAsArray(table, CL.recipe) || [];
     const entries = [];
     for (let i = 0; i < ids.length; i++) {
       if (getRefId(refs[i]) !== recipeId) continue;
       entries.push({
-        date: columnAsArray(table, 'Change_Date')[i],
-        note: columnAsArray(table, 'Change_Note')[i] || '',
+        date: columnAsArray(table, CL.date)[i],
+        note: columnAsArray(table, CL.note)[i] || '',
       });
     }
     entries.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
@@ -586,10 +611,10 @@ async function loadVendorsList() {
 // display-name string, or (last resort) by reading it straight from the
 // Recipes table, where a stored ref is always the target row id.
 async function resolveLinkedCustomerId(record) {
-  let id = getRefId(record.Linked_Customer);
+  let id = getRefId(rowField(record, ['Linked_Customer']));
   if (id) return id;
 
-  const raw = record.Linked_Customer;
+  const raw = rowField(record, ['Linked_Customer']);
   if (typeof raw === 'string' && customerIdByName[raw.trim()]) return customerIdByName[raw.trim()];
 
   try {
@@ -634,28 +659,35 @@ async function loadOrderLinesList() {
       grist.docApi.fetchTable('Work_Order_Lines'),
     ]);
 
+    const WO = resolveCols(woTable, 'Work_Orders', {
+      orderNumber: ['Order_Number'], customerName: ['Customer_Name'], orderDate: ['Order_Date'],
+    }, null);
+    const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], productName: ['Product_Name'], sku: ['SKU'], qtyNeeded: ['Qty_Needed'],
+    }, null);
+
     const woIds = woTable.id || [];
     const woInfo = {};
     woIds.forEach((id, i) => {
       woInfo[id] = {
-        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
-        customerName: columnAsArray(woTable, 'Customer_Name')[i],
-        orderDate: columnAsArray(woTable, 'Order_Date')[i],
+        orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
+        customerName: columnAsArray(woTable, WO.customerName)[i],
+        orderDate: columnAsArray(woTable, WO.orderDate)[i],
       };
     });
 
     const lIds = wolTable.id || [];
     allOrderLines = lIds.map((id, i) => {
-      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
       const info = woInfo[woId] || {};
       return {
         lineId: id,
         orderNumber: info.orderNumber || '',
         customerName: info.customerName || '',
         orderDate: info.orderDate || '',
-        productName: columnAsArray(wolTable, 'Product_Name')[i] || '',
-        sku: columnAsArray(wolTable, 'SKU')[i] || '',
-        qtyNeeded: columnAsArray(wolTable, 'Qty_Needed')[i] || '',
+        productName: columnAsArray(wolTable, WOL.productName)[i] || '',
+        sku: columnAsArray(wolTable, WOL.sku)[i] || '',
+        qtyNeeded: columnAsArray(wolTable, WOL.qtyNeeded)[i] || '',
       };
     });
   } catch (e) {
@@ -731,11 +763,12 @@ function renderLinkedOrderBanner() {
 async function loadAllSkus() {
   try {
     const recipesTable = await grist.docApi.fetchTable('Recipes');
+    const R = resolveCols(recipesTable, 'Recipes', { sku: ['SKU_Base'], name: ['Recipe_Name'] }, null);
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
       id,
-      sku: columnAsArray(recipesTable, 'SKU_Base')[i],
-      recipeName: columnAsArray(recipesTable, 'Recipe_Name')[i],
+      sku: columnAsArray(recipesTable, R.sku)[i],
+      recipeName: columnAsArray(recipesTable, R.name)[i],
     }));
   } catch (e) {
     console.error('Could not load existing SKUs for duplicate check:', e);
@@ -865,38 +898,38 @@ async function loadRecipe(record) {
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('content').style.display = 'block';
 
-  document.getElementById('nameInput').value = record.Recipe_Name || '';
-  document.getElementById('shopifyProductUrl').value = record.Shopify_URL || '';
+  document.getElementById('nameInput').value = rowField(record, ['Recipe_Name']) || '';
+  document.getElementById('shopifyProductUrl').value = rowField(record, ['Shopify_URL']) || '';
 
   const createdLabel = document.getElementById('createdDateLabel');
-  if (record.Created_Date) {
-    const d = new Date(Number(record.Created_Date) * 1000);
+  if (rowField(record, ['Created_Date'])) {
+    const d = new Date(Number(rowField(record, ['Created_Date'])) * 1000);
     createdLabel.textContent = `Created ${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
   } else {
     createdLabel.textContent = '';
   }
   await loadHistory(record.id);
 
-  document.getElementById('fiberType').value = record.Fiber_Type || '';
-  document.getElementById('dyeMethod').value = record.Dye_Method || '';
-  document.getElementById('recipeScope').value = record.Recipe_Scope || '';
-  document.getElementById('skuBase').value = record.SKU_Base || record.Shopify_SKU || '';
-  document.getElementById('generalNotes').value = record.Notes || '';
-  document.getElementById('layoutDescription').value = record.Layout_Description || '';
-  document.getElementById('photoP1').value = record.Photo_Process_1 || '';
-  document.getElementById('photoP2').value = record.Photo_Process_2 || '';
-  document.getElementById('photoPF').value = record.Photo_Finished || '';
-  document.getElementById('photoInsp').value = record.Photo_Inspiration || '';
-  document.getElementById('noteP1').value = record.Photo_Process_1_Note || '';
-  document.getElementById('noteP2').value = record.Photo_Process_2_Note || '';
-  document.getElementById('notePF').value = record.Photo_Finished_Note || '';
-  document.getElementById('noteInsp').value = record.Photo_Inspiration_Note || '';
-  document.getElementById('inspirationHex').value = record.Inspiration_Hex_Codes || '';
+  document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
+  document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
+  document.getElementById('recipeScope').value = rowField(record, ['Recipe_Scope']) || '';
+  document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
+  document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
+  document.getElementById('layoutDescription').value = rowField(record, ['Layout_Description']) || '';
+  document.getElementById('photoP1').value = rowField(record, ['Photo_Process_1']) || '';
+  document.getElementById('photoP2').value = rowField(record, ['Photo_Process_2']) || '';
+  document.getElementById('photoPF').value = rowField(record, ['Photo_Finished']) || '';
+  document.getElementById('photoInsp').value = rowField(record, ['Photo_Inspiration']) || '';
+  document.getElementById('noteP1').value = rowField(record, ['Photo_Process_1_Note']) || '';
+  document.getElementById('noteP2').value = rowField(record, ['Photo_Process_2_Note']) || '';
+  document.getElementById('notePF').value = rowField(record, ['Photo_Finished_Note']) || '';
+  document.getElementById('noteInsp').value = rowField(record, ['Photo_Inspiration_Note']) || '';
+  document.getElementById('inspirationHex').value = rowField(record, ['Inspiration_Hex_Codes']) || '';
   renderInspirationSwatches();
-  document.getElementById('draftNotes').value = record.Draft_Notes || '';
+  document.getElementById('draftNotes').value = rowField(record, ['Draft_Notes']) || '';
   updatePhotoThumbs();
 
-  const status = record.Status || 'Active';
+  const status = rowField(record, ['Status']) || 'Active';
   const badge = document.getElementById('draftBadge');
   if (status !== 'Active') {
     badge.textContent = status;
@@ -909,14 +942,14 @@ async function loadRecipe(record) {
   await loadVendorsList();
   await loadAllSkus();
   await loadOrderLinesList();
-  const linkedOrderLineId = getRefId(record.Linked_Order_Line);
+  const linkedOrderLineId = getRefId(rowField(record, ['Linked_Order_Line']));
   selectedOrderLine = linkedOrderLineId ? allOrderLines.find(l => l.lineId === linkedOrderLineId) || null : null;
   renderLinkedOrderBanner();
-  console.log('[linkedCustomer] raw =', record.Linked_Customer, '| typeof =', typeof record.Linked_Customer);
+  console.log('[linkedCustomer] raw =', rowField(record, ['Linked_Customer']), '| typeof =', typeof rowField(record, ['Linked_Customer']));
   const linkedCustomerId = await resolveLinkedCustomerId(record);
   setLinkedCustomerValue(linkedCustomerId);
   onScopeChange();
-  const existingVendor = vendorCodeFromExistingSku(record.SKU_Base || record.Shopify_SKU);
+  const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();
   updateFinalizeGate();
@@ -928,26 +961,32 @@ async function loadRecipe(record) {
 
   try {
     const compTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const C = resolveCols(compTable, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'], full: ['Dye_Full'],
+      powder: ['Std_Powder_tsp_'], water: ['Std_Water_mL_'],
+      dilution: ['Dilution', 'Dilution_Ratio'], technique: ['Technique'],
+      notes: ['Application_Notes'], isPowder: ['Is_Powder'], step: ['Step_Number'],
+    }, null);
     const ids = compTable.id || [];
-    const refs = compTable.Recipe || [];
+    const refs = columnAsArray(compTable, C.recipe) || [];
     const rows = [];
     for (let i = 0; i < ids.length; i++) {
       if (getRefId(refs[i]) !== currentRecipeId) continue;
-      const dyeRefId = getRefId(columnAsArray(compTable, 'Dye_Name')[i]);
+      const dyeRefId = getRefId(columnAsArray(compTable, C.dye)[i]);
       const resolvedName = dyeRefId ? ((allDyes.find(d => d.id === dyeRefId) || {}).name || '') : '';
       rows.push({
         rowId: ids[i],
         clientKey: nextClientKey++,
         dyeId: dyeRefId,
         Dye_Name: resolvedName,
-        Dye_Full: columnAsArray(compTable, 'Dye_Full')[i] || '',
-        powder: columnAsArray(compTable, 'Std_Powder_tsp_')[i] ?? '',
-        water: columnAsArray(compTable, 'Std_Water_mL_')[i] ?? '',
-        dilution: (columnAsArray(compTable, 'Dilution')[i] || columnAsArray(compTable, 'Dilution_Ratio')[i]) || '',
-        technique: columnAsArray(compTable, 'Technique')[i] || '',
-        notes: columnAsArray(compTable, 'Application_Notes')[i] || '',
-        isPowder: !!columnAsArray(compTable, 'Is_Powder')[i],
-        stepOrder: columnAsArray(compTable, 'Step_Number')[i] ?? 999,
+        Dye_Full: columnAsArray(compTable, C.full)[i] || '',
+        powder: columnAsArray(compTable, C.powder)[i] ?? '',
+        water: columnAsArray(compTable, C.water)[i] ?? '',
+        dilution: columnAsArray(compTable, C.dilution)[i] || '',
+        technique: columnAsArray(compTable, C.technique)[i] || '',
+        notes: columnAsArray(compTable, C.notes)[i] || '',
+        isPowder: !!columnAsArray(compTable, C.isPowder)[i],
+        stepOrder: columnAsArray(compTable, C.step)[i] ?? 999,
       });
     }
     rows.sort((a, b) => (Number(a.stepOrder) || 999) - (Number(b.stepOrder) || 999));
@@ -1305,7 +1344,7 @@ grist.ready({
 
 grist.onRecord(async (record) => {
   if (isSaving) return;
-  if (!record || !record.Recipe_Name) {
+  if (!record || !rowField(record, ['Recipe_Name'])) {
     if (!currentRecipeId) {
       document.getElementById('emptyState').style.display = 'flex';
       document.getElementById('content').style.display = 'none';
