@@ -120,6 +120,25 @@ let expandedRecipeId = null;
 function columnAsArray(tableData, col) {
   return Array.isArray(tableData[col]) ? tableData[col] : [];
 }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
 
 function getRefId(ref) {
   if (typeof ref === 'number') return ref;
@@ -149,22 +168,38 @@ async function loadEverything() {
       grist.docApi.fetchTable('Product_Photos'),
     ]);
 
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const REC = resolveCols(recipesData, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), scope: opt(['Recipe_Scope']),
+    }, missing);
+    const PHOTO = resolveCols(photosData, 'Product_Photos', {
+      recipe: ['Recipe'], colorway: opt(['Colorway_Name']), url: opt(['Nextcloud_URL']),
+      filename: opt(['Source_Filename']), lotDate: opt(['Lot_Date']),
+    }, missing);
+    if (missing.length) {
+      const sub = document.getElementById('headerSub');
+      if (sub) sub.textContent = 'Missing columns: ' + [...new Set(missing)].join(', ');
+      missingRecipes = []; unlinkedPhotos = []; renderList();
+      return;
+    }
+
     const rIds = recipesData.id || [];
     const allRecipes = rIds.map((id, i) => ({
       id,
-      Recipe_Name: columnAsArray(recipesData, 'Recipe_Name')[i],
-      Fiber_Type: columnAsArray(recipesData, 'Fiber_Type')[i],
-      Recipe_Scope: columnAsArray(recipesData, 'Recipe_Scope')[i],
+      Recipe_Name: columnAsArray(recipesData, REC.name)[i],
+      Fiber_Type: columnAsArray(recipesData, REC.fiber)[i],
+      Recipe_Scope: columnAsArray(recipesData, REC.scope)[i],
     })).filter(r => r.Recipe_Name);
 
     const pIds = photosData.id || [];
     const allPhotos = pIds.map((id, i) => ({
       id,
-      Recipe: columnAsArray(photosData, 'Recipe')[i],
-      Colorway_Name: columnAsArray(photosData, 'Colorway_Name')[i],
-      Nextcloud_URL: columnAsArray(photosData, 'Nextcloud_URL')[i],
-      Source_Filename: columnAsArray(photosData, 'Source_Filename')[i],
-      Lot_Date: columnAsArray(photosData, 'Lot_Date')[i],
+      Recipe: columnAsArray(photosData, PHOTO.recipe)[i],
+      Colorway_Name: columnAsArray(photosData, PHOTO.colorway)[i],
+      Nextcloud_URL: columnAsArray(photosData, PHOTO.url)[i],
+      Source_Filename: columnAsArray(photosData, PHOTO.filename)[i],
+      Lot_Date: columnAsArray(photosData, PHOTO.lotDate)[i],
     }));
 
     const linkedRecipeIds = new Set(
@@ -181,7 +216,8 @@ async function loadEverything() {
     renderList();
   } catch (e) {
     console.error('Failed to load:', e);
-    document.getElementById('headerSub').textContent = 'Failed to load data';
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('headerSub').textContent = 'Failed to load — ' + msg;
   }
 }
 
