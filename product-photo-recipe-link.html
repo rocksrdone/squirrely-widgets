@@ -127,6 +127,34 @@ let currentPhoto = null; // {id, Colorway_Name, Source_Filename, Nextcloud_URL, 
 function columnAsArray(tableData, col) {
   return Array.isArray(tableData[col]) ? tableData[col] : [];
 }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+function rowField(row, candidates) {
+  if (!row) return undefined;
+  const keys = Object.keys(row);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return row[hit];
+  }
+  return undefined;
+}
 
 function getRefId(ref) {
   if (typeof ref === 'number') return ref;
@@ -148,12 +176,18 @@ function showToast(msg) {
 
 async function loadRecipes() {
   const recipesData = await grist.docApi.fetchTable('Recipes');
+  const missing = [];
+  const opt = cands => ({ cands, required: false });
+  const REC = resolveCols(recipesData, 'Recipes', {
+    name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), scope: opt(['Recipe_Scope']),
+  }, missing);
+  if (missing.length) { console.warn('Recipes missing columns:', missing); }
   const ids = recipesData.id || [];
   allRecipes = ids.map((id, i) => ({
     id,
-    Recipe_Name: columnAsArray(recipesData, 'Recipe_Name')[i],
-    Fiber_Type: columnAsArray(recipesData, 'Fiber_Type')[i],
-    Recipe_Scope: columnAsArray(recipesData, 'Recipe_Scope')[i],
+    Recipe_Name: columnAsArray(recipesData, REC.name)[i],
+    Fiber_Type: columnAsArray(recipesData, REC.fiber)[i],
+    Recipe_Scope: columnAsArray(recipesData, REC.scope)[i],
   })).filter(r => r.Recipe_Name);
 }
 
@@ -176,10 +210,10 @@ function renderLinkStatus() {
 async function loadEverything(record) {
   currentPhoto = {
     id: record.id,
-    Colorway_Name: record.Colorway_Name,
-    Source_Filename: record.Source_Filename,
-    Nextcloud_URL: record.Nextcloud_URL,
-    Recipe: record.Recipe,
+    Colorway_Name: rowField(record, ['Colorway_Name']),
+    Source_Filename: rowField(record, ['Source_Filename']),
+    Nextcloud_URL: rowField(record, ['Nextcloud_URL']),
+    Recipe: rowField(record, ['Recipe']),
   };
 
   document.getElementById('emptyState').style.display = 'none';
