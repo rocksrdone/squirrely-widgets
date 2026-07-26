@@ -142,6 +142,14 @@ function guessColor(name) {
 const PRIORITY_RANK = { 'Urgent': 0, 'High': 1, 'Normal': 2, 'Low': 3 };
 function priorityRank(p) { return PRIORITY_RANK[p] ?? 2; }
 
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
 function getRefId(ref) {
   if (typeof ref === 'number') return ref || null;
   if (Array.isArray(ref)) return ref[1];
@@ -165,6 +173,46 @@ async function loadEverything() {
       grist.docApi.fetchTable('Dyes'),
       grist.docApi.fetchTable('Dye_Stock'),
     ]);
+
+    // Coverage is derived, not stored. Qty_Dyed is no longer written (pot-logging
+    // creates lots instead), so "remaining to make" = order need − spools already
+    // allocated to the line − unwound spools sitting in that colorway's lots.
+    // Without this, the mL totals below would tell you to mix dye for thread you've
+    // already made.
+    let allocByLine = {}, unwoundByRecipe = {};
+    try {
+      const [allocT, lotsT] = await Promise.all([
+        grist.docApi.fetchTable('Lot_Allocations'),
+        grist.docApi.fetchTable('Production_Lots'),
+      ]);
+      const aLine = findColumn(allocT, ['Work_Order_Line']);
+      const aQty = findColumn(allocT, ['Qty_Spools']);
+      const aLot = findColumn(allocT, ['Lot']);
+      const byLot = {};
+      (allocT.id || []).forEach((id, i) => {
+        const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
+        const li = aLine ? getRefId(columnAsArray(allocT, aLine)[i]) : null;
+        if (li) allocByLine[li] = (allocByLine[li] || 0) + q;
+        const lo = aLot ? getRefId(columnAsArray(allocT, aLot)[i]) : null;
+        if (lo) byLot[lo] = (byLot[lo] || 0) + q;
+      });
+      const lR = findColumn(lotsT, ['Recipe']);
+      const lS = findColumn(lotsT, ['Spools_Made']);
+      const buckets = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'General_Stock_Spools', 'Broken_Spools']
+        .map(c => findColumn(lotsT, [c]));
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
+        if (!rid) return;
+        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
+        buckets.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+      });
+    } catch (e) {
+      console.warn('Lots/allocations unavailable — dye amounts fall back to full order need', e);
+    }
+    // Working copy of bin stock, drawn down per line so two lines of a colorway
+    // don't both discount the same unwound spools.
+    const binPool = { ...unwoundByRecipe };
 
     const woIds = woTable.id || [];
     const woInfo = {};
@@ -243,8 +291,8 @@ async function loadEverything() {
       if (!info || !info.active) continue;
 
       const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
-      const qtyDyed = Number(columnAsArray(wolTable, 'Qty_Dyed')[i]) || 0;
-      const remaining = qtyNeeded - qtyDyed;
+      const allocated = allocByLine[wolIds[i]] || 0;
+      let remaining = qtyNeeded - allocated;
       if (remaining <= 0) continue;
 
       const sku = columnAsArray(wolTable, 'SKU')[i] || '';
@@ -254,6 +302,13 @@ async function loadEverything() {
       else recipe = recipeBySku[normalize(sku)] || null;
 
       if (!recipe || !compsByRecipe[recipe.id]) continue;
+
+      // Discount unwound spools already sitting in this colorway's bins — no need
+      // to mix dye for thread that's made but not yet wound.
+      const fromBin = Math.min(remaining, binPool[recipe.id] || 0);
+      binPool[recipe.id] = (binPool[recipe.id] || 0) - fromBin;
+      remaining -= fromBin;
+      if (remaining <= 0) continue;
 
       if (!recipeDyeSets[recipe.id]) recipeDyeSets[recipe.id] = new Set();
       compsByRecipe[recipe.id].forEach(comp => {
