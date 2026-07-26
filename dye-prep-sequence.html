@@ -150,6 +150,17 @@ function findColumn(t, candidates) {
   }
   return null;
 }
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
 function getRefId(ref) {
   if (typeof ref === 'number') return ref || null;
   if (Array.isArray(ref)) return ref[1];
@@ -214,14 +225,45 @@ async function loadEverything() {
     // don't both discount the same unwound spools.
     const binPool = { ...unwoundByRecipe };
 
+    // ── Resolve every column id up front (rename-proofing) ──────────────
+    const missing = [];
+    const optC = cands => ({ cands, required: false });
+    const rc = (table, name, spec) => resolveCols(table, name, spec, missing);
+    const WO = rc(woTable, 'Work_Orders', {
+      status: ['Status'], orderNumber: optC(['Order_Number']),
+      customerName: optC(['Customer_Name']), dueDate: optC(['Due_Date']),
+    });
+    const REC = rc(recipesTable, 'Recipes', { name: ['Recipe_Name'], sku: optC(['SKU_Base']) });
+    const COMP = rc(compTable, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'],
+      effRate: optC(['Effective_mL_per_100_yd']), defRate: optC(['Default_mL_per_100_yds']),
+    });
+    const DYE = rc(dyesTable, 'Dyes', {
+      name: ['Dye_Name'], brand: optC(['Brand']),
+      cleanup: optC(['Cleanup_Order']), shelf: optC(['Shelf_Life_days_']),
+    });
+    const STK = rc(stockTable, 'Dye_Stock', {
+      dye: ['Dye'], quantity: ['Quantity_mL'], mixedDate: optC(['Mixed_Date']),
+    });
+    const WOL = rc(wolTable, 'Work_Order_Lines', {
+      workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
+      sku: optC(['SKU']), recipe: optC(['Recipe']), priority: optC(['Production_Priority']),
+    });
+    if (missing.length) {
+      document.getElementById('content').innerHTML =
+        `<div class="empty-state">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].join('<br>')}</strong><br><br><span style="font-size:10px">A table or column was likely renamed.</span></div>`;
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     const woIds = woTable.id || [];
     const woInfo = {};
     woIds.forEach((id, i) => {
       woInfo[id] = {
-        active: (columnAsArray(woTable, 'Status')[i] || '').toString() === 'Active',
-        orderNumber: columnAsArray(woTable, 'Order_Number')[i],
-        customerName: columnAsArray(woTable, 'Customer_Name')[i],
-        dueDate: columnAsArray(woTable, 'Due_Date')[i],
+        active: (columnAsArray(woTable, WO.status)[i] || '').toString() === 'Active',
+        orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
+        customerName: columnAsArray(woTable, WO.customerName)[i],
+        dueDate: columnAsArray(woTable, WO.dueDate)[i],
       };
     });
 
@@ -229,26 +271,23 @@ async function loadEverything() {
     const recipeById = {};
     const recipeBySku = {};
     rIds.forEach((id, i) => {
-      const rec = { id, name: columnAsArray(recipesTable, 'Recipe_Name')[i] };
+      const rec = { id, name: columnAsArray(recipesTable, REC.name)[i] };
       recipeById[id] = rec;
-      const sku = normalize(columnAsArray(recipesTable, 'SKU_Base')[i]);
+      const sku = normalize(columnAsArray(recipesTable, REC.sku)[i]);
       if (sku) recipeBySku[sku] = rec;
     });
 
     const cIds = compTable.id || [];
     const compsByRecipe = {};
-    // Dye_Name on Recipe_Dye_Components is a Ref:Dyes link — resolve it to the
-    // actual dye name via the Dyes table, or downstream stock/powder lookups
-    // (keyed by name) silently fail.
     const preDyeIds = dyesTable.id || [];
     const dyeNameById = {};
-    preDyeIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, 'Dye_Name')[i] || ''; });
+    preDyeIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, DYE.name)[i] || ''; });
     cIds.forEach((id, i) => {
-      const recipeRef = getRefId(columnAsArray(compTable, 'Recipe')[i]);
+      const recipeRef = getRefId(columnAsArray(compTable, COMP.recipe)[i]);
       if (!recipeRef) return;
-      const rate = Number(columnAsArray(compTable, 'Effective_mL_per_100_yd')[i]) ||
-                   Number(columnAsArray(compTable, 'Default_mL_per_100_yds')[i]) || 0;
-      const rawDye = columnAsArray(compTable, 'Dye_Name')[i];
+      const rate = Number(columnAsArray(compTable, COMP.effRate)[i]) ||
+                   Number(columnAsArray(compTable, COMP.defRate)[i]) || 0;
+      const rawDye = columnAsArray(compTable, COMP.dye)[i];
       const dyeRefId = getRefId(rawDye);
       const resolvedName = dyeRefId ? (dyeNameById[dyeRefId] || '') : (typeof rawDye === 'string' ? rawDye : '');
       const entry = { dyeName: resolvedName, rate };
@@ -259,24 +298,24 @@ async function loadEverything() {
     const dIds = dyesTable.id || [];
     const dyeByName = {};
     dIds.forEach((id, i) => {
-      const name = normalize(columnAsArray(dyesTable, 'Dye_Name')[i]);
+      const name = normalize(columnAsArray(dyesTable, DYE.name)[i]);
       if (!name) return;
       dyeByName[name] = {
         id,
-        name: columnAsArray(dyesTable, 'Dye_Name')[i],
-        brand: columnAsArray(dyesTable, 'Brand')[i],
-        cleanupOrder: Number(columnAsArray(dyesTable, 'Cleanup_Order')[i]) || 999,
-        shelfLifeDays: Number(columnAsArray(dyesTable, 'Shelf_Life_days_')[i]) || null,
+        name: columnAsArray(dyesTable, DYE.name)[i],
+        brand: columnAsArray(dyesTable, DYE.brand)[i],
+        cleanupOrder: Number(columnAsArray(dyesTable, DYE.cleanup)[i]) || 999,
+        shelfLifeDays: Number(columnAsArray(dyesTable, DYE.shelf)[i]) || null,
       };
     });
 
     const sIds = stockTable.id || [];
     const stockByDyeId = {};
     sIds.forEach((id, i) => {
-      const dyeRef = getRefId(columnAsArray(stockTable, 'Dye')[i]);
+      const dyeRef = getRefId(columnAsArray(stockTable, STK.dye)[i]);
       if (!dyeRef) return;
-      const qty = Number(columnAsArray(stockTable, 'Quantity_mL')[i]) || 0;
-      const mixedDate = columnAsArray(stockTable, 'Mixed_Date')[i];
+      const qty = Number(columnAsArray(stockTable, STK.quantity)[i]) || 0;
+      const mixedDate = columnAsArray(stockTable, STK.mixedDate)[i];
       if (!stockByDyeId[dyeRef]) stockByDyeId[dyeRef] = [];
       stockByDyeId[dyeRef].push({ id, qty, mixedDate });
     });
@@ -286,18 +325,18 @@ async function loadEverything() {
     const recipeDyeSets = {}; // recipeId -> Set of dye names, for clustering
 
     for (let i = 0; i < wolIds.length; i++) {
-      const woId = getRefId(columnAsArray(wolTable, 'Work_Order')[i]);
+      const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
       const info = woInfo[woId];
       if (!info || !info.active) continue;
 
-      const qtyNeeded = Number(columnAsArray(wolTable, 'Qty_Needed')[i]) || 0;
+      const qtyNeeded = Number(columnAsArray(wolTable, WOL.qtyNeeded)[i]) || 0;
       const allocated = allocByLine[wolIds[i]] || 0;
       let remaining = qtyNeeded - allocated;
       if (remaining <= 0) continue;
 
-      const sku = columnAsArray(wolTable, 'SKU')[i] || '';
+      const sku = columnAsArray(wolTable, WOL.sku)[i] || '';
       let recipe = null;
-      const directRecipeId = getRefId(columnAsArray(wolTable, 'Recipe')[i]);
+      const directRecipeId = getRefId(columnAsArray(wolTable, WOL.recipe)[i]);
       if (directRecipeId && recipeById[directRecipeId]) recipe = recipeById[directRecipeId];
       else recipe = recipeBySku[normalize(sku)] || null;
 
@@ -315,7 +354,7 @@ async function loadEverything() {
         if (comp.dyeName) recipeDyeSets[recipe.id].add(comp.dyeName);
       });
 
-      const priority = columnAsArray(wolTable, 'Production_Priority')[i] || 'Normal';
+      const priority = columnAsArray(wolTable, WOL.priority)[i] || 'Normal';
 
       compsByRecipe[recipe.id].forEach(comp => {
         if (!comp.dyeName) return;
@@ -440,7 +479,8 @@ async function loadEverything() {
     renderList();
   } catch (e) {
     console.error('Failed to load dye prep sequence:', e);
-    document.getElementById('headerSub').textContent = 'Failed to load — check table/column names';
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    document.getElementById('headerSub').textContent = 'Failed to load — ' + msg;
   }
 }
 
