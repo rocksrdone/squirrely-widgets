@@ -644,6 +644,18 @@ async function sendPhotoToReview(label) {
   }
 }
 
+// Read a field off a Grist row/record object by trying candidate column ids,
+// matched ignoring case and non-alphanumerics — so a rename doesn't break it.
+function rowField(row, candidates) {
+  if (!row) return undefined;
+  const keys = Object.keys(row);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return row[hit];
+  }
+  return undefined;
+}
+
 function calcTsp(base) {
   if (!base || isNaN(base)) return '—';
   const v = parseFloat(base) * currentYardage / 100;
@@ -812,9 +824,9 @@ function renderLeft() {
         ${c.Dye_Name || '—'}
         ${brand ? `<span class="brand">${brand[1]}</span>` : ''}
       </div></td>
-      <td><span class="amt">${calcTsp(c['Std_Powder_tsp_'])}</span></td>
-      <td><span class="amt">${calcMl(c['Std_Water_mL_'])}</span></td>
-      <td><span class="amt">${calcMl(c['Effective_mL_per_100_yd'] || c['Default_mL_per_100_yds'])}</span></td>
+      <td><span class="amt">${calcTsp(rowField(c, ['Std_Powder_tsp_']))}</span></td>
+      <td><span class="amt">${calcMl(rowField(c, ['Std_Water_mL_']))}</span></td>
+      <td><span class="amt">${calcMl(rowField(c, ['Effective_mL_per_100_yd']) || rowField(c, ['Default_mL_per_100_yds']))}</span></td>
       <td>${c.Is_Powder ? `<span class="dil" style="background:#EFE7D8;color:#8A6D2A;">powder</span>` : (c.Dilution_Ratio ? `<span class="dil">${c.Dilution_Ratio}</span>` : '')}</td>
     </tr>`;
   }).join('');
@@ -1054,7 +1066,7 @@ let loadGeneration = 0;
 grist.onRecord(async (record) => {
   const myGeneration = ++loadGeneration;
 
-  if (!record || !record.Recipe_Name) {
+  if (!record || !rowField(record, ['Recipe_Name'])) {
     if (myGeneration !== loadGeneration) return;
     document.getElementById('emptyState').style.display = 'flex';
     document.getElementById('cardView').style.display = 'none';
@@ -1167,7 +1179,7 @@ grist.onRecord(async (record) => {
 
   let localSpoolStats = { needed: 0, made: 0, perOrder: [] };
   try {
-    const recipeSku = (record.SKU_Base || record.Shopify_SKU || '').toString().trim().toUpperCase();
+    const recipeSku = (rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '').toString().trim().toUpperCase();
 
     if (recipeSku) {
       const [woTable, wolTable] = await Promise.all([
@@ -1260,7 +1272,7 @@ grist.onRecord(async (record) => {
   currentBaseSegments = localBaseSegments;
   currentOverlayMarks = localOverlayMarks;
   currentSpoolStats = localSpoolStats;
-  currentShopifyUrl = record.Shopify_URL || '';
+  currentShopifyUrl = rowField(record, ['Shopify_URL']) || '';
   currentHistoryEntries = localHistoryEntries;
   currentProductPhotos = previewResult.candidates;
   currentPreviewUrl = previewResult.matchUrl;
