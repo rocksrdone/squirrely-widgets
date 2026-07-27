@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Product Photo Manager</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --done-bg: #EAF3DE;
+  --done-border: #639922;
+  --done-text: #27500A;
+  --star: #C8A020;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+}
+
+/* ── Header ── */
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.head-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.refresh-btn { font-size: 11px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer; }
+.refresh-btn:hover { border-color: var(--accent); }
+.summary { font-size: 11px; color: #8B7D72; margin-bottom: 14px; }
+
+/* ── Banner (missing columns / errors) ── */
+.banner { display: none; padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 12px;
+  background: var(--accent-light); border: 1px solid var(--accent); color: var(--accent); }
+.banner.show { display: block; }
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--rule); }
+.tab { font-size: 12px; font-weight: 600; padding: 8px 12px; cursor: pointer; color: #8B7D72;
+  border: none; background: none; border-bottom: 2px solid transparent; font-family: 'Inter', sans-serif; }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .count { font-family: 'DM Mono', monospace; font-size: 10px; margin-left: 4px; opacity: .8; }
+
+/* ── Section labels ── */
+.slabel { font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #8B7D72; margin: 20px 0 10px; }
+.slabel:first-child { margin-top: 0; }
+.section-note { font-size: 11px; color: #8B7D72; margin: -4px 0 12px; font-style: italic; }
+
+/* ── Search ── */
+.search-input { width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px;
+  font-family: 'Inter', sans-serif; font-size: 13px; background: white; color: var(--ink); outline: none; margin-bottom: 14px; }
+.search-input:focus { border-color: var(--accent); }
+
+/* ── Empty / done states ── */
+.done-state { text-align: center; color: #8B7D72; padding: 28px 20px; font-style: italic;
+  border: 1px dashed var(--rule); border-radius: 8px; }
+
+/* ── Unlinked photo cards ── */
+.attn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.attn-card { border: 1.5px solid var(--rule); border-radius: 8px; background: white; overflow: hidden; }
+.attn-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
+.attn-body { padding: 10px; }
+.attn-file { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; margin-bottom: 6px; }
+.suggest-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.confidence { font-size: 9px; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.conf-exact { background: var(--done-bg); color: var(--done-text); }
+.conf-likely { background: var(--gold-light); color: var(--gold); }
+.link-btn { font-size: 11px; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--accent);
+  background: var(--accent); color: white; cursor: pointer; font-family: 'Inter', sans-serif; }
+.link-btn:hover { opacity: .9; }
+.link-search { position: relative; }
+.link-search input { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
+.link-search input:focus { border-color: var(--accent); }
+.suggestions { border: 1px solid var(--rule); border-radius: 0 0 6px 6px; border-top: none; background: white;
+  max-height: 180px; overflow-y: auto; margin-top: -1px; display: none; }
+.suggestions.show { display: block; }
+.sugg { padding: 6px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--warm); }
+.sugg:last-child { border-bottom: none; }
+.sugg:hover { background: var(--warm); }
+.sugg .sn { font-weight: 500; }
+.sugg .sm { font-size: 10px; color: #8B7D72; }
+
+/* ── Missing-photo recipe chips ── */
+.recipe-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.recipe-chip { padding: 6px 10px; border-radius: 6px; background: white; border: 1px solid var(--rule);
+  font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.recipe-chip .rc-fiber { font-size: 10px; color: #8B7D72; }
+
+/* ── By-recipe cards ── */
+.rec-card { border: 1px solid var(--rule); border-radius: 8px; background: white; margin-bottom: 12px; overflow: hidden; }
+.rec-head { display: flex; align-items: center; gap: 10px; padding: 12px; cursor: pointer; }
+.rec-head:hover { background: var(--warm); }
+.rec-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+.rec-headmain { flex: 1; min-width: 0; }
+.rec-name { font-weight: 600; font-size: 14px; }
+.rec-sub { font-size: 11px; color: #8B7D72; margin-top: 1px; }
+.rec-slots { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+.slot-pill { font-size: 8px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+  border: 1px solid var(--rule); color: #A89A8C; background: var(--paper); }
+.slot-pill.on { background: var(--teal-light); color: var(--teal); border-color: #9ACFC7; }
+.rec-chev { font-size: 12px; color: #8B7D72; transition: transform .15s; }
+.rec-card.open .rec-chev { transform: rotate(90deg); }
+.rec-warn { font-size: 10px; color: var(--gold); font-weight: 600; }
+
+.rec-body { display: none; padding: 0 12px 12px; border-top: 1px solid var(--warm); }
+.rec-card.open .rec-body { display: block; }
+
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.pcard { border: 1.5px solid var(--warm); border-radius: 6px; overflow: hidden; background: white; }
+.pcard.standard { border-color: var(--star); }
+.pcard.rejected { opacity: .6; }
+.pcard img { width: 100%; height: 120px; object-fit: cover; display: block; background: var(--warm); }
+.pcard-body { padding: 8px; }
+.pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
+.pcard-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.star-btn { background: none; border: none; cursor: pointer; font-size: 17px; color: var(--rule); line-height: 1; padding: 0; }
+.star-btn.on { color: var(--star); }
+.standard-tag { font-size: 9px; font-weight: 600; color: var(--star); text-transform: uppercase; letter-spacing: .04em; }
+.status-seg { display: flex; gap: 3px; margin-bottom: 6px; }
+.status-seg button { flex: 1; font-size: 9px; padding: 4px 2px; border-radius: 4px; border: 1px solid var(--rule);
+  background: white; color: #8B7D72; cursor: pointer; font-family: 'Inter', sans-serif; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em; }
+.status-seg button.active-pending { background: var(--gold-light); color: var(--gold); border-color: var(--gold); }
+.status-seg button.active-approved { background: var(--done-bg); color: var(--done-text); border-color: var(--done-border); }
+.status-seg button.active-rejected { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
+.note-input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: vertical; margin-bottom: 6px; }
+.note-input:focus { border-color: var(--accent); }
+.pcard-links { display: flex; gap: 8px; }
+.mini-link { font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-family: 'Inter', sans-serif; }
+
+/* ── Toast ── */
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="head-title">Product Photo Manager</div>
+  <button class="refresh-btn" id="refreshBtn">↻ Refresh</button>
+</div>
+<div class="summary" id="summary">Loading…</div>
+
+<div class="banner" id="banner"></div>
+
+<div class="tabs" id="tabs" style="display:none">
+  <button class="tab active" data-tab="attention">Needs attention<span class="count" id="attnCount"></span></button>
+  <button class="tab" data-tab="recipes">By recipe<span class="count" id="recCount"></span></button>
+</div>
+
+<div id="viewAttention"></div>
+<div id="viewRecipes" style="display:none"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Static shell is already rendered above. Only now do we talk to Grist. ──
+
+const STATUSES = ['Pending', 'Approved', 'Rejected'];
+
+let allRecipes = [];   // {id, Recipe_Name, Fiber_Type, Recipe_Scope, slots:{...}}
+let allPhotos = [];    // {id, recipeId, Colorway_Name, Fiber_Type, Nextcloud_URL, Source_Filename, Status, Lot_Date, Notes, Is_Favorite, Is_Preview}
+let currentTab = 'attention';
+let expandedRecipeId = null;
+let recipeSearch = '';
+
+// ── helpers ──
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const target = cand.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === target);
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId || null;
+  return null;
+}
+function normalize(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function filled(v) { return Array.isArray(v) ? v.length > 0 : (v != null && v !== ''); }
+function fmtDate(v) {
+  const n = Number(v);
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  return isNaN(d) ? '' : d.toLocaleDateString();
+}
+function statusOf(p) {
+  const s = (p.Status || '').toLowerCase();
+  if (s.includes('approve')) return 'Approved';
+  if (s.includes('reject')) return 'Rejected';
+  return 'Pending';
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+function showBanner(msg) {
+  const b = document.getElementById('banner');
+  b.textContent = msg;
+  b.classList.add('show');
+}
+
+// ── load ──
+async function loadEverything() {
+  document.getElementById('summary').textContent = 'Loading…';
+  document.getElementById('banner').classList.remove('show');
+  try {
+    const [recipesData, photosData] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Product_Photos'),
+    ]);
+
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const REC = resolveCols(recipesData, 'Recipes', {
+      name: ['Recipe_Name'],
+      fiber: opt(['Fiber_Type']),
+      scope: opt(['Recipe_Scope']),
+      step1: opt(['Photo_Process_1']),
+      step2: opt(['Photo_Process_2']),
+      finished: opt(['Photo_Finished']),
+      inspiration: opt(['Photo_Inspiration']),
+    }, missing);
+    const PH = resolveCols(photosData, 'Product_Photos', {
+      recipe: ['Recipe'],
+      colorway: opt(['Colorway_Name']),
+      fiber: opt(['Fiber_Type']),
+      url: opt(['Nextcloud_URL']),
+      filename: opt(['Source_Filename']),
+      status: opt(['Status']),
+      lotDate: opt(['Lot_Date']),
+      notes: opt(['Notes']),
+      fav: opt(['Is_Favorite']),
+      preview: opt(['Is_Preview']),
+    }, missing);
+
+    if (missing.length) {
+      showBanner('Missing columns: ' + [...new Set(missing)].join(', ') + '. Check the Product Photos / Recipes tables.');
+      document.getElementById('summary').textContent = 'Could not load — see above.';
+      return;
+    }
+
+    const rIds = recipesData.id || [];
+    allRecipes = rIds.map((id, i) => ({
+      id,
+      Recipe_Name: columnAsArray(recipesData, REC.name)[i],
+      Fiber_Type: columnAsArray(recipesData, REC.fiber)[i],
+      Recipe_Scope: columnAsArray(recipesData, REC.scope)[i],
+      slots: {
+        step1: filled(columnAsArray(recipesData, REC.step1)[i]),
+        step2: filled(columnAsArray(recipesData, REC.step2)[i]),
+        finished: filled(columnAsArray(recipesData, REC.finished)[i]),
+        inspiration: filled(columnAsArray(recipesData, REC.inspiration)[i]),
+      },
+    })).filter(r => r.Recipe_Name);
+
+    const pIds = photosData.id || [];
+    allPhotos = pIds.map((id, i) => ({
+      id,
+      recipeId: getRefId(columnAsArray(photosData, PH.recipe)[i]),
+      Colorway_Name: columnAsArray(photosData, PH.colorway)[i],
+      Fiber_Type: columnAsArray(photosData, PH.fiber)[i],
+      Nextcloud_URL: columnAsArray(photosData, PH.url)[i],
+      Source_Filename: columnAsArray(photosData, PH.filename)[i],
+      Status: columnAsArray(photosData, PH.status)[i],
+      Lot_Date: columnAsArray(photosData, PH.lotDate)[i],
+      Notes: columnAsArray(photosData, PH.notes)[i],
+      Is_Favorite: !!columnAsArray(photosData, PH.fav)[i],
+      Is_Preview: !!columnAsArray(photosData, PH.preview)[i],
+    }));
+
+    document.getElementById('tabs').style.display = 'flex';
+    renderAll();
+  } catch (e) {
+    console.error('Load failed:', e);
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    showBanner('Failed to load — ' + msg);
+    document.getElementById('summary').textContent = 'Failed to load.';
+  }
+}
+
+// ── derived ──
+function unlinkedPhotos() { return allPhotos.filter(p => !p.recipeId && statusOf(p) !== 'Rejected'); }
+function photosForRecipe(rid) { return allPhotos.filter(p => p.recipeId === rid); }
+function recipesWithPhotos() {
+  const linked = new Set(allPhotos.map(p => p.recipeId).filter(Boolean));
+  return allRecipes.filter(r => linked.has(r.id));
+}
+function recipesMissingPhotos() {
+  const linked = new Set(allPhotos.map(p => p.recipeId).filter(Boolean));
+  return allRecipes.filter(r => !linked.has(r.id)).sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
+}
+function pendingCount() { return allPhotos.filter(p => p.recipeId && statusOf(p) === 'Pending').length; }
+
+// Suggest a recipe for an unlinked photo by its colorway name.
+function suggestRecipe(photo) {
+  const n = normalize(photo.Colorway_Name);
+  if (!n) return null;
+  const exact = allRecipes.find(r => normalize(r.Recipe_Name) === n);
+  if (exact) return { recipe: exact, confidence: 'exact' };
+  const likely = allRecipes
+    .filter(r => { const rn = normalize(r.Recipe_Name); return rn && (rn.includes(n) || n.includes(rn)); })
+    .sort((a, b) => Math.abs(normalize(a.Recipe_Name).length - n.length) - Math.abs(normalize(b.Recipe_Name).length - n.length))[0];
+  return likely ? { recipe: likely, confidence: 'likely' } : null;
+}
+
+// ── render root ──
+function renderAll() {
+  const unl = unlinkedPhotos();
+  const miss = recipesMissingPhotos();
+  const attnTotal = unl.length + miss.length;
+
+  document.getElementById('attnCount').textContent = attnTotal ? `(${attnTotal})` : '';
+  document.getElementById('recCount').textContent = `(${recipesWithPhotos().length})`;
+
+  const pend = pendingCount();
+  document.getElementById('summary').textContent =
+    `${unl.length} photo${unl.length === 1 ? '' : 's'} to link · ` +
+    `${miss.length} recipe${miss.length === 1 ? '' : 's'} with no photo · ` +
+    `${pend} pending review`;
+
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === currentTab));
+  document.getElementById('viewAttention').style.display = currentTab === 'attention' ? 'block' : 'none';
+  document.getElementById('viewRecipes').style.display = currentTab === 'recipes' ? 'block' : 'none';
+
+  if (currentTab === 'attention') renderAttention(unl, miss);
+  else renderRecipes();
+}
+
+function renderAttention(unl, miss) {
+  const v = document.getElementById('viewAttention');
+  let html = '';
+
+  html += `<div class="slabel">Photos waiting for a recipe (${unl.length})</div>`;
+  html += `<div class="section-note">These arrived from the lot-photo import and aren't linked to a recipe yet. Confirm the suggestion or search for the right one.</div>`;
+  if (!unl.length) {
+    html += `<div class="done-state">Nothing waiting — every photo is linked to a recipe. 🎉</div>`;
+  } else {
+    html += `<div class="attn-grid">` + unl.map(unlinkedCardHTML).join('') + `</div>`;
+  }
+
+  html += `<div class="slabel">Recipes with no product photo (${miss.length})</div>`;
+  if (!miss.length) {
+    html += `<div class="done-state">Every recipe has at least one photo.</div>`;
+  } else {
+    html += `<div class="recipe-chips">` + miss.map(r => `
+      <div class="recipe-chip">
+        <span>${esc(r.Recipe_Name)}</span>
+        <span class="rc-fiber">${esc(r.Fiber_Type || '—')}</span>
+      </div>`).join('') + `</div>`;
+    html += `<div class="section-note" style="margin-top:10px">Take and file a photo through Photo Inbox — these will drop off the list once one is linked.</div>`;
+  }
+
+  v.innerHTML = html;
+}
+
+function unlinkedCardHTML(p) {
+  const s = suggestRecipe(p);
+  const suggestBlock = s
+    ? `<div class="suggest-row">
+         <span class="confidence conf-${s.confidence}">${s.confidence === 'exact' ? 'exact match' : 'likely'}</span>
+         <button class="link-btn" data-action="link" data-photo="${p.id}" data-recipe="${s.recipe.id}">Link to ${esc(s.recipe.Recipe_Name)}</button>
+       </div>`
+    : `<div class="suggest-row"><span class="confidence conf-likely">no name match</span><span style="font-size:11px;color:#8B7D72">Search for the recipe below.</span></div>`;
+  return `
+    <div class="attn-card">
+      <img src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" onerror="this.style.opacity=0.2">
+      <div class="attn-body">
+        <div style="font-weight:500;margin-bottom:2px">${esc(p.Colorway_Name || 'Untitled')}</div>
+        <div class="attn-file">${esc(p.Source_Filename || '')}</div>
+        ${suggestBlock}
+        <div class="link-search">
+          <input placeholder="Search recipes…" data-linksearch="${p.id}">
+          <div class="suggestions" data-suggfor="${p.id}"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderRecipes() {
+  const v = document.getElementById('viewRecipes');
+  const all = recipesWithPhotos();
+  const q = normalize(recipeSearch);
+  const list = (q ? all.filter(r => normalize(r.Recipe_Name).includes(q)) : all)
+    .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
+
+  let html = `<input class="search-input" id="recSearchBox" placeholder="Search recipes…" value="${esc(recipeSearch)}">`;
+  html += `<div class="section-note">★ is your standard — the most consistent version to show. Mark lot alternatives clients can use as <b>Approved</b>. Sending an approved photo to a client's order folder happens in Photo Gallery, per order.</div>`;
+
+  if (!list.length) {
+    html += `<div class="done-state">${q ? 'No recipes match that search.' : 'No recipes have product photos yet.'}</div>`;
+    v.innerHTML = html;
+    wireRecipeSearch();
+    return;
+  }
+
+  html += list.map(recipeCardHTML).join('');
+  v.innerHTML = html;
+  wireRecipeSearch();
+}
+
+function slotPills(slots) {
+  const defs = [['step1', 'Step 1'], ['step2', 'Step 2'], ['finished', 'Finished'], ['inspiration', 'Inspiration']];
+  return `<div class="rec-slots">` + defs.map(([k, label]) =>
+    `<span class="slot-pill ${slots[k] ? 'on' : ''}">${label}</span>`).join('') + `</div>`;
+}
+
+function recipeCardHTML(r) {
+  const photos = photosForRecipe(r.id).sort((a, b) => {
+    if (a.Is_Favorite !== b.Is_Favorite) return a.Is_Favorite ? -1 : 1;
+    return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
+  });
+  const isOpen = expandedRecipeId === r.id;
+  const standard = photos.find(p => p.Is_Favorite);
+  const approved = photos.filter(p => statusOf(p) === 'Approved').length;
+  const thumb = (standard || photos[0] || {}).Nextcloud_URL || '';
+
+  let subBits = `${esc(r.Fiber_Type || '—')} · ${photos.length} photo${photos.length === 1 ? '' : 's'}`;
+  if (approved) subBits += ` · ${approved} client-ready`;
+  const noStandard = photos.length > 0 && !standard;
+
+  return `
+    <div class="rec-card ${isOpen ? 'open' : ''}" data-reccard="${r.id}">
+      <div class="rec-head" data-action="expand" data-recipe="${r.id}">
+        <img class="rec-thumb" src="${esc(thumb)}" alt="" onerror="this.style.opacity=0.2">
+        <div class="rec-headmain">
+          <div class="rec-name">${esc(r.Recipe_Name)}</div>
+          <div class="rec-sub">${subBits}${noStandard ? ' · <span class="rec-warn">no standard set</span>' : ''}</div>
+          ${slotPills(r.slots)}
+        </div>
+        <div class="rec-chev">▸</div>
+      </div>
+      <div class="rec-body">
+        ${isOpen ? `<div class="photo-grid">${photos.map(photoCardHTML).join('')}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function photoCardHTML(p) {
+  const st = statusOf(p);
+  const std = p.Is_Favorite;
+  return `
+    <div class="pcard ${std ? 'standard' : ''} ${st === 'Rejected' ? 'rejected' : ''}">
+      <img src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" onerror="this.style.opacity=0.2">
+      <div class="pcard-body">
+        <div class="pcard-top">
+          <button class="star-btn ${std ? 'on' : ''}" data-action="standard" data-photo="${p.id}" title="Set as the standard to show">★</button>
+          ${std ? '<span class="standard-tag">Standard</span>' : '<span style="font-size:10px;color:#8B7D72">Set standard</span>'}
+        </div>
+        <div class="pcard-meta">${fmtDate(p.Lot_Date) || esc(p.Source_Filename || '')}</div>
+        <div class="status-seg">
+          ${STATUSES.map(s => `<button class="${st === s ? 'active-' + s.toLowerCase() : ''}" data-action="status" data-photo="${p.id}" data-status="${s}">${s === 'Approved' ? 'Client-ready' : s}</button>`).join('')}
+        </div>
+        <textarea class="note-input" rows="1" placeholder="Note (e.g. lot ran darker)" data-notefor="${p.id}">${esc(p.Notes || '')}</textarea>
+        <div class="pcard-links">
+          <button class="mini-link" data-action="unlink" data-photo="${p.id}">Unlink</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function wireRecipeSearch() {
+  const box = document.getElementById('recSearchBox');
+  if (!box) return;
+  box.oninput = () => { recipeSearch = box.value; /* re-render list only, keep focus */ renderRecipesListOnly(); };
+}
+// Re-render the recipe list without stealing focus from the search box.
+function renderRecipesListOnly() {
+  const v = document.getElementById('viewRecipes');
+  const box = document.getElementById('recSearchBox');
+  const caret = box ? box.selectionStart : null;
+  renderRecipes();
+  const box2 = document.getElementById('recSearchBox');
+  if (box2) { box2.focus(); if (caret != null) box2.setSelectionRange(caret, caret); }
+}
+
+// ── actions ──
+async function linkPhoto(photoId, recipeId) {
+  const p = allPhotos.find(x => x.id === photoId);
+  const r = allRecipes.find(x => x.id === recipeId);
+  if (!p || !r) return;
+  const fields = { Recipe: recipeId };
+  if (!p.Fiber_Type && r.Fiber_Type) fields.Fiber_Type = r.Fiber_Type;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, fields]]);
+    p.recipeId = recipeId;
+    if (fields.Fiber_Type) p.Fiber_Type = fields.Fiber_Type;
+    showToast(`Linked to ${r.Recipe_Name}`);
+    renderAll();
+  } catch (e) {
+    console.error('Link failed:', e);
+    showToast('Could not link — check widget access level');
+  }
+}
+
+async function unlinkPhoto(photoId) {
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Recipe: null }]]);
+    const p = allPhotos.find(x => x.id === photoId);
+    if (p) p.recipeId = null;
+    showToast('Unlinked');
+    renderAll();
+  } catch (e) {
+    console.error('Unlink failed:', e);
+    showToast('Could not unlink — check widget access level');
+  }
+}
+
+// Set the single standard for a recipe: favorite + preview on this photo, off its siblings.
+async function setStandard(photoId) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p || !p.recipeId) return;
+  const siblings = photosForRecipe(p.recipeId);
+  const turningOff = p.Is_Favorite; // clicking the current standard clears it
+  const actions = [];
+  siblings.forEach(s => {
+    const shouldBe = !turningOff && s.id === photoId;
+    if (s.Is_Favorite !== shouldBe || s.Is_Preview !== shouldBe) {
+      actions.push(['UpdateRecord', 'Product_Photos', s.id, { Is_Favorite: shouldBe, Is_Preview: shouldBe }]);
+    }
+  });
+  if (!actions.length) return;
+  try {
+    await grist.docApi.applyUserActions(actions);
+    siblings.forEach(s => { const on = !turningOff && s.id === photoId; s.Is_Favorite = on; s.Is_Preview = on; });
+    showToast(turningOff ? 'Standard cleared' : 'Standard set');
+    renderRecipes();
+  } catch (e) {
+    console.error('Set standard failed:', e);
+    showToast('Could not set standard — check widget access level');
+  }
+}
+
+async function setStatus(photoId, status) {
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Status: status }]]);
+    const p = allPhotos.find(x => x.id === photoId);
+    if (p) p.Status = status;
+    showToast(status === 'Approved' ? 'Marked client-ready' : status);
+    renderAll();
+  } catch (e) {
+    console.error('Set status failed:', e);
+    showToast('Could not update status — check widget access level');
+  }
+}
+
+async function setNote(photoId, text) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p || (p.Notes || '') === text) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Notes: text }]]);
+    p.Notes = text;
+    showToast('Note saved');
+  } catch (e) {
+    console.error('Save note failed:', e);
+    showToast('Could not save note — check widget access level');
+  }
+}
+
+// ── event delegation ──
+document.getElementById('refreshBtn').addEventListener('click', loadEverything);
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  currentTab = tab.dataset.tab;
+  renderAll();
+});
+
+document.body.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const photoId = el.dataset.photo ? Number(el.dataset.photo) : null;
+  const recipeId = el.dataset.recipe ? Number(el.dataset.recipe) : null;
+
+  if (action === 'link') linkPhoto(photoId, recipeId);
+  else if (action === 'unlink') unlinkPhoto(photoId);
+  else if (action === 'standard') setStandard(photoId);
+  else if (action === 'status') setStatus(photoId, el.dataset.status);
+  else if (action === 'expand') { expandedRecipeId = (expandedRecipeId === recipeId) ? null : recipeId; renderRecipes(); }
+});
+
+// Live recipe-search inside unlinked cards (delegated input).
+document.body.addEventListener('input', (e) => {
+  const input = e.target.closest('[data-linksearch]');
+  if (!input) return;
+  const photoId = input.dataset.linksearch;
+  const box = document.querySelector(`[data-suggfor="${photoId}"]`);
+  if (!box) return;
+  const q = normalize(input.value);
+  if (!q) { box.classList.remove('show'); box.innerHTML = ''; return; }
+  const matches = allRecipes
+    .filter(r => normalize(r.Recipe_Name).includes(q))
+    .slice(0, 8);
+  if (!matches.length) {
+    box.innerHTML = `<div class="sugg" style="color:#8B7D72;font-style:italic">No matches</div>`;
+  } else {
+    box.innerHTML = matches.map(r => `
+      <div class="sugg" data-action="link" data-photo="${photoId}" data-recipe="${r.id}">
+        <div class="sn">${esc(r.Recipe_Name)}</div>
+        <div class="sm">${esc(r.Fiber_Type || '—')}${/reserv/i.test(r.Recipe_Scope || '') ? ' · reserved' : ''}</div>
+      </div>`).join('');
+  }
+  box.classList.add('show');
+});
+
+// Save notes on blur / change (delegated).
+document.body.addEventListener('change', (e) => {
+  const ta = e.target.closest('[data-notefor]');
+  if (!ta) return;
+  setNote(Number(ta.dataset.notefor), ta.value);
+});
+
+// ── GRIST INTEGRATION ──
+grist.ready({ requiredAccess: 'full' });
+loadEverything();
+</script>
+</body>
+</html>
