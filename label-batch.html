@@ -131,6 +131,9 @@ input[type=checkbox]:disabled { cursor: default; }
 .footer-opt { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); }
 .footer-actions { margin-left: auto; display: flex; gap: 6px; }
 
+.start-at { font-size: 11px; color: var(--mid); display: flex; align-items: center; gap: 5px; }
+.start-at .qty-input { width: 46px; }
+.geom-warn { padding: 8px 13px; background: var(--gold-light); border-top: 1px solid #E4CF9E; color: #6E4C13; font-size: 11px; line-height: 1.5; }
 .toast { position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 82vw; }
 .toast.show { opacity: 1; }
 .toast.err { background: var(--accent); }
@@ -157,7 +160,8 @@ input[type=checkbox]:disabled { cursor: default; }
 
 <div class="footer-bar">
   <div class="footer-count"><strong id="totalCount">0</strong> labels across <span id="groupCount">0</span> sheet type(s)</div>
-  <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool</label>
+  <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool <span style="color:var(--muted)">(CSV)</span></label>
+  <label class="footer-opt"><input type="checkbox" id="proofMode"> Proof outlines <span style="color:var(--muted)">(PDF)</span></label>
   <div class="footer-actions">
     <button class="btn solid" id="csvAllBtn">Download all files</button>
   </div>
@@ -166,6 +170,7 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="toast" id="toast"></div>
 
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 /* ============================================================
    Spool Label Batch — Squirrely Stash
@@ -182,6 +187,32 @@ input[type=checkbox]:disabled { cursor: default; }
    Requires FULL access — writes the sheet-on-hand toggle and
    calibration values back to Grist.
    ============================================================ */
+
+/* ---------- PDF constants ----------
+   Ring artwork is fetched at runtime rather than embedded, so regenerating a
+   ring (e.g. EN moving from 140 to 150 yards) is a file swap in the repo with
+   no widget change. One PNG per fiber code, transparent, ~900ppi.            */
+/* The ring is drawn as live text, not embedded artwork. Yardage therefore comes
+   from yardsPerSpool() — the same function thread-board, wind-routing and
+   work-overview already use — so changing a spool length in one place updates
+   every printed label. No PNG to regenerate, ever.                            */
+const RING_SPEC = {
+  FFN: { material: '100% Nylon',  size: 'FF' },
+  FFC: { material: '100% Cotton', size: 'FF' },
+  EN:  { material: '100% Nylon',  size: 'E'  },
+};
+
+/* Measured off the real Maestro sheets: text sits at 0.4217 x diameter on
+   OL3012 and 0.4152 on OL1025. One ratio covers both.                        */
+const RING_RADIUS_RATIO = 0.42;
+const RING_FONT_RATIO = 0.062;   // of diameter, when no Ring_Font_Size_Pt is set
+const METRES_PER_YARD = 0.9144;
+
+/* Helvetica-Bold is a PDF base-14 font: no download, cannot fail to load, and
+   renders identically everywhere. OLSansserif3-Bold is a Helvetica-class
+   grotesque, so this is also the closest available match.                     */
+const NAME_FONT = ['helvetica', 'bold'];
+const NAME_FIT_RATIO = 0.62;   // usable width inside the ring, as a fraction of diameter
 
 /* ---------- helpers ---------- */
 function esc(s) {
@@ -252,6 +283,8 @@ const S = {
   openCalib: null,      // template id whose calibration form is open
   orderSearch: '',
   storeQtyDefault: 6,
+  startAt: {},          // group key -> first label position on the sheet
+  proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
 
@@ -409,6 +442,13 @@ async function loadTemplates(problems) {
     reverse: findColumn(t, ['Reverse_Print', 'Reverse']),
     calDate: findColumn(t, ['Calibrated_On', 'Calibration_Date']),
     batchNote: findColumn(t, ['Batch_Note', 'Notes', 'Note']),
+    cols: findColumn(t, ['Columns', 'Cols', 'Across']),
+    rows: findColumn(t, ['Rows', 'Down']),
+    pitchX: findColumn(t, ['Pitch_X_In', 'Horizontal_Pitch_In', 'Pitch_X']),
+    pitchY: findColumn(t, ['Pitch_Y_In', 'Vertical_Pitch_In', 'Pitch_Y']),
+    dia: findColumn(t, ['Label_Diameter_In', 'Diameter_In', 'Diameter']),
+    fontPt: findColumn(t, ['Name_Font_Size_Pt', 'Font_Size_Pt']),
+    ringPt: findColumn(t, ['Ring_Font_Size_Pt']),
   };
   if (!c.code) {
     problems.push({ title: 'Label_Templates has no stock-code column',
@@ -432,6 +472,13 @@ async function loadTemplates(problems) {
       reverse: c.reverse ? !!columnAsArray(t, c.reverse)[i] : false,
       calDate: c.calDate ? columnAsArray(t, c.calDate)[i] : null,
       batchNote: c.batchNote ? columnAsArray(t, c.batchNote)[i] || '' : '',
+      cols: c.cols ? Number(columnAsArray(t, c.cols)[i]) || null : null,
+      rows: c.rows ? Number(columnAsArray(t, c.rows)[i]) || null : null,
+      pitchX: c.pitchX ? Number(columnAsArray(t, c.pitchX)[i]) || null : null,
+      pitchY: c.pitchY ? Number(columnAsArray(t, c.pitchY)[i]) || null : null,
+      dia: c.dia ? Number(columnAsArray(t, c.dia)[i]) || null : null,
+      fontPt: c.fontPt ? Number(columnAsArray(t, c.fontPt)[i]) || null : null,
+      ringPt: c.ringPt ? Number(columnAsArray(t, c.ringPt)[i]) || null : null,
     };
     S.templates.push(tpl);
     fibers.forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = tpl; });
@@ -610,6 +657,7 @@ function calibHtml(tpl) {
 function groupHtml(g) {
   const tpl = g.tpl;
   const rows = g.rows;
+  const geom = pdfGeometry(tpl);
   const hasSheetCol = !!S.cols.recipe.sheet;
   const body = rows.map(r => {
     const st = stateFor(r);
@@ -645,11 +693,17 @@ function groupHtml(g) {
     </table>
     <div class="group-foot">
       <div class="group-total"><strong data-grouptotal="${esc(g.key)}">${g.total}</strong> labels on this sheet type</div>
+      ${geom.ok ? `<label class="start-at" title="Skip this many positions so a part-used sheet gets finished">
+        start at <input class="qty-input" data-startat="${esc(g.key)}" value="${esc(S.startAt[g.key] || 1)}"> of ${geom.cols * geom.rows}
+      </label>` : ''}
       <div class="group-foot-actions">
         <button class="btn tiny" data-copy="${esc(g.key)}">Copy</button>
-        <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}>Download CSV</button>
+        <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}>CSV</button>
+        <button class="btn solid" data-pdf="${esc(g.key)}" ${g.total && geom.ok ? '' : 'disabled'}
+          ${geom.ok ? '' : `title="Add to Label_Templates: ${esc(geom.missing.join(', '))}"`}>Download PDF</button>
       </div>
     </div>
+    ${geom.ok ? '' : `<div class="geom-warn">PDF needs geometry on <strong>${esc(g.code || 'this template')}</strong> — missing ${esc(geom.missing.join(', '))}. CSV still works.</div>`}
   </div>`;
 }
 
@@ -703,6 +757,17 @@ function bindPane() {
   }));
   document.querySelectorAll('[data-calibsave]').forEach(el => el.addEventListener('click', () => saveCalibration(Number(el.dataset.calibsave))));
 
+  document.querySelectorAll('[data-startat]').forEach(el => el.addEventListener('input', () => {
+    S.startAt[el.dataset.startat] = el.value;
+  }));
+  document.querySelectorAll('[data-pdf]').forEach(el => el.addEventListener('click', async () => {
+    const g = findGroup(el.dataset.pdf);
+    if (!g) return;
+    el.disabled = true; el.textContent = 'Building...';
+    try { await buildPdf(g); }
+    catch (e) { console.error(e); showToast('PDF failed — see console.', true); }
+    el.disabled = false; el.textContent = 'Download PDF';
+  }));
   document.querySelectorAll('[data-csv]').forEach(el => el.addEventListener('click', () => {
     const g = findGroup(el.dataset.csv);
     if (g) downloadGroup(g);
@@ -789,6 +854,150 @@ function updateFooter() {
   document.getElementById('csvAllBtn').disabled = !total;
 }
 
+/* ---------- PDF generation ----------
+   Draws the sheet directly rather than handing data to Maestro. The win is
+   `startAt`: a half-used sheet gets finished instead of being thrown away,
+   which is where sheet labels quietly waste the most money.                  */
+
+// "Made in USA • 100% Nylon • Size E • 137 Meters / 150 Yards"
+function ringText(fiber) {
+  const spec = RING_SPEC[fiberCode(fiber)];
+  if (!spec) return null;
+  const yd = yardsPerSpool(fiber);
+  const m = Math.round(yd * METRES_PER_YARD);
+  return `Made in USA \u2022 ${spec.material} \u2022 Size ${spec.size} \u2022 ${m} Meters / ${yd} Yards`;
+}
+
+/* Lays the string around the full circle, one character at a time, each rotated
+   to sit tangent to the path. Character angles are proportional to glyph width
+   so spacing stays even, and the string is scaled to close the loop exactly —
+   which is why a longer string ("150 Yards") still fits without adjustment.
+   Midpoint sits at 12 o'clock, matching the existing Maestro design.          */
+function drawRingText(doc, text, cx, cy, dia, fontPt) {
+  const chars = [...(text + ' \u2022 ')];   // trailing bullet closes the loop
+  doc.setFontSize(fontPt);
+  const widths = chars.map(ch => doc.getTextWidth(ch));
+  const total = widths.reduce((a, b) => a + b, 0);
+  if (!total) return;
+  const radius = dia * RING_RADIUS_RATIO;
+  let acc = 0;
+  chars.forEach((ch, i) => {
+    const frac = (acc + widths[i] / 2) / total;
+    acc += widths[i];
+    if (ch === ' ') return;
+    const theta = (frac - 0.5) * 360;             // degrees clockwise from top
+    const rad = theta * Math.PI / 180;
+    const x = cx + radius * Math.sin(rad);
+    const y = cy - radius * Math.cos(rad);
+    doc.text(ch, x, y, { angle: -theta, align: 'center', baseline: 'middle' });
+  });
+}
+
+// Every geometry field the generator needs, or a list of what's missing.
+function pdfGeometry(tpl) {
+  if (!tpl) return { ok: false, missing: ['a Label_Templates row'] };
+  const need = {
+    Columns: tpl.cols, Rows: tpl.rows,
+    Pitch_X_In: tpl.pitchX, Pitch_Y_In: tpl.pitchY,
+    Label_Diameter_In: tpl.dia,
+    Left_Margin_In: tpl.left, Top_Margin_In: tpl.top,
+  };
+  const missing = Object.keys(need).filter(k => !(Number(need[k]) > 0));
+  if (missing.length) return { ok: false, missing };
+  return {
+    ok: true,
+    cols: Number(tpl.cols), rows: Number(tpl.rows),
+    pitchX: Number(tpl.pitchX), pitchY: Number(tpl.pitchY),
+    dia: Number(tpl.dia),
+    left: Number(tpl.left), top: Number(tpl.top),
+    fontPt: Number(tpl.fontPt) > 0 ? Number(tpl.fontPt) : 7.5,
+    ringPt: Number(tpl.ringPt) > 0 ? Number(tpl.ringPt) : Number(tpl.dia) * 72 * RING_FONT_RATIO,
+  };
+}
+
+// One entry per physical label, so quantities expand the same way the CSV does.
+function expandLabels(group) {
+  const out = [];
+  group.rows.forEach(r => {
+    const q = effectiveQty(r);
+    for (let i = 0; i < q; i++) out.push(r);
+  });
+  return out;
+}
+
+async function buildPdf(group) {
+  const g = pdfGeometry(group.tpl);
+  if (!g.ok) {
+    showToast('Missing on Label_Templates: ' + g.missing.join(', '), true);
+    return;
+  }
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    showToast('PDF library did not load — check the network and refresh.', true);
+    return;
+  }
+
+  const labels = expandLabels(group);
+  if (!labels.length) return;
+
+  const startAt = Math.max(1, Math.min(g.cols * g.rows, Number(S.startAt[group.key]) || 1));
+  const perSheet = g.cols * g.rows;
+  const proof = !!S.proof;
+
+  // A fiber with no RING_SPEC entry still prints, just without the ring.
+  const fibers = [...new Set(labels.map(r => fiberCode(r.fiber) || 'GEN'))];
+  const missingArt = fibers.filter(f => !ringText(f));
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'in', format: 'letter', compress: true });
+  doc.setFont(NAME_FONT[0], NAME_FONT[1]);
+
+  let slot = startAt - 1;   // 0-based position on the current sheet
+  labels.forEach((r, idx) => {
+    if (idx > 0 && slot === 0) doc.addPage();
+    const col = slot % g.cols;
+    const row = Math.floor(slot / g.cols);
+    const cx = g.left + col * g.pitchX + g.dia / 2;
+    const cy = g.top + row * g.pitchY + g.dia / 2;
+
+    if (proof) {
+      doc.setDrawColor(200); doc.setLineWidth(0.005);
+      doc.circle(cx, cy, g.dia / 2, 'S');
+    }
+
+    const rt = ringText(r.fiber);
+    if (rt) drawRingText(doc, rt, cx, cy, g.dia, g.ringPt);
+
+    // Shrink long colorway names to stay inside the ring rather than
+    // letting them run under the curved text.
+    const maxW = g.dia * NAME_FIT_RATIO;
+    let pt = g.fontPt;
+    doc.setFont(NAME_FONT[0], NAME_FONT[1]);
+    doc.setFontSize(pt);
+    while (doc.getTextWidth(r.name) > maxW && pt > 4) {
+      pt -= 0.25;
+      doc.setFontSize(pt);
+    }
+    doc.setTextColor(0);
+    doc.text(String(r.name), cx, cy, { align: 'center', baseline: 'middle' });
+
+    slot = (slot + 1) % perSheet;
+  });
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const stock = (group.code || ('fiber-' + group.fallbackFiber)).replace(/[^A-Za-z0-9_-]/g, '');
+  const o = currentOrder();
+  const base = S.mode === 'order'
+    ? `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}`
+    : `labels_store-listings_${stock}`;
+  doc.save(`${base}_${stamp}.pdf`);
+
+  const sheets = Math.ceil((labels.length + startAt - 1) / perSheet);
+  let msg = `${labels.length} labels over ${sheets} sheet${sheets === 1 ? '' : 's'}`;
+  if (startAt > 1) msg += `, starting at position ${startAt}`;
+  if (missingArt.length) msg += ` — no ring spec for ${missingArt.join(', ')}, names only`;
+  showToast(msg + '.', missingArt.length > 0);
+}
+
 /* ---------- CSV ---------- */
 function csvCell(v) {
   const s = (v === null || v === undefined) ? '' : String(v);
@@ -837,6 +1046,7 @@ document.getElementById('csvAllBtn').addEventListener('click', () => {
   showToast(`${groups.length} file${groups.length === 1 ? '' : 's'} downloading — one per sheet type.`);
 });
 document.getElementById('oneRowPerSpool').addEventListener('change', updateFooter);
+document.getElementById('proofMode').addEventListener('change', e => { S.proof = e.target.checked; });
 document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
