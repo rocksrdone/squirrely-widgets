@@ -666,6 +666,7 @@ function groupHtml(g) {
   const used = perSheet ? (g.total + (Number(S.startAt[g.key]) || 1) - 1) % perSheet : 0;
   const leftover = perSheet && g.total && used ? perSheet - used : 0;
   const fillOpts = fibersForTemplate(tpl);
+  const gFibers = fibersInGroup(g);
   const hasSheetCol = !!S.cols.recipe.sheet;
   const body = rows.map(r => {
     const st = stateFor(r);
@@ -691,6 +692,7 @@ function groupHtml(g) {
       <span class="group-code">${tpl ? esc(tpl.code) : 'No sheet assigned'}</span>
       ${tpl && tpl.desc ? `<span class="group-desc">${esc(tpl.desc)}</span>` : ''}
       <span class="group-fibers">${[...new Set(rows.map(r => fiberCode(r.fiber)).filter(Boolean))].map(f => `<span class="fiber-tag">${esc(f)}</span>`).join('')}</span>
+      ${gFibers.length > 1 ? `<span class="group-desc" style="color:var(--gold);">mixed fibers — one PDF sheet, ${gFibers.length} separate CSV merges</span>` : ''}
       ${!tpl ? `<span class="group-desc" style="color:var(--accent);">${esc(g.fallbackFiber)} isn't mapped to a stock code — add it to Fiber_Codes on Label_Templates</span>` : ''}
       ${sheetsNeeded ? `<span class="group-head-right"><span class="group-desc">${sheetsNeeded} sheet${sheetsNeeded === 1 ? '' : 's'} at ${tpl.perSheet}/sheet</span></span>` : ''}
     </div>
@@ -712,7 +714,8 @@ function groupHtml(g) {
       </label>` : ''}
       <div class="group-foot-actions">
         <button class="btn tiny" data-copy="${esc(g.key)}">Copy</button>
-        <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}>CSV</button>
+        <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}
+          title="${gFibers.length > 1 ? esc(gFibers.length + ' files, one per fiber (each needs its own Maestro design)') : 'One merge file'}">CSV${gFibers.length > 1 ? ' \u00d7' + gFibers.length : ''}</button>
         <button class="btn solid" data-pdf="${esc(g.key)}" ${g.total && geom.ok ? '' : 'disabled'}
           ${geom.ok ? '' : `title="Add to Label_Templates: ${esc(geom.missing.join(', '))}"`}>Download PDF</button>
       </div>
@@ -941,14 +944,25 @@ function pdfGeometry(tpl) {
   };
 }
 
-// One entry per physical label, so quantities expand the same way the CSV does.
+/* One entry per physical label. Sorted by fiber first so a mixed FFN/FFC sheet
+   comes off the printer in blocks rather than interleaved — you peel all the
+   cotton, then all the nylon, instead of hunting across the sheet.           */
 function expandLabels(group) {
+  const rows = group.rows.slice().sort((a, b) =>
+    String(fiberCode(a.fiber)).localeCompare(String(fiberCode(b.fiber))) ||
+    String(a.name).localeCompare(String(b.name)));
   const out = [];
-  group.rows.forEach(r => {
+  rows.forEach(r => {
     const q = effectiveQty(r);
     for (let i = 0; i < q; i++) out.push(r);
   });
   return out;
+}
+
+// Distinct fibers actually being printed in this group.
+function fibersInGroup(g) {
+  return [...new Set(g.rows.filter(r => effectiveQty(r) > 0)
+    .map(r => fiberCode(r.fiber) || 'GEN'))].sort();
 }
 
 async function buildPdf(group) {
@@ -1053,7 +1067,11 @@ function csvCell(v) {
   const s = (v === null || v === undefined) ? '' : String(v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-function buildCsv(g) {
+/* onlyFiber restricts output to one fiber. The ring is baked into the Maestro
+   design, and the ring differs per fiber — so one merge file can only ever be
+   one fiber, even when both print on the same physical sheet. The PDF path has
+   no such limit because it draws each ring itself.                            */
+function buildCsv(g, onlyFiber) {
   const perSpool = document.getElementById('oneRowPerSpool').checked;
   const o = currentOrder();
   const cust = S.mode === 'order' ? customerForOrder(o) : null;
@@ -1063,6 +1081,7 @@ function buildCsv(g) {
   g.rows.forEach(r => {
     const qty = effectiveQty(r);
     if (!qty) return;
+    if (onlyFiber && (fiberCode(r.fiber) || 'GEN') !== onlyFiber) return;
     const base = [r.name, fiberCode(r.fiber) || r.fiber || '', yardsPerSpool(r.fiber),
       r.sku || '', cust ? cust.name : '', o ? o.num : ''];
     if (perSpool) { for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(',')); }
@@ -1070,23 +1089,34 @@ function buildCsv(g) {
   });
   return lines.join('\r\n');
 }
-function csvFilename(g) {
+function csvFilename(g, onlyFiber) {
   const stamp = new Date().toISOString().slice(0, 10);
-  const stock = (g.code || ('fiber-' + g.fallbackFiber)).replace(/[^A-Za-z0-9_-]/g, '');
+  let stock = (g.code || ('fiber-' + g.fallbackFiber)).replace(/[^A-Za-z0-9_-]/g, '');
+  if (onlyFiber) stock += '_' + onlyFiber;
   if (S.mode === 'order') {
     const o = currentOrder();
     return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}_${stamp}.csv`;
   }
   return `labels_store-listings_${stock}_${stamp}.csv`;
 }
-function downloadGroup(g) {
-  if (!g.total) return;
-  const blob = new Blob(['\ufeff' + buildCsv(g)], { type: 'text/csv;charset=utf-8;' });
+function saveCsvFile(name, csv) {
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = csvFilename(g);
+  a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function downloadGroup(g) {
+  if (!g.total) return;
+  const fibers = fibersInGroup(g);
+  if (fibers.length <= 1) {
+    saveCsvFile(csvFilename(g), buildCsv(g));
+    return;
+  }
+  // Mixed sheet: one file per fiber, since each needs its own Maestro design.
+  fibers.forEach((f, i) => setTimeout(() => saveCsvFile(csvFilename(g, f), buildCsv(g, f)), i * 400));
+  showToast(`${fibers.length} files — one per fiber, because each needs its own Maestro design.`);
 }
 
 document.getElementById('csvAllBtn').addEventListener('click', () => {
