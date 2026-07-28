@@ -133,6 +133,8 @@ input[type=checkbox]:disabled { cursor: default; }
 
 .start-at { font-size: 11px; color: var(--mid); display: flex; align-items: center; gap: 5px; }
 .start-at .qty-input { width: 46px; }
+.start-at select { padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; font-family: 'Inter', sans-serif; background: white; color: var(--ink); outline: none; }
+.start-at select:focus { border-color: var(--accent); }
 .geom-warn { padding: 8px 13px; background: var(--gold-light); border-top: 1px solid #E4CF9E; color: #6E4C13; font-size: 11px; line-height: 1.5; }
 .toast { position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 82vw; }
 .toast.show { opacity: 1; }
@@ -284,6 +286,7 @@ const S = {
   orderSearch: '',
   storeQtyDefault: 6,
   startAt: {},          // group key -> first label position on the sheet
+  fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
@@ -658,6 +661,11 @@ function groupHtml(g) {
   const tpl = g.tpl;
   const rows = g.rows;
   const geom = pdfGeometry(tpl);
+  // How many positions the last sheet leaves unused, and which rings could fill them.
+  const perSheet = geom.ok ? geom.cols * geom.rows : 0;
+  const used = perSheet ? (g.total + (Number(S.startAt[g.key]) || 1) - 1) % perSheet : 0;
+  const leftover = perSheet && g.total && used ? perSheet - used : 0;
+  const fillOpts = fibersForTemplate(tpl);
   const hasSheetCol = !!S.cols.recipe.sheet;
   const body = rows.map(r => {
     const st = stateFor(r);
@@ -695,6 +703,12 @@ function groupHtml(g) {
       <div class="group-total"><strong data-grouptotal="${esc(g.key)}">${g.total}</strong> labels on this sheet type</div>
       ${geom.ok ? `<label class="start-at" title="Skip this many positions so a part-used sheet gets finished">
         start at <input class="qty-input" data-startat="${esc(g.key)}" value="${esc(S.startAt[g.key] || 1)}"> of ${geom.cols * geom.rows}
+      </label>` : ''}
+      ${geom.ok && leftover ? `<label class="start-at" title="Print rings with no name on the unused positions, to write on by hand">
+        ${leftover} spare: <select data-fill="${esc(g.key)}">
+          <option value="">leave empty</option>
+          ${fillOpts.map(f => `<option value="${esc(f)}" ${S.fillBlanks[g.key] === f ? 'selected' : ''}>blank ${esc(f)} rings</option>`).join('')}
+        </select>
       </label>` : ''}
       <div class="group-foot-actions">
         <button class="btn tiny" data-copy="${esc(g.key)}">Copy</button>
@@ -757,8 +771,12 @@ function bindPane() {
   }));
   document.querySelectorAll('[data-calibsave]').forEach(el => el.addEventListener('click', () => saveCalibration(Number(el.dataset.calibsave))));
 
-  document.querySelectorAll('[data-startat]').forEach(el => el.addEventListener('input', () => {
+  document.querySelectorAll('[data-startat]').forEach(el => el.addEventListener('change', () => {
     S.startAt[el.dataset.startat] = el.value;
+    render();   // leftover count depends on the start position
+  }));
+  document.querySelectorAll('[data-fill]').forEach(el => el.addEventListener('change', () => {
+    S.fillBlanks[el.dataset.fill] = el.value;
   }));
   document.querySelectorAll('[data-pdf]').forEach(el => el.addEventListener('click', async () => {
     const g = findGroup(el.dataset.pdf);
@@ -893,6 +911,14 @@ function drawRingText(doc, text, cx, cy, dia, fontPt) {
   });
 }
 
+// Fibers this stock can carry: whatever Fiber_Codes lists, restricted to
+// fibers that actually have ring text defined.
+function fibersForTemplate(tpl) {
+  if (!tpl) return [];
+  const listed = (tpl.fibers || []).filter(f => RING_SPEC[f]);
+  return listed.length ? listed : Object.keys(RING_SPEC);
+}
+
 // Every geometry field the generator needs, or a list of what's missing.
 function pdfGeometry(tpl) {
   if (!tpl) return { ok: false, missing: ['a Label_Templates row'] };
@@ -983,6 +1009,29 @@ async function buildPdf(group) {
     slot = (slot + 1) % perSheet;
   });
 
+  /* Fill the tail of the last sheet with ring-only labels. No centre text —
+     the colorway gets written on by hand. Nothing is re-fed through the
+     printer, so the remainder of the sheet stops being offcut.               */
+  let blanks = 0;
+  const fillCode = S.fillBlanks[group.key];
+  const fillRing = fillCode ? ringText(fillCode) : null;
+  if (fillRing && slot !== 0) {
+    doc.setFont(NAME_FONT[0], NAME_FONT[1]);
+    while (slot !== 0) {
+      const col = slot % g.cols;
+      const row = Math.floor(slot / g.cols);
+      const cx = g.left + col * g.pitchX + g.dia / 2;
+      const cy = g.top + row * g.pitchY + g.dia / 2;
+      if (proof) {
+        doc.setDrawColor(200); doc.setLineWidth(0.005);
+        doc.circle(cx, cy, g.dia / 2, 'S');
+      }
+      drawRingText(doc, fillRing, cx, cy, g.dia, g.ringPt);
+      blanks++;
+      slot = (slot + 1) % perSheet;
+    }
+  }
+
   const stamp = new Date().toISOString().slice(0, 10);
   const stock = (group.code || ('fiber-' + group.fallbackFiber)).replace(/[^A-Za-z0-9_-]/g, '');
   const o = currentOrder();
@@ -994,6 +1043,7 @@ async function buildPdf(group) {
   const sheets = Math.ceil((labels.length + startAt - 1) / perSheet);
   let msg = `${labels.length} labels over ${sheets} sheet${sheets === 1 ? '' : 's'}`;
   if (startAt > 1) msg += `, starting at position ${startAt}`;
+  if (blanks) msg += ` + ${blanks} blank ${fillCode} ring${blanks === 1 ? '' : 's'} to hand-write`;
   if (missingArt.length) msg += ` — no ring spec for ${missingArt.join(', ')}, names only`;
   showToast(msg + '.', missingArt.length > 0);
 }
