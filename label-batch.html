@@ -21,36 +21,24 @@
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
-  font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5;
-  padding: 0 0 96px;
+  font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 0 0 96px;
 }
 
-.banner {
-  background: #FBEDE9; border-bottom: 1px solid var(--accent); color: var(--accent);
-  padding: 8px 16px; font-size: 11px; line-height: 1.6;
-}
+.banner { background: #FBEDE9; border-bottom: 1px solid var(--accent); color: var(--accent); padding: 8px 16px; font-size: 11px; line-height: 1.6; }
 .banner .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-bottom: 3px; }
 .banner strong { font-family: 'DM Mono', monospace; font-weight: 500; }
 
-.head {
-  padding: 14px 16px 0; display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
-}
+.head { padding: 14px 16px 0; display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
 .head h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 2px; }
 .head .sub { font-size: 11px; color: var(--muted); }
 .head-actions { margin-left: auto; display: flex; gap: 6px; }
 
 .tabs { display: flex; gap: 4px; padding: 12px 16px 0; border-bottom: 1px solid var(--rule); }
-.tab {
-  font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 6px 6px 0 0; cursor: pointer;
-  border: 1px solid transparent; border-bottom: none; color: var(--mid); background: transparent;
-}
+.tab { font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 6px 6px 0 0; cursor: pointer; border: 1px solid transparent; border-bottom: none; color: var(--mid); }
 .tab:hover { background: var(--warm); }
 .tab.active { background: white; border-color: var(--rule); color: var(--ink); margin-bottom: -1px; }
 
-.btn {
-  font-size: 11px; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-weight: 600;
-  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif;
-}
+.btn { font-size: 11px; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-weight: 600; border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif; }
 .btn:hover { border-color: var(--accent); }
 .btn.solid { background: var(--accent); border-color: var(--accent); color: white; }
 .btn.solid:hover { filter: brightness(1.08); }
@@ -59,50 +47,57 @@ body {
 
 .pane { padding: 14px 16px 0; }
 
-/* ---------- order picker ---------- */
 .pick-box { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 12px; }
 .pick-row { display: flex; gap: 8px; align-items: center; }
-.pick-row input {
-  flex: 1; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px;
-  font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
-}
+.pick-row input { flex: 1; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; }
 .pick-row input:focus { border-color: var(--accent); }
-.order-list { margin-top: 10px; max-height: 260px; overflow-y: auto; }
-.order-row {
-  display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  padding: 7px 9px; border-radius: 5px; cursor: pointer; font-size: 12px;
-  border: 1px solid var(--rule); margin-bottom: 4px; background: var(--paper);
-}
-.order-row:hover { border-color: var(--accent); background: white; }
-.order-row.active { border-color: var(--accent); background: white; }
+.order-list { margin-top: 10px; max-height: 240px; overflow-y: auto; }
+.order-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 5px; cursor: pointer; font-size: 12px; border: 1px solid var(--rule); margin-bottom: 4px; background: var(--paper); }
+.order-row:hover, .order-row.active { border-color: var(--accent); background: white; }
 .order-row .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
 .order-row .ord-cust { color: var(--mid); flex: 1; }
 .order-row .ord-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .empty-note { font-size: 11px; color: var(--muted); font-style: italic; padding: 10px 0; }
 
-/* ---------- customer profile strip ---------- */
-.profile {
-  margin-top: 12px; background: white; border: 1px solid var(--rule); border-radius: 8px;
-  padding: 11px 13px; display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start;
-}
+.profile { margin-top: 12px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px; display: flex; gap: 22px; flex-wrap: wrap; }
 .profile .pf { min-width: 130px; }
 .profile .pf-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
 .profile .pf-value { font-size: 13px; font-weight: 500; margin-top: 2px; }
 .profile .pf-value.warn { color: var(--accent); font-weight: 600; }
 .profile .pf-value.dim { color: var(--muted); font-style: italic; font-weight: 400; }
 
-.alert {
-  margin-top: 10px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
-  background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13;
-}
+.alert { margin-top: 10px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6; background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13; }
 .alert strong { font-weight: 700; }
 
-/* ---------- table ---------- */
-table.lbl { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
-table.lbl thead th {
-  text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
-  color: white; background: var(--ink); padding: 7px 9px; font-weight: 600; white-space: nowrap;
-}
+/* ---------- stock group ---------- */
+.group { margin-top: 18px; background: white; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.group.unassigned { border-color: var(--accent); }
+.group-head { padding: 10px 13px; background: var(--warm); border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.group-code { font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; }
+.group-desc { font-size: 11px; color: var(--mid); }
+.group-fibers { display: flex; gap: 4px; }
+.group-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.calib { padding: 8px 13px; background: #FBF8F4; border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; }
+.calib-vals { font-family: 'DM Mono', monospace; color: var(--mid); }
+.calib-vals b { color: var(--ink); font-weight: 500; }
+.calib-date { color: var(--muted); font-style: italic; }
+.calib-missing { color: var(--accent); font-style: italic; }
+.calib-form { padding: 10px 13px; background: #FBF8F4; border-bottom: 1px solid var(--rule); display: none; }
+.calib-form.open { display: block; }
+.calib-fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.calib-field { display: flex; flex-direction: column; }
+.calib-field label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+.calib-field input[type=text] { width: 82px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px; font-family: 'DM Mono', monospace; font-size: 12px; outline: none; }
+.calib-field input:focus { border-color: var(--accent); }
+.calib-note { font-size: 10.5px; color: var(--mid); margin-top: 8px; line-height: 1.55; }
+.group-foot { padding: 9px 13px; display: flex; align-items: center; gap: 10px; background: var(--paper); border-top: 1px solid var(--rule); }
+.group-total { font-size: 12px; }
+.group-total strong { font-family: 'DM Mono', monospace; font-size: 15px; color: var(--accent); }
+.group-foot-actions { margin-left: auto; display: flex; gap: 6px; }
+
+table.lbl { width: 100%; border-collapse: collapse; }
+table.lbl thead th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: white; background: var(--ink); padding: 7px 9px; font-weight: 600; white-space: nowrap; }
 table.lbl td { padding: 7px 9px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
 table.lbl tbody tr:nth-child(even) { background: #FBF8F4; }
 table.lbl tbody tr.skipped { opacity: .5; }
@@ -110,55 +105,33 @@ table.lbl tbody tr.skipped .colorway { text-decoration: line-through; }
 .colorway { font-weight: 500; }
 .sku { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--mid); }
 .num { font-family: 'DM Mono', monospace; text-align: center; }
-.num.zero { color: var(--muted); }
 .num.print { font-weight: 700; color: var(--accent); }
+.num.zero { color: var(--muted); font-weight: 400; }
 .col-chk { width: 34px; text-align: center; }
 .col-num { width: 66px; }
-.col-stock { width: 108px; }
-.fiber-tag {
-  font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF;
-  padding: 1px 5px; border-radius: 8px; white-space: nowrap;
-}
+.col-stock { width: 116px; }
+.fiber-tag { font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF; padding: 1px 5px; border-radius: 8px; white-space: nowrap; }
 input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--teal); margin: 0; cursor: pointer; }
 input[type=checkbox]:disabled { cursor: default; }
-.qty-input {
-  width: 52px; padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px;
-  font-family: 'DM Mono', monospace; font-size: 12px; text-align: center; outline: none; background: white;
-}
+.qty-input { width: 52px; padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px; font-family: 'DM Mono', monospace; font-size: 12px; text-align: center; outline: none; background: white; }
 .qty-input:focus { border-color: var(--accent); }
 .stock-cell { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .stock-cell label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--mid); }
 .stock-cell.disabled label { cursor: default; color: var(--muted); font-style: italic; }
 .hint-num { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); }
 
-/* ---------- front-label summary ---------- */
-.front-summary {
-  margin-top: 14px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px;
-}
-.front-summary h3 {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--teal);
-  font-weight: 700; margin: 0 0 7px;
-}
-.front-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
-.front-row:last-child { border-bottom: none; }
+.front-summary { margin-top: 16px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px; }
+.front-summary h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--teal); font-weight: 700; margin: 0 0 7px; }
+.front-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; }
 .front-row .fr-qty { font-family: 'DM Mono', monospace; font-weight: 600; }
 
-/* ---------- sticky footer ---------- */
-.footer-bar {
-  position: fixed; bottom: 0; left: 0; right: 0; background: white;
-  border-top: 1.5px solid var(--rule); padding: 10px 16px;
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; z-index: 20;
-}
+.footer-bar { position: fixed; bottom: 0; left: 0; right: 0; background: white; border-top: 1.5px solid var(--rule); padding: 10px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; z-index: 20; }
 .footer-count { font-size: 12px; }
 .footer-count strong { font-family: 'DM Mono', monospace; font-size: 17px; color: var(--accent); }
 .footer-opt { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); }
 .footer-actions { margin-left: auto; display: flex; gap: 6px; }
 
-.toast {
-  position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
-  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 82vw;
-}
+.toast { position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 82vw; }
 .toast.show { opacity: 1; }
 .toast.err { background: var(--accent); }
 </style>
@@ -170,11 +143,9 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="head">
   <div>
     <h1>Spool Label Batch</h1>
-    <div class="sub">Back labels (colorway names) for Maestro mail merge. One row per spool.</div>
+    <div class="sub">Back labels for Maestro mail merge, split by label sheet — one file per stock code.</div>
   </div>
-  <div class="head-actions">
-    <button class="btn" id="refreshBtn">↻ Refresh</button>
-  </div>
+  <div class="head-actions"><button class="btn" id="refreshBtn">↻ Refresh</button></div>
 </div>
 
 <div class="tabs">
@@ -185,11 +156,10 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="pane" id="pane"><div class="empty-note">Loading...</div></div>
 
 <div class="footer-bar">
-  <div class="footer-count"><strong id="totalCount">0</strong> labels to print</div>
+  <div class="footer-count"><strong id="totalCount">0</strong> labels across <span id="groupCount">0</span> sheet type(s)</div>
   <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool</label>
   <div class="footer-actions">
-    <button class="btn" id="copyBtn">Copy to clipboard</button>
-    <button class="btn solid" id="csvBtn">Download CSV</button>
+    <button class="btn solid" id="csvAllBtn">Download all files</button>
   </div>
 </div>
 
@@ -200,15 +170,17 @@ input[type=checkbox]:disabled { cursor: default; }
 /* ============================================================
    Spool Label Batch — Squirrely Stash
 
-   Back labels carry the colorway name, so they're the only variable
-   data. Front labels are one fixed design per customer — they never
-   go through mail merge, they get bulk-printed and pulled from stock,
-   so this widget only *counts* them for you.
+   Label sheets differ by fiber (OL3012WI for FFN/CN, OL1025WI for
+   EN), so a mixed-fiber order can NEVER go out as one merge file.
+   Rows are grouped by stock code and each group exports its own CSV.
 
-   "Sheet on hand" is a per-recipe toggle on Recipes: if a printed
-   sheet of that colorway exists, the row drops out of the batch.
+   Sheet calibration (left/top margin, bleed) drifts between packs of
+   label stock. It lives on Label_Templates so there's one place to
+   change it, it's dated, and the future PDF generator can read the
+   same numbers instead of you re-deriving them.
 
-   Requires FULL access (it writes the sheet-on-hand toggle back).
+   Requires FULL access — writes the sheet-on-hand toggle and
+   calibration values back to Grist.
    ============================================================ */
 
 /* ---------- helpers ---------- */
@@ -239,20 +211,19 @@ function fmtDate(v) {
   if (!ms || isNaN(ms)) return '';
   return new Date(ms).toISOString().slice(0, 10);
 }
+function todayEpochSeconds() { const d = new Date(); d.setHours(0, 0, 0, 0); return Math.floor(d.getTime() / 1000); }
 function showToast(msg, isErr) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.toggle('err', !!isErr);
   t.classList.add('show');
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => t.classList.remove('show'), 2800);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 3200);
 }
-
-// Same rule as wind-routing: E Nylon spools are 150 yd, everything else 100.
 function fiberCode(f) {
   const s = normalize(f);
   if (!s) return '';
-  if (s === 'FFN' || s === 'FFC' || s === 'EN' || s === 'BW' || s === 'CN') return s;
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
   if (/E\s*NYLON/.test(s)) return 'EN';
   if (/COTTON/.test(s)) return 'FFC';
   if (/BLACKWING/.test(s)) return 'BW';
@@ -260,18 +231,25 @@ function fiberCode(f) {
   return s;
 }
 function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+function numOrNull(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const n = Number(s.replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? null : n;
+}
 
 /* ---------- state ---------- */
 const S = {
   mode: 'order',
   cols: {},
-  recipes: {},        // id -> {name, sku, fiber, sheetOnHand, storeActive, stock}
-  customers: {},      // id -> {name, code, frontLogo, backStyle, labelNotes}
-  custByName: {},     // normalized name -> customer object
-  orders: [],
-  lines: [],          // all Work_Order_Lines
+  recipes: {}, customers: {}, custByName: {},
+  orders: [], lines: [],
+  templates: [],        // [{id, code, desc, perSheet, left, top, bleed, reverse, calibratedOn, batchNote, fibers:[]}]
+  tplByFiber: {},       // FFN -> template
+  hasTemplates: false,
   selectedOrderId: null,
-  rowState: {},       // rowKey -> {include: bool, qty: number}
+  rowState: {},
+  openCalib: null,      // template id whose calibration form is open
   orderSearch: '',
   storeQtyDefault: 6,
   ready: false,
@@ -281,7 +259,6 @@ const S = {
 async function loadAll() {
   document.getElementById('pane').innerHTML = '<div class="empty-note">Loading...</div>';
   const problems = [];
-
   let recT, custT, woT, wolT;
   try {
     [recT, custT, woT, wolT] = await Promise.all([
@@ -298,20 +275,19 @@ async function loadAll() {
     return;
   }
 
-  // --- Recipes ---
   const rc = {
     name: findColumn(recT, ['Recipe_Name', 'Name', 'Colorway_Name']),
     sku: findColumn(recT, ['SKU_Base', 'SKU']),
     shopifySku: findColumn(recT, ['Shopify_SKU']),
     fiber: findColumn(recT, ['Fiber_Type', 'Fiber']),
-    sheet: findColumn(recT, ['Label_Sheet_On_Hand', 'Label_Sheet', 'Has_Printed_Sheet']),
-    store: findColumn(recT, ['Store_Listing_Active', 'Store_Active', 'Active_Listing', 'Is_Active']),
+    sheet: findColumn(recT, ['Label_Sheet_On_Hand', 'Has_Printed_Sheet']),
+    store: findColumn(recT, ['Store_Listing_Active', 'Store_Active', 'Active_Listing']),
   };
   S.cols.recipe = rc;
   if (!rc.sheet) problems.push({ title: 'No sheet-on-hand column on Recipes',
-    body: 'Add a Toggle column <strong>Label_Sheet_On_Hand</strong> to Recipes and the stock checkboxes below become live. Until then every colorway is treated as "no sheet on hand".' });
+    body: 'Add a Toggle column <strong>Label_Sheet_On_Hand</strong> to Recipes and the stock checkboxes become live. Until then every colorway is treated as "no sheet on hand".' });
   if (!rc.store) problems.push({ title: 'No store-listing column on Recipes',
-    body: 'Add a Toggle column <strong>Store_Listing_Active</strong> to Recipes to drive the Store listings tab. Until then that tab lists every recipe that has a Shopify SKU.' });
+    body: 'Add a Toggle column <strong>Store_Listing_Active</strong> to Recipes to drive the Store listings tab. Until then it lists every recipe with a Shopify SKU.' });
 
   S.recipes = {};
   (recT.id || []).forEach((id, i) => {
@@ -333,17 +309,15 @@ async function loadAll() {
     if (r.shopifySku) recipeIdBySku[normalize(r.shopifySku)] = r.id;
   });
 
-  // --- Customers ---
   const cc = {
     name: findColumn(custT, ['Customer_Name', 'Name']),
     code: findColumn(custT, ['Code', 'Vendor_Code']),
     front: findColumn(custT, ['Label_Front_Logo', 'Front_Label_Logo']),
     back: findColumn(custT, ['Label_Back_Style', 'Back_Label_Style']),
-    stock: findColumn(custT, ['Label_Stock_Code', 'Label_Size']),
     notes: findColumn(custT, ['Label_Notes']),
   };
   if (!cc.front || !cc.back) problems.push({ title: 'Label preferences not set up on Customers',
-    body: 'Add <strong>Label_Front_Logo</strong> and <strong>Label_Back_Style</strong> to Customers (see the Customer Card widget) so this batch knows which front logo to pull and whether the back is a custom design.' });
+    body: 'Add <strong>Label_Front_Logo</strong> and <strong>Label_Back_Style</strong> to Customers so this batch knows which front logo to pull and whether the back is a custom design.' });
 
   S.customers = {}; S.custByName = {};
   (custT.id || []).forEach((id, i) => {
@@ -353,21 +327,16 @@ async function loadAll() {
       code: columnAsArray(custT, cc.code)[i] || '',
       front: cc.front ? columnAsArray(custT, cc.front)[i] || '' : '',
       back: cc.back ? columnAsArray(custT, cc.back)[i] || '' : '',
-      stockCode: cc.stock ? columnAsArray(custT, cc.stock)[i] || '' : '',
       notes: cc.notes ? columnAsArray(custT, cc.notes)[i] || '' : '',
     };
     S.customers[id] = o;
     if (o.name) S.custByName[normalize(o.name)] = o;
   });
 
-  // --- Work orders ---
   const wc = {
-    num: findColumn(woT, ['Order_Number']),
-    cust: findColumn(woT, ['Customer']),
-    custName: findColumn(woT, ['Customer_Name']),
-    date: findColumn(woT, ['Order_Date']),
-    due: findColumn(woT, ['Due_Date']),
-    status: findColumn(woT, ['Status']),
+    num: findColumn(woT, ['Order_Number']), cust: findColumn(woT, ['Customer']),
+    custName: findColumn(woT, ['Customer_Name']), date: findColumn(woT, ['Order_Date']),
+    due: findColumn(woT, ['Due_Date']), status: findColumn(woT, ['Status']),
   };
   S.orders = (woT.id || []).map((id, i) => ({
     id,
@@ -379,12 +348,9 @@ async function loadAll() {
     status: wc.status ? columnAsArray(woT, wc.status)[i] || '' : '',
   })).sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
 
-  // --- Order lines ---
   const lc = {
-    wo: findColumn(wolT, ['Work_Order']),
-    recipe: findColumn(wolT, ['Recipe']),
-    sku: findColumn(wolT, ['SKU']),
-    qty: findColumn(wolT, ['Qty_Needed']),
+    wo: findColumn(wolT, ['Work_Order']), recipe: findColumn(wolT, ['Recipe']),
+    sku: findColumn(wolT, ['SKU']), qty: findColumn(wolT, ['Qty_Needed']),
     product: findColumn(wolT, ['Product_Name']),
   };
   S.lines = (wolT.id || []).map((id, i) => {
@@ -392,93 +358,117 @@ async function loadAll() {
     let rid = lc.recipe ? getRefId(columnAsArray(wolT, lc.recipe)[i]) : null;
     if (!rid) rid = recipeIdBySku[normalize(sku)] || null;
     return {
-      id,
-      woId: getRefId(columnAsArray(wolT, lc.wo)[i]),
-      recipeId: rid,
-      sku,
+      id, woId: getRefId(columnAsArray(wolT, lc.wo)[i]), recipeId: rid, sku,
       productName: lc.product ? columnAsArray(wolT, lc.product)[i] || '' : '',
       qty: Number(columnAsArray(wolT, lc.qty)[i]) || 0,
     };
   });
 
-  // --- optional: spool stock, used to seed the store-listing quantities ---
+  await loadTemplates(problems);
+
   try {
     const lotsT = await grist.docApi.fetchTable('Production_Lots');
-    const pc = {
-      recipe: findColumn(lotsT, ['Recipe']),
-      store: findColumn(lotsT, ['Store_Stock_Spools']),
-      general: findColumn(lotsT, ['General_Stock_Spools']),
-    };
+    const pc = { recipe: findColumn(lotsT, ['Recipe']), store: findColumn(lotsT, ['Store_Stock_Spools']), general: findColumn(lotsT, ['General_Stock_Spools']) };
     if (pc.recipe) {
       (lotsT.id || []).forEach((id, i) => {
         const rid = getRefId(columnAsArray(lotsT, pc.recipe)[i]);
         if (!rid || !S.recipes[rid]) return;
-        S.recipes[rid].stock +=
-          (Number(columnAsArray(lotsT, pc.store)[i]) || 0) +
-          (Number(columnAsArray(lotsT, pc.general)[i]) || 0);
+        S.recipes[rid].stock += (Number(columnAsArray(lotsT, pc.store)[i]) || 0) + (Number(columnAsArray(lotsT, pc.general)[i]) || 0);
       });
     }
-  } catch (e) {
-    console.warn('Production_Lots unavailable — stock hints hidden', e);
-  }
+  } catch (e) { console.warn('Production_Lots unavailable — stock hints hidden', e); }
 
   setBanner(problems);
   S.ready = true;
   render();
 }
 
+async function loadTemplates(problems) {
+  S.templates = []; S.tplByFiber = {}; S.hasTemplates = false;
+  let t;
+  try {
+    t = await grist.docApi.fetchTable('Label_Templates');
+  } catch (e) {
+    problems.push({ title: 'Label_Templates table not found',
+      body: 'Add a table <strong>Label_Templates</strong> with columns <strong>Stock_Code</strong>, <strong>Description</strong>, ' +
+        '<strong>Fiber_Codes</strong>, <strong>Labels_Per_Sheet</strong>, <strong>Left_Margin_In</strong>, <strong>Top_Margin_In</strong>, ' +
+        '<strong>Bleed_In</strong>, <strong>Reverse_Print</strong> (Toggle), <strong>Calibrated_On</strong> (Date), <strong>Batch_Note</strong>. ' +
+        'Seed it with: <strong>OL3012WI</strong> (FFN, CN — Circle 48/sheet, L 0.31, T 0.27, bleed 0.125), ' +
+        '<strong>OL1025WI</strong> (EN), <strong>OL5125WR</strong> (removable, bin labels). ' +
+        'Until then, batches group by fiber with no calibration record.' });
+    return;
+  }
+  const c = {
+    code: findColumn(t, ['Stock_Code', 'Code', 'OL_Code']),
+    desc: findColumn(t, ['Description', 'Desc', 'Name']),
+    fibers: findColumn(t, ['Fiber_Codes', 'Fibers', 'Fiber']),
+    perSheet: findColumn(t, ['Labels_Per_Sheet', 'Per_Sheet']),
+    left: findColumn(t, ['Left_Margin_In', 'Left_Margin']),
+    top: findColumn(t, ['Top_Margin_In', 'Top_Margin']),
+    bleed: findColumn(t, ['Bleed_In', 'Bleed']),
+    reverse: findColumn(t, ['Reverse_Print', 'Reverse']),
+    calDate: findColumn(t, ['Calibrated_On', 'Calibration_Date']),
+    batchNote: findColumn(t, ['Batch_Note', 'Notes', 'Note']),
+  };
+  if (!c.code) {
+    problems.push({ title: 'Label_Templates has no stock-code column',
+      body: 'Add a <strong>Stock_Code</strong> column (e.g. OL3012WI). Batches group by fiber until then.' });
+    return;
+  }
+  S.cols.tpl = c;
+  S.hasTemplates = true;
+  (t.id || []).forEach((id, i) => {
+    const code = normalize(columnAsArray(t, c.code)[i]);
+    if (!code) return;
+    const fibers = String(columnAsArray(t, c.fibers)[i] || '')
+      .split(/[,;/|\s]+/).map(normalize).filter(Boolean);
+    const tpl = {
+      id, code, fibers,
+      desc: c.desc ? columnAsArray(t, c.desc)[i] || '' : '',
+      perSheet: c.perSheet ? Number(columnAsArray(t, c.perSheet)[i]) || null : null,
+      left: c.left ? columnAsArray(t, c.left)[i] : null,
+      top: c.top ? columnAsArray(t, c.top)[i] : null,
+      bleed: c.bleed ? columnAsArray(t, c.bleed)[i] : null,
+      reverse: c.reverse ? !!columnAsArray(t, c.reverse)[i] : false,
+      calDate: c.calDate ? columnAsArray(t, c.calDate)[i] : null,
+      batchNote: c.batchNote ? columnAsArray(t, c.batchNote)[i] || '' : '',
+    };
+    S.templates.push(tpl);
+    fibers.forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = tpl; });
+  });
+}
+
 function setBanner(items) {
   const el = document.getElementById('banner');
   if (!items || !items.length) { el.innerHTML = ''; el.className = ''; return; }
   el.className = 'banner';
-  el.innerHTML = items.map(i =>
-    `<div class="banner-title">${esc(i.title)}</div><div>${i.body}</div>`).join('<div style="height:7px"></div>');
+  el.innerHTML = items.map(i => `<div class="banner-title">${esc(i.title)}</div><div>${i.body}</div>`).join('<div style="height:7px"></div>');
 }
 
-/* ---------- row model ----------
-   A "row" is one colorway to print back labels for. rowKey is stable across
-   re-renders so include/qty edits survive. Order mode keys on the order line
-   (a colorway can appear twice in one order); store mode keys on the recipe. */
+/* ---------- rows & grouping ---------- */
 function currentRows() {
   if (S.mode === 'order') {
     if (!S.selectedOrderId) return [];
-    return S.lines
-      .filter(l => l.woId === S.selectedOrderId && l.qty > 0)
-      .map(l => {
-        const r = S.recipes[l.recipeId] || null;
-        return {
-          rowKey: 'L' + l.id,
-          recipeId: l.recipeId,
-          name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
-          sku: (r && r.sku) || l.sku,
-          fiber: r ? r.fiber : '',
-          sheetOnHand: r ? r.sheetOnHand : false,
-          matched: !!r,
-          defaultQty: l.qty,
-          stock: r ? r.stock : 0,
-        };
-      });
+    return S.lines.filter(l => l.woId === S.selectedOrderId && l.qty > 0).map(l => {
+      const r = S.recipes[l.recipeId] || null;
+      return {
+        rowKey: 'L' + l.id, recipeId: l.recipeId,
+        name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
+        sku: (r && r.sku) || l.sku, fiber: r ? r.fiber : '',
+        sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
+        defaultQty: l.qty, stock: r ? r.stock : 0,
+      };
+    });
   }
-  return Object.values(S.recipes)
-    .filter(r => r.storeActive)
+  return Object.values(S.recipes).filter(r => r.storeActive)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map(r => ({
-      rowKey: 'R' + r.id,
-      recipeId: r.id,
-      name: r.name,
-      sku: r.sku,
-      fiber: r.fiber,
-      sheetOnHand: r.sheetOnHand,
-      matched: true,
-      defaultQty: S.storeQtyDefault,
-      stock: r.stock,
+      rowKey: 'R' + r.id, recipeId: r.id, name: r.name, sku: r.sku, fiber: r.fiber,
+      sheetOnHand: r.sheetOnHand, matched: true, defaultQty: S.storeQtyDefault, stock: r.stock,
     }));
 }
-
 function stateFor(row) {
-  if (!S.rowState[row.rowKey]) {
-    S.rowState[row.rowKey] = { include: !row.sheetOnHand, qty: row.defaultQty };
-  }
+  if (!S.rowState[row.rowKey]) S.rowState[row.rowKey] = { include: !row.sheetOnHand, qty: row.defaultQty };
   return S.rowState[row.rowKey];
 }
 function effectiveQty(row) {
@@ -487,15 +477,40 @@ function effectiveQty(row) {
   return Math.max(0, Number(st.qty) || 0);
 }
 
+// Fiber alone decides the sheet: Label_Templates.Fiber_Codes is the whole
+// mapping. Nothing customer-specific enters here.
+function templateForRow(row) {
+  return S.tplByFiber[fiberCode(row.fiber)] || null;
+}
+
+function groupRows(rows) {
+  const map = new Map();
+  rows.forEach(r => {
+    const tpl = templateForRow(r);
+    const key = tpl ? tpl.code : ('?' + (fiberCode(r.fiber) || 'UNKNOWN'));
+    if (!map.has(key)) {
+      map.set(key, {
+        key, tpl,
+        code: tpl ? tpl.code : '',
+        fallbackFiber: tpl ? '' : (fiberCode(r.fiber) || 'no fiber set'),
+        rows: [],
+      });
+    }
+    map.get(key).rows.push(r);
+  });
+  const groups = [...map.values()];
+  groups.forEach(g => { g.total = g.rows.reduce((a, r) => a + effectiveQty(r), 0); });
+  groups.sort((a, b) => (a.tpl ? 0 : 1) - (b.tpl ? 0 : 1) || String(a.key).localeCompare(String(b.key)));
+  return groups;
+}
+
 /* ---------- render ---------- */
 function render() {
   if (!S.ready) return;
-  const pane = document.getElementById('pane');
-  pane.innerHTML = S.mode === 'order' ? orderPaneHtml() : storePaneHtml();
+  document.getElementById('pane').innerHTML = S.mode === 'order' ? orderPaneHtml() : storePaneHtml();
   bindPane();
   updateFooter();
 }
-
 function currentOrder() { return S.orders.find(o => o.id === S.selectedOrderId) || null; }
 function customerForOrder(o) {
   if (!o) return null;
@@ -503,91 +518,98 @@ function customerForOrder(o) {
   return S.custByName[normalize(o.custName)] || null;
 }
 
-function orderPaneHtml() {
+function orderPickerHtml() {
   const q = S.orderSearch.trim().toLowerCase();
-  const matches = S.orders.filter(o => {
-    if (!q) return true;
-    return (String(o.num) + ' ' + String(o.custName)).toLowerCase().includes(q);
-  }).slice(0, 40);
+  const matches = S.orders.filter(o => !q || (String(o.num) + ' ' + String(o.custName)).toLowerCase().includes(q)).slice(0, 40);
+  const listHtml = matches.length ? matches.map(o => `<div class="order-row ${o.id === S.selectedOrderId ? 'active' : ''}" data-order="${o.id}">
+      <span class="ord-num">${esc(o.num || '—')}</span>
+      <span class="ord-cust">${esc(o.custName || '')}</span>
+      <span class="ord-meta">${esc(fmtDate(o.date))}${o.status ? ' · ' + esc(o.status) : ''}</span>
+    </div>`).join('') : '<div class="empty-note">No orders match.</div>';
+  return `<div class="pick-box">
+    <div class="pick-row"><input id="orderSearch" placeholder="Search order number or customer..." value="${esc(S.orderSearch)}"></div>
+    <div class="order-list">${listHtml}</div>
+  </div>`;
+}
 
-  const listHtml = matches.length
-    ? matches.map(o => `<div class="order-row ${o.id === S.selectedOrderId ? 'active' : ''}" data-order="${o.id}">
-        <span class="ord-num">${esc(o.num || '—')}</span>
-        <span class="ord-cust">${esc(o.custName || '')}</span>
-        <span class="ord-meta">${esc(fmtDate(o.date))}${o.status ? ' · ' + esc(o.status) : ''}</span>
-      </div>`).join('')
-    : '<div class="empty-note">No orders match.</div>';
-
+function orderPaneHtml() {
   const o = currentOrder();
-  if (!o) {
-    return `<div class="pick-box">
-      <div class="pick-row"><input id="orderSearch" placeholder="Search order number or customer..." value="${esc(S.orderSearch)}"></div>
-      <div class="order-list">${listHtml}</div>
-    </div>`;
-  }
-
+  if (!o) return orderPickerHtml();
   const cust = customerForOrder(o);
   const rows = currentRows();
+  const groups = groupRows(rows);
   const customBack = cust && /custom/i.test(String(cust.back || ''));
   const unmatched = rows.filter(r => !r.matched);
 
-  return `<div class="pick-box">
-      <div class="pick-row"><input id="orderSearch" placeholder="Search order number or customer..." value="${esc(S.orderSearch)}"></div>
-      <div class="order-list">${listHtml}</div>
-    </div>
-
-    ${profileHtml(cust, o)}
-    ${customBack ? `<div class="alert"><strong>Custom back design.</strong> ${esc(cust.name)} doesn't take the standard colorway-name back.
-      ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}
-      Export below still lists the colorway names, so adjust in Maestro before printing.</div>` : ''}
-    ${unmatched.length ? `<div class="alert"><strong>${unmatched.length} line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
-      The SKU on the order line isn't in Recipes, so there's no colorway name to print — the product name is used instead. Fix the SKU or link the recipe.</div>` : ''}
-
-    ${tableHtml(rows)}
-    ${frontSummaryHtml(rows, cust)}`;
+  return orderPickerHtml() + profileHtml(cust, o) +
+    (customBack ? `<div class="alert"><strong>Custom back design.</strong> ${esc(cust.name)} doesn't take the standard colorway-name back.
+      ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}</div>` : '') +
+    (unmatched.length ? `<div class="alert"><strong>${unmatched.length} line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
+      The SKU isn't in Recipes, so there's no colorway name and no fiber to pick a sheet from. Fix the SKU or link the recipe.</div>` : '') +
+    (groups.length ? groups.map(g => groupHtml(g)).join('') : '<div class="empty-note">Nothing on this order to label.</div>') +
+    frontSummaryHtml(rows, cust);
 }
 
 function storePaneHtml() {
   const rows = currentRows();
   if (!rows.length) {
-    return `<div class="empty-note">No recipes are marked active on the store.
-      Tick <strong>Store_Listing_Active</strong> on the recipes you're listing, or add that column to Recipes.</div>`;
+    return `<div class="empty-note">No recipes are marked active on the store. Tick <strong>Store_Listing_Active</strong> on the recipes you're listing, or add that column to Recipes.</div>`;
   }
+  const groups = groupRows(rows);
   return `<div class="pick-box">
       <div class="pick-row" style="gap:12px;flex-wrap:wrap;">
-        <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:6px;">
-          Labels per colorway
-          <input class="qty-input" id="storeDefault" value="${esc(S.storeQtyDefault)}">
-        </label>
+        <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:6px;">Labels per colorway
+          <input class="qty-input" id="storeDefault" value="${esc(S.storeQtyDefault)}"></label>
         <button class="btn tiny" id="applyDefault">Apply to all</button>
         <button class="btn tiny" id="useStock">Use stock counts</button>
         <button class="btn tiny" id="selectAll">Select all</button>
         <button class="btn tiny" id="selectNone">Select none</button>
       </div>
-    </div>
-    ${tableHtml(rows)}`;
+    </div>` + groups.map(g => groupHtml(g)).join('');
 }
 
 function profileHtml(cust, o) {
-  if (!cust) {
-    return `<div class="profile"><div class="pf">
-      <div class="pf-label">Customer</div>
-      <div class="pf-value warn">${esc(o.custName || 'Unknown')} — not linked to a Customers row</div>
-    </div></div>`;
-  }
-  const pf = (label, value, cls) =>
-    `<div class="pf"><div class="pf-label">${esc(label)}</div><div class="pf-value ${cls || ''}">${esc(value)}</div></div>`;
+  if (!cust) return `<div class="profile"><div class="pf"><div class="pf-label">Customer</div>
+    <div class="pf-value warn">${esc(o.custName || 'Unknown')} — not linked to a Customers row</div></div></div>`;
+  const pf = (l, v, cls) => `<div class="pf"><div class="pf-label">${esc(l)}</div><div class="pf-value ${cls || ''}">${esc(v)}</div></div>`;
   return `<div class="profile">
     ${pf('Customer', cust.name + (cust.code ? ' (' + cust.code + ')' : ''))}
     ${cust.front ? pf('Front of spool', cust.front) : pf('Front of spool', 'not set', 'dim')}
     ${cust.back ? pf('Back of spool', cust.back) : pf('Back of spool', 'not set', 'dim')}
-    ${cust.stockCode ? pf('Label stock', cust.stockCode) : ''}
     ${pf('Order', (o.num || '—') + (o.due ? ' · due ' + fmtDate(o.due) : ''))}
   </div>`;
 }
 
-function tableHtml(rows) {
-  if (!rows.length) return '<div class="empty-note">Nothing on this order to label.</div>';
+function calibHtml(tpl) {
+  if (!tpl) return '';
+  const has = tpl.left !== null && tpl.left !== undefined && tpl.left !== '';
+  const open = S.openCalib === tpl.id;
+  const vals = has
+    ? `<span class="calib-vals">left <b>${esc(tpl.left)}"</b> · top <b>${esc(tpl.top)}"</b> · bleed <b>${esc(tpl.bleed)}"</b> · reverse <b>${tpl.reverse ? 'yes' : 'no'}</b></span>
+       ${tpl.calDate ? `<span class="calib-date">set ${esc(fmtDate(tpl.calDate))}${tpl.batchNote ? ' · ' + esc(tpl.batchNote) : ''}</span>` : ''}`
+    : `<span class="calib-missing">no calibration recorded for this sheet</span>`;
+  return `<div class="calib">
+      <span style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;">Page setup</span>
+      ${vals}
+      <button class="btn tiny" style="margin-left:auto;" data-calib="${tpl.id}">${open ? 'Close' : 'Recalibrate'}</button>
+    </div>
+    <div class="calib-form ${open ? 'open' : ''}" data-calibform="${tpl.id}">
+      <div class="calib-fields">
+        <div class="calib-field"><label>Left margin (in)</label><input type="text" data-cf="left" value="${esc(tpl.left ?? '')}"></div>
+        <div class="calib-field"><label>Top margin (in)</label><input type="text" data-cf="top" value="${esc(tpl.top ?? '')}"></div>
+        <div class="calib-field"><label>Bleed (in)</label><input type="text" data-cf="bleed" value="${esc(tpl.bleed ?? '')}"></div>
+        <div class="calib-field"><label>Reverse print</label><div style="padding:6px 0;"><input type="checkbox" data-cf="reverse" ${tpl.reverse ? 'checked' : ''}></div></div>
+        <div class="calib-field" style="flex:1;min-width:170px;"><label>Which pack of sheets</label>
+          <input type="text" data-cf="batchNote" value="${esc(tpl.batchNote || '')}" placeholder="e.g. box opened July 2026" style="width:100%;"></div>
+        <button class="btn solid" data-calibsave="${tpl.id}">Save calibration</button>
+      </div>
+      <div class="calib-note">Copy these into Maestro under <strong>File → Page Setup</strong> before printing. Saving stamps today's date, so when a print comes out crooked you can see whether the numbers changed since the last good run.</div>
+    </div>`;
+}
+
+function groupHtml(g) {
+  const tpl = g.tpl;
+  const rows = g.rows;
   const hasSheetCol = !!S.cols.recipe.sheet;
   const body = rows.map(r => {
     const st = stateFor(r);
@@ -600,102 +622,124 @@ function tableHtml(rows) {
       <td class="col-stock">
         <div class="stock-cell ${hasSheetCol ? '' : 'disabled'}">
           <label><input type="checkbox" data-sheet="${esc(r.recipeId || '')}" ${r.sheetOnHand ? 'checked' : ''} ${hasSheetCol && r.recipeId ? '' : 'disabled'}> sheet on hand</label>
-        </div>
-        ${r.stock ? `<div class="hint-num">${r.stock} in stock</div>` : ''}
+        </div>${r.stock ? `<div class="hint-num">${r.stock} in stock</div>` : ''}
       </td>
-      <td class="num print ${printing ? '' : 'zero'}">${printing}</td>
+      <td class="col-num num print ${printing ? '' : 'zero'}">${printing}</td>
     </tr>`;
   }).join('');
-  return `<table class="lbl">
-    <thead><tr>
-      <th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Qty</th>
-      <th class="col-stock">Printed stock</th><th class="col-num">Print</th>
-    </tr></thead>
-    <tbody>${body}</tbody>
-  </table>`;
+
+  const sheetsNeeded = tpl && tpl.perSheet && g.total ? Math.ceil(g.total / tpl.perSheet) : null;
+
+  return `<div class="group ${tpl ? '' : 'unassigned'}">
+    <div class="group-head">
+      <span class="group-code">${tpl ? esc(tpl.code) : 'No sheet assigned'}</span>
+      ${tpl && tpl.desc ? `<span class="group-desc">${esc(tpl.desc)}</span>` : ''}
+      <span class="group-fibers">${[...new Set(rows.map(r => fiberCode(r.fiber)).filter(Boolean))].map(f => `<span class="fiber-tag">${esc(f)}</span>`).join('')}</span>
+      ${!tpl ? `<span class="group-desc" style="color:var(--accent);">${esc(g.fallbackFiber)} isn't mapped to a stock code — add it to Fiber_Codes on Label_Templates</span>` : ''}
+      ${sheetsNeeded ? `<span class="group-head-right"><span class="group-desc">${sheetsNeeded} sheet${sheetsNeeded === 1 ? '' : 's'} at ${tpl.perSheet}/sheet</span></span>` : ''}
+    </div>
+    ${calibHtml(tpl)}
+    <table class="lbl">
+      <thead><tr><th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Qty</th><th class="col-stock">Printed stock</th><th class="col-num">Print</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <div class="group-foot">
+      <div class="group-total"><strong data-grouptotal="${esc(g.key)}">${g.total}</strong> labels on this sheet type</div>
+      <div class="group-foot-actions">
+        <button class="btn tiny" data-copy="${esc(g.key)}">Copy</button>
+        <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}>Download CSV</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 function frontSummaryHtml(rows, cust) {
   const total = rows.reduce((a, r) => a + effectiveQty(r), 0);
   if (!total || !cust) return '';
-  const which = cust.front || 'not set — check the Customer Card';
   return `<div class="front-summary">
     <h3>Front labels to pull from stock</h3>
-    <div class="front-row"><span>${esc(which)}</span><span class="fr-qty">${total}</span></div>
-    <div style="font-size:10.5px;color:var(--muted);margin-top:7px;line-height:1.55;">
-      Front labels have no variable data, so they aren't in the CSV — bulk-print a sheet of each logo once and pull from the shelf.
-    </div>
+    <div class="front-row"><span>${esc(cust.front || 'not set — check the Customer Card')}</span><span class="fr-qty">${total}</span></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:7px;line-height:1.55;">Front labels carry no variable data, so they aren't in any CSV — bulk-print a sheet of each logo once and pull from the shelf.</div>
   </div>`;
 }
 
 /* ---------- events ---------- */
 function bindPane() {
   const search = document.getElementById('orderSearch');
-  if (search) {
-    search.addEventListener('input', () => {
-      S.orderSearch = search.value;
-      const pos = search.selectionStart;
-      render();
-      const s2 = document.getElementById('orderSearch');
-      if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
-    });
-  }
-  document.querySelectorAll('[data-order]').forEach(el =>
-    el.addEventListener('click', () => {
-      S.selectedOrderId = Number(el.dataset.order);
-      S.rowState = {};
-      render();
-    }));
-
-  document.querySelectorAll('[data-include]').forEach(el =>
-    el.addEventListener('change', () => {
-      const rows = currentRows();
-      const row = rows.find(r => r.rowKey === el.dataset.include);
-      if (row) stateFor(row).include = el.checked;
-      render();
-    }));
-
-  document.querySelectorAll('[data-qty]').forEach(el =>
-    el.addEventListener('input', () => {
-      const rows = currentRows();
-      const row = rows.find(r => r.rowKey === el.dataset.qty);
-      if (!row) return;
-      stateFor(row).qty = el.value;
-      const tr = el.closest('tr');
-      const cell = tr.querySelector('.num.print');
-      const q = effectiveQty(row);
-      cell.textContent = q;
-      cell.classList.toggle('zero', !q);
-      tr.classList.toggle('skipped', !q);
-      updateFooter();
-    }));
-
+  if (search) search.addEventListener('input', () => {
+    S.orderSearch = search.value;
+    const pos = search.selectionStart;
+    render();
+    const s2 = document.getElementById('orderSearch');
+    if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  document.querySelectorAll('[data-order]').forEach(el => el.addEventListener('click', () => {
+    S.selectedOrderId = Number(el.dataset.order); S.rowState = {}; render();
+  }));
+  document.querySelectorAll('[data-include]').forEach(el => el.addEventListener('change', () => {
+    const row = currentRows().find(r => r.rowKey === el.dataset.include);
+    if (row) stateFor(row).include = el.checked;
+    render();
+  }));
+  document.querySelectorAll('[data-qty]').forEach(el => el.addEventListener('input', () => {
+    const row = currentRows().find(r => r.rowKey === el.dataset.qty);
+    if (!row) return;
+    stateFor(row).qty = el.value;
+    const tr = el.closest('tr');
+    const q = effectiveQty(row);
+    const cell = tr.querySelector('.num.print');
+    cell.textContent = q;
+    cell.classList.toggle('zero', !q);
+    tr.classList.toggle('skipped', !q);
+    refreshTotals();
+  }));
   document.querySelectorAll('[data-sheet]').forEach(el =>
     el.addEventListener('change', () => toggleSheet(Number(el.dataset.sheet), el.checked)));
+
+  document.querySelectorAll('[data-calib]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.calib);
+    S.openCalib = S.openCalib === id ? null : id;
+    render();
+  }));
+  document.querySelectorAll('[data-calibsave]').forEach(el => el.addEventListener('click', () => saveCalibration(Number(el.dataset.calibsave))));
+
+  document.querySelectorAll('[data-csv]').forEach(el => el.addEventListener('click', () => {
+    const g = findGroup(el.dataset.csv);
+    if (g) downloadGroup(g);
+  }));
+  document.querySelectorAll('[data-copy]').forEach(el => el.addEventListener('click', async () => {
+    const g = findGroup(el.dataset.copy);
+    if (!g) return;
+    try { await navigator.clipboard.writeText(buildCsv(g)); showToast('Copied ' + (g.code || 'batch') + ' rows.'); }
+    catch (e) { showToast('Clipboard blocked here — use Download CSV.', true); }
+  }));
 
   const sd = document.getElementById('storeDefault');
   if (sd) sd.addEventListener('input', () => { S.storeQtyDefault = sd.value; });
   const ad = document.getElementById('applyDefault');
-  if (ad) ad.addEventListener('click', () => {
-    currentRows().forEach(r => { stateFor(r).qty = S.storeQtyDefault; });
-    render();
-  });
+  if (ad) ad.addEventListener('click', () => { currentRows().forEach(r => { stateFor(r).qty = S.storeQtyDefault; }); render(); });
   const us = document.getElementById('useStock');
   if (us) us.addEventListener('click', () => {
     currentRows().forEach(r => { stateFor(r).qty = r.stock || 0; });
-    render();
-    showToast('Quantities set from spool stock counts.');
+    render(); showToast('Quantities set from spool stock counts.');
   });
   const sa = document.getElementById('selectAll');
-  if (sa) sa.addEventListener('click', () => {
-    currentRows().forEach(r => { if (!r.sheetOnHand) stateFor(r).include = true; });
-    render();
-  });
+  if (sa) sa.addEventListener('click', () => { currentRows().forEach(r => { if (!r.sheetOnHand) stateFor(r).include = true; }); render(); });
   const sn = document.getElementById('selectNone');
-  if (sn) sn.addEventListener('click', () => {
-    currentRows().forEach(r => { stateFor(r).include = false; });
-    render();
+  if (sn) sn.addEventListener('click', () => { currentRows().forEach(r => { stateFor(r).include = false; }); render(); });
+}
+
+function allGroups() {
+  return groupRows(currentRows());
+}
+function findGroup(key) { return allGroups().find(g => g.key === key) || null; }
+
+function refreshTotals() {
+  allGroups().forEach(g => {
+    const el = document.querySelector(`[data-grouptotal="${CSS.escape(g.key)}"]`);
+    if (el) el.textContent = g.total;
   });
+  updateFooter();
 }
 
 async function toggleSheet(recipeId, onHand) {
@@ -704,13 +748,9 @@ async function toggleSheet(recipeId, onHand) {
   try {
     await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', recipeId, { [col]: !!onHand }]]);
     if (S.recipes[recipeId]) S.recipes[recipeId].sheetOnHand = !!onHand;
-    // A sheet appearing takes the row out of the batch; a sheet running out
-    // puts it back in and re-arms the include box.
-    currentRows().forEach(r => {
-      if (r.recipeId === recipeId) stateFor(r).include = !onHand;
-    });
+    currentRows().forEach(r => { if (r.recipeId === recipeId) stateFor(r).include = !onHand; });
     render();
-    showToast(onHand ? 'Marked as sheet on hand — dropped from this batch.' : 'Sheet used up — back in the batch.');
+    showToast(onHand ? 'Sheet on hand — dropped from this batch.' : 'Sheet used up — back in the batch.');
   } catch (e) {
     console.error(e);
     showToast('Could not save — widget access must be Full document.', true);
@@ -718,90 +758,92 @@ async function toggleSheet(recipeId, onHand) {
   }
 }
 
-function updateFooter() {
-  const rows = currentRows();
-  const total = rows.reduce((a, r) => a + effectiveQty(r), 0);
-  document.getElementById('totalCount').textContent = total;
-  document.getElementById('csvBtn').disabled = !total;
-  document.getElementById('copyBtn').disabled = !total;
+async function saveCalibration(tplId) {
+  const c = S.cols.tpl;
+  const form = document.querySelector(`[data-calibform="${tplId}"]`);
+  if (!c || !form) return;
+  const get = k => form.querySelector(`[data-cf="${k}"]`);
+  const fields = {};
+  if (c.left) fields[c.left] = numOrNull(get('left').value);
+  if (c.top) fields[c.top] = numOrNull(get('top').value);
+  if (c.bleed) fields[c.bleed] = numOrNull(get('bleed').value);
+  if (c.reverse) fields[c.reverse] = get('reverse').checked;
+  if (c.batchNote) fields[c.batchNote] = get('batchNote').value.trim();
+  if (c.calDate) fields[c.calDate] = todayEpochSeconds();
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Label_Templates', tplId, fields]]);
+    S.openCalib = null;
+    showToast('Calibration saved — set Maestro Page Setup to match.');
+    await loadAll();
+  } catch (e) {
+    console.error(e);
+    showToast('Could not save calibration — check Full document access.', true);
+  }
 }
 
-/* ---------- CSV ----------
-   Maestro merges one data row onto one label, so "one row per spool" is the
-   default. Headers are plain words with no duplicates or special characters,
-   which is what Maestro's importer wants. */
+function updateFooter() {
+  const groups = allGroups().filter(g => g.total > 0);
+  const total = groups.reduce((a, g) => a + g.total, 0);
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('groupCount').textContent = groups.length;
+  document.getElementById('csvAllBtn').disabled = !total;
+}
+
+/* ---------- CSV ---------- */
 function csvCell(v) {
   const s = (v === null || v === undefined) ? '' : String(v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-function buildCsv() {
+function buildCsv(g) {
   const perSpool = document.getElementById('oneRowPerSpool').checked;
   const o = currentOrder();
   const cust = S.mode === 'order' ? customerForOrder(o) : null;
-  const headers = perSpool
-    ? ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order']
-    : ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order', 'Qty'];
-
+  const headers = ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order'];
+  if (!perSpool) headers.push('Qty');
   const lines = [headers.join(',')];
-  currentRows().forEach(r => {
+  g.rows.forEach(r => {
     const qty = effectiveQty(r);
     if (!qty) return;
-    const base = [
-      r.name,
-      fiberCode(r.fiber) || r.fiber || '',
-      yardsPerSpool(r.fiber),
-      r.sku || '',
-      cust ? cust.name : '',
-      o ? o.num : '',
-    ];
-    if (perSpool) {
-      for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(','));
-    } else {
-      lines.push(base.concat([qty]).map(csvCell).join(','));
-    }
+    const base = [r.name, fiberCode(r.fiber) || r.fiber || '', yardsPerSpool(r.fiber),
+      r.sku || '', cust ? cust.name : '', o ? o.num : ''];
+    if (perSpool) { for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(',')); }
+    else lines.push(base.concat([qty]).map(csvCell).join(','));
   });
   return lines.join('\r\n');
 }
-function csvFilename() {
+function csvFilename(g) {
   const stamp = new Date().toISOString().slice(0, 10);
+  const stock = (g.code || ('fiber-' + g.fallbackFiber)).replace(/[^A-Za-z0-9_-]/g, '');
   if (S.mode === 'order') {
     const o = currentOrder();
-    return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stamp}.csv`;
+    return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}_${stamp}.csv`;
   }
-  return `labels_store-listings_${stamp}.csv`;
+  return `labels_store-listings_${stock}_${stamp}.csv`;
 }
-
-document.getElementById('csvBtn').addEventListener('click', () => {
-  const csv = buildCsv();
-  // BOM keeps accented colorway names intact if the file is opened in Excel first.
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+function downloadGroup(g) {
+  if (!g.total) return;
+  const blob = new Blob(['\ufeff' + buildCsv(g)], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = csvFilename();
+  a.href = url; a.download = csvFilename(g);
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast('CSV downloaded — upload it in Maestro under Tools → Mail Merge.');
-});
+}
 
-document.getElementById('copyBtn').addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(buildCsv());
-    showToast('Copied. Paste into a sheet and save as CSV.');
-  } catch (e) {
-    showToast('Clipboard blocked here — use Download CSV instead.', true);
-  }
+document.getElementById('csvAllBtn').addEventListener('click', () => {
+  const groups = allGroups().filter(g => g.total > 0);
+  // Browsers throttle simultaneous downloads, so stagger them.
+  groups.forEach((g, i) => setTimeout(() => downloadGroup(g), i * 450));
+  showToast(`${groups.length} file${groups.length === 1 ? '' : 's'} downloading — one per sheet type.`);
 });
-
 document.getElementById('oneRowPerSpool').addEventListener('change', updateFooter);
 document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
-document.querySelectorAll('.tab').forEach(t =>
-  t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    t.classList.add('active');
-    S.mode = t.dataset.mode;
-    S.rowState = {};
-    render();
-  }));
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  S.mode = t.dataset.mode; S.rowState = {}; S.openCalib = null;
+  render();
+}));
 
 /* ---------- boot ---------- */
 try {
