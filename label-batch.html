@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spool Label Batch</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --teal: #3A8B7A;
+  --gold: #9A6B22;
+  --gold-light: #F6EDDA;
+  --muted: #8B7D72;
+  --mid: #6B5E52;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5;
+  padding: 0 0 96px;
+}
+
+.banner {
+  background: #FBEDE9; border-bottom: 1px solid var(--accent); color: var(--accent);
+  padding: 8px 16px; font-size: 11px; line-height: 1.6;
+}
+.banner .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-bottom: 3px; }
+.banner strong { font-family: 'DM Mono', monospace; font-weight: 500; }
+
+.head {
+  padding: 14px 16px 0; display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+}
+.head h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 2px; }
+.head .sub { font-size: 11px; color: var(--muted); }
+.head-actions { margin-left: auto; display: flex; gap: 6px; }
+
+.tabs { display: flex; gap: 4px; padding: 12px 16px 0; border-bottom: 1px solid var(--rule); }
+.tab {
+  font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 6px 6px 0 0; cursor: pointer;
+  border: 1px solid transparent; border-bottom: none; color: var(--mid); background: transparent;
+}
+.tab:hover { background: var(--warm); }
+.tab.active { background: white; border-color: var(--rule); color: var(--ink); margin-bottom: -1px; }
+
+.btn {
+  font-size: 11px; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-weight: 600;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.solid { background: var(--accent); border-color: var(--accent); color: white; }
+.btn.solid:hover { filter: brightness(1.08); }
+.btn.tiny { font-size: 10px; padding: 3px 8px; font-weight: 500; }
+.btn:disabled { opacity: .4; cursor: default; filter: none; }
+
+.pane { padding: 14px 16px 0; }
+
+/* ---------- order picker ---------- */
+.pick-box { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 12px; }
+.pick-row { display: flex; gap: 8px; align-items: center; }
+.pick-row input {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px;
+  font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+}
+.pick-row input:focus { border-color: var(--accent); }
+.order-list { margin-top: 10px; max-height: 260px; overflow-y: auto; }
+.order-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 9px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  border: 1px solid var(--rule); margin-bottom: 4px; background: var(--paper);
+}
+.order-row:hover { border-color: var(--accent); background: white; }
+.order-row.active { border-color: var(--accent); background: white; }
+.order-row .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
+.order-row .ord-cust { color: var(--mid); flex: 1; }
+.order-row .ord-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.empty-note { font-size: 11px; color: var(--muted); font-style: italic; padding: 10px 0; }
+
+/* ---------- customer profile strip ---------- */
+.profile {
+  margin-top: 12px; background: white; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 11px 13px; display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start;
+}
+.profile .pf { min-width: 130px; }
+.profile .pf-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+.profile .pf-value { font-size: 13px; font-weight: 500; margin-top: 2px; }
+.profile .pf-value.warn { color: var(--accent); font-weight: 600; }
+.profile .pf-value.dim { color: var(--muted); font-style: italic; font-weight: 400; }
+
+.alert {
+  margin-top: 10px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13;
+}
+.alert strong { font-weight: 700; }
+
+/* ---------- table ---------- */
+table.lbl { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
+table.lbl thead th {
+  text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+  color: white; background: var(--ink); padding: 7px 9px; font-weight: 600; white-space: nowrap;
+}
+table.lbl td { padding: 7px 9px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
+table.lbl tbody tr:nth-child(even) { background: #FBF8F4; }
+table.lbl tbody tr.skipped { opacity: .5; }
+table.lbl tbody tr.skipped .colorway { text-decoration: line-through; }
+.colorway { font-weight: 500; }
+.sku { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--mid); }
+.num { font-family: 'DM Mono', monospace; text-align: center; }
+.num.zero { color: var(--muted); }
+.num.print { font-weight: 700; color: var(--accent); }
+.col-chk { width: 34px; text-align: center; }
+.col-num { width: 66px; }
+.col-stock { width: 108px; }
+.fiber-tag {
+  font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF;
+  padding: 1px 5px; border-radius: 8px; white-space: nowrap;
+}
+input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--teal); margin: 0; cursor: pointer; }
+input[type=checkbox]:disabled { cursor: default; }
+.qty-input {
+  width: 52px; padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px;
+  font-family: 'DM Mono', monospace; font-size: 12px; text-align: center; outline: none; background: white;
+}
+.qty-input:focus { border-color: var(--accent); }
+.stock-cell { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.stock-cell label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--mid); }
+.stock-cell.disabled label { cursor: default; color: var(--muted); font-style: italic; }
+.hint-num { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); }
+
+/* ---------- front-label summary ---------- */
+.front-summary {
+  margin-top: 14px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px;
+}
+.front-summary h3 {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--teal);
+  font-weight: 700; margin: 0 0 7px;
+}
+.front-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.front-row:last-child { border-bottom: none; }
+.front-row .fr-qty { font-family: 'DM Mono', monospace; font-weight: 600; }
+
+/* ---------- sticky footer ---------- */
+.footer-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; background: white;
+  border-top: 1.5px solid var(--rule); padding: 10px 16px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; z-index: 20;
+}
+.footer-count { font-size: 12px; }
+.footer-count strong { font-family: 'DM Mono', monospace; font-size: 17px; color: var(--accent); }
+.footer-opt { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); }
+.footer-actions { margin-left: auto; display: flex; gap: 6px; }
+
+.toast {
+  position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 82vw;
+}
+.toast.show { opacity: 1; }
+.toast.err { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="banner"></div>
+
+<div class="head">
+  <div>
+    <h1>Spool Label Batch</h1>
+    <div class="sub">Back labels (colorway names) for Maestro mail merge. One row per spool.</div>
+  </div>
+  <div class="head-actions">
+    <button class="btn" id="refreshBtn">↻ Refresh</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-mode="order">Order batch</div>
+  <div class="tab" data-mode="store">Store listings</div>
+</div>
+
+<div class="pane" id="pane"><div class="empty-note">Loading...</div></div>
+
+<div class="footer-bar">
+  <div class="footer-count"><strong id="totalCount">0</strong> labels to print</div>
+  <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool</label>
+  <div class="footer-actions">
+    <button class="btn" id="copyBtn">Copy to clipboard</button>
+    <button class="btn solid" id="csvBtn">Download CSV</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script>
+/* ============================================================
+   Spool Label Batch — Squirrely Stash
+
+   Back labels carry the colorway name, so they're the only variable
+   data. Front labels are one fixed design per customer — they never
+   go through mail merge, they get bulk-printed and pulled from stock,
+   so this widget only *counts* them for you.
+
+   "Sheet on hand" is a per-recipe toggle on Recipes: if a printed
+   sheet of that colorway exists, the row drops out of the batch.
+
+   Requires FULL access (it writes the sheet-on-hand toggle back).
+   ============================================================ */
+
+/* ---------- helpers ---------- */
+function esc(s) {
+  return (s === null || s === undefined ? '' : String(s))
+    .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t || {});
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const cand of candidates) {
+    const hit = keys.find(k => norm(k) === norm(cand));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!isErr);
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// Same rule as wind-routing: E Nylon spools are 150 yd, everything else 100.
+function fiberCode(f) {
+  const s = normalize(f);
+  if (!s) return '';
+  if (s === 'FFN' || s === 'FFC' || s === 'EN' || s === 'BW' || s === 'CN') return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/BLACKWING/.test(s)) return 'BW';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+
+/* ---------- state ---------- */
+const S = {
+  mode: 'order',
+  cols: {},
+  recipes: {},        // id -> {name, sku, fiber, sheetOnHand, storeActive, stock}
+  customers: {},      // id -> {name, code, frontLogo, backStyle, labelNotes}
+  custByName: {},     // normalized name -> customer object
+  orders: [],
+  lines: [],          // all Work_Order_Lines
+  selectedOrderId: null,
+  rowState: {},       // rowKey -> {include: bool, qty: number}
+  orderSearch: '',
+  storeQtyDefault: 6,
+  ready: false,
+};
+
+/* ---------- load ---------- */
+async function loadAll() {
+  document.getElementById('pane').innerHTML = '<div class="empty-note">Loading...</div>';
+  const problems = [];
+
+  let recT, custT, woT, wolT;
+  try {
+    [recT, custT, woT, wolT] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Customers'),
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+    ]);
+  } catch (e) {
+    console.error(e);
+    setBanner([{ title: "Can't read the document",
+      body: 'Needs <strong>Recipes</strong>, <strong>Customers</strong>, <strong>Work_Orders</strong> and <strong>Work_Order_Lines</strong>, with widget access set to <strong>Full document</strong>.' }]);
+    document.getElementById('pane').innerHTML = '<div class="empty-note">Not connected.</div>';
+    return;
+  }
+
+  // --- Recipes ---
+  const rc = {
+    name: findColumn(recT, ['Recipe_Name', 'Name', 'Colorway_Name']),
+    sku: findColumn(recT, ['SKU_Base', 'SKU']),
+    shopifySku: findColumn(recT, ['Shopify_SKU']),
+    fiber: findColumn(recT, ['Fiber_Type', 'Fiber']),
+    sheet: findColumn(recT, ['Label_Sheet_On_Hand', 'Label_Sheet', 'Has_Printed_Sheet']),
+    store: findColumn(recT, ['Store_Listing_Active', 'Store_Active', 'Active_Listing', 'Is_Active']),
+  };
+  S.cols.recipe = rc;
+  if (!rc.sheet) problems.push({ title: 'No sheet-on-hand column on Recipes',
+    body: 'Add a Toggle column <strong>Label_Sheet_On_Hand</strong> to Recipes and the stock checkboxes below become live. Until then every colorway is treated as "no sheet on hand".' });
+  if (!rc.store) problems.push({ title: 'No store-listing column on Recipes',
+    body: 'Add a Toggle column <strong>Store_Listing_Active</strong> to Recipes to drive the Store listings tab. Until then that tab lists every recipe that has a Shopify SKU.' });
+
+  S.recipes = {};
+  (recT.id || []).forEach((id, i) => {
+    S.recipes[id] = {
+      id,
+      name: columnAsArray(recT, rc.name)[i] || '',
+      sku: columnAsArray(recT, rc.sku)[i] || columnAsArray(recT, rc.shopifySku)[i] || '',
+      shopifySku: rc.shopifySku ? columnAsArray(recT, rc.shopifySku)[i] || '' : '',
+      fiber: columnAsArray(recT, rc.fiber)[i] || '',
+      sheetOnHand: rc.sheet ? !!columnAsArray(recT, rc.sheet)[i] : false,
+      storeActive: rc.store ? !!columnAsArray(recT, rc.store)[i]
+                            : !!(rc.shopifySku && columnAsArray(recT, rc.shopifySku)[i]),
+      stock: 0,
+    };
+  });
+  const recipeIdBySku = {};
+  Object.values(S.recipes).forEach(r => {
+    if (r.sku) recipeIdBySku[normalize(r.sku)] = r.id;
+    if (r.shopifySku) recipeIdBySku[normalize(r.shopifySku)] = r.id;
+  });
+
+  // --- Customers ---
+  const cc = {
+    name: findColumn(custT, ['Customer_Name', 'Name']),
+    code: findColumn(custT, ['Code', 'Vendor_Code']),
+    front: findColumn(custT, ['Label_Front_Logo', 'Front_Label_Logo']),
+    back: findColumn(custT, ['Label_Back_Style', 'Back_Label_Style']),
+    stock: findColumn(custT, ['Label_Stock_Code', 'Label_Size']),
+    notes: findColumn(custT, ['Label_Notes']),
+  };
+  if (!cc.front || !cc.back) problems.push({ title: 'Label preferences not set up on Customers',
+    body: 'Add <strong>Label_Front_Logo</strong> and <strong>Label_Back_Style</strong> to Customers (see the Customer Card widget) so this batch knows which front logo to pull and whether the back is a custom design.' });
+
+  S.customers = {}; S.custByName = {};
+  (custT.id || []).forEach((id, i) => {
+    const o = {
+      id,
+      name: columnAsArray(custT, cc.name)[i] || '',
+      code: columnAsArray(custT, cc.code)[i] || '',
+      front: cc.front ? columnAsArray(custT, cc.front)[i] || '' : '',
+      back: cc.back ? columnAsArray(custT, cc.back)[i] || '' : '',
+      stockCode: cc.stock ? columnAsArray(custT, cc.stock)[i] || '' : '',
+      notes: cc.notes ? columnAsArray(custT, cc.notes)[i] || '' : '',
+    };
+    S.customers[id] = o;
+    if (o.name) S.custByName[normalize(o.name)] = o;
+  });
+
+  // --- Work orders ---
+  const wc = {
+    num: findColumn(woT, ['Order_Number']),
+    cust: findColumn(woT, ['Customer']),
+    custName: findColumn(woT, ['Customer_Name']),
+    date: findColumn(woT, ['Order_Date']),
+    due: findColumn(woT, ['Due_Date']),
+    status: findColumn(woT, ['Status']),
+  };
+  S.orders = (woT.id || []).map((id, i) => ({
+    id,
+    num: columnAsArray(woT, wc.num)[i] || '',
+    custId: wc.cust ? getRefId(columnAsArray(woT, wc.cust)[i]) : null,
+    custName: columnAsArray(woT, wc.custName)[i] || '',
+    date: wc.date ? columnAsArray(woT, wc.date)[i] : null,
+    due: wc.due ? columnAsArray(woT, wc.due)[i] : null,
+    status: wc.status ? columnAsArray(woT, wc.status)[i] || '' : '',
+  })).sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+
+  // --- Order lines ---
+  const lc = {
+    wo: findColumn(wolT, ['Work_Order']),
+    recipe: findColumn(wolT, ['Recipe']),
+    sku: findColumn(wolT, ['SKU']),
+    qty: findColumn(wolT, ['Qty_Needed']),
+    product: findColumn(wolT, ['Product_Name']),
+  };
+  S.lines = (wolT.id || []).map((id, i) => {
+    const sku = columnAsArray(wolT, lc.sku)[i] || '';
+    let rid = lc.recipe ? getRefId(columnAsArray(wolT, lc.recipe)[i]) : null;
+    if (!rid) rid = recipeIdBySku[normalize(sku)] || null;
+    return {
+      id,
+      woId: getRefId(columnAsArray(wolT, lc.wo)[i]),
+      recipeId: rid,
+      sku,
+      productName: lc.product ? columnAsArray(wolT, lc.product)[i] || '' : '',
+      qty: Number(columnAsArray(wolT, lc.qty)[i]) || 0,
+    };
+  });
+
+  // --- optional: spool stock, used to seed the store-listing quantities ---
+  try {
+    const lotsT = await grist.docApi.fetchTable('Production_Lots');
+    const pc = {
+      recipe: findColumn(lotsT, ['Recipe']),
+      store: findColumn(lotsT, ['Store_Stock_Spools']),
+      general: findColumn(lotsT, ['General_Stock_Spools']),
+    };
+    if (pc.recipe) {
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = getRefId(columnAsArray(lotsT, pc.recipe)[i]);
+        if (!rid || !S.recipes[rid]) return;
+        S.recipes[rid].stock +=
+          (Number(columnAsArray(lotsT, pc.store)[i]) || 0) +
+          (Number(columnAsArray(lotsT, pc.general)[i]) || 0);
+      });
+    }
+  } catch (e) {
+    console.warn('Production_Lots unavailable — stock hints hidden', e);
+  }
+
+  setBanner(problems);
+  S.ready = true;
+  render();
+}
+
+function setBanner(items) {
+  const el = document.getElementById('banner');
+  if (!items || !items.length) { el.innerHTML = ''; el.className = ''; return; }
+  el.className = 'banner';
+  el.innerHTML = items.map(i =>
+    `<div class="banner-title">${esc(i.title)}</div><div>${i.body}</div>`).join('<div style="height:7px"></div>');
+}
+
+/* ---------- row model ----------
+   A "row" is one colorway to print back labels for. rowKey is stable across
+   re-renders so include/qty edits survive. Order mode keys on the order line
+   (a colorway can appear twice in one order); store mode keys on the recipe. */
+function currentRows() {
+  if (S.mode === 'order') {
+    if (!S.selectedOrderId) return [];
+    return S.lines
+      .filter(l => l.woId === S.selectedOrderId && l.qty > 0)
+      .map(l => {
+        const r = S.recipes[l.recipeId] || null;
+        return {
+          rowKey: 'L' + l.id,
+          recipeId: l.recipeId,
+          name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
+          sku: (r && r.sku) || l.sku,
+          fiber: r ? r.fiber : '',
+          sheetOnHand: r ? r.sheetOnHand : false,
+          matched: !!r,
+          defaultQty: l.qty,
+          stock: r ? r.stock : 0,
+        };
+      });
+  }
+  return Object.values(S.recipes)
+    .filter(r => r.storeActive)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .map(r => ({
+      rowKey: 'R' + r.id,
+      recipeId: r.id,
+      name: r.name,
+      sku: r.sku,
+      fiber: r.fiber,
+      sheetOnHand: r.sheetOnHand,
+      matched: true,
+      defaultQty: S.storeQtyDefault,
+      stock: r.stock,
+    }));
+}
+
+function stateFor(row) {
+  if (!S.rowState[row.rowKey]) {
+    S.rowState[row.rowKey] = { include: !row.sheetOnHand, qty: row.defaultQty };
+  }
+  return S.rowState[row.rowKey];
+}
+function effectiveQty(row) {
+  const st = stateFor(row);
+  if (!st.include || row.sheetOnHand) return 0;
+  return Math.max(0, Number(st.qty) || 0);
+}
+
+/* ---------- render ---------- */
+function render() {
+  if (!S.ready) return;
+  const pane = document.getElementById('pane');
+  pane.innerHTML = S.mode === 'order' ? orderPaneHtml() : storePaneHtml();
+  bindPane();
+  updateFooter();
+}
+
+function currentOrder() { return S.orders.find(o => o.id === S.selectedOrderId) || null; }
+function customerForOrder(o) {
+  if (!o) return null;
+  if (o.custId && S.customers[o.custId]) return S.customers[o.custId];
+  return S.custByName[normalize(o.custName)] || null;
+}
+
+function orderPaneHtml() {
+  const q = S.orderSearch.trim().toLowerCase();
+  const matches = S.orders.filter(o => {
+    if (!q) return true;
+    return (String(o.num) + ' ' + String(o.custName)).toLowerCase().includes(q);
+  }).slice(0, 40);
+
+  const listHtml = matches.length
+    ? matches.map(o => `<div class="order-row ${o.id === S.selectedOrderId ? 'active' : ''}" data-order="${o.id}">
+        <span class="ord-num">${esc(o.num || '—')}</span>
+        <span class="ord-cust">${esc(o.custName || '')}</span>
+        <span class="ord-meta">${esc(fmtDate(o.date))}${o.status ? ' · ' + esc(o.status) : ''}</span>
+      </div>`).join('')
+    : '<div class="empty-note">No orders match.</div>';
+
+  const o = currentOrder();
+  if (!o) {
+    return `<div class="pick-box">
+      <div class="pick-row"><input id="orderSearch" placeholder="Search order number or customer..." value="${esc(S.orderSearch)}"></div>
+      <div class="order-list">${listHtml}</div>
+    </div>`;
+  }
+
+  const cust = customerForOrder(o);
+  const rows = currentRows();
+  const customBack = cust && /custom/i.test(String(cust.back || ''));
+  const unmatched = rows.filter(r => !r.matched);
+
+  return `<div class="pick-box">
+      <div class="pick-row"><input id="orderSearch" placeholder="Search order number or customer..." value="${esc(S.orderSearch)}"></div>
+      <div class="order-list">${listHtml}</div>
+    </div>
+
+    ${profileHtml(cust, o)}
+    ${customBack ? `<div class="alert"><strong>Custom back design.</strong> ${esc(cust.name)} doesn't take the standard colorway-name back.
+      ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}
+      Export below still lists the colorway names, so adjust in Maestro before printing.</div>` : ''}
+    ${unmatched.length ? `<div class="alert"><strong>${unmatched.length} line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
+      The SKU on the order line isn't in Recipes, so there's no colorway name to print — the product name is used instead. Fix the SKU or link the recipe.</div>` : ''}
+
+    ${tableHtml(rows)}
+    ${frontSummaryHtml(rows, cust)}`;
+}
+
+function storePaneHtml() {
+  const rows = currentRows();
+  if (!rows.length) {
+    return `<div class="empty-note">No recipes are marked active on the store.
+      Tick <strong>Store_Listing_Active</strong> on the recipes you're listing, or add that column to Recipes.</div>`;
+  }
+  return `<div class="pick-box">
+      <div class="pick-row" style="gap:12px;flex-wrap:wrap;">
+        <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:6px;">
+          Labels per colorway
+          <input class="qty-input" id="storeDefault" value="${esc(S.storeQtyDefault)}">
+        </label>
+        <button class="btn tiny" id="applyDefault">Apply to all</button>
+        <button class="btn tiny" id="useStock">Use stock counts</button>
+        <button class="btn tiny" id="selectAll">Select all</button>
+        <button class="btn tiny" id="selectNone">Select none</button>
+      </div>
+    </div>
+    ${tableHtml(rows)}`;
+}
+
+function profileHtml(cust, o) {
+  if (!cust) {
+    return `<div class="profile"><div class="pf">
+      <div class="pf-label">Customer</div>
+      <div class="pf-value warn">${esc(o.custName || 'Unknown')} — not linked to a Customers row</div>
+    </div></div>`;
+  }
+  const pf = (label, value, cls) =>
+    `<div class="pf"><div class="pf-label">${esc(label)}</div><div class="pf-value ${cls || ''}">${esc(value)}</div></div>`;
+  return `<div class="profile">
+    ${pf('Customer', cust.name + (cust.code ? ' (' + cust.code + ')' : ''))}
+    ${cust.front ? pf('Front of spool', cust.front) : pf('Front of spool', 'not set', 'dim')}
+    ${cust.back ? pf('Back of spool', cust.back) : pf('Back of spool', 'not set', 'dim')}
+    ${cust.stockCode ? pf('Label stock', cust.stockCode) : ''}
+    ${pf('Order', (o.num || '—') + (o.due ? ' · due ' + fmtDate(o.due) : ''))}
+  </div>`;
+}
+
+function tableHtml(rows) {
+  if (!rows.length) return '<div class="empty-note">Nothing on this order to label.</div>';
+  const hasSheetCol = !!S.cols.recipe.sheet;
+  const body = rows.map(r => {
+    const st = stateFor(r);
+    const printing = effectiveQty(r);
+    return `<tr class="${printing ? '' : 'skipped'}" data-row="${esc(r.rowKey)}">
+      <td class="col-chk"><input type="checkbox" data-include="${esc(r.rowKey)}" ${st.include ? 'checked' : ''} ${r.sheetOnHand ? 'disabled' : ''}></td>
+      <td><div class="colorway">${esc(r.name)}</div><div class="sku">${esc(r.sku || '')}</div></td>
+      <td>${r.fiber ? `<span class="fiber-tag">${esc(fiberCode(r.fiber) || r.fiber)}</span>` : ''}</td>
+      <td class="col-num"><input class="qty-input" data-qty="${esc(r.rowKey)}" value="${esc(st.qty)}"></td>
+      <td class="col-stock">
+        <div class="stock-cell ${hasSheetCol ? '' : 'disabled'}">
+          <label><input type="checkbox" data-sheet="${esc(r.recipeId || '')}" ${r.sheetOnHand ? 'checked' : ''} ${hasSheetCol && r.recipeId ? '' : 'disabled'}> sheet on hand</label>
+        </div>
+        ${r.stock ? `<div class="hint-num">${r.stock} in stock</div>` : ''}
+      </td>
+      <td class="num print ${printing ? '' : 'zero'}">${printing}</td>
+    </tr>`;
+  }).join('');
+  return `<table class="lbl">
+    <thead><tr>
+      <th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Qty</th>
+      <th class="col-stock">Printed stock</th><th class="col-num">Print</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
+}
+
+function frontSummaryHtml(rows, cust) {
+  const total = rows.reduce((a, r) => a + effectiveQty(r), 0);
+  if (!total || !cust) return '';
+  const which = cust.front || 'not set — check the Customer Card';
+  return `<div class="front-summary">
+    <h3>Front labels to pull from stock</h3>
+    <div class="front-row"><span>${esc(which)}</span><span class="fr-qty">${total}</span></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:7px;line-height:1.55;">
+      Front labels have no variable data, so they aren't in the CSV — bulk-print a sheet of each logo once and pull from the shelf.
+    </div>
+  </div>`;
+}
+
+/* ---------- events ---------- */
+function bindPane() {
+  const search = document.getElementById('orderSearch');
+  if (search) {
+    search.addEventListener('input', () => {
+      S.orderSearch = search.value;
+      const pos = search.selectionStart;
+      render();
+      const s2 = document.getElementById('orderSearch');
+      if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+    });
+  }
+  document.querySelectorAll('[data-order]').forEach(el =>
+    el.addEventListener('click', () => {
+      S.selectedOrderId = Number(el.dataset.order);
+      S.rowState = {};
+      render();
+    }));
+
+  document.querySelectorAll('[data-include]').forEach(el =>
+    el.addEventListener('change', () => {
+      const rows = currentRows();
+      const row = rows.find(r => r.rowKey === el.dataset.include);
+      if (row) stateFor(row).include = el.checked;
+      render();
+    }));
+
+  document.querySelectorAll('[data-qty]').forEach(el =>
+    el.addEventListener('input', () => {
+      const rows = currentRows();
+      const row = rows.find(r => r.rowKey === el.dataset.qty);
+      if (!row) return;
+      stateFor(row).qty = el.value;
+      const tr = el.closest('tr');
+      const cell = tr.querySelector('.num.print');
+      const q = effectiveQty(row);
+      cell.textContent = q;
+      cell.classList.toggle('zero', !q);
+      tr.classList.toggle('skipped', !q);
+      updateFooter();
+    }));
+
+  document.querySelectorAll('[data-sheet]').forEach(el =>
+    el.addEventListener('change', () => toggleSheet(Number(el.dataset.sheet), el.checked)));
+
+  const sd = document.getElementById('storeDefault');
+  if (sd) sd.addEventListener('input', () => { S.storeQtyDefault = sd.value; });
+  const ad = document.getElementById('applyDefault');
+  if (ad) ad.addEventListener('click', () => {
+    currentRows().forEach(r => { stateFor(r).qty = S.storeQtyDefault; });
+    render();
+  });
+  const us = document.getElementById('useStock');
+  if (us) us.addEventListener('click', () => {
+    currentRows().forEach(r => { stateFor(r).qty = r.stock || 0; });
+    render();
+    showToast('Quantities set from spool stock counts.');
+  });
+  const sa = document.getElementById('selectAll');
+  if (sa) sa.addEventListener('click', () => {
+    currentRows().forEach(r => { if (!r.sheetOnHand) stateFor(r).include = true; });
+    render();
+  });
+  const sn = document.getElementById('selectNone');
+  if (sn) sn.addEventListener('click', () => {
+    currentRows().forEach(r => { stateFor(r).include = false; });
+    render();
+  });
+}
+
+async function toggleSheet(recipeId, onHand) {
+  const col = S.cols.recipe.sheet;
+  if (!col || !recipeId) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', recipeId, { [col]: !!onHand }]]);
+    if (S.recipes[recipeId]) S.recipes[recipeId].sheetOnHand = !!onHand;
+    // A sheet appearing takes the row out of the batch; a sheet running out
+    // puts it back in and re-arms the include box.
+    currentRows().forEach(r => {
+      if (r.recipeId === recipeId) stateFor(r).include = !onHand;
+    });
+    render();
+    showToast(onHand ? 'Marked as sheet on hand — dropped from this batch.' : 'Sheet used up — back in the batch.');
+  } catch (e) {
+    console.error(e);
+    showToast('Could not save — widget access must be Full document.', true);
+    render();
+  }
+}
+
+function updateFooter() {
+  const rows = currentRows();
+  const total = rows.reduce((a, r) => a + effectiveQty(r), 0);
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('csvBtn').disabled = !total;
+  document.getElementById('copyBtn').disabled = !total;
+}
+
+/* ---------- CSV ----------
+   Maestro merges one data row onto one label, so "one row per spool" is the
+   default. Headers are plain words with no duplicates or special characters,
+   which is what Maestro's importer wants. */
+function csvCell(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function buildCsv() {
+  const perSpool = document.getElementById('oneRowPerSpool').checked;
+  const o = currentOrder();
+  const cust = S.mode === 'order' ? customerForOrder(o) : null;
+  const headers = perSpool
+    ? ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order']
+    : ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order', 'Qty'];
+
+  const lines = [headers.join(',')];
+  currentRows().forEach(r => {
+    const qty = effectiveQty(r);
+    if (!qty) return;
+    const base = [
+      r.name,
+      fiberCode(r.fiber) || r.fiber || '',
+      yardsPerSpool(r.fiber),
+      r.sku || '',
+      cust ? cust.name : '',
+      o ? o.num : '',
+    ];
+    if (perSpool) {
+      for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(','));
+    } else {
+      lines.push(base.concat([qty]).map(csvCell).join(','));
+    }
+  });
+  return lines.join('\r\n');
+}
+function csvFilename() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (S.mode === 'order') {
+    const o = currentOrder();
+    return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stamp}.csv`;
+  }
+  return `labels_store-listings_${stamp}.csv`;
+}
+
+document.getElementById('csvBtn').addEventListener('click', () => {
+  const csv = buildCsv();
+  // BOM keeps accented colorway names intact if the file is opened in Excel first.
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = csvFilename();
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('CSV downloaded — upload it in Maestro under Tools → Mail Merge.');
+});
+
+document.getElementById('copyBtn').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildCsv());
+    showToast('Copied. Paste into a sheet and save as CSV.');
+  } catch (e) {
+    showToast('Clipboard blocked here — use Download CSV instead.', true);
+  }
+});
+
+document.getElementById('oneRowPerSpool').addEventListener('change', updateFooter);
+document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
+document.querySelectorAll('.tab').forEach(t =>
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    S.mode = t.dataset.mode;
+    S.rowState = {};
+    render();
+  }));
+
+/* ---------- boot ---------- */
+try {
+  grist.ready({ requiredAccess: 'full' });
+  loadAll();
+} catch (e) {
+  console.error(e);
+  setBanner([{ title: 'Grist plugin API unavailable',
+    body: 'The widget loaded but could not reach Grist. Reload the page; if it persists, re-add the custom widget URL.' }]);
+  document.getElementById('pane').innerHTML = '<div class="empty-note">Not connected.</div>';
+}
+</script>
+</body>
+</html>

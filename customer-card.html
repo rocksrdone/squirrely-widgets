@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Card</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --teal: #3A8B7A;
+  --muted: #8B7D72;
+  --mid: #6B5E52;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5;
+}
+
+/* ---------- banner (missing columns / setup help) ---------- */
+.banner {
+  background: #FBEDE9; border-bottom: 1px solid var(--accent); color: var(--accent);
+  padding: 8px 14px; font-size: 11px; line-height: 1.6;
+}
+.banner strong { font-family: 'DM Mono', monospace; font-weight: 500; }
+.banner .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-bottom: 3px; }
+
+/* ---------- layout ---------- */
+.layout { display: flex; height: 100vh; }
+.banner + .layout { height: calc(100vh - 46px); }
+
+.rail {
+  width: 232px; flex-shrink: 0; border-right: 1px solid var(--rule);
+  background: var(--warm); display: flex; flex-direction: column;
+}
+.rail-head { padding: 10px; border-bottom: 1px solid var(--rule); position: sticky; top: 0; }
+.rail-head input, .rail-head select {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; background: white; color: var(--ink); outline: none;
+}
+.rail-head input:focus, .rail-head select:focus { border-color: var(--accent); }
+.rail-head select { margin-top: 6px; }
+.rail-list { flex: 1; overflow-y: auto; padding: 6px; }
+.rail-empty { font-size: 11px; color: var(--muted); font-style: italic; padding: 10px; }
+
+.cust-row {
+  padding: 7px 9px; border-radius: 5px; cursor: pointer; margin-bottom: 3px;
+  border: 1px solid transparent; display: flex; align-items: baseline; gap: 6px;
+}
+.cust-row:hover { background: #F2EAE0; }
+.cust-row.active { background: white; border-color: var(--accent); }
+.cust-row .cust-name { flex: 1; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cust-row.inactive .cust-name { color: var(--muted); font-style: italic; }
+.code-chip {
+  font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500;
+  background: var(--ink); color: white; padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+}
+.code-chip.empty { background: var(--rule); color: var(--mid); }
+
+/* ---------- detail ---------- */
+.detail { flex: 1; overflow-y: auto; padding: 0 0 60px; }
+.detail-empty {
+  display: flex; align-items: center; justify-content: center; height: 100%;
+  color: var(--muted); font-style: italic; font-size: 13px; padding: 24px; text-align: center;
+}
+
+.card-head {
+  position: sticky; top: 0; z-index: 5; background: var(--paper);
+  border-bottom: 1px solid var(--rule); padding: 14px 20px 12px;
+  display: flex; align-items: flex-start; gap: 14px;
+}
+.card-head h1 {
+  font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; line-height: 1.25;
+}
+.head-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tag {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+  padding: 2px 7px; border-radius: 10px; background: var(--warm); color: var(--mid);
+}
+.tag.teal { background: #E4F0EF; color: #2A6B6B; }
+.tag.accent { background: #F6E6E2; color: var(--accent); }
+.tag.mono { font-family: 'DM Mono', monospace; letter-spacing: 0; text-transform: none; font-size: 10px; }
+.head-actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+
+.btn {
+  font-size: 11px; padding: 6px 12px; border-radius: 5px; cursor: pointer; font-weight: 600;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: white; border-color: var(--rule); color: var(--mid); }
+.btn.primary.unsaved { background: var(--accent); border-color: var(--accent); color: white; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.tiny { font-size: 10px; padding: 3px 8px; font-weight: 500; }
+
+.quick-links { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 20px 0; }
+.quick-link {
+  font-size: 11px; padding: 5px 10px; border-radius: 5px; text-decoration: none;
+  border: 1px solid var(--rule); background: white; color: var(--teal); font-weight: 600;
+}
+.quick-link:hover { border-color: var(--teal); }
+.quick-link.off { color: var(--muted); border-style: dashed; pointer-events: none; font-weight: 400; font-style: italic; }
+
+section.block { padding: 16px 20px 0; }
+.block-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--teal);
+  font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+}
+.block-title::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
+
+.field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 16px; }
+.field { display: flex; flex-direction: column; }
+.field.wide { grid-column: 1 / -1; }
+.field label {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  margin-bottom: 3px; font-weight: 600;
+}
+.field input, .field select, .field textarea {
+  width: 100%; padding: 5px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; background: white; color: var(--ink); outline: none;
+}
+.field input.mono, .field.mono input { font-family: 'DM Mono', monospace; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field textarea { min-height: 62px; resize: vertical; line-height: 1.55; }
+.field.missing input, .field.missing select, .field.missing textarea {
+  background: #F4F1EC; border-style: dashed; color: var(--muted);
+}
+.field-hint { font-size: 9px; color: var(--accent); margin-top: 2px; font-family: 'DM Mono', monospace; }
+
+.toggle-field {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--rule); border-radius: 5px; background: white; align-self: end;
+}
+.toggle-field input { width: 15px; height: 15px; accent-color: var(--teal); margin: 0; flex-shrink: 0; }
+.toggle-field span { font-size: 12px; }
+.toggle-field.missing { border-style: dashed; background: #F4F1EC; color: var(--muted); }
+
+/* ---------- pricing ---------- */
+table.price-table { width: 100%; border-collapse: collapse; }
+table.price-table thead th {
+  text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+  color: white; background: var(--ink); padding: 6px 9px; font-weight: 600;
+}
+table.price-table td { padding: 4px 6px; border-bottom: 1px solid var(--rule); }
+table.price-table input, table.price-table select {
+  width: 100%; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px;
+  font-size: 12px; background: transparent; outline: none; font-family: 'Inter', sans-serif; color: var(--ink);
+}
+table.price-table input.mono { font-family: 'DM Mono', monospace; }
+table.price-table input:focus, table.price-table select:focus { border-color: var(--accent); background: white; }
+table.price-table tbody tr:nth-child(even) { background: #FBF8F4; }
+.col-fiber { width: 130px; }
+.col-num { width: 110px; }
+.col-x { width: 30px; text-align: center; }
+.row-x { cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 2px 5px; border-radius: 4px; }
+.row-x:hover { color: var(--accent); background: var(--warm); }
+.setup-note {
+  font-size: 11px; color: var(--mid); background: var(--warm); border: 1px dashed var(--rule);
+  border-radius: 6px; padding: 9px 11px; line-height: 1.6;
+}
+.setup-note code { font-family: 'DM Mono', monospace; background: white; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+
+/* ---------- orders ---------- */
+table.orders-table { width: 100%; border-collapse: collapse; }
+table.orders-table thead th {
+  text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); padding: 5px 9px; font-weight: 600; border-bottom: 1px solid var(--rule);
+}
+table.orders-table td { padding: 6px 9px; border-bottom: 1px solid var(--rule); font-size: 12px; }
+table.orders-table .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
+table.orders-table .ord-date { font-family: 'DM Mono', monospace; color: var(--mid); font-size: 11px; }
+
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 80vw;
+}
+.toast.show { opacity: 1; }
+.toast.err { background: var(--accent); }
+
+@media (max-width: 720px) {
+  .layout { flex-direction: column; height: auto; }
+  .rail { width: auto; max-height: 190px; border-right: none; border-bottom: 1px solid var(--rule); }
+  .card-head { position: static; }
+}
+</style>
+</head>
+<body>
+
+<div id="banner"></div>
+
+<div class="layout">
+  <aside class="rail">
+    <div class="rail-head">
+      <input id="searchBox" placeholder="Search name, code, contact...">
+      <select id="typeFilter"><option value="">All customers</option></select>
+    </div>
+    <div class="rail-list" id="custList"><div class="rail-empty">Loading...</div></div>
+  </aside>
+  <main class="detail" id="detail">
+    <div class="detail-empty">Pick a customer from the list.</div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script>
+/* ============================================================
+   Customer Card — Squirrely Stash
+   Standalone: reads Customers, Customer_Pricing, Work_Orders via
+   fetchTable. No Select By wiring needed. Requires FULL access
+   (it writes back to Customers and Customer_Pricing).
+
+   House rules honoured here:
+   - static shell renders before any Grist call
+   - every column resolved defensively via findColumn/resolveCols
+   - every Grist string HTML-escaped before innerHTML
+   ============================================================ */
+
+/* ---------- helpers ---------- */
+function esc(s) {
+  return (s === null || s === undefined ? '' : String(s))
+    .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t || {});
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const cand of candidates) {
+    const hit = keys.find(k => norm(k) === norm(cand));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function normUrl(u) {
+  const s = (u || '').toString().trim();
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : 'https://' + s;
+}
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!isErr);
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+/* ---------- field spec ----------
+   One declarative list drives the whole detail pane. `cands` is tried in
+   order against the live Customers table, so renaming a column in Grist
+   doesn't break the widget — it just picks the next name it recognises.  */
+const FIELDS = [
+  // identity
+  { key: 'name',      cands: ['Customer_Name', 'Name'],                 label: 'Business name',   type: 'text',   block: 'identity' },
+  { key: 'code',      cands: ['Code', 'Vendor_Code', 'Customer_Code'],  label: 'Code',            type: 'text',   block: 'identity', mono: true },
+  { key: 'type',      cands: ['Type', 'Customer_Type'],                 label: 'Type',            type: 'choice', block: 'identity',
+    options: ['Wholesale Vendor', 'Retail', 'Individual', 'Internal'] },
+  { key: 'status',    cands: ['Status', 'Account_Status'],              label: 'Status',          type: 'choice', block: 'identity',
+    options: ['Active', 'Paused', 'Inactive', 'Prospect'] },
+
+  // people
+  { key: 'owner',     cands: ['Owner_Name', 'Owner'],                   label: 'Owner',           type: 'text',   block: 'people' },
+  { key: 'contact',   cands: ['Main_Contact', 'Contact_Name', 'Primary_Contact'], label: 'Main contact', type: 'text', block: 'people' },
+  { key: 'role',      cands: ['Contact_Role', 'Contact_Title'],         label: 'Their role',      type: 'text',   block: 'people' },
+  { key: 'email',     cands: ['Email', 'Email_Primary'],                label: 'Email',           type: 'email',  block: 'people' },
+  { key: 'emailBill', cands: ['Email_Billing', 'Billing_Email'],        label: 'Billing email',   type: 'email',  block: 'people' },
+  { key: 'phone',     cands: ['Phone', 'Phone_Primary'],                label: 'Phone',           type: 'tel',    block: 'people', mono: true },
+  { key: 'phoneAlt',  cands: ['Phone_Alt', 'Phone_Secondary', 'Mobile'], label: 'Second phone',   type: 'tel',    block: 'people', mono: true },
+  { key: 'website',   cands: ['Website_URL', 'Website', 'URL'],         label: 'Website',         type: 'url',    block: 'people' },
+
+  // money
+  { key: 'invMethod', cands: ['Invoice_Method', 'Billing_Method'],      label: 'Invoiced via',    type: 'choice', block: 'money',
+    options: ['Shopify', 'Wise', 'PayPal', 'Bank transfer', 'Check', 'Other'] },
+  { key: 'currency',  cands: ['Currency'],                              label: 'Currency',        type: 'choice', block: 'money',
+    options: ['USD', 'CAD', 'EUR', 'GBP', 'AUD', 'JPY'] },
+  { key: 'terms',     cands: ['Payment_Terms', 'Terms'],                label: 'Payment terms',   type: 'text',   block: 'money' },
+  { key: 'taxId',     cands: ['Tax_ID', 'VAT_Number', 'Resale_Number'], label: 'Tax / VAT / resale no.', type: 'text', block: 'money', mono: true },
+
+  // photos
+  { key: 'wantsPhotos', cands: ['Wants_Product_Photos', 'Wants_Photos', 'Send_Product_Photos'], label: 'Send product photos', type: 'toggle', block: 'photos' },
+  { key: 'photoUrl',  cands: ['Photo_Share_URL', 'Nextcloud_Share_URL', 'Photo_Folder_URL'], label: 'Shared photo folder link', type: 'url', block: 'photos', wide: true },
+  { key: 'photoNotes',cands: ['Photo_Notes'],                           label: 'Photo notes',     type: 'text',   block: 'photos', wide: true },
+
+  // labels
+  { key: 'frontLogo', cands: ['Label_Front_Logo', 'Front_Label_Logo'],  label: 'Front of spool',  type: 'choice', block: 'labels',
+    options: ['Squirrely Stash logo', 'Customer logo', 'No front label'] },
+  { key: 'backStyle', cands: ['Label_Back_Style', 'Back_Label_Style'],  label: 'Back of spool',   type: 'choice', block: 'labels',
+    options: ['Colorway name', 'Custom — see notes'] },
+  { key: 'labelSize', cands: ['Label_Stock_Code', 'Label_Size'],        label: 'Label stock (OL code)', type: 'text', block: 'labels', mono: true },
+  { key: 'labelNotes',cands: ['Label_Notes'],                           label: 'Label notes',     type: 'textarea', block: 'labels', wide: true },
+
+  // shipping
+  { key: 'shipName',  cands: ['Ship_To_Name', 'Ship_Name'],             label: 'Ship to name',    type: 'text',   block: 'ship' },
+  { key: 'shipAddr1', cands: ['Ship_Addr1', 'Ship_Address_1'],          label: 'Address line 1',  type: 'text',   block: 'ship' },
+  { key: 'shipAddr2', cands: ['Ship_Addr2', 'Ship_Address_2'],          label: 'Address line 2',  type: 'text',   block: 'ship' },
+  { key: 'shipCsz',   cands: ['Ship_City_State_Zip', 'Ship_CSZ'],       label: 'City, state, ZIP', type: 'text',  block: 'ship' },
+  { key: 'shipCountry', cands: ['Ship_Country', 'Country'],             label: 'Country',         type: 'text',   block: 'ship' },
+
+  // notes
+  { key: 'reqs',      cands: ['Special_Requirements', 'Requirements'],  label: 'Special requirements', type: 'textarea', block: 'notes', wide: true },
+  { key: 'notes',     cands: ['Notes', 'Internal_Notes'],               label: 'Internal notes',  type: 'textarea', block: 'notes', wide: true },
+];
+
+const BLOCKS = [
+  { id: 'identity', title: 'Account' },
+  { id: 'people',   title: 'People & contact' },
+  { id: 'money',    title: 'Billing' },
+  { id: 'pricing',  title: 'Pricing by fiber' },
+  { id: 'photos',   title: 'Product photos' },
+  { id: 'labels',   title: 'Spool labels' },
+  { id: 'ship',     title: 'Ship to' },
+  { id: 'notes',    title: 'Notes' },
+  { id: 'orders',   title: 'Recent orders' },
+];
+
+const SEED_FIBERS = ['FFN', 'FFC', 'EN'];
+
+/* ---------- state ---------- */
+const S = {
+  cols: {},            // field key -> live column id (or null)
+  missingCols: [],     // ['Customers.Email', ...]
+  customers: [],       // [{id, vals:{key:value}}]
+  selectedId: null,
+  dirty: {},           // key -> value, for the selected customer
+  priceCols: null,     // resolved Customer_Pricing columns, or null if table absent
+  pricing: [],         // rows for selected customer: {rowId|null, key, fiber, price, discount, notes}
+  priceDirty: false,
+  priceDeleted: [],
+  orders: [],
+  saving: false,
+  nextKey: 1,
+};
+
+/* ---------- load ---------- */
+async function loadAll() {
+  document.getElementById('custList').innerHTML = '<div class="rail-empty">Loading...</div>';
+  let custT;
+  try {
+    custT = await grist.docApi.fetchTable('Customers');
+  } catch (e) {
+    console.error(e);
+    setBanner([{ title: "Can't read Customers",
+      body: 'Check the table is named <strong>Customers</strong> and this widget has <strong>Full document</strong> access.' }]);
+    document.getElementById('custList').innerHTML = '<div class="rail-empty">No data.</div>';
+    return;
+  }
+
+  // Resolve every field's column; anything unresolved renders disabled with a hint.
+  S.cols = {};
+  S.missingCols = [];
+  FIELDS.forEach(f => {
+    const hit = findColumn(custT, f.cands);
+    S.cols[f.key] = hit;
+    if (!hit) S.missingCols.push(f.cands[0]);
+  });
+
+  const ids = custT.id || [];
+  S.customers = ids.map((id, i) => {
+    const vals = {};
+    FIELDS.forEach(f => { vals[f.key] = S.cols[f.key] ? columnAsArray(custT, S.cols[f.key])[i] : null; });
+    return { id, vals };
+  }).sort((a, b) => String(a.vals.name || '').localeCompare(String(b.vals.name || '')));
+
+  // Type filter options come from the data, not a hardcoded list.
+  const types = [...new Set(S.customers.map(c => c.vals.type).filter(Boolean))].sort();
+  const tf = document.getElementById('typeFilter');
+  tf.innerHTML = '<option value="">All customers</option>' +
+    types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+
+  await loadPricingCols();
+  await loadOrdersTable();
+
+  const banners = [];
+  if (S.missingCols.length) {
+    banners.push({
+      title: 'Columns not found in Customers',
+      body: 'These fields are read-only until you add the columns in Grist: <strong>' +
+        esc(S.missingCols.join(', ')) + '</strong>',
+    });
+  }
+  if (!S.priceCols) {
+    banners.push({
+      title: 'Customer_Pricing table not found',
+      body: 'Add a table named <strong>Customer_Pricing</strong> with columns ' +
+        '<strong>Customer</strong> (Reference → Customers), <strong>Fiber_Code</strong>, ' +
+        '<strong>Price_Per_Spool</strong>, <strong>Discount_Pct</strong>, <strong>Notes</strong>.',
+    });
+  }
+  setBanner(banners);
+
+  renderList();
+  if (S.selectedId && S.customers.some(c => c.id === S.selectedId)) selectCustomer(S.selectedId, true);
+  else renderDetail();
+}
+
+async function loadPricingCols() {
+  S.priceCols = null;
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Pricing');
+    const cols = {
+      customer: findColumn(t, ['Customer', 'Customer_ID', 'Client']),
+      fiber: findColumn(t, ['Fiber_Code', 'Fiber', 'Fiber_Type', 'Product']),
+      price: findColumn(t, ['Price_Per_Spool', 'Price', 'Unit_Price']),
+      discount: findColumn(t, ['Discount_Pct', 'Discount', 'Discount_Percent']),
+      notes: findColumn(t, ['Notes', 'Note']),
+    };
+    if (!cols.customer || !cols.fiber) return;   // unusable — treat as absent
+    S.priceCols = cols;
+    S.priceTable = t;
+  } catch (e) {
+    // table simply doesn't exist yet — the banner explains how to add it
+  }
+}
+
+async function loadOrdersTable() {
+  S.orders = [];
+  try {
+    const t = await grist.docApi.fetchTable('Work_Orders');
+    const c = {
+      cust: findColumn(t, ['Customer']),
+      custName: findColumn(t, ['Customer_Name']),
+      num: findColumn(t, ['Order_Number']),
+      date: findColumn(t, ['Order_Date']),
+      due: findColumn(t, ['Due_Date']),
+      status: findColumn(t, ['Status']),
+      channel: findColumn(t, ['Channel']),
+      pay: findColumn(t, ['Payment_Status']),
+    };
+    const ids = t.id || [];
+    S.orders = ids.map((id, i) => ({
+      id,
+      custId: c.cust ? getRefId(columnAsArray(t, c.cust)[i]) : null,
+      custName: c.custName ? columnAsArray(t, c.custName)[i] : '',
+      num: c.num ? columnAsArray(t, c.num)[i] : '',
+      date: c.date ? columnAsArray(t, c.date)[i] : null,
+      due: c.due ? columnAsArray(t, c.due)[i] : null,
+      status: c.status ? columnAsArray(t, c.status)[i] : '',
+      channel: c.channel ? columnAsArray(t, c.channel)[i] : '',
+      pay: c.pay ? columnAsArray(t, c.pay)[i] : '',
+    }));
+  } catch (e) {
+    console.warn('Work_Orders unavailable — order history hidden', e);
+  }
+}
+
+function setBanner(items) {
+  const el = document.getElementById('banner');
+  if (!items || !items.length) { el.innerHTML = ''; el.className = ''; return; }
+  el.className = 'banner';
+  el.innerHTML = items.map(i =>
+    `<div class="banner-title">${esc(i.title)}</div><div>${i.body}</div>`).join('<div style="height:6px"></div>');
+}
+
+/* ---------- customer list ---------- */
+function renderList() {
+  const q = document.getElementById('searchBox').value.trim().toLowerCase();
+  const typeF = document.getElementById('typeFilter').value;
+  const rows = S.customers.filter(c => {
+    if (typeF && c.vals.type !== typeF) return false;
+    if (!q) return true;
+    const hay = [c.vals.name, c.vals.code, c.vals.contact, c.vals.owner, c.vals.email]
+      .map(v => String(v || '').toLowerCase()).join(' ');
+    return hay.includes(q);
+  });
+
+  const el = document.getElementById('custList');
+  if (!rows.length) { el.innerHTML = '<div class="rail-empty">Nothing matches.</div>'; return; }
+  el.innerHTML = rows.map(c => {
+    const inactive = /inactive|paused/i.test(String(c.vals.status || ''));
+    return `<div class="cust-row ${c.id === S.selectedId ? 'active' : ''} ${inactive ? 'inactive' : ''}" data-id="${c.id}">
+      <span class="cust-name">${esc(c.vals.name || '(no name)')}</span>
+      <span class="code-chip ${c.vals.code ? '' : 'empty'}">${esc(c.vals.code || '—')}</span>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.cust-row').forEach(r =>
+    r.addEventListener('click', () => selectCustomer(Number(r.dataset.id))));
+}
+
+/* ---------- selection ---------- */
+function selectCustomer(id, keepDirty) {
+  if (!keepDirty && hasUnsaved() && !confirm('You have unsaved changes. Discard them?')) return;
+  S.selectedId = id;
+  if (!keepDirty) { S.dirty = {}; S.priceDeleted = []; S.priceDirty = false; }
+  buildPricingRows();
+  renderList();
+  renderDetail();
+}
+function hasUnsaved() { return Object.keys(S.dirty).length > 0 || S.priceDirty || S.priceDeleted.length > 0; }
+function selected() { return S.customers.find(c => c.id === S.selectedId) || null; }
+function val(key) {
+  if (key in S.dirty) return S.dirty[key];
+  const c = selected();
+  return c ? c.vals[key] : null;
+}
+
+function buildPricingRows() {
+  S.pricing = [];
+  if (!S.priceCols || !S.priceTable || !S.selectedId) return;
+  const t = S.priceTable, c = S.priceCols;
+  const ids = t.id || [];
+  ids.forEach((rid, i) => {
+    if (getRefId(columnAsArray(t, c.customer)[i]) !== S.selectedId) return;
+    S.pricing.push({
+      rowId: rid, key: S.nextKey++,
+      fiber: columnAsArray(t, c.fiber)[i] || '',
+      price: c.price ? (columnAsArray(t, c.price)[i] ?? '') : '',
+      discount: c.discount ? (columnAsArray(t, c.discount)[i] ?? '') : '',
+      notes: c.notes ? (columnAsArray(t, c.notes)[i] || '') : '',
+    });
+  });
+  S.pricing.sort((a, b) => {
+    const ia = SEED_FIBERS.indexOf(a.fiber), ib = SEED_FIBERS.indexOf(b.fiber);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || String(a.fiber).localeCompare(String(b.fiber));
+  });
+}
+
+/* ---------- detail render ---------- */
+function fieldHtml(f) {
+  const missing = !S.cols[f.key];
+  const v = val(f.key);
+  const cls = `field ${f.wide ? 'wide' : ''} ${missing ? 'missing' : ''} ${f.mono ? 'mono' : ''}`;
+  const dis = missing ? 'disabled' : '';
+  const hint = missing ? `<div class="field-hint">add column ${esc(f.cands[0])}</div>` : '';
+
+  if (f.type === 'toggle') {
+    return `<div class="field ${f.wide ? 'wide' : ''}">
+      <label>&nbsp;</label>
+      <div class="toggle-field ${missing ? 'missing' : ''}">
+        <input type="checkbox" data-key="${f.key}" ${v ? 'checked' : ''} ${dis}>
+        <span>${esc(f.label)}</span>
+      </div>${hint}</div>`;
+  }
+  let control;
+  if (f.type === 'choice') {
+    const opts = f.options.slice();
+    if (v && !opts.includes(v)) opts.unshift(v);
+    control = `<select data-key="${f.key}" ${dis}><option value=""></option>` +
+      opts.map(o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
+  } else if (f.type === 'textarea') {
+    control = `<textarea data-key="${f.key}" ${dis}>${esc(v || '')}</textarea>`;
+  } else {
+    control = `<input type="${f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text'}" data-key="${f.key}" value="${esc(v || '')}" ${dis}>`;
+  }
+  return `<div class="${cls}"><label>${esc(f.label)}</label>${control}${hint}</div>`;
+}
+
+function pricingHtml() {
+  if (!S.priceCols) {
+    return `<div class="setup-note">Add a <code>Customer_Pricing</code> table and per-fiber prices will edit right here.
+      Columns: <code>Customer</code> (Reference → Customers), <code>Fiber_Code</code>, <code>Price_Per_Spool</code>,
+      <code>Discount_Pct</code>, <code>Notes</code>.</div>`;
+  }
+  const rows = S.pricing.map(p => `
+    <tr data-pkey="${p.key}">
+      <td class="col-fiber"><input class="mono" data-pfield="fiber" value="${esc(p.fiber)}" placeholder="FFN"></td>
+      <td class="col-num"><input class="mono" data-pfield="price" value="${esc(p.price)}" placeholder="0.00"></td>
+      <td class="col-num"><input class="mono" data-pfield="discount" value="${esc(p.discount)}" placeholder="0"></td>
+      <td><input data-pfield="notes" value="${esc(p.notes)}" placeholder="e.g. 25+ spools"></td>
+      <td class="col-x"><span class="row-x" data-premove="${p.key}" title="Remove this row">×</span></td>
+    </tr>`).join('');
+  const missingSeeds = SEED_FIBERS.filter(f => !S.pricing.some(p => String(p.fiber).toUpperCase() === f));
+  return `<table class="price-table">
+    <thead><tr><th>Fiber</th><th>Price / spool</th><th>Discount %</th><th>Note</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="5" style="padding:10px;color:var(--muted);font-style:italic;font-size:11px;">No pricing set for this customer.</td></tr>'}</tbody>
+  </table>
+  <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+    <button class="btn tiny" id="addPriceRow">+ Add row</button>
+    ${missingSeeds.length ? `<button class="btn tiny" id="seedPriceRows">+ ${esc(missingSeeds.join(', '))}</button>` : ''}
+  </div>`;
+}
+
+function ordersHtml() {
+  const c = selected();
+  if (!c) return '';
+  const name = String(c.vals.name || '').trim().toLowerCase();
+  const mine = S.orders.filter(o =>
+    (o.custId && o.custId === c.id) ||
+    (!o.custId && name && String(o.custName || '').trim().toLowerCase() === name));
+  if (!mine.length) return `<div class="setup-note">No orders linked to this customer yet.</div>`;
+  mine.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+  const rows = mine.slice(0, 10).map(o => `<tr>
+    <td class="ord-num">${esc(o.num || '—')}</td>
+    <td class="ord-date">${esc(fmtDate(o.date))}</td>
+    <td class="ord-date">${esc(fmtDate(o.due))}</td>
+    <td>${esc(o.status || '')}</td>
+    <td>${esc(o.channel || '')}</td>
+    <td>${esc(o.pay || '')}</td>
+  </tr>`).join('');
+  return `<table class="orders-table">
+    <thead><tr><th>Order</th><th>Placed</th><th>Due</th><th>Status</th><th>Channel</th><th>Payment</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${mine.length > 10 ? `<div style="font-size:10px;color:var(--muted);padding:6px 9px;">Showing 10 of ${mine.length}.</div>` : ''}`;
+}
+
+function renderDetail() {
+  const el = document.getElementById('detail');
+  const c = selected();
+  if (!c) { el.innerHTML = '<div class="detail-empty">Pick a customer from the list.</div>'; return; }
+
+  const website = normUrl(val('website'));
+  const photoUrl = normUrl(val('photoUrl'));
+  const email = String(val('email') || '').trim();
+  const wantsPhotos = !!val('wantsPhotos');
+
+  const blocksHtml = BLOCKS.map(b => {
+    let body;
+    if (b.id === 'pricing') body = pricingHtml();
+    else if (b.id === 'orders') body = ordersHtml();
+    else {
+      const fs = FIELDS.filter(f => f.block === b.id);
+      if (!fs.length) return '';
+      body = `<div class="field-grid">${fs.map(fieldHtml).join('')}</div>`;
+    }
+    return `<section class="block"><div class="block-title">${esc(b.title)}</div>${body}</section>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card-head">
+      <div>
+        <h1>${esc(val('name') || '(no name)')}</h1>
+        <div class="head-meta">
+          ${val('code') ? `<span class="tag mono">${esc(val('code'))}</span>` : ''}
+          ${val('type') ? `<span class="tag teal">${esc(val('type'))}</span>` : ''}
+          ${val('status') ? `<span class="tag ${/inactive|paused/i.test(String(val('status'))) ? 'accent' : ''}">${esc(val('status'))}</span>` : ''}
+          ${val('invMethod') ? `<span class="tag">via ${esc(val('invMethod'))}</span>` : ''}
+          <span class="tag ${wantsPhotos ? 'teal' : ''}">${wantsPhotos ? 'Wants photos' : 'No photos'}</span>
+        </div>
+      </div>
+      <div class="head-actions">
+        <button class="btn" id="refreshBtn">↻ Refresh</button>
+        <button class="btn primary" id="saveBtn">Save changes</button>
+      </div>
+    </div>
+
+    <div class="quick-links">
+      ${website ? `<a class="quick-link" href="${esc(website)}" target="_blank" rel="noopener">Website ↗</a>`
+                : `<span class="quick-link off">No website</span>`}
+      ${photoUrl ? `<a class="quick-link" href="${esc(photoUrl)}" target="_blank" rel="noopener">Photo folder ↗</a>`
+                 : `<span class="quick-link off">No photo folder link</span>`}
+      ${email ? `<a class="quick-link" href="mailto:${esc(email)}">Email ${esc(val('contact') || '')} ↗</a>`
+              : `<span class="quick-link off">No email</span>`}
+    </div>
+
+    ${blocksHtml}
+  `;
+
+  bindDetail();
+  updateSaveBtn();
+}
+
+/* ---------- editing ---------- */
+function bindDetail() {
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    if (hasUnsaved() && !confirm('Discard unsaved changes and reload?')) return;
+    S.dirty = {}; S.priceDirty = false; S.priceDeleted = [];
+    loadAll();
+  });
+  document.getElementById('saveBtn').addEventListener('click', save);
+
+  document.querySelectorAll('[data-key]').forEach(inp => {
+    const key = inp.dataset.key;
+    const handler = () => {
+      S.dirty[key] = inp.type === 'checkbox' ? inp.checked : inp.value;
+      updateSaveBtn();
+    };
+    inp.addEventListener(inp.tagName === 'SELECT' || inp.type === 'checkbox' ? 'change' : 'input', handler);
+  });
+
+  document.querySelectorAll('[data-pfield]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const key = Number(inp.closest('tr').dataset.pkey);
+      const row = S.pricing.find(p => p.key === key);
+      if (!row) return;
+      row[inp.dataset.pfield] = inp.value;
+      S.priceDirty = true;
+      updateSaveBtn();
+    });
+  });
+  document.querySelectorAll('[data-premove]').forEach(x => {
+    x.addEventListener('click', () => {
+      const key = Number(x.dataset.premove);
+      const idx = S.pricing.findIndex(p => p.key === key);
+      if (idx === -1) return;
+      if (S.pricing[idx].rowId) S.priceDeleted.push(S.pricing[idx].rowId);
+      S.pricing.splice(idx, 1);
+      S.priceDirty = true;
+      renderDetail();
+    });
+  });
+
+  const addBtn = document.getElementById('addPriceRow');
+  if (addBtn) addBtn.addEventListener('click', () => {
+    S.pricing.push({ rowId: null, key: S.nextKey++, fiber: '', price: '', discount: '', notes: '' });
+    S.priceDirty = true;
+    renderDetail();
+  });
+  const seedBtn = document.getElementById('seedPriceRows');
+  if (seedBtn) seedBtn.addEventListener('click', () => {
+    SEED_FIBERS.filter(f => !S.pricing.some(p => String(p.fiber).toUpperCase() === f))
+      .forEach(f => S.pricing.push({ rowId: null, key: S.nextKey++, fiber: f, price: '', discount: '', notes: '' }));
+    S.priceDirty = true;
+    renderDetail();
+  });
+}
+
+function updateSaveBtn() {
+  const btn = document.getElementById('saveBtn');
+  if (!btn) return;
+  const dirty = hasUnsaved();
+  btn.classList.toggle('unsaved', dirty);
+  btn.disabled = S.saving || !dirty;
+  btn.textContent = S.saving ? 'Saving...' : dirty ? 'Save changes' : 'Saved';
+}
+
+function numOrNull(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const n = Number(s.replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+async function save() {
+  if (S.saving || !S.selectedId) return;
+  S.saving = true; updateSaveBtn();
+  const actions = [];
+
+  // Customers row
+  const fields = {};
+  Object.keys(S.dirty).forEach(key => {
+    const col = S.cols[key];
+    if (!col) return;
+    const spec = FIELDS.find(f => f.key === key);
+    let v = S.dirty[key];
+    if (spec && spec.type === 'toggle') v = !!v;
+    else if (typeof v === 'string') v = v.trim();
+    fields[col] = v;
+  });
+  if (Object.keys(fields).length) {
+    actions.push(['UpdateRecord', 'Customers', S.selectedId, fields]);
+  }
+
+  // Customer_Pricing rows
+  if (S.priceCols) {
+    const c = S.priceCols;
+    S.priceDeleted.forEach(rid => actions.push(['RemoveRecord', 'Customer_Pricing', rid]));
+    S.pricing.forEach(p => {
+      const f = {};
+      f[c.fiber] = String(p.fiber || '').trim().toUpperCase();
+      if (c.price) f[c.price] = numOrNull(p.price);
+      if (c.discount) f[c.discount] = numOrNull(p.discount);
+      if (c.notes) f[c.notes] = String(p.notes || '').trim();
+      if (p.rowId) {
+        actions.push(['UpdateRecord', 'Customer_Pricing', p.rowId, f]);
+      } else if (f[c.fiber]) {
+        f[c.customer] = S.selectedId;
+        actions.push(['AddRecord', 'Customer_Pricing', null, f]);
+      }
+    });
+  }
+
+  if (!actions.length) { S.saving = false; S.dirty = {}; S.priceDirty = false; updateSaveBtn(); return; }
+
+  try {
+    await grist.docApi.applyUserActions(actions);
+    S.dirty = {}; S.priceDirty = false; S.priceDeleted = [];
+    showToast('Saved.');
+    S.saving = false;
+    await loadAll();
+  } catch (e) {
+    console.error('Save failed:', e);
+    S.saving = false;
+    updateSaveBtn();
+    showToast('Save failed — ' + (e && e.message ? e.message : 'check widget access is Full document'), true);
+  }
+}
+
+/* ---------- boot ----------
+   Shell is already on screen. Everything below is inside try/catch so a
+   plugin-API failure shows a banner instead of killing the script silently. */
+document.getElementById('searchBox').addEventListener('input', renderList);
+document.getElementById('typeFilter').addEventListener('change', renderList);
+
+try {
+  grist.ready({ requiredAccess: 'full' });
+  grist.onRecord(rec => {
+    // Optional: if someone wires this up with Select By, follow the selection.
+    if (rec && rec.id && S.customers.some(c => c.id === rec.id) && rec.id !== S.selectedId) {
+      selectCustomer(rec.id);
+    }
+  });
+  loadAll();
+} catch (e) {
+  console.error(e);
+  setBanner([{ title: 'Grist plugin API unavailable',
+    body: 'The widget loaded but could not reach Grist. Reload the page; if it persists, re-add the custom widget URL.' }]);
+  document.getElementById('custList').innerHTML = '<div class="rail-empty">Not connected.</div>';
+}
+</script>
+</body>
+</html>
