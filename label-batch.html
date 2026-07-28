@@ -207,14 +207,14 @@ const RING_SPEC = {
 /* Measured off the real Maestro sheets: text sits at 0.4217 x diameter on
    OL3012 and 0.4152 on OL1025. One ratio covers both.                        */
 const RING_RADIUS_RATIO = 0.42;
-const RING_FONT_RATIO = 0.062;   // of diameter, when no Ring_Font_Size_Pt is set
+const RING_FONT_RATIO = 0.058;   // of diameter, when no Ring_Font_Size_Pt is set
 const METRES_PER_YARD = 0.9144;
 
 /* Helvetica-Bold is a PDF base-14 font: no download, cannot fail to load, and
    renders identically everywhere. OLSansserif3-Bold is a Helvetica-class
    grotesque, so this is also the closest available match.                     */
 const NAME_FONT = ['helvetica', 'bold'];
-const NAME_FIT_RATIO = 0.62;   // usable width inside the ring, as a fraction of diameter
+const NAME_FIT_RATIO = 0.72;   // usable width inside the ring, as a fraction of diameter
 
 /* ---------- helpers ---------- */
 function esc(s) {
@@ -991,6 +991,7 @@ async function buildPdf(group) {
   const doc = new jsPDF({ unit: 'in', format: 'letter', compress: true });
   doc.setFont(NAME_FONT[0], NAME_FONT[1]);
 
+  const shrunk = new Set();   // names that wouldn't fit at full size
   let slot = startAt - 1;   // 0-based position on the current sheet
   labels.forEach((r, idx) => {
     if (idx > 0 && slot === 0) doc.addPage();
@@ -1013,10 +1014,11 @@ async function buildPdf(group) {
     let pt = g.fontPt;
     doc.setFont(NAME_FONT[0], NAME_FONT[1]);
     doc.setFontSize(pt);
-    while (doc.getTextWidth(r.name) > maxW && pt > 4) {
+    while (doc.getTextWidth(r.name) > maxW && pt > 5) {
       pt -= 0.25;
       doc.setFontSize(pt);
     }
+    if (pt < g.fontPt) shrunk.add(r.name);
     doc.setTextColor(0);
     doc.text(String(r.name), cx, cy, { align: 'center', baseline: 'middle' });
 
@@ -1058,6 +1060,7 @@ async function buildPdf(group) {
   let msg = `${labels.length} labels over ${sheets} sheet${sheets === 1 ? '' : 's'}`;
   if (startAt > 1) msg += `, starting at position ${startAt}`;
   if (blanks) msg += ` + ${blanks} blank ${fillCode} ring${blanks === 1 ? '' : 's'} to hand-write`;
+  if (shrunk.size) msg += ` — ${shrunk.size} name${shrunk.size === 1 ? '' : 's'} shrunk to fit (${[...shrunk].slice(0, 2).join(', ')}${shrunk.size > 2 ? '...' : ''})`;
   if (missingArt.length) msg += ` — no ring spec for ${missingArt.join(', ')}, names only`;
   showToast(msg + '.', missingArt.length > 0);
 }
