@@ -237,6 +237,69 @@ function showBanner(msg) {
   b.classList.add('show');
 }
 
+// ── Throttled, dwell-gated image loading ──
+// Every thumbnail is served through the n8n `photo2` proxy, which only handles
+// a few requests at once. Painting a whole grid would flood its queue and knock
+// the workflow offline. So: images carry their URL in data-src (not src), only
+// load once scrolled into view, only after they've stayed in view briefly
+// (fast scrolling past never fires a request), and never more than a few at a
+// time. The proxy's cache headers mean a photo loaded once is served from
+// browser cache on later renders, not re-fetched.
+const IMG_MAX_CONCURRENT = 2;   // most requests in flight from this page at once
+const IMG_DWELL_MS = 500;       // must stay visible this long before loading
+let imgInFlight = 0;
+const imgQueue = [];
+const imgDwell = new WeakMap();
+let imgObserver = null;
+
+function pumpImageQueue() {
+  while (imgInFlight < IMG_MAX_CONCURRENT && imgQueue.length) {
+    const img = imgQueue.shift();
+    if (!img || !img.isConnected || img.dataset.loaded) continue;
+    const url = img.dataset.src;
+    if (!url) { img.dataset.loaded = '1'; continue; }
+    imgInFlight++;
+    img.dataset.loaded = '1';
+    const done = () => { imgInFlight--; pumpImageQueue(); };
+    img.addEventListener('load', done, { once: true });
+    img.addEventListener('error', () => { img.style.opacity = 0.2; done(); }, { once: true });
+    img.src = url;
+  }
+}
+
+function ensureObserver() {
+  if (imgObserver || !('IntersectionObserver' in window)) return;
+  imgObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const img = e.target;
+      if (e.isIntersecting) {
+        if (!imgDwell.has(img)) {
+          imgDwell.set(img, setTimeout(() => {
+            imgDwell.delete(img);
+            imgObserver.unobserve(img);
+            imgQueue.push(img);
+            pumpImageQueue();
+          }, IMG_DWELL_MS));
+        }
+      } else {
+        const t = imgDwell.get(img);
+        if (t) { clearTimeout(t); imgDwell.delete(img); }
+      }
+    }
+  }, { rootMargin: '150px' });
+}
+
+// Called after every render that adds <img data-src> elements.
+function observeImages() {
+  ensureObserver();
+  document.querySelectorAll('img[data-src]:not([data-observed])').forEach(img => {
+    img.dataset.observed = '1';
+    if (imgObserver) imgObserver.observe(img);
+    else imgQueue.push(img); // no IntersectionObserver: still throttle
+  });
+  if (!imgObserver) pumpImageQueue();
+}
+
 // ── load ──
 async function loadEverything() {
   document.getElementById('summary').textContent = 'Loading…';
@@ -389,6 +452,7 @@ function renderAttention(unl, miss) {
   }
 
   v.innerHTML = html;
+  observeImages();
 }
 
 function unlinkedCardHTML(p) {
@@ -401,7 +465,7 @@ function unlinkedCardHTML(p) {
     : `<div class="suggest-row"><span class="confidence conf-likely">no name match</span><span style="font-size:11px;color:#8B7D72">Search for the recipe below.</span></div>`;
   return `
     <div class="attn-card">
-      <img src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" onerror="this.style.opacity=0.2">
+      <img data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
       <div class="attn-body">
         <div style="font-weight:500;margin-bottom:2px">${esc(p.Colorway_Name || 'Untitled')}</div>
         <div class="attn-file">${esc(p.Source_Filename || '')}</div>
@@ -428,12 +492,14 @@ function renderRecipes() {
     html += `<div class="done-state">${q ? 'No recipes match that search.' : 'No recipes have product photos yet.'}</div>`;
     v.innerHTML = html;
     wireRecipeSearch();
+    observeImages();
     return;
   }
 
   html += list.map(recipeCardHTML).join('');
   v.innerHTML = html;
   wireRecipeSearch();
+  observeImages();
 }
 
 function slotPills(slots) {
@@ -459,7 +525,7 @@ function recipeCardHTML(r) {
   return `
     <div class="rec-card ${isOpen ? 'open' : ''}" data-reccard="${r.id}">
       <div class="rec-head" data-action="expand" data-recipe="${r.id}">
-        <img class="rec-thumb" src="${esc(thumb)}" alt="" onerror="this.style.opacity=0.2">
+        <img class="rec-thumb" data-src="${esc(thumb)}" alt="" loading="lazy">
         <div class="rec-headmain">
           <div class="rec-name">${esc(r.Recipe_Name)}</div>
           <div class="rec-sub">${subBits}${noStandard ? ' · <span class="rec-warn">no standard set</span>' : ''}</div>
@@ -478,7 +544,7 @@ function photoCardHTML(p) {
   const std = p.Is_Favorite;
   return `
     <div class="pcard ${std ? 'standard' : ''} ${st === 'Rejected' ? 'rejected' : ''}">
-      <img src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" onerror="this.style.opacity=0.2">
+      <img data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
       <div class="pcard-body">
         <div class="pcard-top">
           <button class="star-btn ${std ? 'on' : ''}" data-action="standard" data-photo="${p.id}" title="Set as the standard to show">★</button>
