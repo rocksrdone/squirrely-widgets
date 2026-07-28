@@ -215,6 +215,7 @@ const METRES_PER_YARD = 0.9144;
    grotesque, so this is also the closest available match.                     */
 const NAME_FONT = ['helvetica', 'bold'];
 const NAME_FIT_RATIO = 0.72;   // usable width inside the ring, as a fraction of diameter
+const NAME_LINE_HEIGHT = 1.15;   // line spacing as a multiple of font size
 
 /* ---------- helpers ---------- */
 function esc(s) {
@@ -944,6 +945,49 @@ function pdfGeometry(tpl) {
   };
 }
 
+/* Name fitting, in order of preference:
+     1. one line at full size
+     2. two lines at full size, split at the word break that balances them best
+     3. two lines, shrinking only as far as needed
+   Wrapping before shrinking because two lines of 8.5pt read better on a spool
+   than one line of 6.5pt. Chord width is used rather than the flat clear width,
+   since a second line sits off-centre where the circle is narrower.           */
+function nameChordWidth(dia, pt, lineCount, lineIndex) {
+  const clearR = dia * NAME_FIT_RATIO / 2;
+  if (lineCount < 2) return clearR * 2;
+  const lead = pt * NAME_LINE_HEIGHT / 72;
+  const offset = Math.abs((lineIndex - (lineCount - 1) / 2) * lead) + pt * 0.36 / 72;
+  const inner = clearR * clearR - offset * offset;
+  return inner > 0 ? 2 * Math.sqrt(inner) : 0;
+}
+
+// Break at whichever word gap leaves the two lines closest in width.
+function splitTwo(doc, words) {
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const a = words.slice(0, i).join(' '), b = words.slice(i).join(' ');
+    const diff = Math.abs(doc.getTextWidth(a) - doc.getTextWidth(b));
+    if (!best || diff < best.diff) best = { diff, lines: [a, b] };
+  }
+  return best ? best.lines : [words.join(' ')];
+}
+
+function fitName(doc, name, dia, basePt) {
+  const words = name.trim().split(/\s+/);
+  for (let pt = basePt; pt >= 5; pt -= 0.25) {
+    doc.setFontSize(pt);
+    if (doc.getTextWidth(name) <= nameChordWidth(dia, pt, 1, 0)) return { lines: [name], pt };
+    if (words.length > 1) {
+      const lines = splitTwo(doc, words);
+      if (lines.every((ln, i) => doc.getTextWidth(ln) <= nameChordWidth(dia, pt, 2, i))) {
+        return { lines, pt };
+      }
+    }
+  }
+  doc.setFontSize(5);
+  return { lines: words.length > 1 ? splitTwo(doc, words) : [name], pt: 5 };
+}
+
 /* One entry per physical label. Sorted by fiber first so a mixed FFN/FFC sheet
    comes off the printer in blocks rather than interleaved — you peel all the
    cotton, then all the nylon, instead of hunting across the sheet.           */
@@ -1010,17 +1054,16 @@ async function buildPdf(group) {
 
     // Shrink long colorway names to stay inside the ring rather than
     // letting them run under the curved text.
-    const maxW = g.dia * NAME_FIT_RATIO;
-    let pt = g.fontPt;
     doc.setFont(NAME_FONT[0], NAME_FONT[1]);
-    doc.setFontSize(pt);
-    while (doc.getTextWidth(r.name) > maxW && pt > 5) {
-      pt -= 0.25;
-      doc.setFontSize(pt);
-    }
-    if (pt < g.fontPt) shrunk.add(r.name);
     doc.setTextColor(0);
-    doc.text(String(r.name), cx, cy, { align: 'center', baseline: 'middle' });
+    const fit = fitName(doc, String(r.name), g.dia, g.fontPt);
+    if (fit.pt < g.fontPt) shrunk.add(r.name);
+    // Two lines straddle the centre; one line sits on it.
+    const lead = fit.pt * NAME_LINE_HEIGHT / 72;
+    const y0 = cy - lead * (fit.lines.length - 1) / 2;
+    fit.lines.forEach((ln, li) => {
+      doc.text(ln, cx, y0 + li * lead, { align: 'center', baseline: 'middle' });
+    });
 
     slot = (slot + 1) % perSheet;
   });
