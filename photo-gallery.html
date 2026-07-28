@@ -149,8 +149,21 @@ body {
 // Replace with the production webhook URL once the n8n workflow
 // "SS - Share Photo to Vendor" is built and activated.
 const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/share-photo';
-const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+// Vendor codes drive SKU-suffix parsing. The literal below is only a SEED so
+// parsing still works before the Customers fetch lands — refreshVendorCodes()
+// then replaces it with the live list, so adding a customer in Grist can never
+// again leave a vendor unrecognised and glue its code onto the colorway name.
+// Keep this pair byte-identical across widgets.
+let VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
   'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+function refreshVendorCodes(customersTable) {
+  if (!customersTable) return;
+  const col = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+  if (!col) return;
+  const codes = (Array.isArray(customersTable[col]) ? customersTable[col] : [])
+    .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+  if (codes.length) VENDOR_CODES = [...new Set(codes)];
+}
 
 let currentOrder = null;
 let orderLines = [];
@@ -226,6 +239,7 @@ async function loadData(record) {
       grist.docApi.fetchTable('Customers'),
       grist.docApi.fetchTable('Photo_Shares').catch(() => null),
     ]);
+    refreshVendorCodes(customersData);
 
     // Work order lines for this order
     const lineRows = rowsFromTableData(linesData, ['Work_Order', 'SKU', 'Qty_Needed', 'Qty_Dyed', 'Production_Priority']);

@@ -152,8 +152,21 @@ const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-phot
 const PRODUCT_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-product-photo';
 const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
 
-const VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+// Vendor codes drive SKU-suffix parsing. The literal below is only a SEED so
+// parsing still works before the Customers fetch lands — refreshVendorCodes()
+// then replaces it with the live list, so adding a customer in Grist can never
+// again leave a vendor unrecognised and glue its code onto the colorway name.
+// Keep this pair byte-identical across widgets.
+let VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
   'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+function refreshVendorCodes(customersTable) {
+  if (!customersTable) return;
+  const col = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+  if (!col) return;
+  const codes = (Array.isArray(customersTable[col]) ? customersTable[col] : [])
+    .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+  if (codes.length) VENDOR_CODES = [...new Set(codes)];
+}
 const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
 
 const SLOTS = {
@@ -236,7 +249,13 @@ async function loadEverything() {
       throw fetchErr;
     }
 
-    const recipesData = await grist.docApi.fetchTable('Recipes');
+    // Customers is fetched purely for the vendor-code list; a missing table
+    // must not take the inbox down, hence the catch.
+    const [recipesData, customersData] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Customers').catch(() => null),
+    ]);
+    refreshVendorCodes(customersData);
 
     inboxPhotos = (inboxRes.photos || []);
     visibleCount = 30;
