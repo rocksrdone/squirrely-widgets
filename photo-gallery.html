@@ -86,6 +86,8 @@ body {
 .pcard img {
   width: 100%; height: 110px; object-fit: cover; display: block; background: var(--warm);
 }
+.pcard img.lazy-photo:not(.loaded) { opacity: 0.3; }
+.pcard img.lazy-photo { transition: opacity 0.2s; }
 .pcard-body { padding: 8px; }
 .pcard-name { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
 .pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
@@ -304,7 +306,7 @@ function photoCardHTML(p) {
     : '';
   return `
     <div class="pcard ${fav ? 'fav' : ''}" id="pcard-${p.id}">
-      <img src="${p.Nextcloud_URL || ''}" alt="${p.Colorway_Name || ''}" onerror="this.style.opacity=0.2">
+      <img class="lazy-photo" data-src="${p.Nextcloud_URL || ''}" alt="${p.Colorway_Name || ''}">
       <div class="pcard-body">
         <div class="pcard-name">${p.Colorway_Name || 'Untitled'}</div>
         <div class="pcard-meta">${p.Fiber_Type || ''}${p.Lot_Date ? ' · ' + p.Lot_Date : ''}</div>
@@ -341,6 +343,39 @@ function renderLines() {
         </div>
       </div>`;
   }).join('');
+  loadImagesInBatches();
+}
+
+// Load photos a few at a time instead of all at once. Firing every thumbnail
+// request at the n8n photo2 proxy simultaneously overwhelms it and trips n8n's
+// crash detection, which takes the workflow offline. Two-at-a-time, with one
+// retry on error, keeps the proxy's queue small. (Same pattern as photo-inbox.)
+async function loadImagesInBatches() {
+  const images = Array.from(document.querySelectorAll('img.lazy-photo:not(.loaded)'));
+  const BATCH_SIZE = 2;
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    const batch = images.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(img => loadOneImageWithRetry(img)));
+  }
+}
+
+function loadOneImageWithRetry(img) {
+  return new Promise(resolve => {
+    const src = img.getAttribute('data-src');
+    if (!src) { resolve(); return; }
+    let retried = false;
+    img.onload = () => { img.classList.add('loaded'); resolve(); };
+    img.onerror = () => {
+      if (!retried) {
+        retried = true;
+        setTimeout(() => { img.src = src; }, 1500);
+      } else {
+        img.style.opacity = 0.2;
+        resolve();
+      }
+    };
+    img.src = src;
+  });
 }
 
 function renderSearch(query) {
@@ -367,6 +402,7 @@ function renderSearch(query) {
     <div class="photo-grid">
       ${matches.length ? matches.map(photoCardHTML).join('') : '<div class="no-match">No matching photos found among this order\'s colorways.</div>'}
     </div>`;
+  loadImagesInBatches();
 }
 
 async function toggleFavorite(photoId, currentlyFav) {
