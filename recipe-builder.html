@@ -123,6 +123,13 @@
   }
   .dye-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
   .dye-name-input { flex: 1; font-weight: 500; }
+  .dye-id-badge {
+    flex-shrink: 0; max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11px; padding: 3px 7px; border-radius: 4px; background: var(--warm);
+    color: #6B5E52; border: 1px solid var(--rule);
+  }
+  .dye-id-badge.unlinked { background: #FDF3E3; border-color: #E0C48A; color: #8A6A22; }
+  .dye-id-badge.ambiguous { background: #FBE9E9; border-color: #E0A8A8; color: #9A3B3B; }
   .dye-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
   .icon-btn {
     width: 24px; height: 24px; border-radius: 4px; border: 1px solid var(--rule); background: white;
@@ -139,6 +146,8 @@
   }
   .dye-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; }
   .dye-suggestion-row:hover { background: var(--warm); }
+  .dye-suggestion-detail { font-size: 10px; color: #8B7D72; margin-top: 1px; letter-spacing: .02em; }
+  .dye-suggestion-dup { color: #9A3B3B; font-weight: 600; }
 
   .add-dye-btn {
     width: 100%; padding: 11px; border-radius: 7px; border: 1px solid var(--teal);
@@ -543,7 +552,8 @@ let customerIdByName = {};   // name -> id, fallback when a ref arrives as a dis
 let allOtherSkus = [];  // {id, sku, recipeName}
 let dyeRows = [];       // {rowId or null, clientKey, Dye_Name, Dye_Full, powder, water, dilution, position, technique, notes}
 let deletedDyeIds = [];
-let allDyes = [];        // for autocomplete: {name, brand, powder, water}
+let allDyes = [];        // for autocomplete: {id, name, brand, serial, dyeType, status, powder, water}
+let dyeNameCounts = {};  // normalized dye name -> how many catalog rows share it
 let unsavedChanges = false;
 let isSaving = false;
 let nextClientKey = 1;
@@ -876,6 +886,9 @@ async function loadDyesList() {
     const dyesTable = await grist.docApi.fetchTable('Dyes');
     const nameCol = findColumn(dyesTable, ['Dye_Name', 'Name']) || 'Dye_Name';
     const brandCol = findColumn(dyesTable, ['Brand']);
+    const serialCol = findColumn(dyesTable, ['Serial']);
+    const dyeTypeCol = findColumn(dyesTable, ['Dye_Type']);
+    const statusCol = findColumn(dyesTable, ['Status']);
     const powderCol = findColumn(dyesTable, ['Std_Powder_tsp_', 'Powder', 'Standard_Powder']);
     const waterCol = findColumn(dyesTable, ['Std_Water_mL_', 'Water', 'Standard_Water']);
     const ids = dyesTable.id || [];
@@ -883,13 +896,34 @@ async function loadDyesList() {
       id,
       name: columnAsArray(dyesTable, nameCol)[i],
       brand: brandCol ? columnAsArray(dyesTable, brandCol)[i] : '',
+      serial: serialCol ? columnAsArray(dyesTable, serialCol)[i] : '',
+      dyeType: dyeTypeCol ? columnAsArray(dyesTable, dyeTypeCol)[i] : '',
+      status: statusCol ? columnAsArray(dyesTable, statusCol)[i] : '',
       powder: powderCol ? columnAsArray(dyesTable, powderCol)[i] : '',
       water: waterCol ? columnAsArray(dyesTable, waterCol)[i] : '',
     })).filter(d => d.name);
+
+    // Names are not unique in the catalog — count them so the picker can flag
+    // collisions instead of silently offering two identical-looking rows.
+    dyeNameCounts = {};
+    allDyes.forEach(d => {
+      const k = normalize(d.name);
+      dyeNameCounts[k] = (dyeNameCounts[k] || 0) + 1;
+    });
   } catch (e) {
     console.error('Could not load Dyes table for autocomplete:', e);
     allDyes = [];
+    dyeNameCounts = {};
   }
+}
+
+// Same convention as batch-assignment / dye-editor: brand · serial · type.
+function dyeDetailLine(d) {
+  if (!d) return '';
+  return [d.brand, d.serial, d.dyeType].filter(Boolean).join(' · ');
+}
+function dyeNameIsAmbiguous(name) {
+  return (dyeNameCounts[normalize(name)] || 0) > 1;
 }
 
 async function loadRecipe(record) {
@@ -973,12 +1007,16 @@ async function loadRecipe(record) {
     for (let i = 0; i < ids.length; i++) {
       if (getRefId(refs[i]) !== currentRecipeId) continue;
       const dyeRefId = getRefId(columnAsArray(compTable, C.dye)[i]);
-      const resolvedName = dyeRefId ? ((allDyes.find(d => d.id === dyeRefId) || {}).name || '') : '';
+      const catalogDye = dyeRefId ? (allDyes.find(d => d.id === dyeRefId) || null) : null;
+      const resolvedName = catalogDye ? (catalogDye.name || '') : '';
       rows.push({
         rowId: ids[i],
         clientKey: nextClientKey++,
         dyeId: dyeRefId,
         Dye_Name: resolvedName,
+        dyeBrand: catalogDye ? (catalogDye.brand || '') : '',
+        dyeSerial: catalogDye ? (catalogDye.serial || '') : '',
+        dyeType: catalogDye ? (catalogDye.dyeType || '') : '',
         Dye_Full: columnAsArray(compTable, C.full)[i] || '',
         powder: columnAsArray(compTable, C.powder)[i] ?? '',
         water: columnAsArray(compTable, C.water)[i] ?? '',
@@ -1006,7 +1044,8 @@ function addDyeRow() {
     rowId: null,
     clientKey: nextClientKey++,
     dyeId: null,
-    Dye_Name: '', Dye_Full: '', powder: '', water: '', dilution: '', technique: '', notes: '', isPowder: false,
+    Dye_Name: '', Dye_Full: '', dyeBrand: '', dyeSerial: '', dyeType: '',
+    powder: '', water: '', dilution: '', technique: '', notes: '', isPowder: false,
   });
   markUnsaved();
   renderDyeRows();
@@ -1037,7 +1076,15 @@ function updateDyeField(clientKey, field, value) {
   if (!row) return;
   row[field] = value;
   markUnsaved();
-  if (field === 'Dye_Name') { row.dyeId = null; renderLayoutPreview(); }
+  if (field === 'Dye_Name') {
+    // Typing breaks the link — drop the stale identity so the badge can't
+    // keep showing the brand of a dye this row is no longer pointing at.
+    row.dyeId = null;
+    row.dyeBrand = ''; row.dyeSerial = ''; row.dyeType = '';
+    const badgeHost = document.getElementById(`dye-badge-${clientKey}`);
+    if (badgeHost) badgeHost.innerHTML = renderDyeIdBadge(row);
+    renderLayoutPreview();
+  }
 }
 
 function searchDyeSuggestions(clientKey, query) {
@@ -1045,14 +1092,28 @@ function searchDyeSuggestions(clientKey, query) {
   const q = normalize(query);
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
-  const matches = allDyes.filter(d => normalize(d.name).includes(q)).slice(0, 8);
+  // Name-first, then brand/serial — so typing "sab" finds the Dh Sab dyes too.
+  const matches = allDyes.filter(d => {
+    const hay = normalize(d.name) + normalize(d.brand) + normalize(d.serial);
+    return hay.includes(q);
+  }).sort((a, b) => {
+    const an = normalize(a.name), bn = normalize(b.name);
+    const rank = s => (s.startsWith(q) ? 0 : s.includes(q) ? 1 : 2);
+    return rank(an) - rank(bn) || (a.name || '').localeCompare(b.name || '')
+      || (a.brand || '').localeCompare(b.brand || '');
+  }).slice(0, 10);
   if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
-  box.innerHTML = matches.map(d => `
+  box.innerHTML = matches.map(d => {
+    const detail = dyeDetailLine(d);
+    const dup = dyeNameIsAmbiguous(d.name);
+    const inactive = d.status && d.status !== 'Active';
+    return `
     <div class="dye-suggestion-row" onclick='pickDyeSuggestion(${clientKey}, ${JSON.stringify(d).replace(/'/g, "&apos;")})'>
-      <strong>${d.name}</strong>${d.brand ? ` <span style="color:#8B7D72">(${d.brand})</span>` : ''}
-    </div>
-  `).join('');
+      <strong>${esc(d.name)}</strong>${inactive ? ` <span style="color:#9A3B3B;font-size:10px;">${esc(d.status)}</span>` : ''}
+      <div class="dye-suggestion-detail${dup ? ' dye-suggestion-dup' : ''}">${detail ? esc(detail) : 'no brand/serial on record'}</div>
+    </div>`;
+  }).join('');
   box.style.display = 'block';
 }
 
@@ -1061,12 +1122,33 @@ function pickDyeSuggestion(clientKey, dye) {
   if (!row) return;
   row.dyeId = dye.id;
   row.Dye_Name = dye.name;
-  row.Dye_Full = dye.brand ? `${dye.name} (${dye.brand})` : dye.name;
+  row.dyeBrand = dye.brand || '';
+  row.dyeSerial = dye.serial || '';
+  row.dyeType = dye.dyeType || '';
+  const detail = dyeDetailLine(dye);
+  row.Dye_Full = detail ? `${dye.name} (${detail})` : dye.name;
   if (dye.powder !== '' && dye.powder != null) row.powder = dye.powder;
   if (dye.water !== '' && dye.water != null) row.water = dye.water;
   markUnsaved();
   renderDyeRows();
   renderLayoutPreview();
+}
+
+// The name alone doesn't identify a dye — several share one. Once a row is
+// linked to a catalog row, keep its brand/serial/type visible; when it isn't
+// linked, say so rather than letting a bare name look resolved.
+function renderDyeIdBadge(row) {
+  if (!row.Dye_Name) return '';
+  if (row.dyeId) {
+    const detail = dyeDetailLine({ brand: row.dyeBrand, serial: row.dyeSerial, dyeType: row.dyeType });
+    if (!detail) return `<span class="dye-id-badge" title="Linked, but no brand/serial on the Dyes row">linked · no brand</span>`;
+    return `<span class="dye-id-badge" title="${esc(row.Dye_Name)} — ${esc(detail)}">${esc(detail)}</span>`;
+  }
+  if (dyeNameIsAmbiguous(row.Dye_Name)) {
+    const n = dyeNameCounts[normalize(row.Dye_Name)];
+    return `<span class="dye-id-badge ambiguous" title="${n} dyes share this name — pick the right one from the list so the recipe links to it">⚠ ${n} dyes named this</span>`;
+  }
+  return `<span class="dye-id-badge unlinked" title="Typed name, not yet linked to a catalog dye">not linked</span>`;
 }
 
 function renderDyeRows() {
@@ -1086,6 +1168,7 @@ function renderDyeRows() {
           onfocus="searchDyeSuggestions(${row.clientKey}, this.value)"
           onblur="setTimeout(() => { const b = document.getElementById('dye-suggestions-${row.clientKey}'); if (b) b.style.display='none'; }, 150)">
         <div class="dye-suggestions" id="dye-suggestions-${row.clientKey}" style="display:none; top:100%; left:38px;"></div>
+        <span id="dye-badge-${row.clientKey}" style="flex-shrink:0;">${renderDyeIdBadge(row)}</span>
         <div class="dye-row-actions">
           <button class="icon-btn" onclick="moveDyeRow(${row.clientKey}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button>
           <button class="icon-btn" onclick="moveDyeRow(${row.clientKey}, 1)" ${i === dyeRows.length - 1 ? 'disabled' : ''} title="Move down">↓</button>
@@ -1230,6 +1313,15 @@ async function createNewRecipe() {
 
 async function saveRecipe() {
   if (!currentRecipeId) return;
+
+  // A typed name that several catalog dyes share can't be resolved safely —
+  // picking the first match would quietly link the recipe to the wrong dye.
+  const ambiguous = dyeRows.filter(r => !r.dyeId && r.Dye_Name && dyeNameIsAmbiguous(r.Dye_Name));
+  if (ambiguous.length) {
+    showToast(`Pick which "${ambiguous[0].Dye_Name}" from the dropdown — more than one dye has that name`);
+    return;
+  }
+
   isSaving = true;
   const saveBtn = document.getElementById('saveBtn');
   saveBtn.disabled = true;
@@ -1286,7 +1378,9 @@ async function saveRecipe() {
                 ['AddRecord', 'Dyes', null, { Dye_Name: typedName }]
               ]);
               resolvedDyeId = result.retValues[0];
-              allDyes.push({ id: resolvedDyeId, name: typedName, brand: '', powder: '', water: '' });
+              allDyes.push({ id: resolvedDyeId, name: typedName, brand: '', serial: '', dyeType: '', status: '', powder: '', water: '' });
+              const k = normalize(typedName);
+              dyeNameCounts[k] = (dyeNameCounts[k] || 0) + 1;
             } catch (e) {
               console.error('Failed to auto-create new dye:', typedName, e);
               resolvedDyeId = null;
