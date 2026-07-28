@@ -65,6 +65,8 @@
   .candidates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
   .candidate-card { border: 1.5px solid var(--rule); border-radius: 6px; overflow: hidden; background: white; }
   .candidate-card img { width: 100%; height: 90px; object-fit: cover; background: var(--warm); display: block; }
+  img.lazy-photo:not(.loaded) { opacity: 0.3; }
+  img.lazy-photo { transition: opacity 0.2s; }
   .candidate-body { padding: 6px; }
   .candidate-name { font-family: 'DM Mono', monospace; font-size: 9px; color: #6B5E52; word-break: break-all; margin-bottom: 4px; }
   .candidate-date { font-size: 9px; color: #8B7D72; margin-bottom: 4px; }
@@ -269,7 +271,7 @@ function renderRecipeCard(r) {
             <div class="candidates-grid">
               ${candidates.map(p => `
                 <div class="candidate-card">
-                  <img src="${p.Nextcloud_URL || ''}" alt="${p.Source_Filename || ''}" onerror="this.style.opacity=0.2">
+                  <img class="lazy-photo" data-src="${p.Nextcloud_URL || ''}" alt="${p.Source_Filename || ''}">
                   <div class="candidate-body">
                     <div class="candidate-name">${p.Source_Filename || 'untitled'}</div>
                     <div class="candidate-date">${p.Lot_Date ? new Date(Number(p.Lot_Date) * 1000).toLocaleDateString() : ''}</div>
@@ -313,6 +315,39 @@ function renderList() {
   }
 
   content.innerHTML = html;
+  loadImagesInBatches();
+}
+
+// Load thumbnails a few at a time. Firing every request at the n8n photo2 proxy
+// at once overwhelms it and trips n8n's crash detection, taking the workflow
+// offline. Two-at-a-time with one retry keeps the queue small. (Same pattern as
+// photo-inbox and photo-gallery.)
+async function loadImagesInBatches() {
+  const images = Array.from(document.querySelectorAll('img.lazy-photo:not(.loaded)'));
+  const BATCH_SIZE = 2;
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    const batch = images.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(img => loadOneImageWithRetry(img)));
+  }
+}
+
+function loadOneImageWithRetry(img) {
+  return new Promise(resolve => {
+    const src = img.getAttribute('data-src');
+    if (!src) { resolve(); return; }
+    let retried = false;
+    img.onload = () => { img.classList.add('loaded'); resolve(); };
+    img.onerror = () => {
+      if (!retried) {
+        retried = true;
+        setTimeout(() => { img.src = src; }, 1500);
+      } else {
+        img.style.opacity = 0.2;
+        resolve();
+      }
+    };
+    img.src = src;
+  });
 }
 
 function toggleExpand(recipeId) {
@@ -338,11 +373,12 @@ function searchUnlinked(recipeId, query) {
 
   box.innerHTML = matches.map(p => `
     <div class="manual-row" onclick="assignPhoto(${recipeId}, ${p.id})">
-      <img src="${p.Nextcloud_URL || ''}" onerror="this.style.opacity=0.2">
+      <img class="lazy-photo" data-src="${p.Nextcloud_URL || ''}">
       <div class="manual-row-name">${p.Source_Filename || 'untitled'}</div>
     </div>
   `).join('');
   box.style.display = 'block';
+  loadImagesInBatches();
 }
 
 async function assignPhoto(recipeId, photoId) {
