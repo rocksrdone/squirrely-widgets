@@ -385,6 +385,7 @@ const S = {
   priceDeleted: [],
   orders: [],
   saving: false,
+  userPicked: false,   // once you choose from the rail, stop following the table cursor
   stockCodes: [], lsCols: null, lsAll: [], labelRows: [], lsDirty: false,
   nextKey: 1,
 };
@@ -575,12 +576,18 @@ function renderList() {
     </div>`;
   }).join('');
   el.querySelectorAll('.cust-row').forEach(r =>
-    r.addEventListener('click', () => selectCustomer(Number(r.dataset.id))));
+    r.addEventListener('click', () => {
+      S.userPicked = true;
+      selectCustomer(Number(r.dataset.id));
+    }));
 }
 
 /* ---------- selection ---------- */
 function selectCustomer(id, keepDirty) {
-  if (!keepDirty && hasUnsaved() && !confirm('You have unsaved changes. Discard them?')) return;
+  // Never prompt mid-save: dirty state is cleared straight after and the
+  // question is meaningless to the person who just clicked Save.
+  if (!keepDirty && !S.saving && hasUnsaved()
+      && !confirm('You have unsaved changes. Discard them?')) return;
   S.selectedId = id;
   if (!keepDirty) { S.dirty = {}; S.priceDeleted = []; S.priceDirty = false; S.lsDirty = false; }
   buildPricingRows();
@@ -961,8 +968,12 @@ async function save() {
     await grist.docApi.applyUserActions(actions);
     S.dirty = {}; S.priceDirty = false; S.priceDeleted = []; S.lsDirty = false;
     showToast('Saved.');
-    S.saving = false;
+    // Stay "saving" through the reload: applying actions makes Grist re-fire
+    // onRecord, and clearing the flag first would reopen the window in which
+    // the linked table's cursor could steal the selection.
     await loadAll();
+    S.saving = false;
+    updateSaveBtn();
   } catch (e) {
     console.error('Save failed:', e);
     S.saving = false;
@@ -980,9 +991,13 @@ document.getElementById('typeFilter').addEventListener('change', renderList);
 try {
   grist.ready({ requiredAccess: 'full' });
   grist.onRecord(rec => {
-    // Optional: if someone wires this up with Select By, follow the selection.
+    /* Follows a Select By link, but only until you pick someone in this
+       widget. Saving fires a data change that re-fires this event, and without
+       the guard it dragged you to whatever row the linked table's cursor was
+       on — and prompted about unsaved edits mid-save while doing it. */
+    if (S.userPicked || S.saving) return;
     if (rec && rec.id && S.customers.some(c => c.id === rec.id) && rec.id !== S.selectedId) {
-      selectCustomer(rec.id);
+      selectCustomer(rec.id, false);
     }
   });
   loadAll();
