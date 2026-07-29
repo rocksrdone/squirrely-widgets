@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Label Template Setup</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+:root{--ink:#1A1614;--paper:#F7F3EE;--warm:#E8DFD4;--rule:#D4C9BC;--accent:#8B3A2A;--teal:#3A8B7A;--gold:#9A6B22;--gold-light:#F6EDDA;--muted:#8B7D72;--mid:#6B5E52;}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;font-size:13px;line-height:1.5}
+
+.banner{background:#FBEDE9;border-bottom:1px solid var(--accent);color:var(--accent);padding:8px 14px;font-size:11px;line-height:1.6}
+.banner b{font-family:'DM Mono',monospace;font-weight:500}
+
+.layout{display:flex;height:100vh}
+.banner+.layout{height:calc(100vh - 44px)}
+
+.rail{width:186px;flex-shrink:0;border-right:1px solid var(--rule);background:var(--warm);display:flex;flex-direction:column}
+.rail-head{padding:9px 10px;border-bottom:1px solid var(--rule);font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--mid);font-weight:700}
+.rail-list{flex:1;overflow-y:auto;padding:6px}
+.tpl-row{padding:8px 9px;border-radius:5px;cursor:pointer;margin-bottom:3px;border:1px solid transparent}
+.tpl-row:hover{background:#F2EAE0}
+.tpl-row.active{background:white;border-color:var(--accent)}
+.tpl-code{font-family:'DM Mono',monospace;font-size:12px;font-weight:500}
+.tpl-sub{font-size:10px;color:var(--muted);margin-top:1px}
+.tpl-row.incomplete .tpl-code::after{content:' •';color:var(--accent);font-weight:700}
+
+.main{flex:1;overflow-y:auto;padding:0 0 40px}
+.empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-style:italic;padding:24px;text-align:center}
+
+.head{position:sticky;top:0;z-index:6;background:var(--paper);border-bottom:1px solid var(--rule);padding:12px 18px;display:flex;align-items:center;gap:12px}
+.head h1{font-family:'Libre Baskerville',serif;font-size:18px;margin:0}
+.head .hsub{font-size:10.5px;color:var(--muted)}
+.head-actions{margin-left:auto;display:flex;gap:6px}
+
+.btn{font-size:11px;padding:6px 12px;border-radius:5px;cursor:pointer;font-weight:600;border:1px solid var(--rule);background:white;color:var(--ink);font-family:'Inter',sans-serif}
+.btn:hover{border-color:var(--accent)}
+.btn.solid{background:var(--accent);border-color:var(--accent);color:white}
+.btn.solid.clean{background:white;border-color:var(--rule);color:var(--muted)}
+.btn.tiny{font-size:10px;padding:3px 8px;font-weight:500}
+.btn:disabled{opacity:.45;cursor:default}
+
+.cols{display:flex;gap:18px;padding:14px 18px 0;align-items:flex-start}
+.formcol{flex:1;min-width:0}
+.previewcol{width:290px;flex-shrink:0;position:sticky;top:64px}
+
+section.blk{margin-bottom:18px}
+.blk-title{font-size:9.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--teal);font-weight:700;margin-bottom:7px;display:flex;align-items:center;gap:8px}
+.blk-title::after{content:'';flex:1;height:1px;background:var(--rule)}
+.blk-note{font-size:10.5px;color:var(--mid);margin:-3px 0 8px;line-height:1.5}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:9px 12px}
+.f{display:flex;flex-direction:column}
+.f.wide{grid-column:1/-1}
+.f label{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:3px;font-weight:600}
+.f input,.f select{width:100%;padding:5px 7px;border:1px solid var(--rule);border-radius:5px;font-size:12px;font-family:'DM Mono',monospace;background:white;color:var(--ink);outline:none}
+.f.txt input{font-family:'Inter',sans-serif}
+.f input:focus,.f select:focus{border-color:var(--accent)}
+.f.missing input,.f.missing select{background:#F4F1EC;border-style:dashed;color:var(--muted)}
+.f .hint{font-size:9px;color:var(--accent);margin-top:2px;font-family:'DM Mono',monospace}
+.f .def{font-size:9px;color:var(--muted);margin-top:2px}
+.toggle{display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid var(--rule);border-radius:5px;background:white;align-self:end}
+.toggle input{width:15px;height:15px;accent-color:var(--teal);margin:0}
+
+.check{padding:8px 11px;border-radius:6px;font-size:11px;line-height:1.6;margin-top:8px}
+.check.ok{background:#E9F2F0;border:1px solid #B9D8D2;color:#245F55}
+.check.bad{background:var(--gold-light);border:1px solid #E4CF9E;color:#6E4C13}
+.check b{font-family:'DM Mono',monospace;font-weight:500}
+
+.calc{background:white;border:1px solid var(--rule);border-radius:7px;padding:11px 12px;margin-top:8px}
+.calc-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.calc-out{font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--accent)}
+.calc-note{font-size:10.5px;color:var(--mid);margin-top:7px;line-height:1.5}
+
+.preview{background:white;border:1px solid var(--rule);border-radius:8px;padding:12px}
+.preview h3{font-size:9.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--teal);font-weight:700;margin:0 0 8px}
+.preview svg{display:block;margin:0 auto;background:#FCFAF7;border-radius:4px}
+.preview-ctl{margin-top:9px;display:flex;flex-direction:column;gap:6px}
+.preview-ctl input,.preview-ctl select{width:100%;padding:5px 7px;border:1px solid var(--rule);border-radius:5px;font-size:12px;font-family:'Inter',sans-serif;outline:none;background:white;color:var(--ink)}
+.preview-ctl input:focus{border-color:var(--accent)}
+.preview-legend{font-size:10px;color:var(--muted);margin-top:8px;line-height:1.55}
+.preview-legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:-1px;margin-right:3px}
+.pv-stat{font-family:'DM Mono',monospace;font-size:10.5px;color:var(--mid);margin-top:6px}
+
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:white;padding:8px 16px;border-radius:6px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99;max-width:80vw}
+.toast.show{opacity:1}
+.toast.err{background:var(--accent)}
+
+@media(max-width:900px){.cols{flex-direction:column}.previewcol{width:100%;position:static}}
+</style>
+</head>
+<body>
+
+<div id="banner"></div>
+<div class="layout">
+  <aside class="rail">
+    <div class="rail-head">Label stock</div>
+    <div class="rail-list" id="tplList"><div class="empty" style="font-size:11px">Loading...</div></div>
+  </aside>
+  <main class="main" id="main"><div class="empty">Pick a label stock.</div></main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script>
+/* ============================================================
+   Label Template Setup — Squirrely Stash
+
+   Every knob label-batch reads, in one place, with a live preview so
+   type and ring changes can be judged on screen instead of on paper.
+
+   Requires FULL access: it writes to Label_Templates.
+   ============================================================ */
+
+function esc(s){return (s===null||s===undefined?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function columnAsArray(t,c){return c&&Array.isArray(t[c])?t[c]:[];}
+function findColumn(t,cands){const keys=Object.keys(t||{});const n=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
+  for(const c of cands){const hit=keys.find(k=>n(k)===n(c));if(hit)return hit;}return null;}
+function num(v){const s=String(v??'').trim();if(!s)return null;const x=Number(s.replace(/[^0-9.\-]/g,''));return isNaN(x)?null:x;}
+function fmtDate(v){if(!v)return '';const ms=typeof v==='number'?v*1000:new Date(v).getTime();
+  return (!ms||isNaN(ms))?'':new Date(ms).toISOString().slice(0,10);}
+function todayEpoch(){const d=new Date();d.setHours(0,0,0,0);return Math.floor(d.getTime()/1000);}
+function showToast(m,err){const t=document.getElementById('toast');t.textContent=m;t.classList.toggle('err',!!err);
+  t.classList.add('show');clearTimeout(showToast._t);showToast._t=setTimeout(()=>t.classList.remove('show'),3000);}
+
+/* These four constants mirror label-batch.html. If they drift apart the
+   preview stops telling the truth, so they are duplicated deliberately and
+   must be changed in both files together. */
+const RING_SPEC={FFN:{material:'100% Nylon',size:'FF'},FFC:{material:'100% Cotton',size:'FF'},EN:{material:'100% Nylon',size:'E'}};
+const RING_RADIUS_RATIO=0.42, RING_FONT_RATIO=0.058, NAME_FIT_RATIO=0.72, NAME_LINE_HEIGHT=1.15;
+const METRES_PER_YARD=0.9144;
+function fiberCode(f){const s=(f||'').toString().trim().toUpperCase();
+  if(/^(FFN|FFC|EN|BW)$/.test(s))return s;
+  if(/E\s*NYLON/.test(s))return 'EN'; if(/COTTON/.test(s))return 'FFC';
+  if(/NYLON/.test(s))return 'FFN'; return s;}
+function yardsPerSpool(f){return fiberCode(f)==='EN'?150:100;}
+function ringText(fiber){const sp=RING_SPEC[fiberCode(fiber)];if(!sp)return null;
+  const yd=yardsPerSpool(fiber);return `Made in USA \u2022 ${sp.material} \u2022 Size ${sp.size} \u2022 ${Math.round(yd*METRES_PER_YARD)} Meters / ${yd} Yards`;}
+
+/* ---------- field spec ---------- */
+const FIELDS=[
+  {k:'code',    c:['Stock_Code','Code'],            l:'Stock code',      b:'ref', t:'txt'},
+  {k:'desc',    c:['Description','Desc'],           l:'Description',     b:'ref', t:'txt', wide:true},
+  {k:'fibers',  c:['Fiber_Codes','Fibers'],         l:'Fiber codes',     b:'ref', t:'txt'},
+  {k:'perSheet',c:['Labels_Per_Sheet','Per_Sheet'], l:'Labels per sheet',b:'ref'},
+
+  {k:'cols',    c:['Columns','Cols'],               l:'Columns',         b:'geo', req:true},
+  {k:'rows',    c:['Rows','Down'],                  l:'Rows',            b:'geo', req:true},
+  {k:'pitchX',  c:['Pitch_X_In'],                   l:'Pitch X (in)',    b:'geo', req:true},
+  {k:'pitchY',  c:['Pitch_Y_In'],                   l:'Pitch Y (in)',    b:'geo', req:true},
+  {k:'dia',     c:['Label_Diameter_In','Diameter_In'],l:'Diameter (in)', b:'geo', req:true},
+
+  {k:'left',    c:['Left_Margin_In'],               l:'Left margin (in)',b:'cal', req:true},
+  {k:'top',     c:['Top_Margin_In'],                l:'Top margin (in)', b:'cal', req:true},
+  {k:'scaleX',  c:['Scale_X','X_Scale'],            l:'Scale X',         b:'cal', def:'1'},
+  {k:'scaleY',  c:['Scale_Y','Y_Scale'],            l:'Scale Y',         b:'cal', def:'1'},
+
+  {k:'fontPt',  c:['Name_Font_Size_Pt'],            l:'Name size (pt)',  b:'typ', def:'7.5'},
+  {k:'ringPt',  c:['Ring_Font_Size_Pt'],            l:'Ring size (pt)',  b:'typ', def:'auto'},
+  {k:'ringRatio',c:['Ring_Radius_Ratio'],           l:'Ring radius',     b:'typ', def:'0.42'},
+
+  {k:'bleed',   c:['Bleed_In'],                     l:'Bleed (in)',      b:'rec'},
+  {k:'reverse', c:['Reverse_Print','Reverse'],      l:'Reverse print',   b:'rec', t:'tog'},
+  {k:'calDate', c:['Calibrated_On'],                l:'Calibrated on',   b:'rec', t:'date'},
+  {k:'batch',   c:['Batch_Note','Note'],            l:'Which pack of sheets', b:'rec', t:'txt', wide:true},
+];
+const BLOCKS=[
+  {id:'geo',t:'Sheet geometry',n:'Facts about the stock, from the OnlineLabels spec sheet. These do not change unless you switch products.'},
+  {id:'cal',t:'Printer calibration',n:'Facts about your printer. Margins fix where the sheet starts; scale fixes drift that accumulates down the page.'},
+  {id:'typ',t:'Type',n:'Leave blank to use the defaults measured off your original Maestro sheets.'},
+  {id:'ref',t:'Identity'},
+  {id:'rec',t:'Record only',n:'Not read by the generator — kept so the Maestro settings live beside everything else.'},
+];
+const PRESETS={
+  OL3012:{cols:6,rows:8,pitchX:1.3125,pitchY:1.3125,dia:1.25,left:0.34375,top:0.28125,bleed:0.125,perSheet:48,fontPt:8.5},
+  OL1025:{cols:7,rows:9,pitchX:1.125,pitchY:1.125,dia:1.0,left:0.375,top:0.5,bleed:0.125,perSheet:63,fontPt:7.5},
+};
+
+const S={cols:{},missing:[],tpls:[],sel:null,dirty:{},saving:false,
+         pvName:'Frost Smoke',pvFiber:'FFN',measured:''};
+
+/* ---------- load ---------- */
+async function load(){
+  let t;
+  try{ t=await grist.docApi.fetchTable('Label_Templates'); }
+  catch(e){
+    setBanner('Cannot read <b>Label_Templates</b>. Check the table name and that this widget has <b>Full document</b> access.');
+    document.getElementById('tplList').innerHTML='<div class="empty" style="font-size:11px">No data.</div>';
+    return;
+  }
+  S.cols={};S.missing=[];
+  FIELDS.forEach(f=>{const hit=findColumn(t,f.c);S.cols[f.k]=hit;if(!hit)S.missing.push(f.c[0]);});
+  const ids=t.id||[];
+  S.tpls=ids.map((id,i)=>{const v={};FIELDS.forEach(f=>{v[f.k]=S.cols[f.k]?columnAsArray(t,S.cols[f.k])[i]:null;});
+    return {id,v};}).filter(x=>String(x.v.code||'').trim());
+  setBanner(S.missing.length?('Columns not in Label_Templates — these stay read-only until added: <b>'+esc(S.missing.join(', '))+'</b>'):'');
+  renderList();
+  if(S.sel&&S.tpls.some(x=>x.id===S.sel))renderMain(); else {S.sel=S.tpls.length?S.tpls[0].id:null;renderList();renderMain();}
+}
+function setBanner(html){const el=document.getElementById('banner');
+  el.className=html?'banner':''; el.innerHTML=html||'';}
+
+function sel(){return S.tpls.find(x=>x.id===S.sel)||null;}
+function val(k){if(k in S.dirty)return S.dirty[k];const t=sel();return t?t.v[k]:null;}
+function nv(k){return num(val(k));}
+function dirty(){return Object.keys(S.dirty).length>0;}
+
+/* geometry completeness drives the dot in the rail */
+function incomplete(t){return FIELDS.filter(f=>f.req).some(f=>!(Number(t.v[f.k])>0));}
+
+function renderList(){
+  const el=document.getElementById('tplList');
+  if(!S.tpls.length){el.innerHTML='<div class="empty" style="font-size:11px">No rows in Label_Templates.</div>';return;}
+  el.innerHTML=S.tpls.map(t=>`<div class="tpl-row ${t.id===S.sel?'active':''} ${incomplete(t)?'incomplete':''}" data-id="${t.id}">
+      <div class="tpl-code">${esc(t.v.code||'—')}</div>
+      <div class="tpl-sub">${esc(t.v.fibers||'no fibers')}</div>
+    </div>`).join('');
+  el.querySelectorAll('[data-id]').forEach(r=>r.addEventListener('click',()=>{
+    if(dirty()&&!confirm('Discard unsaved changes?'))return;
+    S.sel=Number(r.dataset.id);S.dirty={};renderList();renderMain();}));
+}
+
+/* ---------- checks ---------- */
+function geoCheck(){
+  const c=nv('cols'),r=nv('rows'),px=nv('pitchX'),py=nv('pitchY'),d=nv('dia'),l=nv('left'),tp=nv('top');
+  if(!(c&&r&&px&&py&&d&&l!==null&&tp!==null))return null;
+  const w=l*2+ (c-1)*px + d, h=tp*2 + (r-1)*py + d;
+  const okW=Math.abs(w-8.5)<0.02, okH=Math.abs(h-11)<0.02;
+  return {w,h,okW,okH,total:c*r};
+}
+function ringPt(){const v=nv('ringPt');return v>0?v:(nv('dia')||1)*72*RING_FONT_RATIO;}
+function ringRatio(){const v=nv('ringRatio');return v>0?v:RING_RADIUS_RATIO;}
+function namePt(){const v=nv('fontPt');return v>0?v:7.5;}
+
+/* ---------- preview ---------- */
+let _ctx;
+function measure(txt,pxSize){
+  if(!_ctx)_ctx=document.createElement('canvas').getContext('2d');
+  _ctx.font=`bold ${pxSize}px Helvetica, Arial, sans-serif`;
+  return _ctx.measureText(txt).width;
+}
+function chordW(dia,pt,n,i,rr,PX){
+  const clearR=dia*(NAME_FIT_RATIO/2)*(rr/RING_RADIUS_RATIO)*PX;
+  if(n<2)return clearR*2;
+  const lead=pt/72*NAME_LINE_HEIGHT*PX;
+  const off=Math.abs((i-(n-1)/2)*lead)+pt/72*0.36*PX;
+  const inner=clearR*clearR-off*off;
+  return inner>0?2*Math.sqrt(inner):0;
+}
+function splitTwo(words,pxSize){let best=null;
+  for(let i=1;i<words.length;i++){const a=words.slice(0,i).join(' '),b=words.slice(i).join(' ');
+    const d=Math.abs(measure(a,pxSize)-measure(b,pxSize));if(!best||d<best.d)best={d,lines:[a,b]};}
+  return best?best.lines:[words.join(' ')];}
+function fitName(name,dia,basePt,rr,PX){
+  const words=name.trim().split(/\s+/);
+  for(let pt=basePt;pt>=5;pt-=0.25){
+    const pxs=pt/72*PX;
+    if(measure(name,pxs)<=chordW(dia,pt,1,0,rr,PX))return {lines:[name],pt};
+    if(words.length>1){const L=splitTwo(words,pxs);
+      if(L.every((l,i)=>measure(l,pxs)<=chordW(dia,pt,2,i,rr,PX)))return {lines:L,pt};}
+  }
+  return {lines:words.length>1?splitTwo(words,5/72*PX):[name],pt:5};
+}
+function previewSvg(){
+  const dia=nv('dia')||1.25;
+  const SIZE=250, PX=SIZE/(dia*1.12), cx=SIZE/2, cy=SIZE/2;
+  const R=dia/2*PX, rr=ringRatio(), rPt=ringPt(), nPt=namePt();
+  const rt=ringText(S.pvFiber);
+  let ring='';
+  if(rt){
+    const chars=[...(rt+' \u2022 ')], pxs=rPt/72*PX;
+    const w=chars.map(ch=>measure(ch,pxs)), tot=w.reduce((a,b)=>a+b,0);
+    let acc=0;
+    chars.forEach((ch,i)=>{
+      const frac=(acc+w[i]/2)/tot; acc+=w[i];
+      if(ch===' ')return;
+      const th=(frac-0.5)*360, rad=th*Math.PI/180;
+      const x=cx+dia*rr*PX*Math.sin(rad), y=cy-dia*rr*PX*Math.cos(rad);
+      ring+=`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" transform="rotate(${th.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="${pxs.toFixed(2)}">${esc(ch)}</text>`;
+    });
+  }
+  const fit=fitName(S.pvName||'Sample',dia,nPt,rr,PX);
+  const lead=fit.pt/72*NAME_LINE_HEIGHT*PX;
+  const y0=cy-lead*(fit.lines.length-1)/2;
+  const name=fit.lines.map((ln,i)=>`<text x="${cx}" y="${(y0+i*lead).toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="${(fit.pt/72*PX).toFixed(2)}">${esc(ln)}</text>`).join('');
+  const clearR=dia*(NAME_FIT_RATIO/2)*(rr/RING_RADIUS_RATIO)*PX;
+  return {svg:`<svg viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}">
+      <circle cx="${cx}" cy="${cy}" r="${R.toFixed(2)}" fill="none" stroke="#8B3A2A" stroke-width="1" stroke-dasharray="3 3"/>
+      <circle cx="${cx}" cy="${cy}" r="${clearR.toFixed(2)}" fill="none" stroke="#3A8B7A" stroke-width="0.6" stroke-dasharray="2 4" opacity="0.7"/>
+      ${ring}${name}
+    </svg>`, fit, rPt};
+}
+
+/* ---------- render ---------- */
+function fieldHtml(f){
+  const miss=!S.cols[f.k], v=val(f.k);
+  if(f.t==='tog')return `<div class="f ${f.wide?'wide':''}"><label>&nbsp;</label>
+      <div class="toggle"><input type="checkbox" data-k="${f.k}" ${v?'checked':''} ${miss?'disabled':''}><span>${esc(f.l)}</span></div>
+      ${miss?`<div class="hint">add ${esc(f.c[0])}</div>`:''}</div>`;
+  const dv=f.t==='date'?fmtDate(v):(v??'');
+  return `<div class="f ${f.wide?'wide':''} ${f.t==='txt'?'txt':''} ${miss?'missing':''}">
+      <label>${esc(f.l)}</label>
+      <input type="${f.t==='date'?'date':'text'}" data-k="${f.k}" value="${esc(dv)}" ${miss?'disabled':''}>
+      ${miss?`<div class="hint">add ${esc(f.c[0])}</div>`:(f.def?`<div class="def">blank = ${esc(f.def)}</div>`:'')}
+    </div>`;
+}
+
+function renderMain(){
+  const el=document.getElementById('main'), t=sel();
+  if(!t){el.innerHTML='<div class="empty">Pick a label stock.</div>';return;}
+  const g=geoCheck(), pv=previewSvg();
+  const presetKey=Object.keys(PRESETS).find(k=>String(val('code')||'').toUpperCase().startsWith(k));
+
+  const blocks=BLOCKS.map(b=>{
+    const fs=FIELDS.filter(f=>f.b===b.id);
+    let extra='';
+    if(b.id==='geo'){
+      extra = g
+        ? `<div class="check ${g.okW&&g.okH?'ok':'bad'}">
+             Across: <b>${g.w.toFixed(4)}"</b> ${g.okW?'= 8.5 ✓':'≠ 8.5 ✗'} &nbsp;·&nbsp;
+             Down: <b>${g.h.toFixed(4)}"</b> ${g.okH?'= 11.0 ✓':'≠ 11.0 ✗'} &nbsp;·&nbsp;
+             ${g.total} labels/sheet${nv('perSheet')&&nv('perSheet')!==g.total?` <b>(Labels Per Sheet says ${nv('perSheet')})</b>`:''}
+           </div>`
+        : `<div class="check bad">Fill in all five to check the geometry closes against an 8.5 × 11 sheet.</div>`;
+      if(presetKey)extra+=`<div style="margin-top:7px"><button class="btn tiny" id="loadPreset">Load ${esc(presetKey)} spec-sheet values</button></div>`;
+    }
+    if(b.id==='cal'){
+      const sy=nv('scaleY')||1, sx=nv('scaleX')||1;
+      const m=num(S.measured);
+      extra=`<div class="calc">
+        <div class="calc-row">
+          <div class="f" style="max-width:150px"><label>Measured cross-to-cross, down</label>
+            <input type="text" id="measured" value="${esc(S.measured)}" placeholder="10.000"></div>
+          <div><div style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600">Scale Y</div>
+            <div class="calc-out">${m?(m/10).toFixed(4):'—'}</div></div>
+          <button class="btn tiny" id="applyScale" ${m?'':'disabled'}>Apply</button>
+        </div>
+        <div class="calc-note">Print a proof, measure centre to centre between the crosses down the page — nominal <b>10.000"</b>.
+        Across is <b>7.500"</b>; if that is off by the same proportion it is the print dialog scaling, not the printer.</div>
+      </div>
+      ${(sy!==1||sx!==1)?`<div class="check ok">Correcting ${sy!==1?`<b>${((sy-1)*100).toFixed(2)}%</b> down the page`:''}${sy!==1&&sx!==1?' and ':''}${sx!==1?`<b>${((sx-1)*100).toFixed(2)}%</b> across`:''}.</div>`:''}`;
+    }
+    return `<section class="blk"><div class="blk-title">${esc(b.t)}</div>
+      ${b.n?`<div class="blk-note">${esc(b.n)}</div>`:''}
+      <div class="grid">${fs.map(fieldHtml).join('')}</div>${extra}</section>`;
+  }).join('');
+
+  el.innerHTML=`
+    <div class="head">
+      <div><h1>${esc(val('code')||'(no code)')}</h1>
+        <div class="hsub">${esc(val('desc')||'')}</div></div>
+      <div class="head-actions">
+        <button class="btn" id="reloadBtn">↻ Reload</button>
+        <button class="btn solid ${dirty()?'':'clean'}" id="saveBtn" ${dirty()?'':'disabled'}>${dirty()?'Save changes':'Saved'}</button>
+      </div>
+    </div>
+    <div class="cols">
+      <div class="formcol">${blocks}</div>
+      <div class="previewcol">
+        <div class="preview">
+          <h3>Live preview</h3>
+          ${pv.svg}
+          <div class="pv-stat">name ${pv.fit.pt}pt · ${pv.fit.lines.length} line${pv.fit.lines.length===1?'':'s'} · ring ${pv.rPt.toFixed(2)}pt</div>
+          <div class="preview-ctl">
+            <input type="text" id="pvName" value="${esc(S.pvName)}" placeholder="Colorway name">
+            <select id="pvFiber">${Object.keys(RING_SPEC).map(f=>`<option value="${f}" ${S.pvFiber===f?'selected':''}>${f} — ${esc(RING_SPEC[f].material)}</option>`).join('')}</select>
+          </div>
+          <div class="preview-legend">
+            <span class="sw" style="background:#8B3A2A"></span>die cut &nbsp;
+            <span class="sw" style="background:#3A8B7A"></span>name clear area<br>
+            Type your longest colorway to check it still fits.
+          </div>
+        </div>
+      </div>
+    </div>`;
+  bind();
+}
+
+function bind(){
+  document.querySelectorAll('[data-k]').forEach(inp=>{
+    const k=inp.dataset.k, ev=inp.type==='checkbox'?'change':'input';
+    inp.addEventListener(ev,()=>{
+      S.dirty[k]=inp.type==='checkbox'?inp.checked:inp.value;
+      const spec=FIELDS.find(f=>f.k===k);
+      // Type and geometry changes redraw the preview; text fields need not.
+      if(['dia','fontPt','ringPt','ringRatio'].includes(k)||spec&&spec.b==='geo'){
+        const pos=inp.selectionStart;renderMain();
+        const again=document.querySelector(`[data-k="${k}"]`);
+        if(again){again.focus();try{again.setSelectionRange(pos,pos);}catch(e){}}
+      } else { const b=document.getElementById('saveBtn'); if(b){b.disabled=false;b.textContent='Save changes';b.classList.remove('clean');} }
+    });
+  });
+  const pn=document.getElementById('pvName');
+  if(pn)pn.addEventListener('input',()=>{S.pvName=pn.value;const pos=pn.selectionStart;renderMain();
+    const a=document.getElementById('pvName');if(a){a.focus();a.setSelectionRange(pos,pos);}});
+  const pf=document.getElementById('pvFiber');
+  if(pf)pf.addEventListener('change',()=>{S.pvFiber=pf.value;renderMain();});
+  const me=document.getElementById('measured');
+  if(me)me.addEventListener('input',()=>{S.measured=me.value;const pos=me.selectionStart;renderMain();
+    const a=document.getElementById('measured');if(a){a.focus();a.setSelectionRange(pos,pos);}});
+  const ap=document.getElementById('applyScale');
+  if(ap)ap.addEventListener('click',()=>{const m=num(S.measured);if(!m)return;
+    S.dirty.scaleY=(m/10).toFixed(4);S.measured='';renderMain();
+    showToast('Scale Y set to '+S.dirty.scaleY+' — save, then reprint and re-measure.');});
+  const lp=document.getElementById('loadPreset');
+  if(lp)lp.addEventListener('click',()=>{
+    const key=Object.keys(PRESETS).find(k=>String(val('code')||'').toUpperCase().startsWith(k));
+    if(!key)return;
+    Object.entries(PRESETS[key]).forEach(([k,v])=>{if(S.cols[k])S.dirty[k]=String(v);});
+    renderMain();showToast(key+' spec values loaded — margins are nominal, recalibrate for your printer.');});
+  const rb=document.getElementById('reloadBtn');
+  if(rb)rb.addEventListener('click',()=>{if(dirty()&&!confirm('Discard unsaved changes?'))return;S.dirty={};load();});
+  const sb=document.getElementById('saveBtn');
+  if(sb)sb.addEventListener('click',save);
+}
+
+async function save(){
+  if(S.saving||!S.sel)return;
+  S.saving=true;
+  const fields={};
+  Object.keys(S.dirty).forEach(k=>{
+    const col=S.cols[k];if(!col)return;
+    const f=FIELDS.find(x=>x.k===k);let v=S.dirty[k];
+    if(f.t==='tog')v=!!v;
+    else if(f.t==='date')v=v?Math.floor(new Date(v+'T00:00:00Z').getTime()/1000):null;
+    else if(f.t==='txt')v=String(v).trim();
+    else v=num(v);
+    fields[col]=v;
+  });
+  // Touching a calibration value stamps the date, so the record can't go stale.
+  if(['left','top','scaleX','scaleY'].some(k=>k in S.dirty)&&S.cols.calDate&&!('calDate' in S.dirty)){
+    fields[S.cols.calDate]=todayEpoch();
+  }
+  if(!Object.keys(fields).length){S.saving=false;S.dirty={};renderMain();return;}
+  try{
+    await grist.docApi.applyUserActions([['UpdateRecord','Label_Templates',S.sel,fields]]);
+    S.dirty={};S.saving=false;showToast('Saved.');await load();
+  }catch(e){
+    console.error(e);S.saving=false;
+    showToast('Save failed — widget access must be Full document.',true);
+  }
+}
+
+try{
+  grist.ready({requiredAccess:'full'});
+  load();
+}catch(e){
+  console.error(e);
+  setBanner('Grist plugin API unavailable. Reload the page; if it persists, re-add the widget URL.');
+  document.getElementById('tplList').innerHTML='<div class="empty" style="font-size:11px">Not connected.</div>';
+}
+</script>
+</body>
+</html>
