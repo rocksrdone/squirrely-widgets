@@ -385,6 +385,7 @@ const S = {
   priceDeleted: [],
   orders: [],
   saving: false,
+  stockCodes: [], lsCols: null, lsAll: [], labelRows: [], lsDirty: false,
   nextKey: 1,
 };
 
@@ -425,6 +426,7 @@ async function loadAll() {
     types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
 
   await loadPricingCols();
+  await loadLabelSettings();
   await loadOrdersTable();
 
   const banners = [];
@@ -467,6 +469,49 @@ async function loadPricingCols() {
   } catch (e) {
     // table simply doesn't exist yet — the banner explains how to add it
   }
+}
+
+/* Label fit is remembered per customer AND per sheet, because a mark that
+   reads well at 1.25" often needs different treatment at 1". Rows are keyed on
+   the stock codes in Label_Templates, so adding a sheet adds a row here. */
+async function loadLabelSettings() {
+  S.stockCodes = []; S.lsCols = null; S.lsAll = [];
+  try {
+    const t = await grist.docApi.fetchTable('Label_Templates');
+    const codeCol = findColumn(t, ['Stock_Code', 'Code']);
+    if (codeCol) S.stockCodes = columnAsArray(t, codeCol)
+      .map(x => String(x || '').trim()).filter(Boolean);
+  } catch (e) { /* no templates — grid simply won't render */ }
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Label_Settings');
+    const c = {
+      cust: findColumn(t, ['Customer', 'Customer_ID']),
+      stock: findColumn(t, ['Stock_Code', 'Label_Stock', 'Code']),
+      fit: findColumn(t, ['Fit', 'Logo_Fit', 'Front_Logo_Fit']),
+      scale: findColumn(t, ['Scale', 'Logo_Scale', 'Front_Logo_Scale']),
+    };
+    if (!c.cust || !c.stock) return;
+    S.lsCols = c;
+    (t.id || []).forEach((id, i) => S.lsAll.push({
+      id,
+      custId: getRefId(columnAsArray(t, c.cust)[i]),
+      stock: String(columnAsArray(t, c.stock)[i] || '').trim(),
+      fit: c.fit ? String(columnAsArray(t, c.fit)[i] || '') : '',
+      scale: c.scale ? (columnAsArray(t, c.scale)[i] ?? '') : '',
+    }));
+  } catch (e) { /* table absent */ }
+}
+
+function buildLabelRows() {
+  S.labelRows = [];
+  if (!S.lsCols || !S.selectedId) return;
+  S.stockCodes.forEach(code => {
+    const hit = S.lsAll.find(r => r.custId === S.selectedId && r.stock === code);
+    S.labelRows.push({
+      rowId: hit ? hit.id : null, stock: code,
+      fit: hit ? hit.fit : '', scale: hit ? hit.scale : '',
+    });
+  });
 }
 
 async function loadOrdersTable() {
@@ -537,12 +582,13 @@ function renderList() {
 function selectCustomer(id, keepDirty) {
   if (!keepDirty && hasUnsaved() && !confirm('You have unsaved changes. Discard them?')) return;
   S.selectedId = id;
-  if (!keepDirty) { S.dirty = {}; S.priceDeleted = []; S.priceDirty = false; }
+  if (!keepDirty) { S.dirty = {}; S.priceDeleted = []; S.priceDirty = false; S.lsDirty = false; }
   buildPricingRows();
+  buildLabelRows();
   renderList();
   renderDetail();
 }
-function hasUnsaved() { return Object.keys(S.dirty).length > 0 || S.priceDirty || S.priceDeleted.length > 0; }
+function hasUnsaved() { return Object.keys(S.dirty).length > 0 || S.priceDirty || S.priceDeleted.length > 0 || S.lsDirty; }
 function selected() { return S.customers.find(c => c.id === S.selectedId) || null; }
 function val(key) {
   if (key in S.dirty) return S.dirty[key];
@@ -644,6 +690,36 @@ function pricingHtml() {
   </div>`;
 }
 
+function labelSettingsHtml() {
+  if (!S.lsCols) {
+    return `<div class="setup-note" style="margin-top:10px">Add a <code>Customer_Label_Settings</code> table
+      (<code>Customer</code> ref, <code>Stock_Code</code>, <code>Fit</code>, <code>Scale</code>)
+      to remember front-logo sizing per sheet.</div>`;
+  }
+  if (!S.labelRows.length) return '';
+  const rows = S.labelRows.map((r, i) => `<tr data-lsrow="${i}">
+      <td class="col-fiber"><span class="sku">${esc(r.stock)}</span></td>
+      <td><select data-lsfield="fit">
+        <option value="">— default —</option>
+        <option value="Cover" ${r.fit === 'Cover' ? 'selected' : ''}>Cover — bleeds past cut</option>
+        <option value="Contain" ${r.fit === 'Contain' ? 'selected' : ''}>Contain — whole mark inside</option>
+      </select></td>
+      <td class="col-num"><input class="mono" data-lsfield="scale" value="${esc(r.scale)}" placeholder="auto"></td>
+      <td class="col-x">${r.rowId ? `<span class="row-x" data-lsclear="${i}" title="Clear">×</span>` : ''}</td>
+    </tr>`).join('');
+  return `<div style="margin-top:12px">
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin-bottom:5px">Front logo sizing by sheet</div>
+    <table class="price-table">
+      <thead><tr><th>Sheet</th><th>Fit</th><th>Size × dia</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:10px;color:var(--muted);margin-top:5px;line-height:1.5">
+      Blank uses the default: 0.85 for Contain, out to the bleed edge for Cover.
+      Size is a fraction of the label diameter, so it means the same on both sheets.
+    </div>
+  </div>`;
+}
+
 function ordersHtml() {
   const c = selected();
   if (!c) return '';
@@ -685,6 +761,7 @@ function renderDetail() {
       const fs = FIELDS.filter(f => f.block === b.id);
       if (!fs.length) return '';
       body = `<div class="field-grid">${fs.map(fieldHtml).join('')}</div>`;
+      if (b.id === 'labels') body += labelSettingsHtml();
     }
     return `<section class="block"><div class="block-title">${esc(b.title)}</div>${body}</section>`;
   }).join('');
@@ -771,6 +848,22 @@ function bindDetail() {
     });
   });
 
+  document.querySelectorAll('[data-lsfield]').forEach(inp => {
+    inp.addEventListener(inp.tagName === 'SELECT' ? 'change' : 'input', () => {
+      const i = Number(inp.closest('tr').dataset.lsrow);
+      if (!S.labelRows[i]) return;
+      S.labelRows[i][inp.dataset.lsfield] = inp.value;
+      S.lsDirty = true; updateSaveBtn();
+    });
+  });
+  document.querySelectorAll('[data-lsclear]').forEach(x => {
+    x.addEventListener('click', () => {
+      const i = Number(x.dataset.lsclear);
+      S.labelRows[i].fit = ''; S.labelRows[i].scale = '';
+      S.lsDirty = true; renderDetail();
+    });
+  });
+
   const addBtn = document.getElementById('addPriceRow');
   if (addBtn) addBtn.addEventListener('click', () => {
     S.pricing.push({ rowId: null, key: S.nextKey++, fiber: '', price: '', discount: '', notes: '' });
@@ -842,11 +935,31 @@ async function save() {
     });
   }
 
-  if (!actions.length) { S.saving = false; S.dirty = {}; S.priceDirty = false; updateSaveBtn(); return; }
+  // Customer_Label_Settings: write rows that have a value, delete ones cleared.
+  if (S.lsCols) {
+    const c = S.lsCols;
+    S.labelRows.forEach(r => {
+      const fit = String(r.fit || '').trim();
+      const scale = numOrNull(r.scale);
+      const empty = !fit && scale === null;
+      if (r.rowId && empty) {
+        actions.push(['RemoveRecord', 'Customer_Label_Settings', r.rowId]);
+      } else if (!empty) {
+        const f = {};
+        f[c.stock] = r.stock;
+        if (c.fit) f[c.fit] = fit;
+        if (c.scale) f[c.scale] = scale;
+        if (r.rowId) actions.push(['UpdateRecord', 'Customer_Label_Settings', r.rowId, f]);
+        else { f[c.cust] = S.selectedId; actions.push(['AddRecord', 'Customer_Label_Settings', null, f]); }
+      }
+    });
+  }
+
+  if (!actions.length) { S.saving = false; S.dirty = {}; S.priceDirty = false; S.lsDirty = false; updateSaveBtn(); return; }
 
   try {
     await grist.docApi.applyUserActions(actions);
-    S.dirty = {}; S.priceDirty = false; S.priceDeleted = [];
+    S.dirty = {}; S.priceDirty = false; S.priceDeleted = []; S.lsDirty = false;
     showToast('Saved.');
     S.saving = false;
     await loadAll();
