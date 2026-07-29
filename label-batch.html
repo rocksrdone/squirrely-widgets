@@ -430,6 +430,8 @@ async function loadAll() {
 
   await loadTemplates(problems);
   await loadLabelSettings();
+  // Match the dropdown's own fallback so the two never disagree.
+  if (!S.frontStock && S.templates.length) S.frontStock = S.templates[0].code;
 
   try {
     const lotsT = await grist.docApi.fetchTable('Production_Lots');
@@ -551,10 +553,17 @@ async function loadLabelSettings() {
     // table absent — fit and size fall back to the customer, then to defaults
   }
 }
+/* The sheet dropdown falls back to the first template for display, so state
+   and display must resolve identically — otherwise a saved setting is only
+   found once the dropdown has been touched. */
+function frontTpl() {
+  return S.templates.find(t => t.code === S.frontStock) || S.templates[0] || null;
+}
 function savedSetting() {
-  if (!S.frontCust || !S.frontStock) return null;
+  const t = frontTpl();
+  if (!S.frontCust || !t) return null;
   return S.labelSettings.find(r => r.custId === S.frontCust.id
-    && r.stock === normalize(S.frontStock)) || null;
+    && r.stock === normalize(t.code)) || null;
 }
 
 function setBanner(items) {
@@ -892,12 +901,12 @@ function bindPane() {
     });
   const fs = document.getElementById('fSave');
   if (fs) fs.addEventListener('click', async () => {
-    const t = S.templates.find(x => x.code === S.frontStock) || S.templates[0];
+    const t = frontTpl();
     const gg = pdfGeometry(t);
     if (!gg.ok || !S.frontCust || !S.clsCols) return;
     const cols = S.clsCols;
     const fields = {};
-    fields[cols.stock] = S.frontStock;
+    fields[cols.stock] = t.code;
     if (cols.fit) fields[cols.fit] = frontFit();
     if (cols.scale) fields[cols.scale] = Number(frontScale(gg, t).toFixed(4));
     const ex = savedSetting();
@@ -910,7 +919,7 @@ function bindPane() {
       S.frontFit = ''; S.frontScale = '';   // let the saved values take over
       await loadLabelSettings();
       render();
-      showToast('Remembered for ' + (S.frontCust.code || S.frontCust.name) + ' on ' + S.frontStock + '.');
+      showToast('Remembered for ' + (S.frontCust.code || S.frontCust.name) + ' on ' + t.code + '.');
     } catch (e) { console.error(e); showToast('Could not save — needs Full document access.', true); }
   });
 
@@ -1361,7 +1370,7 @@ function frontPaneHtml() {
     .sort((a, b) => (b.front && /customer/i.test(b.front) ? 1 : 0) - (a.front && /customer/i.test(a.front) ? 1 : 0)
       || String(a.name).localeCompare(String(b.name)));
   const tpls = S.templates;
-  const tpl = tpls.find(t => t.code === S.frontStock) || tpls[0] || null;
+  const tpl = frontTpl();
   const g = tpl ? pdfGeometry(tpl) : { ok: false, missing: ['a Label_Templates row'] };
   const c = S.frontCust;
   const src = logoSourceLabel(c);
@@ -1425,7 +1434,7 @@ function frontPaneHtml() {
 }
 
 async function buildFrontPdf() {
-  const tpl = S.templates.find(t => t.code === S.frontStock) || S.templates[0];
+  const tpl = frontTpl();
   const g = pdfGeometry(tpl);
   const c = S.frontCust;
   if (!g.ok || !c) return;
