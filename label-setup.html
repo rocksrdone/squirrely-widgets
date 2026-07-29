@@ -161,6 +161,10 @@ const FIELDS=[
   {k:'ringPt',  c:['Ring_Font_Size_Pt'],            l:'Ring size (pt)',  b:'typ', def:'auto'},
   {k:'ringRatio',c:['Ring_Radius_Ratio'],           l:'Ring radius',     b:'typ', def:'0.42'},
 
+  {k:'buyUrl',  c:['Purchase_URL','Buy_URL','Reorder_URL'], l:'Product page', b:'buy', t:'txt', wide:true},
+  {k:'perPack', c:['Sheets_Per_Pack','Pack_Size'],  l:'Sheets per pack', b:'buy'},
+  {k:'lastOrd', c:['Last_Ordered','Last_Order_Date'],l:'Last ordered',   b:'buy', t:'date'},
+
   {k:'bleed',   c:['Bleed_In'],                     l:'Bleed (in)',      b:'rec'},
   {k:'reverse', c:['Reverse_Print','Reverse'],      l:'Reverse print',   b:'rec', t:'tog'},
   {k:'calDate', c:['Calibrated_On'],                l:'Calibrated on',   b:'rec', t:'date'},
@@ -171,6 +175,7 @@ const BLOCKS=[
   {id:'cal',t:'Printer calibration',n:'Facts about your printer. Margins fix where the sheet starts; scale fixes drift that accumulates down the page.'},
   {id:'typ',t:'Type',n:'Leave blank to use the defaults measured off your original Maestro sheets.'},
   {id:'ref',t:'Identity'},
+  {id:'buy',t:'Reordering',n:'Where this stock comes from. Kept here rather than in a supplies table because one stock code has exactly one product page.'},
   {id:'rec',t:'Record only',n:'Not read by the generator — kept so the Maestro settings live beside everything else.'},
 ];
 const PRESETS={
@@ -325,6 +330,16 @@ function renderMain(){
            </div>`
         : `<div class="check bad">Fill in all five to check the geometry closes against an 8.5 × 11 sheet.</div>`;
       if(presetKey)extra+=`<div style="margin-top:7px"><button class="btn tiny" id="loadPreset">Load ${esc(presetKey)} spec-sheet values</button></div>`;
+    }
+    if(b.id==='buy'){
+      const u=String(val('buyUrl')||'').trim();
+      const url=u?(/^https?:\/\//i.test(u)?u:'https://'+u):'';
+      const pp=nv('perPack'), g2=geoCheck();
+      extra=`<div style="margin-top:7px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${url?`<a class="btn tiny" href="${esc(url)}" target="_blank" rel="noopener">Open product page ↗</a>`
+             :`<span style="font-size:10.5px;color:var(--muted);font-style:italic">No product page saved</span>`}
+        ${pp&&g2?`<span style="font-size:10.5px;color:var(--mid)">one pack = <b style="font-family:'DM Mono',monospace">${(pp*g2.total).toLocaleString()}</b> labels</span>`:''}
+      </div>`;
     }
     if(b.id==='cal'){
       const sy=nv('scaleY')||1, sx=nv('scaleX')||1;
