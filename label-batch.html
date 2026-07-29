@@ -453,6 +453,7 @@ async function loadTemplates(problems) {
     dia: findColumn(t, ['Label_Diameter_In', 'Diameter_In', 'Diameter']),
     fontPt: findColumn(t, ['Name_Font_Size_Pt', 'Font_Size_Pt']),
     ringPt: findColumn(t, ['Ring_Font_Size_Pt']),
+    ringRatio: findColumn(t, ['Ring_Radius_Ratio']),
   };
   if (!c.code) {
     problems.push({ title: 'Label_Templates has no stock-code column',
@@ -483,6 +484,7 @@ async function loadTemplates(problems) {
       dia: c.dia ? Number(columnAsArray(t, c.dia)[i]) || null : null,
       fontPt: c.fontPt ? Number(columnAsArray(t, c.fontPt)[i]) || null : null,
       ringPt: c.ringPt ? Number(columnAsArray(t, c.ringPt)[i]) || null : null,
+      ringRatio: c.ringRatio ? Number(columnAsArray(t, c.ringRatio)[i]) || null : null,
     };
     S.templates.push(tpl);
     fibers.forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = tpl; });
@@ -895,13 +897,13 @@ function ringText(fiber) {
    so spacing stays even, and the string is scaled to close the loop exactly —
    which is why a longer string ("150 Yards") still fits without adjustment.
    Midpoint sits at 12 o'clock, matching the existing Maestro design.          */
-function drawRingText(doc, text, cx, cy, dia, fontPt) {
+function drawRingText(doc, text, cx, cy, dia, fontPt, ratio) {
   const chars = [...(text + ' \u2022 ')];   // trailing bullet closes the loop
   doc.setFontSize(fontPt);
   const widths = chars.map(ch => doc.getTextWidth(ch));
   const total = widths.reduce((a, b) => a + b, 0);
   if (!total) return;
-  const radius = dia * RING_RADIUS_RATIO;
+  const radius = dia * (ratio > 0 ? ratio : RING_RADIUS_RATIO);
   let acc = 0;
   chars.forEach((ch, i) => {
     const frac = (acc + widths[i] / 2) / total;
@@ -942,6 +944,7 @@ function pdfGeometry(tpl) {
     left: Number(tpl.left), top: Number(tpl.top),
     fontPt: Number(tpl.fontPt) > 0 ? Number(tpl.fontPt) : 7.5,
     ringPt: Number(tpl.ringPt) > 0 ? Number(tpl.ringPt) : Number(tpl.dia) * 72 * RING_FONT_RATIO,
+    ringRatio: Number(tpl.ringRatio) > 0 ? Number(tpl.ringRatio) : RING_RADIUS_RATIO,
   };
 }
 
@@ -952,8 +955,11 @@ function pdfGeometry(tpl) {
    Wrapping before shrinking because two lines of 8.5pt read better on a spool
    than one line of 6.5pt. Chord width is used rather than the flat clear width,
    since a second line sits off-centre where the circle is narrower.           */
-function nameChordWidth(dia, pt, lineCount, lineIndex) {
-  const clearR = dia * NAME_FIT_RATIO / 2;
+function nameChordWidth(dia, pt, lineCount, lineIndex, ringRatio) {
+  // Name space is defined by where the ring sits, so pulling the ring inward
+  // for more edge padding correctly tightens the name too.
+  const r = ringRatio > 0 ? ringRatio : RING_RADIUS_RATIO;
+  const clearR = dia * (NAME_FIT_RATIO / 2) * (r / RING_RADIUS_RATIO);
   if (lineCount < 2) return clearR * 2;
   const lead = pt * NAME_LINE_HEIGHT / 72;
   const offset = Math.abs((lineIndex - (lineCount - 1) / 2) * lead) + pt * 0.36 / 72;
@@ -972,14 +978,14 @@ function splitTwo(doc, words) {
   return best ? best.lines : [words.join(' ')];
 }
 
-function fitName(doc, name, dia, basePt) {
+function fitName(doc, name, dia, basePt, ringRatio) {
   const words = name.trim().split(/\s+/);
   for (let pt = basePt; pt >= 5; pt -= 0.25) {
     doc.setFontSize(pt);
-    if (doc.getTextWidth(name) <= nameChordWidth(dia, pt, 1, 0)) return { lines: [name], pt };
+    if (doc.getTextWidth(name) <= nameChordWidth(dia, pt, 1, 0, ringRatio)) return { lines: [name], pt };
     if (words.length > 1) {
       const lines = splitTwo(doc, words);
-      if (lines.every((ln, i) => doc.getTextWidth(ln) <= nameChordWidth(dia, pt, 2, i))) {
+      if (lines.every((ln, i) => doc.getTextWidth(ln) <= nameChordWidth(dia, pt, 2, i, ringRatio))) {
         return { lines, pt };
       }
     }
@@ -1035,6 +1041,26 @@ async function buildPdf(group) {
   const doc = new jsPDF({ unit: 'in', format: 'letter', compress: true });
   doc.setFont(NAME_FONT[0], NAME_FONT[1]);
 
+  /* Calibration marks: crosses at exact, known distances from the page edge.
+     Die cuts are white-on-white and effectively unmeasurable, so instead of
+     trying to see them, measure paper-edge -> cross with a ruler. The gap
+     between what you measure and what's printed beside it IS the printer
+     offset, and it goes straight onto the margins.                          */
+  if (proof) {
+    doc.setDrawColor(120); doc.setLineWidth(0.004);
+    doc.setFontSize(6); doc.setTextColor(120);
+    doc.setFont(NAME_FONT[0], 'normal');
+    [[0.5, 0.5], [8.0, 0.5], [0.5, 10.5], [8.0, 10.5]].forEach(([mx, my]) => {
+      doc.line(mx - 0.15, my, mx + 0.15, my);
+      doc.line(mx, my - 0.15, mx, my + 0.15);
+      doc.text(`${mx}" , ${my}"`, mx, my - 0.22, { align: 'center' });
+    });
+    doc.setFontSize(7);
+    doc.text('Measure paper edge to cross centre. Short by X? Add X to that margin.',
+      4.25, 0.22, { align: 'center' });
+    doc.setTextColor(0);
+  }
+
   const shrunk = new Set();   // names that wouldn't fit at full size
   let slot = startAt - 1;   // 0-based position on the current sheet
   labels.forEach((r, idx) => {
@@ -1050,13 +1076,13 @@ async function buildPdf(group) {
     }
 
     const rt = ringText(r.fiber);
-    if (rt) drawRingText(doc, rt, cx, cy, g.dia, g.ringPt);
+    if (rt) drawRingText(doc, rt, cx, cy, g.dia, g.ringPt, g.ringRatio);
 
     // Shrink long colorway names to stay inside the ring rather than
     // letting them run under the curved text.
     doc.setFont(NAME_FONT[0], NAME_FONT[1]);
     doc.setTextColor(0);
-    const fit = fitName(doc, String(r.name), g.dia, g.fontPt);
+    const fit = fitName(doc, String(r.name), g.dia, g.fontPt, g.ringRatio);
     if (fit.pt < g.fontPt) shrunk.add(r.name);
     // Two lines straddle the centre; one line sits on it.
     const lead = fit.pt * NAME_LINE_HEIGHT / 72;
@@ -1085,7 +1111,7 @@ async function buildPdf(group) {
         doc.setDrawColor(200); doc.setLineWidth(0.005);
         doc.circle(cx, cy, g.dia / 2, 'S');
       }
-      drawRingText(doc, fillRing, cx, cy, g.dia, g.ringPt);
+      drawRingText(doc, fillRing, cx, cy, g.dia, g.ringPt, g.ringRatio);
       blanks++;
       slot = (slot + 1) % perSheet;
     }
