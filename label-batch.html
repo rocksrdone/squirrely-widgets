@@ -211,11 +211,12 @@ const RING_RADIUS_RATIO = 0.42;
 const RING_FONT_RATIO = 0.058;   // of diameter, when no Ring_Font_Size_Pt is set
 const METRES_PER_YARD = 0.9144;
 
-/* Front labels: one fixed logo per customer, no variable data. Images are
-   fetched at runtime from the widgets repo (githack sends CORS headers, so the
-   fetch works and jsPDF can embed the result). A Front_Logo_URL on the customer
-   overrides the convention.                                                   */
-const LOGO_BASE = 'https://raw.githack.com/rocksrdone/squirrely-widgets/main/logos/';
+/* Front labels: one fixed logo per customer, no variable data.
+   Artwork comes from a Grist Attachments column on Customers — private, backed
+   up with the document, and added by dragging a file into the cell. Nothing is
+   hosted externally. Front_Logo_URL remains as an escape hatch for anything
+   served elsewhere, but that host must send CORS headers or the browser will
+   block the fetch and jsPDF gets nothing.                                     */
 
 /* Helvetica-Bold is a PDF base-14 font: no download, cannot fail to load, and
    renders identically everywhere. OLSansserif3-Bold is a Helvetica-class
@@ -361,6 +362,7 @@ async function loadAll() {
     front: findColumn(custT, ['Label_Front_Logo', 'Front_Label_Logo']),
     back: findColumn(custT, ['Label_Back_Style', 'Back_Label_Style']),
     notes: findColumn(custT, ['Label_Notes']),
+    logo: findColumn(custT, ['Front_Logo', 'Logo', 'Front_Label_Art']),
     logoUrl: findColumn(custT, ['Front_Logo_URL', 'Logo_URL']),
     logoFit: findColumn(custT, ['Front_Logo_Fit', 'Logo_Fit']),
     logoScale: findColumn(custT, ['Front_Logo_Scale', 'Logo_Scale']),
@@ -377,6 +379,7 @@ async function loadAll() {
       front: cc.front ? columnAsArray(custT, cc.front)[i] || '' : '',
       back: cc.back ? columnAsArray(custT, cc.back)[i] || '' : '',
       notes: cc.notes ? columnAsArray(custT, cc.notes)[i] || '' : '',
+      logoAtt: cc.logo ? attachmentId(columnAsArray(custT, cc.logo)[i]) : null,
       logoUrl: cc.logoUrl ? String(columnAsArray(custT, cc.logoUrl)[i] || '').trim() : '',
       logoFit: cc.logoFit ? String(columnAsArray(custT, cc.logoFit)[i] || '').trim() : '',
       logoScale: cc.logoScale ? Number(columnAsArray(custT, cc.logoScale)[i]) || null : null,
@@ -1194,17 +1197,45 @@ async function buildPdf(group) {
    hair of misregistration leaves a white crescent.                            */
 
 const logoCache = {};
-function logoUrlFor(cust) {
-  if (!cust) return '';
-  const raw = cust.logoUrl || (cust.code ? LOGO_BASE + cust.code.toUpperCase() + '.png' : '');
-  if (!raw) return '';
-  return /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+
+// Grist stores an Attachments cell as ['L', id, id...]; we want the first.
+function attachmentId(v) {
+  if (Array.isArray(v) && v[0] === 'L' && v.length > 1) return v[1];
+  if (typeof v === 'number' && v > 0) return v;
+  return null;
 }
+
+/* A short-lived read-only token lets the widget pull attachments from the
+   Grist API across origins. Cached until shortly before it expires.          */
+let _tok = null;
+async function accessToken() {
+  if (_tok && Date.now() < _tok.expires) return _tok;
+  const t = await grist.docApi.getAccessToken({ readOnly: true });
+  _tok = { ...t, expires: Date.now() + Math.max(10000, (t.ttlMsecs || 60000) - 10000) };
+  return _tok;
+}
+
+function logoSourceLabel(cust) {
+  if (!cust) return '';
+  if (cust.logoAtt) return 'Grist attachment #' + cust.logoAtt;
+  return cust.logoUrl || '';
+}
+function logoUrlFor(cust) {
+  if (!cust || !cust.logoUrl) return '';
+  return /^https?:\/\//i.test(cust.logoUrl) ? cust.logoUrl : 'https://' + cust.logoUrl;
+}
+
 async function loadLogo(cust) {
-  const url = logoUrlFor(cust);
-  if (!url) return null;
-  if (url in logoCache) return logoCache[url];
+  if (!cust) return null;
+  const key = cust.logoAtt ? 'att:' + cust.logoAtt : logoUrlFor(cust);
+  if (!key) return null;
+  if (key in logoCache) return logoCache[key];
+  let url = logoUrlFor(cust);
   try {
+    if (cust.logoAtt) {
+      const t = await accessToken();
+      url = `${t.baseUrl}/attachments/${cust.logoAtt}/download?auth=${encodeURIComponent(t.token)}`;
+    }
     const resp = await fetch(url, { cache: 'no-cache' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const blob = await resp.blob();
@@ -1219,12 +1250,12 @@ async function loadLogo(cust) {
       im.onerror = () => rej(new Error('decode failed'));
       im.src = dataUrl;
     });
-    logoCache[url] = { dataUrl, ...dims, url };
+    logoCache[key] = { dataUrl, ...dims };
   } catch (e) {
-    console.warn('logo load failed', url, e);
-    logoCache[url] = null;
+    console.warn('logo load failed', key, e);
+    logoCache[key] = null;
   }
-  return logoCache[url];
+  return logoCache[key];
 }
 
 /* Bleed can never exceed half the gap between die cuts, or a label's artwork
@@ -1254,7 +1285,7 @@ function frontPaneHtml() {
   const tpl = tpls.find(t => t.code === S.frontStock) || tpls[0] || null;
   const g = tpl ? pdfGeometry(tpl) : { ok: false, missing: ['a Label_Templates row'] };
   const c = S.frontCust;
-  const url = logoUrlFor(c);
+  const src = logoSourceLabel(c);
   const sb = g.ok ? safeBleed(tpl, g) : 0;
   const sc = g.ok ? frontScale(g, tpl) : 0;
   const over = g.ok ? (sc * g.dia - g.dia) / 2 : 0;
@@ -1286,8 +1317,8 @@ function frontPaneHtml() {
 
     ${!c ? '<div class="empty-note">Pick a customer to load their logo.</div>' : `
       <div class="profile">
-        <div class="pf"><div class="pf-label">Logo file</div>
-          <div class="pf-value ${url ? '' : 'dim'}" style="font-family:'DM Mono',monospace;font-size:11px">${esc(url || 'no URL and no code')}</div></div>
+        <div class="pf"><div class="pf-label">Artwork</div>
+          <div class="pf-value ${src ? '' : 'dim'}" style="font-family:'DM Mono',monospace;font-size:11px">${esc(src || 'none — drop a file into Front_Logo on this customer')}</div></div>
         <div class="pf"><div class="pf-label">Front setting</div>
           <div class="pf-value ${c.front ? '' : 'dim'}">${esc(c.front || 'not set')}</div></div>
       </div>
@@ -1300,7 +1331,7 @@ function frontPaneHtml() {
       <div class="group-foot" style="border:1px solid var(--rule);border-radius:8px;margin-top:12px">
         <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels</div>
         <div class="group-foot-actions">
-          <button class="btn solid" id="fPdf" ${g.ok && c && Number(S.frontQty) > 0 ? '' : 'disabled'}>Download PDF</button>
+          <button class="btn solid" id="fPdf" ${g.ok && c && src && Number(S.frontQty) > 0 ? '' : 'disabled'}>Download PDF</button>
         </div>
       </div>`}`;
 }
@@ -1311,7 +1342,12 @@ async function buildFrontPdf() {
   const c = S.frontCust;
   if (!g.ok || !c) return;
   const logo = await loadLogo(c);
-  if (!logo) { showToast('Could not load ' + (logoUrlFor(c) || 'the logo') + ' — check the file exists and the URL is reachable.', true); return; }
+  if (!logo) {
+    showToast(c.logoAtt
+      ? 'Could not read the attachment — this widget needs Full document access.'
+      : 'No artwork for ' + (c.name || 'this customer') + ' — add a file to Front_Logo, or a CORS-enabled Front_Logo_URL.', true);
+    return;
+  }
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'in', format: 'letter', compress: true });
