@@ -132,6 +132,21 @@ section.block { padding: 16px 20px 0; }
 }
 .field-hint { font-size: 9px; color: var(--accent); margin-top: 2px; font-family: 'DM Mono', monospace; }
 
+.drop {
+  display: flex; align-items: center; gap: 11px; padding: 10px 12px; cursor: pointer;
+  border: 1.5px dashed var(--rule); border-radius: 7px; background: white; transition: border-color .15s, background .15s;
+}
+.drop:hover { border-color: var(--teal); background: #FBFDFC; }
+.drop.over { border-color: var(--teal); background: #E9F2F0; border-style: solid; }
+.drop.off { cursor: default; opacity: .6; }
+.drop.off:hover { border-color: var(--rule); background: white; }
+.art-thumb {
+  width: 54px; height: 54px; object-fit: contain; border-radius: 50%;
+  border: 1px solid var(--rule); background: #FBF8F4; flex-shrink: 0;
+}
+.drop-body { flex: 1; min-width: 0; }
+.drop-main { font-size: 12px; font-weight: 500; }
+.drop-sub { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
 .toggle-field {
   display: flex; align-items: center; gap: 8px; padding: 6px 8px;
   border: 1px solid var(--rule); border-radius: 5px; background: white; align-self: end;
@@ -264,6 +279,39 @@ function showToast(msg, isErr) {
   showToast._t = setTimeout(() => t.classList.remove('show'), 2800);
 }
 
+/* ---------- attachments ----------
+   Front label artwork lives in a Grist Attachments column, so it stays inside
+   the document rather than on any external host. A widget runs cross-origin,
+   so both reading and writing go through a short-lived access token.        */
+function attachmentId(v) {
+  if (Array.isArray(v) && v[0] === 'L' && v.length > 1) return v[1];
+  if (typeof v === 'number' && v > 0) return v;
+  return null;
+}
+let _tok = null;
+async function accessToken() {
+  if (_tok && Date.now() < _tok.expires) return _tok;
+  const t = await grist.docApi.getAccessToken({ readOnly: false });
+  _tok = { ...t, expires: Date.now() + Math.max(10000, (t.ttlMsecs || 60000) - 10000) };
+  return _tok;
+}
+async function attachmentSrc(id) {
+  const t = await accessToken();
+  return `${t.baseUrl}/attachments/${id}/download?auth=${encodeURIComponent(t.token)}`;
+}
+async function uploadAttachment(file) {
+  const t = await accessToken();
+  const fd = new FormData();
+  fd.append('upload', file, file.name);
+  const resp = await fetch(`${t.baseUrl}/attachments?auth=${encodeURIComponent(t.token)}`, {
+    method: 'POST', body: fd,
+  });
+  if (!resp.ok) throw new Error('upload failed: HTTP ' + resp.status);
+  const ids = await resp.json();
+  if (!Array.isArray(ids) || !ids.length) throw new Error('no attachment id returned');
+  return ids[0];
+}
+
 /* ---------- field spec ----------
    One declarative list drives the whole detail pane. `cands` is tried in
    order against the live Customers table, so renaming a column in Grist
@@ -304,6 +352,7 @@ const FIELDS = [
     options: ['Squirrely Stash logo', 'Customer logo', 'No front label'] },
   { key: 'backStyle', cands: ['Label_Back_Style', 'Back_Label_Style'],  label: 'Back of spool',   type: 'choice', block: 'labels',
     options: ['Colorway name', 'Custom — see notes'] },
+  { key: 'frontArt',  cands: ['Front_Logo', 'Logo', 'Front_Label_Art'], label: 'Front label artwork', type: 'attach', block: 'labels', wide: true },
   { key: 'labelNotes',cands: ['Label_Notes'],                           label: 'Label notes',     type: 'textarea', block: 'labels', wide: true },
 
   // shipping
@@ -539,6 +588,22 @@ function fieldHtml(f) {
   const dis = missing ? 'disabled' : '';
   const hint = missing ? `<div class="field-hint">add column ${esc(f.cands[0])}</div>` : '';
 
+  if (f.type === 'attach') {
+    const id = attachmentId(v);
+    return `<div class="field wide ${missing ? 'missing' : ''}">
+      <label>${esc(f.label)}</label>
+      <div class="drop ${missing ? 'off' : ''}" id="artDrop">
+        ${id ? `<img class="art-thumb" id="artThumb" alt="front label artwork">` : ''}
+        <div class="drop-body">
+          <div class="drop-main">${id ? 'Artwork attached' : 'Drop an image here, or click to choose'}</div>
+          <div class="drop-sub">${missing ? 'Add an Attachments column named Front_Logo to Customers'
+            : id ? 'PNG with transparency works best. Click to replace.' : 'PNG or JPG'}</div>
+        </div>
+        ${id && !missing ? `<button class="btn tiny" id="artClear" type="button">Remove</button>` : ''}
+        <input type="file" id="artFile" accept="image/*" hidden ${missing ? 'disabled' : ''}>
+      </div>
+      ${hint}</div>`;
+  }
   if (f.type === 'toggle') {
     return `<div class="field ${f.wide ? 'wide' : ''}">
       <label>&nbsp;</label>
@@ -683,6 +748,54 @@ function bindDetail() {
     inp.addEventListener(inp.tagName === 'SELECT' || inp.type === 'checkbox' ? 'change' : 'input', handler);
   });
 
+  const drop = document.getElementById('artDrop');
+  const fileIn = document.getElementById('artFile');
+  if (drop && fileIn && !drop.classList.contains('off')) {
+    const take = async (file) => {
+      if (!file || !/^image\//.test(file.type)) { showToast('That is not an image file.', true); return; }
+      drop.querySelector('.drop-main').textContent = 'Uploading...';
+      try {
+        const id = await uploadAttachment(file);
+        // Written straight away rather than held for Save: an upload that
+        // vanished because you navigated away would be baffling.
+        await grist.docApi.applyUserActions([['UpdateRecord', 'Customers', S.selectedId,
+          { [S.cols.frontArt]: ['L', id] }]]);
+        showToast('Artwork attached.');
+        await loadAll();
+      } catch (e) {
+        console.error(e);
+        showToast('Upload failed — widget access must be Full document. ' + e.message, true);
+        renderDetail();
+      }
+    };
+    drop.addEventListener('click', e => { if (e.target.id !== 'artClear') fileIn.click(); });
+    fileIn.addEventListener('change', () => take(fileIn.files[0]));
+    ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
+      e.preventDefault(); drop.classList.add('over');
+    }));
+    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
+      e.preventDefault(); drop.classList.remove('over');
+    }));
+    drop.addEventListener('drop', e => take(e.dataTransfer.files[0]));
+    const clear = document.getElementById('artClear');
+    if (clear) clear.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm('Remove this artwork?')) return;
+      try {
+        await grist.docApi.applyUserActions([['UpdateRecord', 'Customers', S.selectedId,
+          { [S.cols.frontArt]: null }]]);
+        showToast('Artwork removed.');
+        await loadAll();
+      } catch (err) { console.error(err); showToast('Could not remove.', true); }
+    });
+    const thumb = document.getElementById('artThumb');
+    if (thumb) {
+      const id = attachmentId(val('frontArt'));
+      if (id) attachmentSrc(id).then(src => { thumb.src = src; })
+        .catch(e => console.warn('thumbnail failed', e));
+    }
+  }
+
   document.querySelectorAll('[data-pfield]').forEach(inp => {
     inp.addEventListener('input', () => {
       const key = Number(inp.closest('tr').dataset.pkey);
@@ -747,6 +860,7 @@ async function save() {
     const col = S.cols[key];
     if (!col) return;
     const spec = FIELDS.find(f => f.key === key);
+    if (spec && spec.type === 'attach') return;   // written immediately on upload
     let v = S.dirty[key];
     if (spec && spec.type === 'toggle') v = !!v;
     else if (typeof v === 'string') v = v.trim();
