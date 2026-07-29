@@ -156,6 +156,7 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="tabs">
   <div class="tab active" data-mode="order">Order batch</div>
   <div class="tab" data-mode="store">Store listings</div>
+  <div class="tab" data-mode="front">Front labels</div>
 </div>
 
 <div class="pane" id="pane"><div class="empty-note">Loading...</div></div>
@@ -209,6 +210,12 @@ const RING_SPEC = {
 const RING_RADIUS_RATIO = 0.42;
 const RING_FONT_RATIO = 0.058;   // of diameter, when no Ring_Font_Size_Pt is set
 const METRES_PER_YARD = 0.9144;
+
+/* Front labels: one fixed logo per customer, no variable data. Images are
+   fetched at runtime from the widgets repo (githack sends CORS headers, so the
+   fetch works and jsPDF can embed the result). A Front_Logo_URL on the customer
+   overrides the convention.                                                   */
+const LOGO_BASE = 'https://raw.githack.com/rocksrdone/squirrely-widgets/main/logos/';
 
 /* Helvetica-Bold is a PDF base-14 font: no download, cannot fail to load, and
    renders identically everywhere. OLSansserif3-Bold is a Helvetica-class
@@ -288,6 +295,8 @@ const S = {
   storeQtyDefault: 6,
   startAt: {},          // group key -> first label position on the sheet
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
+  frontCust: null, frontStock: '', frontQty: 48, frontStart: 1,
+  frontFit: '', frontScale: '', frontImg: null,
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
@@ -352,6 +361,9 @@ async function loadAll() {
     front: findColumn(custT, ['Label_Front_Logo', 'Front_Label_Logo']),
     back: findColumn(custT, ['Label_Back_Style', 'Back_Label_Style']),
     notes: findColumn(custT, ['Label_Notes']),
+    logoUrl: findColumn(custT, ['Front_Logo_URL', 'Logo_URL']),
+    logoFit: findColumn(custT, ['Front_Logo_Fit', 'Logo_Fit']),
+    logoScale: findColumn(custT, ['Front_Logo_Scale', 'Logo_Scale']),
   };
   if (!cc.front || !cc.back) problems.push({ title: 'Label preferences not set up on Customers',
     body: 'Add <strong>Label_Front_Logo</strong> and <strong>Label_Back_Style</strong> to Customers so this batch knows which front logo to pull and whether the back is a custom design.' });
@@ -365,6 +377,9 @@ async function loadAll() {
       front: cc.front ? columnAsArray(custT, cc.front)[i] || '' : '',
       back: cc.back ? columnAsArray(custT, cc.back)[i] || '' : '',
       notes: cc.notes ? columnAsArray(custT, cc.notes)[i] || '' : '',
+      logoUrl: cc.logoUrl ? String(columnAsArray(custT, cc.logoUrl)[i] || '').trim() : '',
+      logoFit: cc.logoFit ? String(columnAsArray(custT, cc.logoFit)[i] || '').trim() : '',
+      logoScale: cc.logoScale ? Number(columnAsArray(custT, cc.logoScale)[i]) || null : null,
     };
     S.customers[id] = o;
     if (o.name) S.custByName[normalize(o.name)] = o;
@@ -564,7 +579,8 @@ function groupRows(rows) {
 /* ---------- render ---------- */
 function render() {
   if (!S.ready) return;
-  document.getElementById('pane').innerHTML = S.mode === 'order' ? orderPaneHtml() : storePaneHtml();
+  document.getElementById('pane').innerHTML =
+    S.mode === 'order' ? orderPaneHtml() : S.mode === 'front' ? frontPaneHtml() : storePaneHtml();
   bindPane();
   updateFooter();
 }
@@ -807,6 +823,30 @@ function bindPane() {
     catch (e) { showToast('Clipboard blocked here — use Download CSV.', true); }
   }));
 
+  const fc = document.getElementById('fCust');
+  if (fc) fc.addEventListener('change', () => {
+    S.frontCust = S.customers[Number(fc.value)] || null;
+    S.frontFit = ''; S.frontScale = ''; render();
+  });
+  ['fStock:frontStock', 'fQty:frontQty', 'fStart:frontStart', 'fFit:frontFit', 'fScale:frontScale']
+    .forEach(pair => {
+      const [id, key] = pair.split(':');
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+        S[key] = el.value;
+        const pos = el.selectionStart; render();
+        const again = document.getElementById(id);
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+      });
+    });
+  const fp = document.getElementById('fPdf');
+  if (fp) fp.addEventListener('click', async () => {
+    fp.disabled = true; fp.textContent = 'Building...';
+    try { await buildFrontPdf(); } catch (e) { console.error(e); showToast('PDF failed — see console.', true); }
+    fp.disabled = false; fp.textContent = 'Download PDF';
+  });
+
   const sd = document.getElementById('storeDefault');
   if (sd) sd.addEventListener('input', () => { S.storeQtyDefault = sd.value; });
   const ad = document.getElementById('applyDefault');
@@ -823,6 +863,7 @@ function bindPane() {
 }
 
 function allGroups() {
+  if (S.mode === 'front') return [];
   return groupRows(currentRows());
 }
 function findGroup(key) { return allGroups().find(g => g.key === key) || null; }
@@ -1144,6 +1185,175 @@ async function buildPdf(group) {
   if (shrunk.size) msg += ` — ${shrunk.size} name${shrunk.size === 1 ? '' : 's'} shrunk to fit (${[...shrunk].slice(0, 2).join(', ')}${shrunk.size > 2 ? '...' : ''})`;
   if (missingArt.length) msg += ` — no ring spec for ${missingArt.join(', ')}, names only`;
   showToast(msg + '.', missingArt.length > 0);
+}
+
+/* ---------- front labels ----------
+   A logo sheet is one customer, one image, N identical labels. No merge data,
+   which is exactly why fronts never appear in the CSV. Bleed matters here in a
+   way it never did for the back: a solid image must overrun the die cut or a
+   hair of misregistration leaves a white crescent.                            */
+
+const logoCache = {};
+function logoUrlFor(cust) {
+  if (!cust) return '';
+  const raw = cust.logoUrl || (cust.code ? LOGO_BASE + cust.code.toUpperCase() + '.png' : '');
+  if (!raw) return '';
+  return /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+}
+async function loadLogo(cust) {
+  const url = logoUrlFor(cust);
+  if (!url) return null;
+  if (url in logoCache) return logoCache[url];
+  try {
+    const resp = await fetch(url, { cache: 'no-cache' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result); fr.onerror = () => rej(new Error('read failed'));
+      fr.readAsDataURL(blob);
+    });
+    const dims = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight });
+      im.onerror = () => rej(new Error('decode failed'));
+      im.src = dataUrl;
+    });
+    logoCache[url] = { dataUrl, ...dims, url };
+  } catch (e) {
+    console.warn('logo load failed', url, e);
+    logoCache[url] = null;
+  }
+  return logoCache[url];
+}
+
+/* Bleed can never exceed half the gap between die cuts, or a label's artwork
+   prints onto its neighbour. Every sheet is clipped to this radius regardless
+   of what Bleed_In says.                                                      */
+function safeBleed(tpl, g) {
+  const gap = Math.min(g.pitchX, g.pitchY) - g.dia;
+  const cap = Math.max(0, gap / 2);
+  const want = Number(tpl && tpl.bleed) > 0 ? Number(tpl.bleed) : cap;
+  return Math.min(want, cap);
+}
+
+function frontFit() { return S.frontFit || (S.frontCust && S.frontCust.logoFit) || 'Cover'; }
+function frontScale(g, tpl) {
+  const v = Number(S.frontScale) || (S.frontCust && S.frontCust.logoScale) || 0;
+  if (v > 0) return v;
+  // Cover defaults out to the bleed edge; contain sits comfortably inside.
+  return /contain/i.test(frontFit()) ? 0.85 : (g.dia + 2 * safeBleed(tpl, g)) / g.dia;
+}
+
+function frontPaneHtml() {
+  const custs = Object.values(S.customers)
+    .filter(c => c.name)
+    .sort((a, b) => (b.front && /customer/i.test(b.front) ? 1 : 0) - (a.front && /customer/i.test(a.front) ? 1 : 0)
+      || String(a.name).localeCompare(String(b.name)));
+  const tpls = S.templates;
+  const tpl = tpls.find(t => t.code === S.frontStock) || tpls[0] || null;
+  const g = tpl ? pdfGeometry(tpl) : { ok: false, missing: ['a Label_Templates row'] };
+  const c = S.frontCust;
+  const url = logoUrlFor(c);
+  const sb = g.ok ? safeBleed(tpl, g) : 0;
+  const sc = g.ok ? frontScale(g, tpl) : 0;
+  const over = g.ok ? (sc * g.dia - g.dia) / 2 : 0;
+
+  return `<div class="pick-box">
+      <div class="pick-row" style="gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <label style="font-size:11px;color:var(--mid)">Customer<br>
+          <select id="fCust" style="min-width:190px;padding:5px 7px;border:1px solid var(--rule);border-radius:5px;font-size:12px;margin-top:3px">
+            <option value="">— pick —</option>
+            ${custs.map(x => `<option value="${x.id}" ${c && c.id === x.id ? 'selected' : ''}>${esc(x.name)}${x.code ? ' (' + esc(x.code) + ')' : ''}${/customer/i.test(x.front || '') ? ' \u2022' : ''}</option>`).join('')}
+          </select></label>
+        <label style="font-size:11px;color:var(--mid)">Sheet<br>
+          <select id="fStock" style="padding:5px 7px;border:1px solid var(--rule);border-radius:5px;font-size:12px;margin-top:3px">
+            ${tpls.map(t => `<option value="${esc(t.code)}" ${tpl && t.code === tpl.code ? 'selected' : ''}>${esc(t.code)}</option>`).join('')}
+          </select></label>
+        <label style="font-size:11px;color:var(--mid)">Labels<br>
+          <input class="qty-input" id="fQty" value="${esc(S.frontQty)}" style="margin-top:3px"></label>
+        <label style="font-size:11px;color:var(--mid)">Start at<br>
+          <input class="qty-input" id="fStart" value="${esc(S.frontStart)}" style="margin-top:3px"></label>
+        <label style="font-size:11px;color:var(--mid)">Fit<br>
+          <select id="fFit" style="padding:5px 7px;border:1px solid var(--rule);border-radius:5px;font-size:12px;margin-top:3px">
+            <option value="Cover" ${/cover/i.test(frontFit()) ? 'selected' : ''}>Cover — solid image, bleeds past cut</option>
+            <option value="Contain" ${/contain/i.test(frontFit()) ? 'selected' : ''}>Contain — whole logo inside</option>
+          </select></label>
+        <label style="font-size:11px;color:var(--mid)">Size \u00d7 dia<br>
+          <input class="qty-input" id="fScale" value="${esc(S.frontScale)}" placeholder="${sc ? sc.toFixed(3) : ''}" style="margin-top:3px"></label>
+      </div>
+    </div>
+
+    ${!c ? '<div class="empty-note">Pick a customer to load their logo.</div>' : `
+      <div class="profile">
+        <div class="pf"><div class="pf-label">Logo file</div>
+          <div class="pf-value ${url ? '' : 'dim'}" style="font-family:'DM Mono',monospace;font-size:11px">${esc(url || 'no URL and no code')}</div></div>
+        <div class="pf"><div class="pf-label">Front setting</div>
+          <div class="pf-value ${c.front ? '' : 'dim'}">${esc(c.front || 'not set')}</div></div>
+      </div>
+      ${g.ok ? `<div class="alert" style="background:#E9F2F0;border-color:#B9D8D2;color:#245F55">
+        Artwork drawn at <strong>${(sc * g.dia).toFixed(3)}"</strong> across a <strong>${g.dia}"</strong> label —
+        ${over > 0.0005 ? `overrunning the cut by <strong>${over.toFixed(4)}"</strong> per side` : 'sitting inside the cut'}.
+        Every label is clipped at <strong>${(g.dia / 2 + sb).toFixed(4)}"</strong> radius, the most this sheet allows before
+        artwork lands on the neighbouring label.
+      </div>` : `<div class="alert"><strong>${esc(tpl ? tpl.code : 'This sheet')}</strong> is missing geometry: ${esc((g.missing || []).join(', '))}.</div>`}
+      <div class="group-foot" style="border:1px solid var(--rule);border-radius:8px;margin-top:12px">
+        <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels</div>
+        <div class="group-foot-actions">
+          <button class="btn solid" id="fPdf" ${g.ok && c && Number(S.frontQty) > 0 ? '' : 'disabled'}>Download PDF</button>
+        </div>
+      </div>`}`;
+}
+
+async function buildFrontPdf() {
+  const tpl = S.templates.find(t => t.code === S.frontStock) || S.templates[0];
+  const g = pdfGeometry(tpl);
+  const c = S.frontCust;
+  if (!g.ok || !c) return;
+  const logo = await loadLogo(c);
+  if (!logo) { showToast('Could not load ' + (logoUrlFor(c) || 'the logo') + ' — check the file exists and the URL is reachable.', true); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'in', format: 'letter', compress: true });
+  const perSheet = g.cols * g.rows;
+  const qty = Math.max(1, Number(S.frontQty) || 1);
+  const startAt = Math.max(1, Math.min(perSheet, Number(S.frontStart) || 1));
+  const sb = safeBleed(tpl, g);
+  const clipR = g.dia / 2 + sb;
+  const target = frontScale(g, tpl) * g.dia;
+  const contain = /contain/i.test(frontFit());
+  const ar = logo.w / logo.h;
+  // contain fits the whole mark inside the target circle; cover fills it.
+  let dw, dh;
+  if (contain) { if (ar >= 1) { dw = target; dh = target / ar; } else { dh = target; dw = target * ar; } }
+  else { if (ar >= 1) { dh = target; dw = target * ar; } else { dw = target; dh = target / ar; } }
+  const canClip = typeof doc.clip === 'function' && typeof doc.discardPath === 'function';
+
+  let slot = startAt - 1;
+  for (let i = 0; i < qty; i++) {
+    if (i > 0 && slot === 0) doc.addPage();
+    const col = slot % g.cols, row = Math.floor(slot / g.cols);
+    const cx = (g.left + col * g.pitchX + g.dia / 2) / g.scaleX;
+    const cy = (g.top + row * g.pitchY + g.dia / 2) / g.scaleY;
+    if (canClip) {
+      doc.saveGraphicsState();
+      doc.circle(cx, cy, clipR, null);
+      doc.clip(); doc.discardPath();
+    }
+    doc.addImage(logo.dataUrl, cx - dw / 2, cy - dh / 2, dw, dh, undefined, 'FAST');
+    if (canClip) doc.restoreGraphicsState();
+    if (S.proof) {
+      doc.setDrawColor(200); doc.setLineWidth(0.005);
+      doc.circle(cx, cy, g.dia / 2, 'S');
+    }
+    slot = (slot + 1) % perSheet;
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  doc.save(`front-labels_${String(c.code || c.name).replace(/[^A-Za-z0-9_-]/g, '')}_${tpl.code}_${stamp}.pdf`);
+  const sheets = Math.ceil((qty + startAt - 1) / perSheet);
+  showToast(`${qty} front labels over ${sheets} sheet${sheets === 1 ? '' : 's'}` +
+    (canClip ? '' : ' — clipping unavailable in this browser, artwork not trimmed'));
 }
 
 /* ---------- CSV ---------- */
