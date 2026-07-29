@@ -454,6 +454,8 @@ async function loadTemplates(problems) {
     fontPt: findColumn(t, ['Name_Font_Size_Pt', 'Font_Size_Pt']),
     ringPt: findColumn(t, ['Ring_Font_Size_Pt']),
     ringRatio: findColumn(t, ['Ring_Radius_Ratio']),
+    scaleX: findColumn(t, ['Scale_X', 'X_Scale']),
+    scaleY: findColumn(t, ['Scale_Y', 'Y_Scale', 'Feed_Scale']),
   };
   if (!c.code) {
     problems.push({ title: 'Label_Templates has no stock-code column',
@@ -485,6 +487,8 @@ async function loadTemplates(problems) {
       fontPt: c.fontPt ? Number(columnAsArray(t, c.fontPt)[i]) || null : null,
       ringPt: c.ringPt ? Number(columnAsArray(t, c.ringPt)[i]) || null : null,
       ringRatio: c.ringRatio ? Number(columnAsArray(t, c.ringRatio)[i]) || null : null,
+      scaleX: c.scaleX ? Number(columnAsArray(t, c.scaleX)[i]) || null : null,
+      scaleY: c.scaleY ? Number(columnAsArray(t, c.scaleY)[i]) || null : null,
     };
     S.templates.push(tpl);
     fibers.forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = tpl; });
@@ -945,6 +949,13 @@ function pdfGeometry(tpl) {
     fontPt: Number(tpl.fontPt) > 0 ? Number(tpl.fontPt) : 7.5,
     ringPt: Number(tpl.ringPt) > 0 ? Number(tpl.ringPt) : Number(tpl.dia) * 72 * RING_FONT_RATIO,
     ringRatio: Number(tpl.ringRatio) > 0 ? Number(tpl.ringRatio) : RING_RADIUS_RATIO,
+    /* Printer feed correction. A printer whose rollers run 0.5% large stretches
+       everything down the page — fine at row 1, worst at the last row. Scale_Y
+       is measured/nominal, so we pre-shrink by dividing. Horizontal is usually
+       exact because the carriage places it optically, but Scale_X is here for
+       the printer where it isn't.                                            */
+    scaleX: Number(tpl.scaleX) > 0 ? Number(tpl.scaleX) : 1,
+    scaleY: Number(tpl.scaleY) > 0 ? Number(tpl.scaleY) : 1,
   };
 }
 
@@ -1051,13 +1062,14 @@ async function buildPdf(group) {
     doc.setFontSize(6); doc.setTextColor(120);
     doc.setFont(NAME_FONT[0], 'normal');
     [[0.5, 0.5], [8.0, 0.5], [0.5, 10.5], [8.0, 10.5]].forEach(([mx, my]) => {
-      doc.line(mx - 0.15, my, mx + 0.15, my);
-      doc.line(mx, my - 0.15, mx, my + 0.15);
-      doc.text(`${mx}" , ${my}"`, mx, my - 0.22, { align: 'center' });
+      const px = mx / g.scaleX, py = my / g.scaleY;
+      doc.line(px - 0.15, py, px + 0.15, py);
+      doc.line(px, py - 0.15, px, py + 0.15);
+      doc.text(`${mx}" , ${my}"`, px, py - 0.22, { align: 'center' });
     });
     doc.setFontSize(7);
-    doc.text('Measure paper edge to cross centre. Short by X? Add X to that margin.',
-      4.25, 0.22, { align: 'center' });
+    doc.text('Edge to cross = offset (fix margins). Cross to cross should be 7.500" across, 10.000" down (fix Scale_X / Scale_Y).',
+      4.25 / g.scaleX, 0.22 / g.scaleY, { align: 'center' });
     doc.setTextColor(0);
   }
 
@@ -1067,8 +1079,8 @@ async function buildPdf(group) {
     if (idx > 0 && slot === 0) doc.addPage();
     const col = slot % g.cols;
     const row = Math.floor(slot / g.cols);
-    const cx = g.left + col * g.pitchX + g.dia / 2;
-    const cy = g.top + row * g.pitchY + g.dia / 2;
+    const cx = (g.left + col * g.pitchX + g.dia / 2) / g.scaleX;
+    const cy = (g.top + row * g.pitchY + g.dia / 2) / g.scaleY;
 
     if (proof) {
       doc.setDrawColor(200); doc.setLineWidth(0.005);
@@ -1105,8 +1117,8 @@ async function buildPdf(group) {
     while (slot !== 0) {
       const col = slot % g.cols;
       const row = Math.floor(slot / g.cols);
-      const cx = g.left + col * g.pitchX + g.dia / 2;
-      const cy = g.top + row * g.pitchY + g.dia / 2;
+      const cx = (g.left + col * g.pitchX + g.dia / 2) / g.scaleX;
+      const cy = (g.top + row * g.pitchY + g.dia / 2) / g.scaleY;
       if (proof) {
         doc.setDrawColor(200); doc.setLineWidth(0.005);
         doc.circle(cx, cy, g.dia / 2, 'S');
