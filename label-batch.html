@@ -298,6 +298,7 @@ const S = {
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
   frontCust: null, frontStock: '', frontQty: 48, frontStart: 1,
   frontFit: '', frontScale: '', frontImg: null,
+  labelSettings: [], clsCols: null,
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
@@ -420,6 +421,7 @@ async function loadAll() {
   });
 
   await loadTemplates(problems);
+  await loadLabelSettings();
 
   try {
     const lotsT = await grist.docApi.fetchTable('Production_Lots');
@@ -511,6 +513,40 @@ async function loadTemplates(problems) {
     S.templates.push(tpl);
     fibers.forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = tpl; });
   });
+}
+
+/* Fit and size are remembered per customer AND per sheet: a mark that reads
+   well at 1.25" often needs different treatment at 1", so one setting on the
+   customer isn't enough. Missing table just means nothing is remembered. */
+async function loadLabelSettings() {
+  S.labelSettings = []; S.clsCols = null;
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Label_Settings');
+    const c = {
+      cust: findColumn(t, ['Customer', 'Customer_ID']),
+      stock: findColumn(t, ['Stock_Code', 'Label_Stock', 'Code']),
+      fit: findColumn(t, ['Fit', 'Logo_Fit', 'Front_Logo_Fit']),
+      scale: findColumn(t, ['Scale', 'Logo_Scale', 'Front_Logo_Scale']),
+    };
+    if (!c.cust || !c.stock) return;
+    S.clsCols = c;
+    (t.id || []).forEach((id, i) => {
+      S.labelSettings.push({
+        id,
+        custId: getRefId(columnAsArray(t, c.cust)[i]),
+        stock: normalize(columnAsArray(t, c.stock)[i]),
+        fit: c.fit ? String(columnAsArray(t, c.fit)[i] || '') : '',
+        scale: c.scale ? Number(columnAsArray(t, c.scale)[i]) || 0 : 0,
+      });
+    });
+  } catch (e) {
+    // table absent — fit and size fall back to the customer, then to defaults
+  }
+}
+function savedSetting() {
+  if (!S.frontCust || !S.frontStock) return null;
+  return S.labelSettings.find(r => r.custId === S.frontCust.id
+    && r.stock === normalize(S.frontStock)) || null;
 }
 
 function setBanner(items) {
@@ -838,11 +874,38 @@ function bindPane() {
       if (!el) return;
       el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
         S[key] = el.value;
+        // A different sheet has its own remembered settings, so drop the
+        // session overrides and let them load.
+        if (id === 'fStock') { S.frontFit = ''; S.frontScale = ''; }
         const pos = el.selectionStart; render();
         const again = document.getElementById(id);
         if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
       });
     });
+  const fs = document.getElementById('fSave');
+  if (fs) fs.addEventListener('click', async () => {
+    const t = S.templates.find(x => x.code === S.frontStock) || S.templates[0];
+    const gg = pdfGeometry(t);
+    if (!gg.ok || !S.frontCust || !S.clsCols) return;
+    const cols = S.clsCols;
+    const fields = {};
+    fields[cols.stock] = S.frontStock;
+    if (cols.fit) fields[cols.fit] = frontFit();
+    if (cols.scale) fields[cols.scale] = Number(frontScale(gg, t).toFixed(4));
+    const ex = savedSetting();
+    try {
+      if (ex) await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Label_Settings', ex.id, fields]]);
+      else {
+        fields[cols.cust] = S.frontCust.id;
+        await grist.docApi.applyUserActions([['AddRecord', 'Customer_Label_Settings', null, fields]]);
+      }
+      S.frontFit = ''; S.frontScale = '';   // let the saved values take over
+      await loadLabelSettings();
+      render();
+      showToast('Remembered for ' + (S.frontCust.code || S.frontCust.name) + ' on ' + S.frontStock + '.');
+    } catch (e) { console.error(e); showToast('Could not save — needs Full document access.', true); }
+  });
+
   const fp = document.getElementById('fPdf');
   if (fp) fp.addEventListener('click', async () => {
     fp.disabled = true; fp.textContent = 'Building...';
@@ -1268,9 +1331,17 @@ function safeBleed(tpl, g) {
   return Math.min(want, cap);
 }
 
-function frontFit() { return S.frontFit || (S.frontCust && S.frontCust.logoFit) || 'Cover'; }
+// session override -> saved for this customer+sheet -> customer default -> computed
+function frontFit() {
+  if (S.frontFit) return S.frontFit;
+  const sv = savedSetting();
+  if (sv && sv.fit) return sv.fit;
+  return (S.frontCust && S.frontCust.logoFit) || 'Cover';
+}
 function frontScale(g, tpl) {
-  const v = Number(S.frontScale) || (S.frontCust && S.frontCust.logoScale) || 0;
+  let v = Number(S.frontScale) || 0;
+  if (!v) { const sv = savedSetting(); if (sv && sv.scale > 0) v = sv.scale; }
+  if (!v) v = (S.frontCust && S.frontCust.logoScale) || 0;
   if (v > 0) return v;
   // Cover defaults out to the bleed edge; contain sits comfortably inside.
   return /contain/i.test(frontFit()) ? 0.85 : (g.dia + 2 * safeBleed(tpl, g)) / g.dia;
@@ -1286,6 +1357,7 @@ function frontPaneHtml() {
   const g = tpl ? pdfGeometry(tpl) : { ok: false, missing: ['a Label_Templates row'] };
   const c = S.frontCust;
   const src = logoSourceLabel(c);
+  const sv = savedSetting();
   const sb = g.ok ? safeBleed(tpl, g) : 0;
   const sc = g.ok ? frontScale(g, tpl) : 0;
   const over = g.ok ? (sc * g.dia - g.dia) / 2 : 0;
@@ -1330,7 +1402,12 @@ function frontPaneHtml() {
       </div>` : `<div class="alert"><strong>${esc(tpl ? tpl.code : 'This sheet')}</strong> is missing geometry: ${esc((g.missing || []).join(', '))}.</div>`}
       <div class="group-foot" style="border:1px solid var(--rule);border-radius:8px;margin-top:12px">
         <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels</div>
+        <div style="font-size:10.5px;color:var(--mid)">${
+          !S.clsCols ? 'Add a <b>Customer_Label_Settings</b> table to remember fit per sheet'
+          : sv ? `remembered for ${esc(c.code || c.name)} on ${esc(S.frontStock)}`
+               : 'not yet remembered for this sheet'}</div>
         <div class="group-foot-actions">
+          ${S.clsCols ? `<button class="btn" id="fSave">${sv ? 'Update' : 'Remember'} for this sheet</button>` : ''}
           <button class="btn solid" id="fPdf" ${g.ok && c && src && Number(S.frontQty) > 0 ? '' : 'disabled'}>Download PDF</button>
         </div>
       </div>`}`;
