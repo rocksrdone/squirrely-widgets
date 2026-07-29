@@ -394,6 +394,7 @@ const S = {
   priceDeleted: [],
   orders: [],
   saving: false,
+  uploadBlocked: false,
   nextKey: 1,
 };
 
@@ -592,11 +593,15 @@ function fieldHtml(f) {
     const id = attachmentId(v);
     return `<div class="field wide ${missing ? 'missing' : ''}">
       <label>${esc(f.label)}</label>
-      <div class="drop ${missing ? 'off' : ''}" id="artDrop">
+      <div class="drop ${missing || S.uploadBlocked ? 'off' : ''}" id="artDrop">
         ${id ? `<img class="art-thumb" id="artThumb" alt="front label artwork">` : ''}
         <div class="drop-body">
-          <div class="drop-main">${id ? 'Artwork attached' : 'Drop an image here, or click to choose'}</div>
-          <div class="drop-sub">${missing ? 'Add an Attachments column named Front_Logo to Customers'
+          <div class="drop-main">${id ? 'Artwork attached'
+            : S.uploadBlocked ? 'Attach from the Customers table'
+            : 'Drop an image here, or click to choose'}</div>
+          <div class="drop-sub">${
+            missing ? 'Add an Attachments column named Front_Logo to Customers'
+            : S.uploadBlocked ? 'Open the Customers table, click this customer\u2019s Front Logo cell, and drop the file there. It will show up here.'
             : id ? 'PNG with transparency works best. Click to replace.' : 'PNG or JPG'}</div>
         </div>
         ${id && !missing ? `<button class="btn tiny" id="artClear" type="button">Remove</button>` : ''}
@@ -750,7 +755,7 @@ function bindDetail() {
 
   const drop = document.getElementById('artDrop');
   const fileIn = document.getElementById('artFile');
-  if (drop && fileIn && !drop.classList.contains('off')) {
+  if (drop && fileIn && !drop.classList.contains('off') && !S.uploadBlocked) {
     const take = async (file) => {
       if (!file || !/^image\//.test(file.type)) { showToast('That is not an image file.', true); return; }
       drop.querySelector('.drop-main').textContent = 'Uploading...';
@@ -764,7 +769,15 @@ function bindDetail() {
         await loadAll();
       } catch (e) {
         console.error(e);
-        showToast('Upload failed — widget access must be Full document. ' + e.message, true);
+        // A TypeError here is the browser blocking the request before it left —
+        // Grist does not accept cross-origin uploads from a widget iframe.
+        // Reading attachments is unaffected, so the thumbnail and the label
+        // PDF still work once the file is attached from the table itself.
+        const blocked = (e instanceof TypeError) || /failed to fetch|networkerror/i.test(e.message || '');
+        S.uploadBlocked = blocked;
+        showToast(blocked
+          ? 'Grist blocks uploads from widgets — attach it on the Customers table instead (see below).'
+          : 'Upload failed: ' + e.message, true);
         renderDetail();
       }
     };
@@ -788,12 +801,14 @@ function bindDetail() {
         await loadAll();
       } catch (err) { console.error(err); showToast('Could not remove.', true); }
     });
-    const thumb = document.getElementById('artThumb');
-    if (thumb) {
-      const id = attachmentId(val('frontArt'));
-      if (id) attachmentSrc(id).then(src => { thumb.src = src; })
-        .catch(e => console.warn('thumbnail failed', e));
-    }
+  }
+
+  // Reading is unaffected by the upload restriction, so this runs regardless.
+  const thumb = document.getElementById('artThumb');
+  if (thumb) {
+    const id = attachmentId(val('frontArt'));
+    if (id) attachmentSrc(id).then(src => { thumb.src = src; })
+      .catch(e => console.warn('thumbnail failed', e));
   }
 
   document.querySelectorAll('[data-pfield]').forEach(inp => {
