@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7; --card: #FFFFFF;
+    --muted: #8B7D72; --hair: #F0EAE1;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --red: #A01830; --red-bg: #FBE0E4;
+    --amber: #7A6A1A; --amber-bg: #F5EFD4;
+    --green: #2D6A2D; --green-bg: #E0F0E0;
+    --blue: #2A5B8B; --blue-bg: #E0ECF7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+
+  .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .today { font-size: 16px; font-weight: 700; }
+  .now { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .banner {
+    background: var(--red-bg); border: 1px solid #E8B4BE; border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 10px; font-size: 12px;
+  }
+  .banner b { display: block; margin-bottom: 2px; }
+
+  /* Single column on a phone; two columns once there's room. Panels are
+     ordered by how early in the day you need them, so the phone case gets
+     the right things first without a separate layout. */
+  .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+  .panel {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 10px 12px 12px;
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--hair);
+  }
+  .panel-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+    font-weight: 700; color: var(--muted);
+  }
+  .count {
+    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 9px;
+    background: var(--hair); color: var(--muted);
+  }
+  .count.hot { background: var(--red-bg); color: var(--red); }
+  .count.warn { background: var(--amber-bg); color: var(--amber); }
+  .count.ok { background: var(--green-bg); color: var(--green); }
+
+  .empty { font-size: 12px; color: var(--muted); padding: 6px 0; }
+  .empty.good { color: var(--green); }
+
+  /* ---- clock ---- */
+  .worker-row {
+    display: flex; align-items: center; gap: 8px; padding: 7px 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .worker-row:last-child { border-bottom: none; }
+  .worker-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .worker-meta { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .on-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none;
+  }
+  .on-dot.off { background: var(--rule); }
+  .punch {
+    font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+    min-width: 68px; min-height: 34px;
+  }
+  .punch.out { background: var(--red-bg); border-color: #E8B4BE; color: var(--red); }
+  .punch.in { background: var(--green-bg); border-color: #B9DCB9; color: var(--green); }
+  .punch:disabled { opacity: .5; cursor: default; }
+  .punch:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  /* ---- generic list rows ---- */
+  .row { padding: 7px 0; border-bottom: 1px solid var(--hair); }
+  .row:last-child { border-bottom: none; }
+  .row-top { display: flex; align-items: baseline; gap: 8px; }
+  .row-main { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-side { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .row-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .tag {
+    font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 9px;
+    white-space: nowrap; display: inline-block;
+  }
+  .t-red { background: var(--red-bg); color: var(--red); }
+  .t-amber { background: var(--amber-bg); color: var(--amber); }
+  .t-green { background: var(--green-bg); color: var(--green); }
+  .t-blue { background: var(--blue-bg); color: var(--blue); }
+  .t-grey { background: var(--hair); color: var(--muted); }
+
+  /* progress bar for order completeness */
+  .bar { height: 4px; background: var(--hair); border-radius: 2px; margin-top: 5px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--teal); }
+
+  a { color: var(--teal); }
+  .setup-hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .setup-hint code { background: var(--hair); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    background: var(--ink); color: var(--paper); padding: 9px 14px; border-radius: 6px;
+    font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 50;
+    max-width: 90vw;
+  }
+  .toast.show { opacity: 1; }
+  .toast.bad { background: var(--red); }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+
+<!-- Static shell renders before Grist is touched. If the plugin API is
+     unavailable the page still shows something explanatory rather than a
+     blank white rectangle. -->
+<div class="topbar">
+  <div class="today" id="today">&nbsp;</div>
+  <div class="now" id="now"></div>
+</div>
+
+<div id="banner"></div>
+
+<div class="grid">
+  <div class="panel" id="p-clock">
+    <div class="panel-head"><span class="panel-title">On the clock</span><span class="count" id="c-clock">—</span></div>
+    <div id="b-clock"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel" id="p-alerts">
+    <div class="panel-head"><span class="panel-title">Needs attention</span><span class="count" id="c-alerts">—</span></div>
+    <div id="b-alerts"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel" id="p-orders">
+    <div class="panel-head"><span class="panel-title">Orders due</span><span class="count" id="c-orders">—</span></div>
+    <div id="b-orders"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel" id="p-dye">
+    <div class="panel-head"><span class="panel-title">Dye ageing out</span><span class="count" id="c-dye">—</span></div>
+    <div id="b-dye"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel" id="p-reorder">
+    <div class="panel-head"><span class="panel-title">Flagged to reorder</span><span class="count" id="c-reorder">—</span></div>
+    <div id="b-reorder"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   Squirrely Stash — Day Board
+   A morning glance. Deliberately says nothing about individual
+   recipes or lines: work-overview, thread-board and wind-and-box
+   already do that better. This answers "what do I need to know
+   before I start?" and nothing else.
+   ============================================================ */
+
+/* ---------- Grist helpers (same contract as the other widgets) ---------- */
+function columnAsArray(t, col) {
+  const v = t[col];
+  return Array.isArray(v) ? v : [];
+}
+function findColumn(t, candidates) {
+  const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const keys = Object.keys(t || {});
+  for (const cand of candidates) {
+    const hit = keys.find(k => norm(k) === norm(cand));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(t, tableName, spec, missing) {
+  const out = {};
+  for (const key of Object.keys(spec)) {
+    const entry = spec[key];
+    const cands = Array.isArray(entry) ? entry : entry.cands;
+    const required = Array.isArray(entry) ? true : entry.required !== false;
+    const col = findColumn(t, cands);
+    if (!col && required) missing.push(tableName + '.' + cands[0]);
+    out[key] = col;
+  }
+  return out;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  return null;
+}
+/* Every Grist string is escaped before it reaches innerHTML. A single
+   unescaped "<" in a note has broken this suite's rendering before. */
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ---------- dates ----------
+   Grist Date columns arrive as epoch SECONDS at UTC midnight. Comparing
+   those against a local Date gives off-by-one errors either side of
+   midnight, so both sides are reduced to an integer day number first. */
+function gristDate(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return new Date(v * 1000);
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+function dayNumberUTC(d) {
+  return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 86400000);
+}
+function todayDayNumber() {
+  const n = new Date();
+  return Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 86400000);
+}
+function daysUntil(v) {
+  const d = gristDate(v);
+  return d === null ? null : dayNumberUTC(d) - todayDayNumber();
+}
+function relativeDay(n) {
+  if (n === null) return '';
+  if (n === 0) return 'today';
+  if (n === 1) return 'tomorrow';
+  if (n === -1) return '1 day late';
+  if (n < 0) return Math.abs(n) + ' days late';
+  return 'in ' + n + ' days';
+}
+function fmtDate(v) {
+  const d = gristDate(v);
+  if (!d) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function fmtDuration(seconds) {
+  const m = Math.max(0, Math.floor(seconds / 60));
+  const h = Math.floor(m / 60);
+  return h > 0 ? h + 'h ' + (m % 60) + 'm' : m + 'm';
+}
+function fmtClockTime(epochSec) {
+  if (!epochSec) return '';
+  return new Date(epochSec * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/* ---------- state ---------- */
+const S = {
+  workers: [],        // { id, name, openPunch, secondsToday }
+  alerts: [],         // unacknowledged System_Alerts rows
+  backups: [],        // newest row per backup source
+  alertsTableOk: false,
+  orders: [],
+  dyeStock: [],
+  reorder: [],
+  busyWorker: null,
+};
+
+let tickTimer = null;
+
+/* ---------- shell ---------- */
+function paintHeader() {
+  const n = new Date();
+  document.getElementById('today').textContent =
+    n.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  document.getElementById('now').textContent =
+    n.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+function setBanner(title, body) {
+  document.getElementById('banner').innerHTML =
+    '<div class="banner"><b>' + esc(title) + '</b>' + esc(body) + '</div>';
+}
+function showToast(msg, bad) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (bad ? ' bad' : '');
+  setTimeout(() => { t.className = 'toast'; }, 2600);
+}
+function setCount(id, text, cls) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'count' + (cls ? ' ' + cls : '');
+}
+
+/* ============================================================
+   LOAD
+   ============================================================ */
+async function loadAll() {
+  // System_Alerts may legitimately not exist yet, and fetchTable throws on a
+  // missing table. Fetching it inside the main Promise.all would take the
+  // whole dashboard down over an optional panel, so it gets its own attempt.
+  const core = await Promise.all([
+    grist.docApi.fetchTable('Workers'),
+    grist.docApi.fetchTable('Time_Clock'),
+    grist.docApi.fetchTable('Work_Orders'),
+    grist.docApi.fetchTable('Work_Order_Lines'),
+    grist.docApi.fetchTable('Lot_Allocations'),
+    grist.docApi.fetchTable('Dyes'),
+    grist.docApi.fetchTable('Dye_Stock'),
+  ]);
+  const [workersT, clockT, woT, wolT, allocT, dyesT, stockT] = core;
+
+  let alertsT = null;
+  try {
+    alertsT = await grist.docApi.fetchTable('System_Alerts');
+  } catch (e) {
+    alertsT = null; // panel will render its own setup instructions
+  }
+
+  const missing = [];
+  const opt = cands => ({ cands, required: false });
+
+  const WRK = resolveCols(workersT, 'Workers', {
+    name: ['Name', 'Worker_Name'],
+    active: opt(['Active', 'Status']),
+  }, missing);
+  const TC = resolveCols(clockT, 'Time_Clock', {
+    worker: ['Worker'], clockIn: ['Clock_In'], clockOut: opt(['Clock_Out']),
+  }, missing);
+  const WO = resolveCols(woT, 'Work_Orders', {
+    status: ['Status'],
+    orderNumber: opt(['Order_Number']),
+    customerName: opt(['Customer_Name']),
+    dueDate: opt(['Due_Date']),
+    bump: opt(['Priority_Bump']),
+  }, missing);
+  const WOL = resolveCols(wolT, 'Work_Order_Lines', {
+    workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
+  }, missing);
+  const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
+    qty: ['Qty_Spools'], line: opt(['Work_Order_Line']),
+  }, missing);
+  const DYE = resolveCols(dyesT, 'Dyes', {
+    name: ['Dye_Name'],
+    shelfLife: opt(['Shelf_Life_days']),
+    ageSensitive: opt(['Age_Sensitive']),
+    status: opt(['Status']),
+    reorderUrl: opt(['Reorder_URL']),
+    powderLoc: opt(['Powder_Location']),
+    brand: opt(['Brand']),
+  }, missing);
+  const DS = resolveCols(stockT, 'Dye_Stock', {
+    dye: ['Dye'],
+    qty: opt(['Quantity_mL']),
+    mixed: opt(['Mixed_Date']),
+    bin: opt(['Bin_Location']),
+  }, missing);
+
+  if (missing.length) {
+    setBanner('Missing columns', missing.join(', ') + '. Check the column IDs in Grist — labels can drift from IDs.');
+  }
+
+  buildClock(workersT, WRK, clockT, TC);
+  buildAlerts(alertsT);
+  buildOrders(woT, WO, wolT, WOL, allocT, ALLOC);
+  buildDye(dyesT, DYE, stockT, DS);
+  buildReorder(dyesT, DYE);
+
+  renderAll();
+}
+
+/* ---------- on the clock ---------- */
+function buildClock(workersT, WRK, clockT, TC) {
+  const names = columnAsArray(workersT, WRK.name);
+  const activeVals = WRK.active ? columnAsArray(workersT, WRK.active) : null;
+
+  const workers = (workersT.id || []).map((id, i) => ({
+    id,
+    name: names[i],
+    // A Workers.Active toggle is respected if present; a text Status column is
+    // treated as active unless it explicitly says otherwise.
+    enabled: !activeVals ? true
+      : (typeof activeVals[i] === 'boolean' ? activeVals[i]
+        : String(activeVals[i] || 'Active').toLowerCase() !== 'inactive'),
+    openPunch: null,
+    secondsToday: 0,
+  })).filter(w => w.name && w.enabled);
+
+  const byId = {};
+  workers.forEach(w => { byId[w.id] = w; });
+
+  const startOfToday = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  (clockT.id || []).forEach((id, i) => {
+    const wid = getRefId(columnAsArray(clockT, TC.worker)[i]);
+    const w = byId[wid];
+    if (!w) return;
+    const inSec = Number(columnAsArray(clockT, TC.clockIn)[i]) || null;
+    const outRaw = TC.clockOut ? columnAsArray(clockT, TC.clockOut)[i] : null;
+    const outSec = outRaw ? Number(outRaw) : null;
+    if (!inSec) return;
+
+    if (!outSec) {
+      // Keep the most recent open punch. A stale open punch from a forgotten
+      // clock-out yesterday still counts as open — that is worth seeing, not
+      // hiding, so it gets flagged rather than filtered.
+      if (!w.openPunch || inSec > w.openPunch.clockIn) w.openPunch = { id, clockIn: inSec };
+    }
+    const from = Math.max(inSec, startOfToday);
+    const to = outSec || nowSec;
+    if (to > from) w.secondsToday += (to - from);
+  });
+
+  S.workers = workers.sort((a, b) => {
+    if (!!a.openPunch !== !!b.openPunch) return a.openPunch ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
+}
+
+function renderClock() {
+  const box = document.getElementById('b-clock');
+  if (!S.workers.length) {
+    box.innerHTML = '<div class="empty">No workers found in the Workers table.</div>';
+    setCount('c-clock', '0');
+    return;
+  }
+  const on = S.workers.filter(w => w.openPunch).length;
+  setCount('c-clock', on + ' on', on ? 'ok' : '');
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  box.innerHTML = S.workers.map(w => {
+    const open = !!w.openPunch;
+    const elapsed = open ? nowSec - w.openPunch.clockIn : 0;
+    // A punch running longer than 16 hours is almost certainly a missed
+    // clock-out rather than a very long day.
+    const stale = open && elapsed > 16 * 3600;
+    const meta = open
+      ? 'in at ' + fmtClockTime(w.openPunch.clockIn) + ' · ' + fmtDuration(elapsed)
+      : (w.secondsToday > 0 ? fmtDuration(w.secondsToday) + ' today' : 'not in today');
+    const busy = S.busyWorker === w.id;
+    return '<div class="worker-row">'
+      + '<span class="on-dot' + (open ? '' : ' off') + '"></span>'
+      + '<span class="worker-name">' + esc(w.name)
+      + (stale ? ' <span class="tag t-amber">check</span>' : '') + '</span>'
+      + '<span class="worker-meta">' + esc(meta) + '</span>'
+      + '<button class="punch ' + (open ? 'out' : 'in') + '" data-worker="' + w.id + '"'
+      + (busy ? ' disabled' : '') + '>'
+      + (busy ? '…' : (open ? 'Clock out' : 'Clock in')) + '</button>'
+      + '</div>';
+  }).join('');
+
+  box.querySelectorAll('button[data-worker]').forEach(btn => {
+    btn.addEventListener('click', () => punch(Number(btn.getAttribute('data-worker'))));
+  });
+}
+
+async function punch(workerId) {
+  const w = S.workers.find(x => x.id === workerId);
+  if (!w || S.busyWorker) return;
+  S.busyWorker = workerId;
+  renderClock();
+  const nowSec = Math.floor(Date.now() / 1000);
+  try {
+    if (w.openPunch) {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Time_Clock', w.openPunch.id, { Clock_Out: nowSec }]
+      ]);
+      showToast(w.name + ' clocked out');
+    } else {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Time_Clock', null, { Worker: w.id, Clock_In: nowSec }]
+      ]);
+      showToast(w.name + ' clocked in');
+    }
+    S.busyWorker = null;
+    await loadAll();
+  } catch (e) {
+    console.error('Punch failed:', e);
+    S.busyWorker = null;
+    renderClock();
+    showToast('Could not save — widget needs Full document access', true);
+  }
+}
+
+/* ---------- needs attention ---------- */
+function buildAlerts(alertsT) {
+  S.alertsTableOk = !!alertsT;
+  S.alerts = [];
+  S.backups = [];
+  if (!alertsT) return;
+
+  const missing = [];
+  const opt = cands => ({ cands, required: false });
+  const SA = resolveCols(alertsT, 'System_Alerts', {
+    timestamp: opt(['Timestamp']),
+    source: opt(['Source']),
+    node: opt(['Node']),
+    message: opt(['Message']),
+    url: opt(['Execution_URL']),
+    ack: opt(['Acknowledged']),
+    level: opt(['Level']),
+  }, missing);
+
+  const rows = (alertsT.id || []).map((id, i) => ({
+    id,
+    ts: SA.timestamp ? Number(columnAsArray(alertsT, SA.timestamp)[i]) || 0 : 0,
+    source: SA.source ? String(columnAsArray(alertsT, SA.source)[i] || '') : '',
+    node: SA.node ? String(columnAsArray(alertsT, SA.node)[i] || '') : '',
+    message: SA.message ? String(columnAsArray(alertsT, SA.message)[i] || '') : '',
+    url: SA.url ? String(columnAsArray(alertsT, SA.url)[i] || '') : '',
+    ack: SA.ack ? !!columnAsArray(alertsT, SA.ack)[i] : false,
+    level: SA.level ? String(columnAsArray(alertsT, SA.level)[i] || '') : '',
+  }));
+
+  const isOk = r => /^(ok|success|done)$/i.test(r.level.trim());
+
+  S.alerts = rows.filter(r => !r.ack && !isOk(r)).sort((a, b) => b.ts - a.ts);
+
+  // Backup freshness: newest row per source mentioning "backup". This is what
+  // catches the failure an error handler structurally cannot — a workflow that
+  // never ran at all produces no error, just silence.
+  const newest = {};
+  rows.filter(r => /backup/i.test(r.source)).forEach(r => {
+    if (!newest[r.source] || r.ts > newest[r.source].ts) newest[r.source] = r;
+  });
+  S.backups = Object.keys(newest).map(k => newest[k]).sort((a, b) => a.source.localeCompare(b.source));
+}
+
+function renderAlerts() {
+  const box = document.getElementById('b-alerts');
+
+  if (!S.alertsTableOk) {
+    setCount('c-alerts', 'setup', 'warn');
+    box.innerHTML = '<div class="setup-hint">No <code>System_Alerts</code> table yet. '
+      + 'Create it with columns <code>Timestamp</code> (DateTime), <code>Source</code>, '
+      + '<code>Node</code>, <code>Message</code>, <code>Execution_URL</code> (Text), '
+      + '<code>Acknowledged</code> (Toggle), and optionally <code>Level</code> (Text) so '
+      + 'success rows can be told apart from failures.</div>';
+    return;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const parts = [];
+
+  // Backup freshness first — it is the quietest failure and the costliest.
+  S.backups.forEach(b => {
+    const ageH = b.ts ? (nowSec - b.ts) / 3600 : null;
+    const stale = ageH === null || ageH > 30;
+    parts.push('<div class="row"><div class="row-top">'
+      + '<span class="row-main">' + esc(b.source) + '</span>'
+      + '<span class="tag ' + (stale ? 't-red' : 't-green') + '">'
+      + (ageH === null ? 'never' : (ageH < 1 ? 'just now' : Math.round(ageH) + 'h ago')) + '</span>'
+      + '</div>'
+      + (stale ? '<div class="row-sub">No fresh run recorded. Check the workflow is still active.</div>' : '')
+      + '</div>');
+  });
+
+  if (!S.backups.length) {
+    parts.push('<div class="row"><div class="row-sub">No backup runs logged yet. '
+      + 'Add a success row from each backup workflow to see freshness here.</div></div>');
+  }
+
+  S.alerts.forEach(a => {
+    parts.push('<div class="row"><div class="row-top">'
+      + '<span class="row-main">' + esc(a.source || 'Unknown') + '</span>'
+      + '<span class="row-side">' + esc(a.ts ? fmtDate(a.ts) + ' ' + fmtClockTime(a.ts) : '') + '</span>'
+      + '</div>'
+      + '<div class="row-sub">' + esc(a.node ? a.node + ' — ' : '') + esc(a.message.slice(0, 160))
+      + (a.url ? ' <a href="' + esc(a.url) + '" target="_blank" rel="noopener">open</a>' : '')
+      + '</div></div>');
+  });
+
+  const n = S.alerts.length;
+  setCount('c-alerts', n ? String(n) : 'clear', n ? 'hot' : 'ok');
+  if (!n && S.backups.length && !S.backups.some(b => !b.ts || (nowSec - b.ts) / 3600 > 30)) {
+    parts.push('<div class="empty good">Nothing needs you.</div>');
+  }
+  box.innerHTML = parts.join('');
+}
+
+/* ---------- orders due ---------- */
+function buildOrders(woT, WO, wolT, WOL, allocT, ALLOC) {
+  // Boxed spools per line, so each order can show real progress rather than a
+  // line count. Same derivation the other widgets use: allocations are truth.
+  const boxedByLine = {};
+  if (ALLOC.line) {
+    (allocT.id || []).forEach((id, i) => {
+      const lineId = getRefId(columnAsArray(allocT, ALLOC.line)[i]);
+      if (!lineId) return;
+      boxedByLine[lineId] = (boxedByLine[lineId] || 0) + (Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0);
+    });
+  }
+
+  const agg = {};
+  (wolT.id || []).forEach((id, i) => {
+    const woId = getRefId(columnAsArray(wolT, WOL.workOrder)[i]);
+    if (!woId) return;
+    if (!agg[woId]) agg[woId] = { needed: 0, boxed: 0, lines: 0 };
+    agg[woId].needed += Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0;
+    agg[woId].boxed += Math.min(boxedByLine[id] || 0, Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0);
+    agg[woId].lines += 1;
+  });
+
+  const statuses = columnAsArray(woT, WO.status);
+  const orders = [];
+  (woT.id || []).forEach((id, i) => {
+    if (String(statuses[i] || '') !== 'Active') return;
+    const due = WO.dueDate ? columnAsArray(woT, WO.dueDate)[i] : null;
+    const d = daysUntil(due);
+    // Undated active orders are real work but not a scheduling signal, so they
+    // are counted in the header and left out of the list.
+    const a = agg[id] || { needed: 0, boxed: 0, lines: 0 };
+    orders.push({
+      id,
+      number: WO.orderNumber ? String(columnAsArray(woT, WO.orderNumber)[i] || '') : '',
+      customer: WO.customerName ? String(columnAsArray(woT, WO.customerName)[i] || '') : '',
+      due, days: d,
+      bump: WO.bump ? !!columnAsArray(woT, WO.bump)[i] : false,
+      needed: a.needed, boxed: a.boxed, lines: a.lines,
+      complete: a.needed > 0 && a.boxed >= a.needed,
+    });
+  });
+
+  S.orders = orders;
+}
+
+function renderOrders() {
+  const box = document.getElementById('b-orders');
+  const open = S.orders.filter(o => !o.complete);
+  // Anything past due, or landing inside a fortnight, plus every bumped order.
+  const shown = open
+    .filter(o => o.days !== null && (o.days <= 14 || o.bump))
+    .sort((a, b) => {
+      if (a.bump !== b.bump) return a.bump ? -1 : 1;
+      return (a.days === null ? 9999 : a.days) - (b.days === null ? 9999 : b.days);
+    });
+
+  const late = shown.filter(o => o.days < 0).length;
+  setCount('c-orders', late ? late + ' late' : String(shown.length), late ? 'hot' : (shown.length ? 'warn' : 'ok'));
+
+  if (!shown.length) {
+    const undated = open.filter(o => o.days === null).length;
+    box.innerHTML = '<div class="empty good">Nothing due in the next two weeks.'
+      + (undated ? ' <span style="color:var(--muted)">' + undated + ' active order'
+        + (undated === 1 ? '' : 's') + ' with no due date.</span>' : '') + '</div>';
+    return;
+  }
+
+  box.innerHTML = shown.slice(0, 12).map(o => {
+    const pct = o.needed > 0 ? Math.round(100 * o.boxed / o.needed) : 0;
+    const tagCls = o.days < 0 ? 't-red' : (o.days <= 2 ? 't-amber' : 't-grey');
+    return '<div class="row">'
+      + '<div class="row-top">'
+      + '<span class="row-main">' + (o.bump ? '<span class="tag t-blue">bumped</span> ' : '')
+      + esc(o.customer || o.number || 'Order ' + o.id) + '</span>'
+      + '<span class="tag ' + tagCls + '">' + esc(relativeDay(o.days)) + '</span>'
+      + '</div>'
+      + '<div class="row-sub">' + esc(o.number ? o.number + ' · ' : '') + esc(fmtDate(o.due))
+      + ' · ' + o.boxed + ' of ' + o.needed + ' spools boxed</div>'
+      + '<div class="bar"><span style="width:' + Math.min(100, pct) + '%"></span></div>'
+      + '</div>';
+  }).join('')
+    + (shown.length > 12 ? '<div class="row-sub" style="padding-top:6px">'
+      + (shown.length - 12) + ' more not shown.</div>' : '');
+}
+
+/* ---------- dye ageing ---------- */
+function buildDye(dyesT, DYE, stockT, DS) {
+  const dyeById = {};
+  (dyesT.id || []).forEach((id, i) => {
+    dyeById[id] = {
+      name: String(columnAsArray(dyesT, DYE.name)[i] || ''),
+      shelfLife: DYE.shelfLife ? Number(columnAsArray(dyesT, DYE.shelfLife)[i]) || 0 : 0,
+      ageSensitive: DYE.ageSensitive ? !!columnAsArray(dyesT, DYE.ageSensitive)[i] : false,
+    };
+  });
+
+  const out = [];
+  (stockT.id || []).forEach((id, i) => {
+    const dye = dyeById[getRefId(columnAsArray(stockT, DS.dye)[i])];
+    if (!dye) return;
+    const mixed = DS.mixed ? columnAsArray(stockT, DS.mixed)[i] : null;
+    // No mixed date or no shelf life means there is no expiry to compute.
+    // Guessing one would be worse than staying quiet.
+    if (!mixed || !dye.shelfLife) return;
+    const age = -daysUntil(mixed);          // days since mixing
+    if (age === null) return;
+    const daysLeft = dye.shelfLife - age;
+    const qty = DS.qty ? Number(columnAsArray(stockT, DS.qty)[i]) || 0 : 0;
+    if (qty <= 0) return;                    // an empty jar cannot go off
+    out.push({
+      id, name: dye.name, daysLeft, age, qty,
+      bin: DS.bin ? String(columnAsArray(stockT, DS.bin)[i] || '') : '',
+      ageSensitive: dye.ageSensitive,
+    });
+  });
+
+  S.dyeStock = out.filter(r => r.daysLeft <= 14).sort((a, b) => a.daysLeft - b.daysLeft);
+}
+
+function renderDye() {
+  const box = document.getElementById('b-dye');
+  const expired = S.dyeStock.filter(r => r.daysLeft < 0).length;
+  setCount('c-dye', expired ? expired + ' expired' : String(S.dyeStock.length),
+    expired ? 'hot' : (S.dyeStock.length ? 'warn' : 'ok'));
+
+  if (!S.dyeStock.length) {
+    box.innerHTML = '<div class="empty good">No mixed dye near its shelf life.</div>';
+    return;
+  }
+  box.innerHTML = S.dyeStock.slice(0, 12).map(r => {
+    const cls = r.daysLeft < 0 ? 't-red' : (r.daysLeft <= 3 ? 't-amber' : 't-grey');
+    const label = r.daysLeft < 0 ? Math.abs(r.daysLeft) + 'd over'
+      : (r.daysLeft === 0 ? 'today' : r.daysLeft + 'd left');
+    return '<div class="row"><div class="row-top">'
+      + '<span class="row-main">' + esc(r.name)
+      + (r.ageSensitive ? ' <span class="tag t-amber">age sensitive</span>' : '') + '</span>'
+      + '<span class="tag ' + cls + '">' + esc(label) + '</span>'
+      + '</div>'
+      + '<div class="row-sub">' + Math.round(r.qty) + ' mL'
+      + esc(r.bin ? ' · ' + r.bin : '') + ' · mixed ' + r.age + 'd ago</div>'
+      + '</div>';
+  }).join('');
+}
+
+/* ---------- reorder ---------- */
+function buildReorder(dyesT, DYE) {
+  if (!DYE.status) { S.reorder = []; return; }
+  const out = [];
+  (dyesT.id || []).forEach((id, i) => {
+    const st = String(columnAsArray(dyesT, DYE.status)[i] || '');
+    if (!/reorder/i.test(st)) return;
+    out.push({
+      id,
+      name: String(columnAsArray(dyesT, DYE.name)[i] || ''),
+      brand: DYE.brand ? String(columnAsArray(dyesT, DYE.brand)[i] || '') : '',
+      url: DYE.reorderUrl ? String(columnAsArray(dyesT, DYE.reorderUrl)[i] || '') : '',
+      loc: DYE.powderLoc ? String(columnAsArray(dyesT, DYE.powderLoc)[i] || '') : '',
+    });
+  });
+  S.reorder = out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderReorder() {
+  const box = document.getElementById('b-reorder');
+  setCount('c-reorder', S.reorder.length ? String(S.reorder.length) : 'none',
+    S.reorder.length ? 'warn' : 'ok');
+  if (!S.reorder.length) {
+    box.innerHTML = '<div class="setup-hint">Nothing flagged. This list is driven by '
+      + '<code>Dyes.Status</code> — set it to <code>Reordering</code> when you notice a jar '
+      + 'running low. Nothing measures powder automatically yet.</div>';
+    return;
+  }
+  box.innerHTML = S.reorder.map(r =>
+    '<div class="row"><div class="row-top">'
+    + '<span class="row-main">' + esc(r.name) + '</span>'
+    + (r.url ? '<a class="row-side" href="' + esc(r.url) + '" target="_blank" rel="noopener">order</a>' : '')
+    + '</div>'
+    + (r.brand || r.loc
+      ? '<div class="row-sub">' + esc([r.brand, r.loc].filter(Boolean).join(' · ')) + '</div>'
+      : '')
+    + '</div>').join('');
+}
+
+/* ---------- render ---------- */
+function renderAll() {
+  paintHeader();
+  renderClock();
+  renderAlerts();
+  renderOrders();
+  renderDye();
+  renderReorder();
+}
+
+/* ---------- boot ----------
+   Shell is already painted. Grist is only touched inside try/catch so a
+   plugin-API failure surfaces a banner instead of killing the script. */
+paintHeader();
+try {
+  grist.ready({ requiredAccess: 'full' });
+  loadAll().catch(e => {
+    console.error('Day board failed to load:', e);
+    const msg = (e && e.message ? e.message : String(e));
+    setBanner('Could not load', msg + ' — check the tables exist and the widget has Full document access.');
+    document.querySelectorAll('.panel [id^="b-"]').forEach(el => {
+      el.innerHTML = '<div class="empty">Not loaded.</div>';
+    });
+  });
+  // Refresh when the underlying data changes, plus a slow tick so elapsed
+  // clock times and the header time stay honest without hammering Grist.
+  grist.onRecords(() => {});
+  tickTimer = setInterval(() => { paintHeader(); renderClock(); }, 30000);
+  setInterval(() => { loadAll().catch(() => {}); }, 5 * 60 * 1000);
+} catch (e) {
+  console.error(e);
+  setBanner('Grist plugin API unavailable',
+    'The widget loaded but could not reach Grist. Reload the page; if it persists, re-add the custom widget URL.');
+}
+</script>
+</body>
+</html>
