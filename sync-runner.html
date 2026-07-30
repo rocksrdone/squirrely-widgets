@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Order Sync</title>
+<style>
+  :root {
+    --bg: #fff; --ink: #1a1a1a; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #2563eb; --good: #047857; --warn: #b45309; --goodbg: #ecfdf5; --warnbg: #fffbeb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         color: var(--ink); background: var(--bg); }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  button { font: inherit; font-weight: 600; padding: 9px 18px; border: 0; border-radius: 6px;
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { background: #9ca3af; cursor: default; }
+  .stamp { color: var(--muted); font-size: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .banner { border-radius: 6px; padding: 9px 12px; margin-bottom: 10px; font-weight: 600; }
+  .banner.good { background: var(--goodbg); color: var(--good); }
+  .banner.warn { background: var(--warnbg); color: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .stat .n { font-size: 20px; font-weight: 700; line-height: 1.1; }
+  .stat .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 2px 0; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- Static shell renders first; nothing here depends on Grist or the network. -->
+<div class="bar">
+  <button id="runBtn">Run order sync</button>
+  <span class="stamp" id="stamp">Not run yet this session</span>
+</div>
+<div id="out"></div>
+
+<script>
+/* Production webhook URL from the "Run From Dashboard" node. The workflow must be
+   ACTIVE for this to answer — the test URL only listens while you're watching the
+   canvas in n8n. */
+const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/sync-drafts';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+function list(items, emptyText) {
+  if (!items || !items.length) return `<div class="empty">${esc(emptyText)}</div>`;
+  return '<ul>' + items.map(i => `<li>${esc(i)}</li>`).join('') + '</ul>';
+}
+
+function stat(n, label) {
+  return `<div class="stat"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
+}
+
+function render(r) {
+  const c = r.counts || {};
+  const banner = r.dry_run
+    ? `<div class="banner warn">DRY RUN — nothing was written. Set DRY_RUN = false in "Diff Draft Quantities" to apply.</div>`
+    : (r.applied
+        ? `<div class="banner good">Applied ${c.lines_updated} update(s) and ${c.lines_added} new line(s) to Grist.</div>`
+        : `<div class="banner good">Everything already matched Shopify — nothing to change.</div>`);
+
+  $('out').innerHTML = banner + `
+    <div class="card">
+      <div class="grid">
+        ${stat(c.lines_updated || 0, 'Qty updated')}
+        ${stat(c.lines_added || 0, 'Lines added')}
+        ${stat(c.orders_imported || 0, 'Orders imported')}
+        ${stat(c.matched || 0, 'Drafts checked')}
+        ${stat(c.skipped_blank_sku || 0, 'Blank SKU')}
+      </div>
+      <h3>Changes</h3>
+      ${list(r.changes, 'No quantity changes.')}
+      <h3>New orders imported</h3>
+      ${list(r.imported_orders, 'No new orders.')}
+      <h3>Needs a look</h3>
+      ${list((r.notes || []).filter(n => /^(HOLD|SKIP)/.test(n)), 'Nothing flagged.')}
+    </div>`;
+}
+
+async function run() {
+  const btn = $('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  $('stamp').textContent = 'Working — this takes a few seconds';
+  $('out').innerHTML = '';
+  try {
+    const res = await fetch(WEBHOOK_URL, { method: 'GET', cache: 'no-store' });
+    if (!res.ok) throw new Error(`webhook returned ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    render(data);
+    $('stamp').textContent = 'Last run ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('out').innerHTML = `<div class="banner warn">Couldn't reach the workflow — ${esc(e.message)}</div>
+      <div class="card">Check that the n8n workflow is <strong>active</strong>, that
+      <code>${esc(WEBHOOK_URL)}</code> is the production URL from the
+      "Run From Dashboard" node, and that its CORS setting allows this page.</div>`;
+    $('stamp').textContent = 'Last attempt failed';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run order sync';
+  }
+}
+
+$('runBtn').addEventListener('click', run);
+
+// Grist is optional here — this widget reads no tables. Kept in a try/catch so a
+// plugin-API hiccup can't kill the script before the button is wired up.
+try { if (window.grist) grist.ready(); } catch (e) { console.warn('grist.ready failed', e); }
+</script>
+</body>
+</html>
