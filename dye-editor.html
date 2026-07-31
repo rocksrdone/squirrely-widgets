@@ -235,6 +235,14 @@ function showToast(msg) {
 let DYE_TYPE_CHOICES = ['Acid', 'Super Fast Acid', 'Procion MX', 'Procion MX Ice', 'Basic', 'Cochineal', 'Indigo', 'iDye Natural', 'iDye Poly', 'Conc Vinyl Sulphon', 'Silk Colors', 'Custom Mix'];
 let STATUS_CHOICES = ['Active', 'Discontinued', 'Reformulated', 'Needs Review'];
 let SOURCE_TYPE_CHOICES = ['Commercial Dye', 'Custom Color'];
+let BRAND_CHOICES = [];   // populated from Dye_Brands, then Choice settings, then existing values
+
+// Which table the brand list comes from, and how Brand is stored on Dyes.
+const BRAND_TABLE_CANDIDATES = ['Dye_Brands', 'Brands', 'Dye_Brand'];
+let dyeColTypes = {};     // Dyes colId -> declared Grist type, filled by loadColumnChoices
+let brandRows = [];       // [{id, name}] from the brands table, when one exists
+let brandTableId = null;  // actual table name found, or null
+let brandColIsRef = false; // true when Dyes.Brand is itself a Ref column
 
 // grist.docApi.applyUserActions() resolves to {actionNum, retValues, ...}, not a
 // bare array. Reading result[0] silently yields undefined, which is how new rows
@@ -259,6 +267,11 @@ async function loadColumnChoices() {
     const byColId = {};
     (cols.id || []).forEach((rowId, i) => {
       if (cols.parentId[i] !== dyesRef) return;
+      // Record the declared type of every Dyes column. Brand may be Text, Choice,
+      // or Ref:Dye_Brands, and each of those needs a different read/write path —
+      // guessing from the value alone is unreliable (a Ref reads as a bare number,
+      // which is indistinguishable from a numeric Text value).
+      dyeColTypes[cols.colId[i]] = (cols.type && cols.type[i]) || '';
       let opts = {};
       try { opts = JSON.parse(cols.widgetOptions[i] || '{}'); } catch (err) { /* not JSON */ }
       if (Array.isArray(opts.choices) && opts.choices.length) byColId[cols.colId[i]] = opts.choices;
@@ -276,6 +289,7 @@ async function loadColumnChoices() {
     DYE_TYPE_CHOICES = pick(['Dye_Type']) || DYE_TYPE_CHOICES;
     STATUS_CHOICES = pick(['Status']) || STATUS_CHOICES;
     SOURCE_TYPE_CHOICES = pick(['Dye_Source_Type']) || SOURCE_TYPE_CHOICES;
+    BRAND_CHOICES = pick(['Brand']) || BRAND_CHOICES;
   } catch (e) {
     console.warn('Could not read column choices from Grist — using built-in lists.', e);
   }
@@ -297,12 +311,65 @@ let mixDyeA = null;
 let mixDyeB = null;
 let mixRatio = 50;
 
+// Load the brand list from its own table so brands are managed in one place
+// instead of being retyped (and misspelled) on every dye. Degrades in order:
+// Dye_Brands table -> Brand column's Choice settings -> distinct values already
+// on Dyes. The field stays usable even if none of those exist.
+async function loadBrands() {
+  brandRows = [];
+  brandTableId = null;
+  for (const name of BRAND_TABLE_CANDIDATES) {
+    try {
+      const t = await grist.docApi.fetchTable(name);
+      const nameCol = findColumn(t, ['Brand_Name', 'Name', 'Brand', 'Title']);
+      if (!nameCol) continue;
+      const ids = t.id || [];
+      brandRows = ids.map((id, i) => ({ id, name: (columnAsArray(t, nameCol)[i] || '').toString() }))
+                     .filter(b => b.name);
+      brandRows.sort((a, b) => a.name.localeCompare(b.name));
+      brandTableId = name;
+      break;
+    } catch (e) { /* table not present — try the next candidate */ }
+  }
+  brandColIsRef = /^Ref(List)?:/.test(dyeColTypes['Brand'] || '');
+}
+
+// Brand may be a row id (Ref) or a plain string. Everything that displays or
+// searches brand text goes through here so the two shapes never leak out.
+function brandLabel(d) {
+  if (!d) return '';
+  const raw = d.Brand;
+  if (brandColIsRef) {
+    const id = getRefId(raw);
+    const hit = brandRows.find(b => b.id === id);
+    return hit ? hit.name : '';
+  }
+  return (raw === null || raw === undefined) ? '' : raw.toString();
+}
+
+// The full option set for the Brand dropdown, as {value, label} pairs. For a Ref
+// column the value is the row id; otherwise it is the brand name itself.
+function brandOptions() {
+  if (brandColIsRef) return brandRows.map(b => ({ value: String(b.id), label: b.name }));
+  const names = new Set();
+  brandRows.forEach(b => names.add(b.name));
+  BRAND_CHOICES.forEach(c => names.add(c));
+  allDyes.forEach(d => { const v = (d.Brand || '').toString().trim(); if (v) names.add(v); });
+  return [...names].sort((a, b) => a.localeCompare(b)).map(n => ({ value: n, label: n }));
+}
+
+function brandSource() {
+  if (brandTableId) return `from ${brandTableId}`;
+  if (BRAND_CHOICES.length) return 'from the Brand choice list';
+  return 'from existing dyes';
+}
+
 function resolvedColor(dye) {
   if (!dye) return '#888780';
   return dye.Swatch_Hex || guessColor(dye.Dye_Name);
 }
 function dyeDetailLine(d) {
-  return [d.Brand, d.Serial, d.Dye_Type].filter(Boolean).join(' · ');
+  return [brandLabel(d), d.Serial, d.Dye_Type].filter(Boolean).join(' · ');
 }
 
 async function loadAllDyes() {
@@ -318,6 +385,7 @@ async function loadAllDyes() {
     const c = {
       name: col(['Dye_Name']),
       brand: col(['Brand']),
+      brandRef: col(['Brand_Ref', 'Brand_Link']),
       serial: col(['Serial']),
       sourceType: col(['Dye_Source_Type']),
       dyeType: col(['Dye_Type']),
@@ -347,7 +415,7 @@ async function loadAllDyes() {
     allDyes = ids.map((id, i) => ({
       id,
       Dye_Name: columnAsArray(table, c.name)[i] || '',
-      Brand: columnAsArray(table, c.brand)[i] || '',
+      Brand: columnAsArray(table, c.brand)[i] ?? '',
       Serial: columnAsArray(table, c.serial)[i] || '',
       Dye_Source_Type: columnAsArray(table, c.sourceType)[i] || '',
       Dye_Type: columnAsArray(table, c.dyeType)[i] || '',
@@ -412,7 +480,7 @@ function renderDyeList() {
   let list = allDyes;
   if (listFilter === 'missing') list = list.filter(d => !d.Swatch_Hex);
   if (listFilter === 'custom') list = list.filter(d => d.Dye_Source_Type === 'Custom Color');
-  if (q) list = list.filter(d => normalize(d.Dye_Name).includes(q) || normalize(d.Brand).includes(q));
+  if (q) list = list.filter(d => normalize(d.Dye_Name).includes(q) || normalize(brandLabel(d)).includes(q));
 
   if (!list.length) {
     box.innerHTML = `<div class="list-empty">No dyes match.</div>`;
@@ -423,7 +491,7 @@ function renderDyeList() {
     <div class="dye-row ${d.id === currentDyeId ? 'selected' : ''}" onclick="selectDye(${d.id})">
       <span class="swatch-dot ${d.Swatch_Hex ? '' : 'no-manual'}" style="background:${resolvedColor(d)}"></span>
       <span class="dye-row-name">${d.Dye_Name}</span>
-      <span class="dye-row-brand">${d.Brand || ''}</span>
+      <span class="dye-row-brand">${esc(brandLabel(d))}</span>
     </div>
   `).join('');
 }
@@ -511,6 +579,52 @@ function selectOption(field, choices, currentValue) {
     `<option value="${esc(c)}" ${currentValue === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
 }
 
+function brandSelectOptions(d) {
+  const current = brandColIsRef
+    ? (getRefId(d.Brand) ? String(getRefId(d.Brand)) : '')
+    : ((d.Brand === null || d.Brand === undefined) ? '' : d.Brand.toString());
+  const opts = brandOptions();
+  // A brand already on the row but absent from the list would otherwise be
+  // silently blanked the next time this dye is saved.
+  if (current && !opts.some(o => o.value === current)) {
+    opts.unshift({ value: current, label: brandColIsRef ? `(unknown brand #${current})` : current });
+  }
+  return `<option value=""></option>` + opts.map(o =>
+    `<option value="${esc(o.value)}" ${o.value === current ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+}
+
+async function addBrand() {
+  const name = (window.prompt('New brand name') || '').trim();
+  if (!name) return;
+  if (brandRows.some(b => normalize(b.name) === normalize(name)) || BRAND_CHOICES.some(c => normalize(c) === normalize(name))) {
+    showToast('That brand is already on the list.');
+    return;
+  }
+  if (brandTableId) {
+    try {
+      const t = await grist.docApi.fetchTable(brandTableId);
+      const nameCol = findColumn(t, ['Brand_Name', 'Name', 'Brand', 'Title']) || 'Brand_Name';
+      const result = await grist.docApi.applyUserActions([['AddRecord', brandTableId, null, { [nameCol]: name }]]);
+      const newId = firstRetValue(result);
+      await loadBrands();
+      if (editingDye) {
+        updateField('Brand', brandColIsRef ? (newId || null) : name);
+        renderEditPanel();
+      }
+      showToast(`Added "${name}" to ${brandTableId}.`);
+    } catch (e) {
+      console.error('Could not add brand:', e);
+      showToast('Could not add the brand — check the console.');
+    }
+    return;
+  }
+  // No brands table yet: usable for this session, but say so plainly rather than
+  // pretending it was stored somewhere.
+  BRAND_CHOICES.push(name);
+  if (editingDye) { updateField('Brand', name); renderEditPanel(); }
+  showToast('Used for now — create a Dye_Brands table to keep brands in one list.');
+}
+
 function renderEditPanel() {
   const panel = document.getElementById('editPanel');
   if (!editingDye) {
@@ -533,8 +647,11 @@ function renderEditPanel() {
         <input class="field-input" value="${(d.Dye_Name || '').replace(/"/g, '&quot;')}" oninput="updateField('Dye_Name', this.value)">
       </div>
       <div class="field-row">
-        <span class="field-label">Brand</span>
-        <input class="field-input" value="${(d.Brand || '').replace(/"/g, '&quot;')}" oninput="updateField('Brand', this.value)">
+        <span class="field-label">Brand <span style="font-weight:400;color:#8B7D72;font-size:9px;">${esc(brandSource())}</span></span>
+        <div style="display:flex; gap:6px;">
+          <select class="field-select" style="flex:1" onchange="updateField('Brand', ${brandColIsRef ? '(Number(this.value) || null)' : 'this.value'})">${brandSelectOptions(d)}</select>
+          <button class="btn" title="Add a brand to the list" onclick="addBrand()">+</button>
+        </div>
       </div>
       <div class="field-row">
         <span class="field-label">Serial / SKU</span>
@@ -682,7 +799,16 @@ async function saveDye() {
   const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
 
   put('name', editingDye.Dye_Name);
-  put('brand', editingDye.Brand);
+  // A Ref column must receive a row id (or null); a Text/Choice column must
+  // receive the name. Sending the wrong shape makes Grist reject the whole
+  // UpdateRecord, which would take every other field down with it.
+  put('brand', brandColIsRef ? (getRefId(editingDye.Brand) || null) : (editingDye.Brand || ''));
+  // If a separate Brand_Ref column exists alongside a text Brand, keep it pointed
+  // at the matching row so the link is available to other widgets and formulas.
+  if (colMap.brandRef && !brandColIsRef) {
+    const hit = brandRows.find(b => normalize(b.name) === normalize(editingDye.Brand || ''));
+    fields[colMap.brandRef] = hit ? hit.id : null;
+  }
   put('serial', editingDye.Serial);
   put('sourceType', editingDye.Dye_Source_Type);
   put('dyeType', editingDye.Dye_Type);
@@ -778,8 +904,8 @@ function renderMixPanel() {
           <input class="field-input" id="mixNewName" placeholder="${a && b ? a.Dye_Name + ' / ' + b.Dye_Name + ' Mix' : 'e.g. Sunset Blend'}">
         </div>
         <div class="field-row">
-          <span class="field-label">Brand / Notes</span>
-          <input class="field-input" id="mixNewBrand" placeholder="Optional">
+          <span class="field-label">Brand</span>
+          <select class="field-select" id="mixNewBrand">${brandSelectOptions({ Brand: '' })}</select>
         </div>
         <button class="btn btn-teal" ${a && b ? '' : 'disabled'} onclick="saveMixAsNewDye()">+ Save as New Dye</button>
       </div>
@@ -850,12 +976,16 @@ async function saveMixAsNewDye() {
   if (!a || !b) return;
   const mixed = mixColors(resolvedColor(a), resolvedColor(b), mixRatio);
   const name = document.getElementById('mixNewName').value.trim() || `${a.Dye_Name} / ${b.Dye_Name} Mix`;
-  const brand = document.getElementById('mixNewBrand').value.trim();
+  const brandVal = document.getElementById('mixNewBrand').value;
 
   const fields = {};
   const set = (key, value) => { if (colMap[key]) fields[colMap[key]] = value; };
   fields[colMap.name || 'Dye_Name'] = name;
-  set('brand', brand);
+  set('brand', brandColIsRef ? (Number(brandVal) || null) : brandVal.trim());
+  if (colMap.brandRef && !brandColIsRef) {
+    const hit = brandRows.find(x => normalize(x.name) === normalize(brandVal));
+    if (hit) fields[colMap.brandRef] = hit.id;
+  }
   set('sourceType', 'Custom Color');
   set('dyeType', 'Custom Mix');
   set('blendDesc', `Mix of ${a.Dye_Name} and ${b.Dye_Name} (${mixRatio}% toward ${b.Dye_Name})`);
@@ -877,7 +1007,8 @@ async function saveMixAsNewDye() {
 // ── GRIST INTEGRATION ──
 grist.ready({ requiredAccess: 'full' });
 (async () => {
-  await loadColumnChoices();
+  await loadColumnChoices();  // must run first: it discovers whether Brand is a Ref
+  await loadBrands();
   await loadAllDyes();
 })();
 </script>
