@@ -96,14 +96,24 @@
   .viewbtn.on { background:var(--teal); color:white; border-color:var(--teal); }
   .viewbtn .n { opacity:.75; font-weight:600; }
 
-  .bin-card { display:flex; align-items:center; gap:8px; background:white; border:1px solid var(--rule);
-              border-radius:6px; padding:6px 8px; margin-bottom:4px; }
+  .bin-card { background:white; border:1px solid var(--rule);
+              border-radius:6px; padding:6px 8px; margin-bottom:5px; }
+  .bin-head { display:flex; align-items:center; gap:8px; }
   .bin-who { flex:1; min-width:0; }
   .bin-name { font-weight:700; font-size:13px; }
   .bin-meta { font-size:10px; color:#8B7D72; }
-  .bin-items { font-size:11px; color:#5A5048; margin-top:1px; }
+  .bin-items { margin-top:4px; }
+  .bin-item { display:flex; align-items:center; gap:8px; padding:4px 0;
+              border-top:1px solid var(--rule); font-size:12px; color:#5A5048; }
+  .bin-item-name { flex:1; min-width:0; }
+  .bin-item-qty { font-weight:700; color:var(--teal); }
+  .bin-item.done { color:var(--done-text); }
+  .bin-item.done .bin-item-name { text-decoration:line-through; opacity:.65; }
+  .bin-item-tick { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+                   background:var(--done-bg); color:var(--done-text); border-radius:9px; padding:2px 7px; }
   button.mini { background:var(--teal); color:white; border:0; border-radius:5px; padding:7px 11px;
                 font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  button.mini.ghost { background:white; color:var(--teal); border:1px solid var(--teal); padding:5px 9px; }
 
   .line-card { background:white; border:1px solid var(--rule); border-radius:6px; padding:5px 8px; margin-bottom:3px; cursor:pointer; }
   .line-card:hover { border-color:var(--teal); }
@@ -213,7 +223,7 @@ function pickPackedStatus(existingValues) {
   return 'Packed';
 }
 
-let S = { view: 'wind', lines: [], bins: [], selected: null, draw: {}, woundStatus: '', packedStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
+let S = { view: 'wind', lines: [], bins: [], selected: null, draw: {}, woundStatus: '', packedStatus: '', brokenCol: null, hasLineLink: true, done: [], boxed: [], cols: null };
 
 async function loadEverything() {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
@@ -370,22 +380,37 @@ async function loadEverything() {
     });
     const binsByWo = {};
     allocs.forEach(a => {
-      if ((a.status || '').toString() !== BIN_STATUS) return;
+      const st = (a.status || '').toString();
+      const waiting = st === BIN_STATUS;
+      const boxed = !waiting && (st === S.packedStatus || /shipped/i.test(st));
+      if (!waiting && !boxed) return;
       const meta = lineMeta[a.lineId];
       if (!meta || !meta.woId) return;
       const info = woInfo[meta.woId];
       if (!info) return;
       const b = binsByWo[meta.woId] = binsByWo[meta.woId] || {
         woId: meta.woId, orderNumber: info.orderNumber || '',
-        customerName: info.customerName || '', items: {}, allocIds: [], total: 0,
+        customerName: info.customerName || '', items: {}, total: 0,
       };
-      const rn = (recipeById[meta.recipeId] || {}).name || 'Unknown colorway';
-      b.items[rn] = (b.items[rn] || 0) + a.qty;
-      b.allocIds.push(a.id);
-      b.total += a.qty;
+      // One row per order line, because that is one colorway going into the box.
+      const key = a.lineId != null ? `L${a.lineId}` : `R${meta.recipeId}`;
+      const it = b.items[key] = b.items[key] || {
+        key, name: (recipeById[meta.recipeId] || {}).name || 'Unknown colorway',
+        qty: 0, allocIds: [], boxedQty: 0,
+      };
+      if (waiting) { it.qty += a.qty; it.allocIds.push(a.id); b.total += a.qty; }
+      else { it.boxedQty += a.qty; }
     });
-    S.bins = Object.values(binsByWo).sort((x, y) =>
-      String(x.customerName).localeCompare(String(y.customerName)));
+    // Only orders with something still waiting; already-boxed rows ride along so
+    // the card shows how far through the box you are.
+    S.bins = Object.values(binsByWo)
+      .filter(b => b.total > 0)
+      .map(b => {
+        b.itemList = Object.values(b.items).sort((x, y) => x.name.localeCompare(y.name));
+        b.doneCount = b.itemList.filter(i => i.qty === 0).length;
+        return b;
+      })
+      .sort((x, y) => String(x.customerName).localeCompare(String(y.customerName)));
 
     // Build one windable row per order LINE. A line is "ready" only when its
     // colorway has enough dry-rack + stock spools to fill it completely.
@@ -501,22 +526,37 @@ function rowHtml(l) {
 function binMatch(b) {
   const q = normalize(S.search || '');
   if (!q) return true;
-  return normalize(`${b.customerName} ${b.orderNumber} ${Object.keys(b.items).join(' ')}`).includes(q);
+  return normalize(`${b.customerName} ${b.orderNumber} ${b.itemList.map(i => i.name).join(' ')}`).includes(q);
 }
 
 function binsHtml(withTitle) {
   const list = S.bins.filter(binMatch);
   if (!list.length) return '';
-  return (withTitle ? `<div class="section-title">In bins — needs labels</div>` : '') + list.map(b => `
-    <div class="bin-card">
-      <div class="bin-who">
-        <div><span class="bin-name">${esc(b.customerName || 'order')}</span>
-          <span class="bin-meta">${esc(b.orderNumber || '')} &middot; ${b.total} spool${b.total === 1 ? '' : 's'}</span></div>
-        <div class="bin-items">${Object.keys(b.items).sort()
-          .map(n => `${esc(n)} &times;${b.items[n]}`).join(' &middot; ')}</div>
-      </div>
-      <button class="mini" onclick="markPacked(${b.woId})">Boxed &#10003;</button>
-    </div>`).join('');
+  return (withTitle ? `<div class="section-title">In bins — needs labels</div>` : '') + list.map(b => {
+    const rows = b.itemList.map(it => it.qty === 0
+      ? `<div class="bin-item done">
+           <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty}</span>
+           <span class="bin-item-tick">in box</span>
+         </div>`
+      : `<div class="bin-item">
+           <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span></span>
+           <button class="mini" onclick="markPacked(${b.woId}, '${it.key}')">In box &#10003;</button>
+         </div>`).join('');
+    const left = b.itemList.filter(i => i.qty > 0).length;
+    const progress = b.doneCount ? ` &middot; ${b.doneCount} of ${b.itemList.length} in box` : '';
+    return `
+      <div class="bin-card">
+        <div class="bin-head">
+          <div class="bin-who">
+            <div><span class="bin-name">${esc(b.customerName || 'order')}</span></div>
+            <div class="bin-meta">${esc(b.orderNumber || '')}${b.orderNumber ? ' &middot; ' : ''}${
+              b.total} spool${b.total === 1 ? '' : 's'} to go${progress}</div>
+          </div>
+          ${left > 1 ? `<button class="mini ghost" onclick="markPacked(${b.woId}, null)">All in &#10003;</button>` : ''}
+        </div>
+        <div class="bin-items">${rows}</div>
+      </div>`;
+  }).join('');
 }
 
 /* Three views rather than one long scroll. The worker doing the labelling only
@@ -534,18 +574,42 @@ function viewBar() {
     btn('labels', 'Needs labels', nBins)}${btn('all', 'All')}</div>`;
 }
 
-async function markPacked(woId) {
+/* itemKey null = everything still waiting in this order's bin. */
+async function markPacked(woId, itemKey) {
   const b = S.bins.find(x => x.woId === woId);
-  if (!b || !b.allocIds.length) return;
+  if (!b) return;
+  const items = (itemKey ? b.itemList.filter(i => i.key === itemKey) : b.itemList)
+    .filter(i => i.qty > 0);
+  const ids = items.reduce((acc, i) => acc.concat(i.allocIds), []);
+  if (!ids.length) return;
   const { ALLOC } = S.cols;
   try {
-    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', b.allocIds,
-      { [ALLOC.status]: b.allocIds.map(() => S.packedStatus) }]]);
-    showToast(`${esc(b.customerName || 'Order')} boxed`);
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', ids,
+      { [ALLOC.status]: ids.map(() => S.packedStatus) }]]);
+    S.boxed.unshift({
+      allocIds: ids, customerName: b.customerName,
+      summary: items.map(i => `${i.name} ×${i.qty}`).join(' · '),
+    });
+    showToast(items.length === 1 ? `${items[0].name} in the box` : `${b.customerName || 'Order'} boxed`);
     await loadEverything();
   } catch (e) {
     console.error('Could not mark packed:', e);
     showToast('Could not update — see console');
+  }
+}
+
+async function undoBox(i) {
+  const d = S.boxed[i];
+  if (!d) return;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', d.allocIds,
+      { [S.cols.ALLOC.status]: d.allocIds.map(() => BIN_STATUS) }]]);
+    S.boxed.splice(i, 1);
+    showToast('Back in the bin');
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not undo box:', e);
+    showToast('Undo failed');
   }
 }
 
@@ -561,6 +625,12 @@ function render() {
     <div class="done-line">
       <span>✓ <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)}</span>
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
+    </div>`).join('');
+
+  const boxedHtml = S.boxed.map((d, i) => `
+    <div class="done-line">
+      <span>📦 <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} in box</span>
+      <span class="undo-link" onclick="undoBox(${i})">↺ undo</span>
     </div>`).join('');
 
   const q = normalize(S.search || '');
@@ -581,6 +651,7 @@ function render() {
     ${viewBar()}
     <input class="search-input" id="searchBox" placeholder="Search colorway, order, or customer..." value="${esc(S.search || '')}" oninput="onSearch(this.value)">
     ${doneHtml}
+    ${showBins ? boxedHtml : ''}
     <div id="binSections">${binBlock}</div>
     <div id="lineSections">
       ${showWind ? section(ready, 'Ready to wind', '') : ''}
