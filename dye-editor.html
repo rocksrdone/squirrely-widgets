@@ -199,6 +199,12 @@ function normalize(s) {
   return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function esc(s) {
+  return (s === null || s === undefined ? '' : String(s))
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function columnAsArray(tableData, col) {
   return Array.isArray(tableData[col]) ? tableData[col] : [];
 }
@@ -224,9 +230,56 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2400);
 }
 
-const DYE_TYPE_CHOICES = ['Acid', 'Super Fast Acid', 'Procion MX', 'Procion MX Ice', 'Basic', 'Cochineal', 'Indigo', 'iDye Natural', 'iDye Poly', 'Conc Vinyl Sulphon', 'Silk Colors', 'Custom Mix'];
-const STATUS_CHOICES = ['Active', 'Discontinued', 'Reformulated', 'Needs Review'];
-const SOURCE_TYPE_CHOICES = ['Commercial Dye', 'Custom Color'];
+// Fallbacks only — the real lists are read from the Grist column settings at load
+// time by loadColumnChoices(), so adding a choice in Grist shows up here on refresh.
+let DYE_TYPE_CHOICES = ['Acid', 'Super Fast Acid', 'Procion MX', 'Procion MX Ice', 'Basic', 'Cochineal', 'Indigo', 'iDye Natural', 'iDye Poly', 'Conc Vinyl Sulphon', 'Silk Colors', 'Custom Mix'];
+let STATUS_CHOICES = ['Active', 'Discontinued', 'Reformulated', 'Needs Review'];
+let SOURCE_TYPE_CHOICES = ['Commercial Dye', 'Custom Color'];
+
+// grist.docApi.applyUserActions() resolves to {actionNum, retValues, ...}, not a
+// bare array. Reading result[0] silently yields undefined, which is how new rows
+// were being created but never selected (and then saved against row id undefined).
+function firstRetValue(result) {
+  if (Array.isArray(result)) return result[0];
+  if (result && Array.isArray(result.retValues)) return result.retValues[0];
+  return null;
+}
+
+// Read the Choice lists straight out of the Dyes column settings so the widget
+// never drifts from Grist. Falls back to the constants above if metadata is
+// unreadable (e.g. the widget is granted less than full access).
+async function loadColumnChoices() {
+  try {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const tIdx = (tables.tableId || []).indexOf('Dyes');
+    if (tIdx < 0) return;
+    const dyesRef = tables.id[tIdx];
+
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    const byColId = {};
+    (cols.id || []).forEach((rowId, i) => {
+      if (cols.parentId[i] !== dyesRef) return;
+      let opts = {};
+      try { opts = JSON.parse(cols.widgetOptions[i] || '{}'); } catch (err) { /* not JSON */ }
+      if (Array.isArray(opts.choices) && opts.choices.length) byColId[cols.colId[i]] = opts.choices;
+    });
+
+    const pick = (cands) => {
+      const keys = Object.keys(byColId);
+      for (const cand of cands) {
+        const hit = keys.find(k => normalize(k) === normalize(cand));
+        if (hit) return byColId[hit];
+      }
+      return null;
+    };
+
+    DYE_TYPE_CHOICES = pick(['Dye_Type']) || DYE_TYPE_CHOICES;
+    STATUS_CHOICES = pick(['Status']) || STATUS_CHOICES;
+    SOURCE_TYPE_CHOICES = pick(['Dye_Source_Type']) || SOURCE_TYPE_CHOICES;
+  } catch (e) {
+    console.warn('Could not read column choices from Grist — using built-in lists.', e);
+  }
+}
 
 // ── STATE ──
 let allDyes = [];       // full catalog, each: {id, Dye_Name, Brand, ..., Swatch_Hex}
@@ -236,6 +289,8 @@ let listFilter = 'all';
 let unsavedChanges = false;
 let viewMode = 'edit';
 let hasSwatchColumn = true;
+let colMap = {};   // logical field -> actual Grist column id, resolved at load
+let swatchColId = null;
 
 // Mix Lab state
 let mixDyeA = null;
@@ -258,34 +313,36 @@ async function loadAllDyes() {
 
     const swatchCol = col(['Swatch_Hex', 'Manual_Hex', 'Swatch_Color', 'Hex_Color']);
     hasSwatchColumn = !!swatchCol;
+    swatchColId = swatchCol;
 
     const c = {
-      name: col(['Dye_Name']) || 'Dye_Name',
-      brand: col(['Brand']) || 'Brand',
-      serial: col(['Serial']) || 'Serial',
-      sourceType: col(['Dye_Source_Type']) || 'Dye_Source_Type',
-      dyeType: col(['Dye_Type']) || 'Dye_Type',
-      status: col(['Status']) || 'Status',
-      statusNotes: col(['Status_Notes']) || 'Status_Notes',
-      stdPowder: col(['Std_Powder_tsp']) || 'Std_Powder_tsp_',
-      stdWater: col(['Std_Water_mL']) || 'Std_Water_mL_',
-      defaultMlPer100: col(['Default_mL_per_100_yds']) || 'Default_mL_per_100_yds',
-      stdDryWeight: col(['Std_Dry_Weight_g']) || 'Std_Dry_Weight_g_',
-      shelfLife: col(['Shelf_Life_days']) || 'Shelf_Life_days_',
-      ageSensitive: col(['Age_Sensitive']) || 'Age_Sensitive_',
-      cleanupOrder: col(['Cleanup_Order']) || 'Cleanup_Order',
-      stainsEquipment: col(['Stains_Equipment']) || 'Stains_Equipment_',
-      dyeFamily: col(['Dye_Family']) || 'Dye_Family',
-      swapBurden: col(['Swap_Burden']) || 'Swap_Burden',
-      tinctorial: col(['Tinctorial_Strength']) || 'Tinctorial_Strength',
-      bleedRisk: col(['Bleed_Risk']) || 'Bleed_Risk',
-      undertone: col(['Undertone']) || 'Undertone',
-      usageNotes: col(['Typical_Usage_Notes']) || 'Typical_Usage_Notes',
-      agingNotes: col(['Aging_Notes']) || 'Aging_Notes',
-      notes: col(['Notes']) || 'Notes',
-      blendDesc: col(['Blend_Description']) || 'Blend_Description',
-      replacementDye: col(['Replacement_Dye']) || 'Replacement_Dye',
+      name: col(['Dye_Name']),
+      brand: col(['Brand']),
+      serial: col(['Serial']),
+      sourceType: col(['Dye_Source_Type']),
+      dyeType: col(['Dye_Type']),
+      status: col(['Status']),
+      statusNotes: col(['Status_Notes']),
+      stdPowder: col(['Std_Powder_tsp']),
+      stdWater: col(['Std_Water_mL']),
+      defaultMlPer100: col(['Default_mL_per_100_yds']),
+      stdDryWeight: col(['Std_Dry_Weight_g']),
+      shelfLife: col(['Shelf_Life_days']),
+      ageSensitive: col(['Age_Sensitive']),
+      cleanupOrder: col(['Cleanup_Order']),
+      stainsEquipment: col(['Stains_Equipment']),
+      dyeFamily: col(['Dye_Family']),
+      swapBurden: col(['Swap_Burden']),
+      tinctorial: col(['Tinctorial_Strength']),
+      bleedRisk: col(['Bleed_Risk']),
+      undertone: col(['Undertone']),
+      usageNotes: col(['Typical_Usage_Notes']),
+      agingNotes: col(['Aging_Notes']),
+      notes: col(['Notes']),
+      blendDesc: col(['Blend_Description']),
+      replacementDye: col(['Replacement_Dye']),
     };
+    colMap = c;
 
     allDyes = ids.map((id, i) => ({
       id,
@@ -446,7 +503,12 @@ function searchReplacementDye(query) {
 }
 
 function selectOption(field, choices, currentValue) {
-  return `<option value=""></option>` + choices.map(c => `<option ${currentValue === c ? 'selected' : ''}>${c}</option>`).join('');
+  const list = choices.slice();
+  // A value already on the row but missing from the Choice list would otherwise
+  // be silently reset to blank the next time the dye is saved.
+  if (currentValue && !list.includes(currentValue)) list.unshift(currentValue);
+  return `<option value=""></option>` + list.map(c =>
+    `<option value="${esc(c)}" ${currentValue === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
 }
 
 function renderEditPanel() {
@@ -608,36 +670,48 @@ async function saveDye() {
   btn.disabled = true;
   btn.textContent = 'Saving...';
 
-  const fields = {
-    Dye_Name: editingDye.Dye_Name,
-    Brand: editingDye.Brand,
-    Serial: editingDye.Serial,
-    Dye_Source_Type: editingDye.Dye_Source_Type,
-    Dye_Type: editingDye.Dye_Type,
-    Status: editingDye.Status,
-    Status_Notes: editingDye.Status_Notes,
-    Std_Powder_tsp_: editingDye.Std_Powder_tsp === '' ? null : Number(editingDye.Std_Powder_tsp),
-    Std_Water_mL_: editingDye.Std_Water_mL === '' ? null : Number(editingDye.Std_Water_mL),
-    Default_mL_per_100_yds: editingDye.Default_mL_per_100_yds === '' ? null : Number(editingDye.Default_mL_per_100_yds),
-    Std_Dry_Weight_g_: editingDye.Std_Dry_Weight_g === '' ? null : Number(editingDye.Std_Dry_Weight_g),
-    Shelf_Life_days_: editingDye.Shelf_Life_days,
-    Age_Sensitive_: editingDye.Age_Sensitive,
-    Cleanup_Order: editingDye.Cleanup_Order,
-    Stains_Equipment_: editingDye.Stains_Equipment,
-    Dye_Family: editingDye.Dye_Family,
-    Swap_Burden: editingDye.Swap_Burden,
-    Tinctorial_Strength: editingDye.Tinctorial_Strength,
-    Bleed_Risk: editingDye.Bleed_Risk,
-    Undertone: editingDye.Undertone,
-    Typical_Usage_Notes: editingDye.Typical_Usage_Notes,
-    Aging_Notes: editingDye.Aging_Notes,
-    Notes: editingDye.Notes,
-    Blend_Description: editingDye.Blend_Description,
-    Replacement_Dye: editingDye.Replacement_Dye || null,
+  // Write to the column ids resolved at load time, never to hardcoded literals.
+  // One bad key makes Grist reject the whole UpdateRecord, so a single renamed
+  // column used to silently kill the entire save, plain text fields included.
+  const fields = {};
+  const skipped = [];
+  const put = (key, value) => {
+    if (colMap[key]) fields[colMap[key]] = value;
+    else skipped.push(key);
   };
-  if (hasSwatchColumn) fields.Swatch_Hex = editingDye.Swatch_Hex;
+  const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+
+  put('name', editingDye.Dye_Name);
+  put('brand', editingDye.Brand);
+  put('serial', editingDye.Serial);
+  put('sourceType', editingDye.Dye_Source_Type);
+  put('dyeType', editingDye.Dye_Type);
+  put('status', editingDye.Status);
+  put('statusNotes', editingDye.Status_Notes);
+  put('stdPowder', num(editingDye.Std_Powder_tsp));
+  put('stdWater', num(editingDye.Std_Water_mL));
+  put('defaultMlPer100', num(editingDye.Default_mL_per_100_yds));
+  put('stdDryWeight', num(editingDye.Std_Dry_Weight_g));
+  put('shelfLife', editingDye.Shelf_Life_days);
+  put('ageSensitive', editingDye.Age_Sensitive);
+  put('cleanupOrder', editingDye.Cleanup_Order);
+  put('stainsEquipment', editingDye.Stains_Equipment);
+  put('dyeFamily', editingDye.Dye_Family);
+  put('swapBurden', editingDye.Swap_Burden);
+  put('tinctorial', editingDye.Tinctorial_Strength);
+  put('bleedRisk', editingDye.Bleed_Risk);
+  put('undertone', editingDye.Undertone);
+  put('usageNotes', editingDye.Typical_Usage_Notes);
+  put('agingNotes', editingDye.Aging_Notes);
+  put('notes', editingDye.Notes);
+  put('blendDesc', editingDye.Blend_Description);
+  put('replacementDye', editingDye.Replacement_Dye || null);
+  if (hasSwatchColumn && swatchColId) fields[swatchColId] = editingDye.Swatch_Hex;
+
+  if (skipped.length) console.warn('No matching Dyes column for:', skipped.join(', '));
 
   try {
+    if (!currentDyeId) throw new Error('No row selected — cannot save.');
     await grist.docApi.applyUserActions([['UpdateRecord', 'Dyes', currentDyeId, fields]]);
     Object.assign(allDyes.find(d => d.id === currentDyeId), editingDye);
     clearUnsaved();
@@ -645,7 +719,7 @@ async function saveDye() {
     renderDyeList();
   } catch (e) {
     console.error('Save failed:', e);
-    showToast('Save failed — check the console for details.');
+    showToast('Save failed: ' + (e && e.message ? e.message : 'check the console for details.'));
   } finally {
     btn.disabled = false;
     btn.textContent = '💾 Save';
@@ -654,15 +728,18 @@ async function saveDye() {
 
 async function createNewDye() {
   try {
-    const fields = { Dye_Name: 'New Dye', Dye_Source_Type: 'Commercial Dye' };
+    const fields = {};
+    fields[colMap.name || 'Dye_Name'] = 'New Dye';
+    if (colMap.sourceType) fields[colMap.sourceType] = 'Commercial Dye';
     const result = await grist.docApi.applyUserActions([['AddRecord', 'Dyes', null, fields]]);
-    const newId = result[0];
+    const newId = firstRetValue(result);
     await loadAllDyes();
+    if (!newId) { showToast('Row added, but Grist did not return its id — reopen the widget.'); return; }
     selectDye(newId);
     showToast('New dye created — fill in the details and Save.');
   } catch (e) {
     console.error('Create failed:', e);
-    showToast('Could not create a new dye — check the console.');
+    showToast('Could not create a new dye: ' + (e && e.message ? e.message : 'check the console.'));
   }
 }
 
@@ -775,18 +852,18 @@ async function saveMixAsNewDye() {
   const name = document.getElementById('mixNewName').value.trim() || `${a.Dye_Name} / ${b.Dye_Name} Mix`;
   const brand = document.getElementById('mixNewBrand').value.trim();
 
-  const fields = {
-    Dye_Name: name,
-    Brand: brand,
-    Dye_Source_Type: 'Custom Color',
-    Dye_Type: 'Custom Mix',
-    Blend_Description: `Mix of ${a.Dye_Name} and ${b.Dye_Name} (${mixRatio}% toward ${b.Dye_Name})`,
-  };
-  if (hasSwatchColumn) fields.Swatch_Hex = mixed;
+  const fields = {};
+  const set = (key, value) => { if (colMap[key]) fields[colMap[key]] = value; };
+  fields[colMap.name || 'Dye_Name'] = name;
+  set('brand', brand);
+  set('sourceType', 'Custom Color');
+  set('dyeType', 'Custom Mix');
+  set('blendDesc', `Mix of ${a.Dye_Name} and ${b.Dye_Name} (${mixRatio}% toward ${b.Dye_Name})`);
+  if (hasSwatchColumn && swatchColId) fields[swatchColId] = mixed;
 
   try {
     const result = await grist.docApi.applyUserActions([['AddRecord', 'Dyes', null, fields]]);
-    const newId = result[0];
+    const newId = firstRetValue(result);
     await loadAllDyes();
     showToast(`Saved "${name}" as a new dye.`);
     setViewMode('edit');
@@ -799,7 +876,10 @@ async function saveMixAsNewDye() {
 
 // ── GRIST INTEGRATION ──
 grist.ready({ requiredAccess: 'full' });
-loadAllDyes();
+(async () => {
+  await loadColumnChoices();
+  await loadAllDyes();
+})();
 </script>
 </body>
 </html>
