@@ -182,17 +182,22 @@ function todayEpochSeconds() {
   return Math.floor(d.getTime() / 1000);
 }
 
-// The allocation Status to write when spools are wound + labelled + boxed.
-// The doc and the live widgets disagree on the exact strings, so rather than
-// hardcode one, pick whichever "wound/packed" value already exists in the data.
-// Falls back to the value thread-lifecycle writes today.
-const WOUND_CANDIDATES = ['Packed', 'Wound - Needs Labels', 'Wound', 'Packaged - Shipped'];
-function pickWoundStatus(existingValues) {
-  for (const c of WOUND_CANDIDATES) if (existingValues.has(c)) return c;
-  return 'Wound - Needs Labels';
+/* Winding no longer finishes a line. Spools come off the winder bagged and go
+   straight into the customer's order bin, unlabelled; someone labels and boxes
+   them later. So winding writes BIN_STATUS, and the "Mark labelled & boxed"
+   button writes the packed status.
+
+   BIN_STATUS is hardcoded rather than sniffed from existing data, because on
+   the day this ships no allocation carries it yet — sniffing would find only
+   the old values and keep collapsing the two steps back into one. */
+const BIN_STATUS = 'Wound - Needs Labels';
+const PACKED_CANDIDATES = ['Packed', 'Packaged - Shipped', 'Wound'];
+function pickPackedStatus(existingValues) {
+  for (const c of PACKED_CANDIDATES) if (existingValues.has(c)) return c;
+  return 'Packed';
 }
 
-let S = { lines: [], selected: null, draw: {}, woundStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
+let S = { lines: [], bins: [], selected: null, draw: {}, woundStatus: '', packedStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
 
 async function loadEverything() {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
@@ -279,7 +284,8 @@ async function loadEverything() {
         status: st,
       };
     });
-    S.woundStatus = pickWoundStatus(statusValues);
+    S.woundStatus = BIN_STATUS;
+    S.packedStatus = pickPackedStatus(statusValues);
 
     // Work orders
     const woInfo = {};
@@ -333,6 +339,37 @@ async function loadEverything() {
       });
     });
     Object.values(lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0))); // oldest first
+
+    /* Allocations sitting in a customer bin waiting for labels, grouped by order
+       because that is how the bins are physically arranged. Built from a plain
+       line->order map rather than S.lines, since a fully wound line drops out of
+       S.lines entirely and would take its bin with it. */
+    const lineMeta = {};
+    (wolT.id || []).forEach((id, i) => {
+      const sku = normalize(columnAsArray(wolT, WOL.sku)[i] || '');
+      lineMeta[id] = {
+        woId: getRefId(columnAsArray(wolT, WOL.workOrder)[i]),
+        recipeId: getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null,
+      };
+    });
+    const binsByWo = {};
+    allocs.forEach(a => {
+      if ((a.status || '').toString() !== BIN_STATUS) return;
+      const meta = lineMeta[a.lineId];
+      if (!meta || !meta.woId) return;
+      const info = woInfo[meta.woId];
+      if (!info) return;
+      const b = binsByWo[meta.woId] = binsByWo[meta.woId] || {
+        woId: meta.woId, orderNumber: info.orderNumber || '',
+        customerName: info.customerName || '', items: {}, allocIds: [], total: 0,
+      };
+      const rn = (recipeById[meta.recipeId] || {}).name || 'Unknown colorway';
+      b.items[rn] = (b.items[rn] || 0) + a.qty;
+      b.allocIds.push(a.id);
+      b.total += a.qty;
+    });
+    S.bins = Object.values(binsByWo).sort((x, y) =>
+      String(x.customerName).localeCompare(String(y.customerName)));
 
     // Build one windable row per order LINE. A line is "ready" only when its
     // colorway has enough dry-rack + stock spools to fill it completely.
@@ -440,10 +477,39 @@ function rowHtml(l) {
     ${open && l.ready ? fillPanel(l) : ''}`;
 }
 
+function binsHtml() {
+  if (!S.bins.length) return '';
+  return `<div class="section-title">In bins — needs labels</div>` + S.bins.map(b => `
+    <div class="panel">
+      <div><strong>${esc(b.customerName || 'order')}</strong>
+        ${esc(b.orderNumber || '')} — ${b.total} spool${b.total === 1 ? '' : 's'}</div>
+      <div style="font-size:11px;color:var(--mid);margin:3px 0 7px">
+        ${Object.keys(b.items).sort().map(n => `${esc(n)} &times;${b.items[n]}`).join(' &middot; ')}
+      </div>
+      <button class="go" onclick="markPacked(${b.woId})">Mark labeled &amp; boxed</button>
+    </div>`).join('');
+}
+
+async function markPacked(woId) {
+  const b = S.bins.find(x => x.woId === woId);
+  if (!b || !b.allocIds.length) return;
+  const { ALLOC } = S.cols;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', b.allocIds,
+      { [ALLOC.status]: b.allocIds.map(() => S.packedStatus) }]]);
+    showToast(`${esc(b.customerName || 'Order')} boxed`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not mark packed:', e);
+    showToast('Could not update — see console');
+  }
+}
+
 function render() {
   const c = document.getElementById('content');
   if (!S.lines.length) {
     c.innerHTML = `<div class="header-title">Wind &amp; Box</div>
+      ${binsHtml()}
       <div class="empty-state">Nothing to wind.<br>Orders show up here once their thread is on the dry rack.</div>`;
     return;
   }
@@ -468,6 +534,7 @@ function render() {
     <div class="header-sub">Most urgent first. Pick a line, draw spools from its lots.</div>
     <input class="search-input" id="searchBox" placeholder="Search colorway, order, or customer..." value="${esc(S.search || '')}" oninput="onSearch(this.value)">
     ${doneHtml}
+    ${binsHtml()}
     <div id="lineSections">
       ${section(ready, 'Ready to wind', '')}
       ${section(waiting, 'Made — still drying / short', 'muted')}
