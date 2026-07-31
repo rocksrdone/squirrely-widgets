@@ -90,16 +90,32 @@
 
   .search-input { width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:6px; font-size:13px; margin-bottom:8px; }
   .section-title.muted { color:#B0A596; }
-  .line-card { background:white; border:1px solid var(--rule); border-radius:6px; padding:8px 9px; margin-bottom:4px; cursor:pointer; }
+  .viewbar { display:flex; gap:4px; margin-bottom:6px; }
+  .viewbtn { flex:1; padding:6px 4px; font-size:11px; font-weight:700; border:1px solid var(--rule);
+             border-radius:5px; background:white; color:#8B7D72; cursor:pointer; }
+  .viewbtn.on { background:var(--teal); color:white; border-color:var(--teal); }
+  .viewbtn .n { opacity:.75; font-weight:600; }
+
+  .bin-card { display:flex; align-items:center; gap:8px; background:white; border:1px solid var(--rule);
+              border-radius:6px; padding:6px 8px; margin-bottom:4px; }
+  .bin-who { flex:1; min-width:0; }
+  .bin-name { font-weight:700; font-size:13px; }
+  .bin-meta { font-size:10px; color:#8B7D72; }
+  .bin-items { font-size:11px; color:#5A5048; margin-top:1px; }
+  button.mini { background:var(--teal); color:white; border:0; border-radius:5px; padding:7px 11px;
+                font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+
+  .line-card { background:white; border:1px solid var(--rule); border-radius:6px; padding:5px 8px; margin-bottom:3px; cursor:pointer; }
   .line-card:hover { border-color:var(--teal); }
   .line-card.active { border-color:var(--teal); background:var(--teal-light); }
   .line-card.not-ready { opacity:.7; cursor:default; background:#FBF9F5; }
   .line-top { display:flex; justify-content:space-between; align-items:baseline; gap:6px; }
-  .line-who { display:flex; flex-direction:column; min-width:0; }
-  .line-cust { font-weight:700; font-size:14px; }
-  .line-color { font-size:11px; color:#8B7D72; margin-top:1px; }
+  .line-who { display:flex; flex-direction:row; align-items:baseline; gap:6px; min-width:0; overflow:hidden; }
+  .line-cust { font-weight:700; font-size:13px; white-space:nowrap; }
+  .line-color { font-size:11px; color:#8B7D72; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .line-qty { font-size:12px; font-weight:700; color:var(--teal); white-space:nowrap; }
-  .line-sub { font-size:10px; color:#8B7D72; margin-top:2px; }
+  .line-sub { font-size:10px; color:#8B7D72; margin-top:1px; }
+  .section-title { margin-top:8px; }
   .drying-note { color:var(--wet-text,#2A5B8B); }
   .tag { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:1px 6px; border-radius:9px; margin-left:4px; }
   .tag.past { background:#F5D8DC; color:#A01830; }
@@ -197,7 +213,7 @@ function pickPackedStatus(existingValues) {
   return 'Packed';
 }
 
-let S = { lines: [], bins: [], selected: null, draw: {}, woundStatus: '', packedStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
+let S = { view: 'wind', lines: [], bins: [], selected: null, draw: {}, woundStatus: '', packedStatus: '', brokenCol: null, hasLineLink: true, done: [], cols: null };
 
 async function loadEverything() {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
@@ -423,12 +439,17 @@ function onSearch(v) {
   const match = l => !q || normalize(`${l.recipeName} ${l.customerName || ''} ${l.orderNumber || ''}`).includes(q);
   const ready = S.lines.filter(l => l.ready && match(l));
   const waiting = S.lines.filter(l => !l.ready && match(l));
+  // Patch the two lists in place rather than re-rendering, so the search box
+  // keeps focus and the cursor stays where the worker left it.
   const secEl = document.getElementById('lineSections');
   if (secEl) {
     const sec = (list, label, cls) => list.length
       ? `<div class="section-title ${cls}">${label}</div>${list.map(rowHtml).join('')}` : '';
-    secEl.innerHTML = sec(ready, 'Ready to wind', '') + sec(waiting, 'Made — still drying / short', 'muted');
+    secEl.innerHTML = S.view === 'labels' ? ''
+      : sec(ready, 'Ready to wind', '') + sec(waiting, 'Made — still drying / short', 'muted');
   }
+  const binEl = document.getElementById('binSections');
+  if (binEl) binEl.innerHTML = S.view === 'wind' ? '' : binsHtml(S.view === 'all');
   if (S.selected != null) updateTally();
 }
 
@@ -470,24 +491,47 @@ function rowHtml(l) {
           <span class="line-cust">${esc(l.recipeName)}</span>
           <span class="line-color">${esc(l.customerName || '—')}</span>
         </div>
-        <span class="line-qty">${l.outstanding} spool${l.outstanding === 1 ? '' : 's'}</span>
+        <span class="line-qty">${l.outstanding}</span>
       </div>
       <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
     </div>
     ${open && l.ready ? fillPanel(l) : ''}`;
 }
 
-function binsHtml() {
-  if (!S.bins.length) return '';
-  return `<div class="section-title">In bins — needs labels</div>` + S.bins.map(b => `
-    <div class="panel">
-      <div><strong>${esc(b.customerName || 'order')}</strong>
-        ${esc(b.orderNumber || '')} — ${b.total} spool${b.total === 1 ? '' : 's'}</div>
-      <div style="font-size:11px;color:var(--mid);margin:3px 0 7px">
-        ${Object.keys(b.items).sort().map(n => `${esc(n)} &times;${b.items[n]}`).join(' &middot; ')}
+function binMatch(b) {
+  const q = normalize(S.search || '');
+  if (!q) return true;
+  return normalize(`${b.customerName} ${b.orderNumber} ${Object.keys(b.items).join(' ')}`).includes(q);
+}
+
+function binsHtml(withTitle) {
+  const list = S.bins.filter(binMatch);
+  if (!list.length) return '';
+  return (withTitle ? `<div class="section-title">In bins — needs labels</div>` : '') + list.map(b => `
+    <div class="bin-card">
+      <div class="bin-who">
+        <div><span class="bin-name">${esc(b.customerName || 'order')}</span>
+          <span class="bin-meta">${esc(b.orderNumber || '')} &middot; ${b.total} spool${b.total === 1 ? '' : 's'}</span></div>
+        <div class="bin-items">${Object.keys(b.items).sort()
+          .map(n => `${esc(n)} &times;${b.items[n]}`).join(' &middot; ')}</div>
       </div>
-      <button class="go" onclick="markPacked(${b.woId})">Mark labeled &amp; boxed</button>
+      <button class="mini" onclick="markPacked(${b.woId})">Boxed &#10003;</button>
     </div>`).join('');
+}
+
+/* Three views rather than one long scroll. The worker doing the labelling only
+   ever wants the middle one, and reaching it should not mean scrolling past
+   every windable line. */
+function setView(v) { S.view = v; render(); }
+
+function viewBar() {
+  const nWind = S.lines.filter(l => l.ready).length;
+  const nBins = S.bins.length;
+  const btn = (v, label, n) =>
+    `<button class="viewbtn ${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${label}${
+      n != null ? ` <span class="n">${n}</span>` : ''}</button>`;
+  return `<div class="viewbar">${btn('wind', 'To wind', nWind)}${
+    btn('labels', 'Needs labels', nBins)}${btn('all', 'All')}</div>`;
 }
 
 async function markPacked(woId) {
@@ -507,9 +551,8 @@ async function markPacked(woId) {
 
 function render() {
   const c = document.getElementById('content');
-  if (!S.lines.length) {
+  if (!S.lines.length && !S.bins.length) {
     c.innerHTML = `<div class="header-title">Wind &amp; Box</div>
-      ${binsHtml()}
       <div class="empty-state">Nothing to wind.<br>Orders show up here once their thread is on the dry rack.</div>`;
     return;
   }
@@ -529,16 +572,22 @@ function render() {
     ? `<div class="section-title ${cls}">${label}</div>${list.map(rowHtml).join('')}`
     : '';
 
+  const showWind = S.view !== 'labels';
+  const showBins = S.view !== 'wind';
+  const binBlock = showBins ? binsHtml(S.view === 'all') : '';
+
   c.innerHTML = `
     <div class="header-title">Wind &amp; Box</div>
-    <div class="header-sub">Most urgent first. Pick a line, draw spools from its lots. Wound spools go to the order bin for labeling.</div>
+    ${viewBar()}
     <input class="search-input" id="searchBox" placeholder="Search colorway, order, or customer..." value="${esc(S.search || '')}" oninput="onSearch(this.value)">
     ${doneHtml}
-    ${binsHtml()}
+    <div id="binSections">${binBlock}</div>
     <div id="lineSections">
-      ${section(ready, 'Ready to wind', '')}
-      ${section(waiting, 'Made — still drying / short', 'muted')}
+      ${showWind ? section(ready, 'Ready to wind', '') : ''}
+      ${showWind ? section(waiting, 'Made — still drying / short', 'muted') : ''}
     </div>
+    ${showBins && !binBlock && S.view === 'labels'
+      ? `<div class="empty-state">Nothing waiting for labels.</div>` : ''}
   `;
   if (S.selected != null) updateTally();
 }
