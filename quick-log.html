@@ -84,6 +84,13 @@
   .pill.done { background: var(--done-bg); color: var(--done-text); }
   .pill.bin { background: var(--bin-bg); color: var(--bin-text); }
   .pill.open { background: var(--rule); color: var(--mid); }
+  .avail {
+    font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 9px;
+    font-family: 'DM Mono', ui-monospace, monospace; cursor: help; white-space: nowrap;
+  }
+  .avail.ok { background: var(--done-bg); color: var(--done-text); }
+  .avail.part { background: var(--warn-bg); color: var(--warn-text); }
+  .avail.none { background: var(--rule); color: var(--muted); }
 
   tr.drawer td { background: var(--warm); padding: 8px 10px; }
   .drawer-grid { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
@@ -97,6 +104,13 @@
   }
   .drow select { flex: 1; min-width: 0; }
   .dnote { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 5px; }
+  .dstat {
+    display: flex; flex-direction: column; gap: 1px; margin-top: 6px;
+    padding: 5px 7px; background: var(--paper); border-radius: 4px; font-size: 11px;
+  }
+  .dstat strong { font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; }
+  .dstat-sub { font-size: 10px; color: var(--muted); }
+  .dstat.warn { background: var(--warn-bg); color: var(--warn-text); }
 
   .footbar {
     position: sticky; bottom: 0; margin-top: 8px; display: flex; gap: 8px; align-items: center;
@@ -217,7 +231,7 @@ function allocBucket(status) {
 
 let S = {
   cols: null, packedStatus: 'Packed',
-  orders: {}, recipes: {}, lots: [], lotsByRecipe: {},
+  orders: {}, recipes: {}, lots: [], lotsByRecipe: {}, availByRecipe: {},
   lines: [], allocs: [],
   search: '', filter: 'open', customer: '',
   picked: {},          // lineId -> true
@@ -354,6 +368,19 @@ async function loadAll() {
     (S.lotsByRecipe[rid] = S.lotsByRecipe[rid] || []).push(lot);
   });
   Object.values(S.lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0)));
+
+  /* Per-colorway rollup. `wound` is the number you actually asked about: spools
+     already on a spool, in back stock, spoken for by nobody. `unwound` is dyed
+     thread on the racks that isn't allocated yet — real, but it needs winding
+     before it can go in a box, so it doesn't belong in the same figure. */
+  S.availByRecipe = {};
+  Object.entries(S.lotsByRecipe).forEach(([rid, arr]) => {
+    S.availByRecipe[rid] = {
+      wound: arr.reduce((a, x) => a + x.stock, 0),
+      unwound: arr.reduce((a, x) => a + x.free, 0),
+      lots: arr.length,
+    };
+  });
 
   // Lines. Every line on a non-cancelled order, whatever its progress — this
   // widget is also how you fix something already logged.
@@ -518,6 +545,20 @@ function render() {
   bind();
 }
 
+function availFor(line) {
+  return S.availByRecipe[line.recipeId] || { wound: 0, unwound: 0, lots: 0 };
+}
+/* Wound and unassigned — spools you could put in a box this second. Thread
+   still on the rack is a different question and stays out of this number. */
+function availChipHtml(l) {
+  if (!l.recipeId || !availFor(l).lots) return '';
+  const a = availFor(l);
+  const cls = l.remaining === 0 ? 'ok' : a.wound >= l.remaining ? 'ok' : a.wound > 0 ? 'part' : 'none';
+  const tip = `${a.wound} wound, in back stock, unassigned`
+    + (a.unwound ? ` · ${a.unwound} more dyed but not yet wound` : '');
+  return `<span class="avail ${cls}" title="${esc(tip)}">${a.wound} wound</span>`;
+}
+
 function lineRowHtml(l) {
   const pill = l.needed === 0 ? `<span class="pill open">no qty</span>`
     : l.remaining === 0 ? `<span class="pill done">done</span>`
@@ -526,7 +567,7 @@ function lineRowHtml(l) {
   const q = rowQty(l);
   const row = `<tr class="line ${S.picked[l.id] ? 'sel' : ''} ${l.remaining === 0 ? 'done' : ''}" data-line="${l.id}">
     <td><input type="checkbox" ${S.picked[l.id] ? 'checked' : ''} data-pick="${l.id}"></td>
-    <td><span class="cw">${esc(l.name)}</span>${l.fiber ? `<span class="fib">${esc(l.fiber)}</span>` : ''} ${pill}</td>
+    <td><span class="cw">${esc(l.name)}</span>${l.fiber ? `<span class="fib">${esc(l.fiber)}</span>` : ''} ${availChipHtml(l)} ${pill}</td>
     <td class="num">${l.needed}</td>
     <td class="num bin ${l.inBin ? '' : 'zero'}">${l.inBin || '—'}</td>
     <td class="num boxed ${l.boxed ? '' : 'zero'}">${l.boxed || '—'}</td>
@@ -543,11 +584,19 @@ function lineRowHtml(l) {
 
 function drawerHtml(l) {
   const lots = S.lotsByRecipe[l.recipeId] || [];
+  const a = availFor(l);
   const chosen = defaultLotFor(l);
   const lotOpts = lots.length
     ? lots.map(x => `<option value="${x.id}" ${chosen && chosen.id === x.id ? 'selected' : ''}>${
         esc(x.number)} — ${x.free} free, ${x.stock} stock</option>`).join('')
     : `<option value="">no lots for this colorway</option>`;
+
+  // How many other open lines want this same colorway — the "avail" chip is a
+  // shared pool, so two lines can both look coverable and only one can be.
+  const rivals = l.recipeId
+    ? S.lines.filter(x => x.id !== l.id && x.recipeId === l.recipeId && x.remaining > 0)
+    : [];
+  const rivalNeed = rivals.reduce((s, x) => s + x.remaining, 0);
 
   // Allocated spools on this line, the pool that transfers and returns draw from.
   const allocated = l.inBin + l.boxed;
@@ -564,6 +613,13 @@ function drawerHtml(l) {
     <div class="dblock">
       <h4>Lot to draw from</h4>
       <div class="drow"><select data-lotsel="${l.id}" ${lots.length ? '' : 'disabled'}>${lotOpts}</select></div>
+      ${lots.length ? `<div class="dstat">
+        <span><strong>${a.wound}</strong> wound &amp; unassigned</span>
+        <span class="dstat-sub">in back stock across ${a.lots} lot${a.lots === 1 ? '' : 's'}</span>
+        ${a.unwound ? `<span class="dstat-sub">${a.unwound} more dyed but not yet wound</span>` : ''}
+      </div>` : ''}
+      ${rivalNeed ? `<div class="dstat warn">${rivals.length} other open line${rivals.length === 1 ? '' : 's'}
+        want ${rivalNeed} of this colorway — the wound stock is a shared pool.</div>` : ''}
       <div class="dnote">${lots.length
         ? 'Defaults to the oldest lot with free spools. Every Bin/Boxed action on this line writes against this lot.'
         : 'No Production_Lots row exists for this colorway, so an allocation here would have no lot attached. Make the lot first if you want the count to reconcile.'}</div>
