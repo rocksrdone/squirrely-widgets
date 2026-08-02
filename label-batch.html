@@ -57,6 +57,21 @@ body {
 .order-row .ord-num { font-family: 'DM Mono', monospace; font-weight: 600; }
 .order-row .ord-cust { color: var(--mid); flex: 1; }
 .order-row .ord-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+/* Pick lines */
+.pl-list { margin-top: 10px; max-height: 300px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 6px; }
+.pl-order + .pl-order { border-top: 1px solid var(--rule); }
+.pl-order-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 9px; background: var(--warm); font-size: 12px; position: sticky; top: 0; }
+.pl-order-head label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--mid); }
+.pl-order-head strong { font-family: 'DM Mono', monospace; color: var(--ink); }
+.pl-order-meta { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.pl-line { display: flex; align-items: center; gap: 8px; padding: 5px 9px 5px 20px; font-size: 12px; cursor: pointer; }
+.pl-line:hover { background: var(--paper); }
+.pl-line.on { background: var(--accent-light, #F3EEE6); }
+.pl-name { flex: 1; min-width: 0; }
+.pl-fiber { font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF; padding: 1px 5px; border-radius: 8px; }
+.pl-qty { font-family: 'DM Mono', monospace; color: var(--mid); min-width: 26px; text-align: right; }
+.pl-summary { margin-top: 9px; font-size: 11.5px; color: var(--mid); }
 .empty-note { font-size: 11px; color: var(--muted); font-style: italic; padding: 10px 0; }
 
 .profile { margin-top: 12px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px; display: flex; gap: 22px; flex-wrap: wrap; }
@@ -163,6 +178,7 @@ input[type=checkbox]:disabled { cursor: default; }
 
 <div class="tabs">
   <div class="tab active" data-mode="order">Order batch</div>
+  <div class="tab" data-mode="lines">Pick lines</div>
   <div class="tab" data-mode="store">Store listings</div>
   <div class="tab" data-mode="front">Front labels</div>
 </div>
@@ -301,6 +317,9 @@ const S = {
   rowState: {},
   openCalib: null,      // template id whose calibration form is open
   orderSearch: '',
+  pickedLines: {},      // lineId -> true, for the cross-order "Pick lines" mode
+  lineSearch: '',
+  lineOnlyActive: true,
   storeQtyDefault: 6,
   startAt: {},          // group key -> first label position on the sheet
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
@@ -574,25 +593,39 @@ function setBanner(items) {
 }
 
 /* ---------- rows & grouping ---------- */
+// One row per work-order line. `ord`/`cust` ride along on the row so a batch
+// mixing several orders can still write the right Customer and Order into the
+// merge CSV — in Order batch mode they're all the same, in Pick lines they
+// aren't.
+function rowFromLine(l) {
+  const r = S.recipes[l.recipeId] || null;
+  const o = S.orders.find(x => x.id === l.woId) || null;
+  const cust = o ? customerForOrder(o) : null;
+  return {
+    rowKey: 'L' + l.id, lineId: l.id, recipeId: l.recipeId,
+    name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
+    sku: (r && r.sku) || l.sku, fiber: r ? r.fiber : '',
+    sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
+    defaultQty: l.qty, stock: r ? r.stock : 0,
+    orderNum: o ? o.num : '', custName: cust ? cust.name : (o ? o.custName : ''),
+  };
+}
 function currentRows() {
   if (S.mode === 'order') {
     if (!S.selectedOrderId) return [];
-    return S.lines.filter(l => l.woId === S.selectedOrderId && l.qty > 0).map(l => {
-      const r = S.recipes[l.recipeId] || null;
-      return {
-        rowKey: 'L' + l.id, recipeId: l.recipeId,
-        name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
-        sku: (r && r.sku) || l.sku, fiber: r ? r.fiber : '',
-        sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
-        defaultQty: l.qty, stock: r ? r.stock : 0,
-      };
-    });
+    return S.lines.filter(l => l.woId === S.selectedOrderId && l.qty > 0).map(rowFromLine);
+  }
+  if (S.mode === 'lines') {
+    return S.lines.filter(l => S.pickedLines[l.id] && l.qty > 0)
+      .map(rowFromLine)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
   return Object.values(S.recipes).filter(r => r.storeActive)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map(r => ({
       rowKey: 'R' + r.id, recipeId: r.id, name: r.name, sku: r.sku, fiber: r.fiber,
       sheetOnHand: r.sheetOnHand, matched: true, defaultQty: S.storeQtyDefault, stock: r.stock,
+      orderNum: '', custName: '',
     }));
 }
 function stateFor(row) {
@@ -636,7 +669,9 @@ function groupRows(rows) {
 function render() {
   if (!S.ready) return;
   document.getElementById('pane').innerHTML =
-    S.mode === 'order' ? orderPaneHtml() : S.mode === 'front' ? frontPaneHtml() : storePaneHtml();
+    S.mode === 'order' ? orderPaneHtml()
+    : S.mode === 'lines' ? linesPaneHtml()
+    : S.mode === 'front' ? frontPaneHtml() : storePaneHtml();
   bindPane();
   updateFooter();
 }
@@ -679,8 +714,89 @@ function orderPaneHtml() {
     frontSummaryHtml(rows, cust);
 }
 
-function storePaneHtml() {
+/* Pick lines: every work-order line in one list, tick the ones you want. Lets
+   two colourways from different orders share a single sheet, which the
+   per-order pane can't do. */
+function linesPaneHtml() {
+  const q = S.lineSearch.trim().toLowerCase();
+  const orderById = {};
+  S.orders.forEach(o => { orderById[o.id] = o; });
+  const candidates = S.lines.filter(l => {
+    if (!l.qty) return false;
+    const o = orderById[l.woId];
+    if (!o) return false;
+    if (S.lineOnlyActive && o.status && o.status !== 'Active') return false;
+    if (!q) return true;
+    const r = S.recipes[l.recipeId];
+    return `${o.num} ${o.custName} ${(r && r.name) || ''} ${l.sku || ''} ${l.productName || ''}`
+      .toLowerCase().includes(q);
+  });
+
+  // Grouped by order so the list reads the way the bins are stacked.
+  const byOrder = new Map();
+  candidates.forEach(l => {
+    if (!byOrder.has(l.woId)) byOrder.set(l.woId, []);
+    byOrder.get(l.woId).push(l);
+  });
+  const blocks = [...byOrder.entries()].map(([woId, lines]) => {
+    const o = orderById[woId];
+    const allOn = lines.every(l => S.pickedLines[l.id]);
+    const rows = lines.map(l => {
+      const r = S.recipes[l.recipeId];
+      const on = !!S.pickedLines[l.id];
+      const fib = r ? fiberCode(r.fiber) : '';
+      return `<div class="pl-line ${on ? 'on' : ''}" data-pickline="${l.id}">
+        <input type="checkbox" ${on ? 'checked' : ''} data-pickbox="${l.id}">
+        <span class="pl-name">${esc(r ? r.name : (l.productName || l.sku || '(unmatched SKU)'))}</span>
+        ${fib ? `<span class="pl-fiber">${esc(fib)}</span>` : ''}
+        <span class="pl-qty">${l.qty}</span>
+      </div>`;
+    }).join('');
+    return `<div class="pl-order">
+      <div class="pl-order-head">
+        <label><input type="checkbox" ${allOn ? 'checked' : ''} data-pickorder="${woId}">
+          <strong>${esc(o.num || '—')}</strong> ${esc(o.custName || '')}</label>
+        <span class="pl-order-meta">${lines.length} line${lines.length === 1 ? '' : 's'}</span>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('');
+
+  const picked = S.lines.filter(l => S.pickedLines[l.id] && l.qty > 0);
+  const pickedSpools = picked.reduce((a, l) => a + l.qty, 0);
+  const pickedOrders = new Set(picked.map(l => l.woId)).size;
+
+  const listBox = `<div class="pick-box">
+    <div class="pick-row" style="gap:10px;flex-wrap:wrap;">
+      <input id="lineSearch" placeholder="Search colorway, SKU, order or customer..." value="${esc(S.lineSearch)}" style="flex:1;min-width:180px;">
+      <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:5px;">
+        <input type="checkbox" id="lineActiveOnly" ${S.lineOnlyActive ? 'checked' : ''}> Active orders only</label>
+      <button class="btn tiny" id="pickAllShown">Pick all shown</button>
+      <button class="btn tiny" id="pickNone">Clear picks</button>
+    </div>
+    <div class="pl-list">${blocks || '<div class="empty-note">No lines match.</div>'}</div>
+    <div class="pl-summary">${picked.length
+      ? `<strong>${picked.length}</strong> line${picked.length === 1 ? '' : 's'} picked across
+         ${pickedOrders} order${pickedOrders === 1 ? '' : 's'} · ${pickedSpools} spools`
+      : 'Nothing picked yet — tick lines above and they drop into sheets below.'}</div>
+  </div>`;
+
+  if (!picked.length) return listBox;
   const rows = currentRows();
+  const groups = groupRows(rows);
+  const unmatched = rows.filter(r => !r.matched);
+  const custCount = new Set(rows.map(r => r.custName).filter(Boolean)).size;
+  return listBox +
+    (custCount > 1 ? `<div class="alert"><strong>${custCount} customers on this batch.</strong>
+      Back labels only carry the colorway name, so mixing is fine — but the merge CSV's Customer
+      column will vary row to row, and front logo sheets still have to be run one customer at a
+      time on the Front labels tab.</div>` : '') +
+    (unmatched.length ? `<div class="alert"><strong>${unmatched.length} picked line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
+      No colorway name and no fiber to pick a sheet from. Fix the SKU or link the recipe.</div>` : '') +
+    groups.map(g => groupHtml(g)).join('');
+}
+
+function storePaneHtml() {  const rows = currentRows();
   if (!rows.length) {
     return `<div class="empty-note">No recipes are marked active on the store. Tick <strong>Store_Listing_Active</strong> on the recipes you're listing, or add that column to Recipes.</div>`;
   }
@@ -815,6 +931,43 @@ function frontSummaryHtml(rows, cust) {
 
 /* ---------- events ---------- */
 function bindPane() {
+  const lsearch = document.getElementById('lineSearch');
+  if (lsearch) lsearch.addEventListener('input', () => {
+    S.lineSearch = lsearch.value;
+    const pos = lsearch.selectionStart;
+    render();
+    const s2 = document.getElementById('lineSearch');
+    if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  const lact = document.getElementById('lineActiveOnly');
+  if (lact) lact.addEventListener('change', () => { S.lineOnlyActive = lact.checked; render(); });
+  document.querySelectorAll('[data-pickbox]').forEach(el => el.addEventListener('change', () => {
+    const id = Number(el.dataset.pickbox);
+    if (el.checked) S.pickedLines[id] = true; else delete S.pickedLines[id];
+    render();
+  }));
+  // Clicking the row toggles too, but not when the click was the checkbox itself.
+  document.querySelectorAll('[data-pickline]').forEach(el => el.addEventListener('click', ev => {
+    if (ev.target && ev.target.matches('input')) return;
+    const id = Number(el.dataset.pickline);
+    if (S.pickedLines[id]) delete S.pickedLines[id]; else S.pickedLines[id] = true;
+    render();
+  }));
+  document.querySelectorAll('[data-pickorder]').forEach(el => el.addEventListener('change', () => {
+    const woId = Number(el.dataset.pickorder);
+    S.lines.filter(l => l.woId === woId && l.qty > 0).forEach(l => {
+      if (el.checked) S.pickedLines[l.id] = true; else delete S.pickedLines[l.id];
+    });
+    render();
+  }));
+  const pAll = document.getElementById('pickAllShown');
+  if (pAll) pAll.addEventListener('click', () => {
+    document.querySelectorAll('[data-pickbox]').forEach(b => { S.pickedLines[Number(b.dataset.pickbox)] = true; });
+    render();
+  });
+  const pNone = document.getElementById('pickNone');
+  if (pNone) pNone.addEventListener('click', () => { S.pickedLines = {}; S.rowState = {}; render(); });
+
   const search = document.getElementById('orderSearch');
   if (search) search.addEventListener('input', () => {
     S.orderSearch = search.value;
@@ -1258,6 +1411,8 @@ async function buildPdf(group) {
   const o = currentOrder();
   const base = S.mode === 'order'
     ? `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}`
+    : S.mode === 'lines'
+    ? `labels_picked-lines_${stock}`
     : `labels_store-listings_${stock}`;
   doc.save(`${base}_${stamp}.pdf`);
 
@@ -1509,8 +1664,11 @@ function buildCsv(g, onlyFiber) {
     const qty = effectiveQty(r);
     if (!qty) return;
     if (onlyFiber && (fiberCode(r.fiber) || 'GEN') !== onlyFiber) return;
+    // Row-level customer/order wins: a Pick lines batch spans several orders.
+    const rowCust = r.custName || (cust ? cust.name : '');
+    const rowOrd = r.orderNum || (o ? o.num : '');
     const base = [r.name, fiberCode(r.fiber) || r.fiber || '', yardsPerSpool(r.fiber),
-      r.sku || '', cust ? cust.name : '', o ? o.num : ''];
+      r.sku || '', rowCust, rowOrd];
     if (perSpool) { for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(',')); }
     else lines.push(base.concat([qty]).map(csvCell).join(','));
   });
@@ -1524,6 +1682,7 @@ function csvFilename(g, onlyFiber) {
     const o = currentOrder();
     return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}_${stamp}.csv`;
   }
+  if (S.mode === 'lines') return `labels_picked-lines_${stock}_${stamp}.csv`;
   return `labels_store-listings_${stock}_${stamp}.csv`;
 }
 function saveCsvFile(name, csv) {

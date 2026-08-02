@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick Log</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7; --warm: #F6F1E9;
+    --mid: #6B5E52; --muted: #9A8E82;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --done-bg: #E8F3E8; --done-text: #2D6A2D;
+    --bin-bg: #F3EAF5; --bin-text: #6B3A7A;
+    --warn-bg: #FBF0E4; --warn-text: #8B5A2A;
+    --accent: #A0522D;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .head h1 { font-size: 15px; font-weight: 700; margin: 0; }
+  .head-sub { font-size: 11px; color: var(--muted); }
+  .btn {
+    border: 1px solid var(--rule); background: white; color: var(--mid);
+    border-radius: 5px; padding: 5px 9px; font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--teal); color: var(--teal); }
+  .btn.solid { background: var(--teal); border-color: var(--teal); color: white; }
+  .btn.solid:hover { opacity: .9; color: white; }
+  .btn.tiny { padding: 3px 7px; font-size: 10px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  .toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0 6px; }
+  .toolbar input.search {
+    flex: 1; min-width: 150px; padding: 6px 9px; border: 1px solid var(--rule);
+    border-radius: 5px; font-size: 12px; background: white; color: var(--ink);
+  }
+  .filters { display: flex; gap: 3px; }
+  .fbtn {
+    padding: 5px 8px; font-size: 10.5px; font-weight: 700; border: 1px solid var(--rule);
+    border-radius: 5px; background: white; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .fbtn.on { background: var(--teal); border-color: var(--teal); color: white; }
+  .fbtn .n { opacity: .7; font-weight: 600; }
+
+  table.grid { width: 100%; border-collapse: collapse; }
+  table.grid thead th {
+    text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+    color: white; background: var(--ink); padding: 5px 7px; position: sticky; top: 0; z-index: 2;
+  }
+  table.grid td { padding: 3px 7px; border-bottom: 1px solid var(--rule); vertical-align: middle; font-size: 12px; }
+  tr.ord-head td {
+    background: var(--warm); font-size: 11px; padding: 5px 7px; border-bottom: 1px solid var(--rule);
+  }
+  tr.ord-head .onum { font-weight: 700; }
+  tr.ord-head .ocust { color: var(--mid); }
+  tr.ord-head .ometa { color: var(--muted); font-size: 10px; }
+  tr.line:hover { background: var(--warm); }
+  tr.line.sel { background: var(--teal-light); }
+  tr.line.done td { color: var(--muted); }
+  .cw { font-weight: 600; }
+  .fib { font-size: 9px; font-weight: 700; color: var(--teal); background: var(--teal-light); padding: 1px 5px; border-radius: 8px; margin-left: 4px; }
+  .num { font-family: 'DM Mono', ui-monospace, monospace; text-align: right; white-space: nowrap; }
+  .num.bin { color: var(--bin-text); font-weight: 700; }
+  .num.boxed { color: var(--done-text); font-weight: 700; }
+  .num.zero { color: var(--muted); font-weight: 400; }
+  .num.rem { font-weight: 700; }
+  .qty-in {
+    width: 52px; padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 12px; text-align: center; font-family: 'DM Mono', ui-monospace, monospace;
+  }
+  .acts { display: flex; gap: 3px; justify-content: flex-end; white-space: nowrap; }
+  .pill {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 2px 6px; border-radius: 9px;
+  }
+  .pill.done { background: var(--done-bg); color: var(--done-text); }
+  .pill.bin { background: var(--bin-bg); color: var(--bin-text); }
+  .pill.open { background: var(--rule); color: var(--mid); }
+
+  tr.drawer td { background: var(--warm); padding: 8px 10px; }
+  .drawer-grid { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+  .dblock { background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; min-width: 210px; flex: 1; }
+  .dblock h4 { margin: 0 0 5px; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .drow { display: flex; gap: 6px; align-items: center; margin-bottom: 5px; }
+  .drow:last-child { margin-bottom: 0; }
+  .drow select, .drow input {
+    padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11.5px;
+    background: white; color: var(--ink); max-width: 100%;
+  }
+  .drow select { flex: 1; min-width: 0; }
+  .dnote { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 5px; }
+
+  .footbar {
+    position: sticky; bottom: 0; margin-top: 8px; display: flex; gap: 8px; align-items: center;
+    flex-wrap: wrap; background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 7px 9px;
+  }
+  .footbar .count { font-size: 11.5px; color: var(--mid); flex: 1; }
+  .footbar .count strong { color: var(--ink); }
+
+  .log-line {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    font-size: 11px; background: var(--done-bg); color: var(--done-text);
+    border-radius: 5px; padding: 4px 8px; margin-bottom: 3px;
+  }
+  .log-line.warnish { background: var(--bin-bg); color: var(--bin-text); }
+  .undo { cursor: pointer; text-decoration: underline; white-space: nowrap; font-size: 10px; }
+  .banner { background: var(--warn-bg); color: var(--warn-text); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; margin-bottom: 8px; line-height: 1.5; }
+  .empty-note { text-align: center; color: var(--muted); font-style: italic; padding: 20px; font-size: 12px; }
+  #toast {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: white; padding: 8px 14px; border-radius: 5px;
+    font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99; max-width: 90%;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div>
+    <h1>Quick Log</h1>
+    <div class="head-sub">Every open line in one table. Log, move, or return spools without walking the workflow.</div>
+  </div>
+  <button class="btn" id="refreshBtn">&#8635; Refresh</button>
+</div>
+
+<div id="banner"></div>
+<div id="log"></div>
+<div id="pane"><div class="empty-note">Loading...</div></div>
+<div id="toast"></div>
+
+<script>
+/* Quick Log — Squirrely Stash
+   ---------------------------
+   The wind-routing widget walks the normal path: dry rack -> bin -> labels ->
+   box. This one is the side door, for the odd jobs that never went through it.
+   Everything here writes the same Lot_Allocations rows the rest of the system
+   derives from, so nothing gets a private notion of progress.
+
+   Four things it does that nothing else does:
+     1. One-click "wound & boxed" for a whole line, straight to Packed.
+     2. Bulk: tick many lines, box all their remaining in one action.
+     3. Transfer spools already allocated to one line over to another line,
+        possibly on a different order.
+     4. Send allocated spools back to back stock on their lot.                */
+
+/* ---------- small helpers (same contracts as the other widgets) ---------- */
+function getRefId(ref) {
+  if (ref == null) return null;
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref.rowId) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+/* applyUserActions returns {actionNum, retValues, ...}, never a bare array. */
+function retValues(res) {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res.retValues) ? res.retValues : [];
+}
+function fmtDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString();
+}
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+function fiberCode(v) {
+  const s = (v || '').toString().trim();
+  if (!s) return '';
+  if (FIBER_NAME_TO_CODE[s]) return FIBER_NAME_TO_CODE[s];
+  const up = s.toUpperCase();
+  return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+
+/* Same three-bucket split order-overview uses. "Wound - Needs Labels" contains
+   the word "Wound", so the needs-labels test must run before the catch-all. */
+const BIN_STATUS = 'Wound - Needs Labels';
+const PACKED_CANDIDATES = ['Packed', 'Packaged - Shipped', 'Wound'];
+function allocBucket(status) {
+  const s = (status == null ? '' : status).toString();
+  if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+  if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+  return 'boxed';
+}
+
+let S = {
+  cols: null, packedStatus: 'Packed',
+  orders: {}, recipes: {}, lots: [], lotsByRecipe: {},
+  lines: [], allocs: [],
+  search: '', filter: 'open',
+  picked: {},          // lineId -> true
+  openDrawer: null,    // lineId whose action drawer is open
+  qty: {},             // lineId -> qty override typed into the row
+  lotChoice: {},       // lineId -> lotId chosen in the drawer
+  xferTarget: {}, xferQty: {}, stockQty: {},
+  log: [],             // [{text, cls, inverse:[actions]}]
+  ready: false,
+};
+
+/* ---------- load ---------- */
+async function loadAll() {
+  document.getElementById('pane').innerHTML = '<div class="empty-note">Loading...</div>';
+  let lotsT, recT, allocT, wolT, woT, custT;
+  try {
+    [lotsT, recT, allocT, wolT, woT, custT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Customers'),
+    ]);
+  } catch (e) {
+    console.error('Quick Log: tables unavailable', e);
+    document.getElementById('pane').innerHTML =
+      `<div class="empty-note">Couldn't read the document. Set this widget's access to <strong>Full document</strong>.</div>`;
+    return;
+  }
+
+  const missing = [];
+  const opt = cands => ({ cands, required: false });
+  const LOT = resolveCols(lotsT, 'Production_Lots', {
+    lotNumber: ['Lot_Number'], recipe: ['Recipe'],
+    spoolsMade: opt(['Spools_Made']), yardsMade: opt(['Total_Yards_Made']),
+    drying: opt(['Drying_Status']), fiber: opt(['Fiber']),
+    storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
+    generalStock: opt(['General_Stock_Spools']),
+    broken: opt(['Broken_Spools', 'Broken_Spool_Count']), date: opt(['Date_Dyed']),
+  }, missing);
+  const REC = resolveCols(recT, 'Recipes', {
+    name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
+  }, missing);
+  const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
+    lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
+    customer: opt(['Customer']), line: ['Work_Order_Line'],
+  }, missing);
+  const WOL = resolveCols(wolT, 'Work_Order_Lines', {
+    workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
+    recipe: opt(['Recipe']), sku: opt(['SKU']),
+  }, missing);
+  const WO = resolveCols(woT, 'Work_Orders', {
+    status: ['Status'], orderNumber: opt(['Order_Number']),
+    customerName: opt(['Customer_Name']), customer: opt(['Customer']),
+    dueDate: opt(['Due_Date']),
+  }, missing);
+  const CUST = resolveCols(custT, 'Customers', { name: opt(['Customer_Name']) }, missing);
+
+  if (missing.length) {
+    document.getElementById('pane').innerHTML =
+      `<div class="empty-note">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].map(esc).join('<br>')}</strong></div>`;
+    return;
+  }
+  S.cols = { LOT, REC, ALLOC, WOL, WO, CUST };
+  // Which stock column absorbs returned spools. General if it exists, else store.
+  S.stockCol = LOT.generalStock || LOT.storeStock;
+  S.stockColLabel = LOT.generalStock ? 'General stock' : 'Store stock';
+
+  // Recipes
+  S.recipes = {};
+  const recipeIdBySku = {};
+  (recT.id || []).forEach((id, i) => {
+    S.recipes[id] = {
+      id, name: columnAsArray(recT, REC.name)[i] || `Recipe #${id}`,
+      fiber: columnAsArray(recT, REC.fiber)[i] || '',
+      sku: normalize(columnAsArray(recT, REC.sku)[i] || ''),
+    };
+    if (S.recipes[id].sku) recipeIdBySku[S.recipes[id].sku] = id;
+  });
+
+  // Customers, for orders whose Customer ref is empty but the name matches.
+  const custIdByName = {};
+  (custT.id || []).forEach((id, i) => {
+    const n = normalize(columnAsArray(custT, CUST.name)[i]);
+    if (n) custIdByName[n] = id;
+  });
+
+  // Work orders
+  S.orders = {};
+  (woT.id || []).forEach((id, i) => {
+    const name = columnAsArray(woT, WO.customerName)[i] || '';
+    S.orders[id] = {
+      id, status: (columnAsArray(woT, WO.status)[i] || '').toString(),
+      num: columnAsArray(woT, WO.orderNumber)[i] || '',
+      custName: name,
+      custId: getRefId(columnAsArray(woT, WO.customer)[i]) || custIdByName[normalize(name)] || null,
+      due: WO.dueDate ? columnAsArray(woT, WO.dueDate)[i] : null,
+    };
+  });
+
+  // Allocations
+  S.allocs = (allocT.id || []).map((id, i) => ({
+    id,
+    lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
+    lineId: getRefId(columnAsArray(allocT, ALLOC.line)[i]),
+    qty: Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0,
+    status: (columnAsArray(allocT, ALLOC.status)[i] || '').toString(),
+  }));
+  const statusValues = new Set(S.allocs.map(a => a.status).filter(Boolean));
+  S.packedStatus = PACKED_CANDIDATES.find(c => statusValues.has(c)) || 'Packed';
+
+  // Lots, with free-spool counts so the drawer can suggest one.
+  const allocByLot = {};
+  S.allocs.forEach(a => { if (a.lotId) allocByLot[a.lotId] = (allocByLot[a.lotId] || 0) + a.qty; });
+  const num = (col, i) => col ? (Number(columnAsArray(lotsT, col)[i]) || 0) : 0;
+  S.lots = []; S.lotsByRecipe = {};
+  (lotsT.id || []).forEach((id, i) => {
+    const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+    if (!rid) return;
+    const rec = S.recipes[rid] || { fiber: '' };
+    let total = num(LOT.spoolsMade, i);
+    if (!total && LOT.yardsMade) total = Math.round(num(LOT.yardsMade, i) / yardsPerSpool(columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber));
+    const stock = num(LOT.storeStock, i) + num(LOT.vendorStock, i) + num(LOT.generalStock, i);
+    const lot = {
+      id, recipeId: rid,
+      number: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+      date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
+      total, stock,
+      free: Math.max(0, total - (allocByLot[id] || 0) - stock - num(LOT.broken, i)),
+      stockVal: S.stockCol ? (Number(columnAsArray(lotsT, S.stockCol)[i]) || 0) : 0,
+    };
+    S.lots.push(lot);
+    (S.lotsByRecipe[rid] = S.lotsByRecipe[rid] || []).push(lot);
+  });
+  Object.values(S.lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0)));
+
+  // Lines. Every line on a non-cancelled order, whatever its progress — this
+  // widget is also how you fix something already logged.
+  S.lines = [];
+  (wolT.id || []).forEach((id, i) => {
+    const woId = getRefId(columnAsArray(wolT, WOL.workOrder)[i]);
+    const o = S.orders[woId];
+    if (!o) return;
+    if (/cancel/i.test(o.status)) return;
+    const sku = normalize(columnAsArray(wolT, WOL.sku)[i] || '');
+    const recipeId = getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null;
+    const rec = S.recipes[recipeId] || null;
+    const mine = S.allocs.filter(a => a.lineId === id);
+    let inBin = 0, boxed = 0;
+    mine.forEach(a => {
+      const b = allocBucket(a.status);
+      if (b === 'wound') inBin += a.qty;
+      else if (b === 'boxed') boxed += a.qty;
+    });
+    const needed = Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0;
+    S.lines.push({
+      id, woId, order: o, recipeId,
+      name: rec ? rec.name : (sku ? `SKU ${sku}` : '(no recipe on this line)'),
+      fiber: rec ? fiberCode(rec.fiber) : '',
+      needed, inBin, boxed,
+      remaining: Math.max(0, needed - inBin - boxed),
+      allocs: mine,
+    });
+  });
+
+  S.ready = true;
+  render();
+}
+
+/* ---------- derived ---------- */
+function lineById(id) { return S.lines.find(l => l.id === id) || null; }
+function matchLine(l) {
+  const q = normalize(S.search);
+  if (!q) return true;
+  return normalize(`${l.name} ${l.order.num} ${l.order.custName} ${l.fiber}`).includes(q);
+}
+function passesFilter(l) {
+  if (S.filter === 'open') return l.remaining > 0 && !/complete|closed|shipped/i.test(l.order.status);
+  if (S.filter === 'bin') return l.inBin > 0;
+  if (S.filter === 'done') return l.remaining === 0 && l.needed > 0;
+  return true;
+}
+function visibleLines() { return S.lines.filter(l => matchLine(l) && passesFilter(l)); }
+function pickedLines() { return S.lines.filter(l => S.picked[l.id]); }
+
+/* Default lot for a one-click log: oldest lot of that colorway with free
+   spools, else the oldest lot at all, else nothing. */
+function defaultLotFor(line) {
+  if (S.lotChoice[line.id] !== undefined) {
+    return S.lots.find(x => x.id === S.lotChoice[line.id]) || null;
+  }
+  const lots = S.lotsByRecipe[line.recipeId] || [];
+  return lots.find(x => x.free > 0) || lots[0] || null;
+}
+function rowQty(line) {
+  const v = S.qty[line.id];
+  if (v === undefined || v === '') return line.remaining;
+  return Math.max(0, Number(v) || 0);
+}
+
+/* ---------- render ---------- */
+function render() {
+  if (!S.ready) return;
+  renderLog();
+
+  const lines = visibleLines();
+  const counts = {
+    open: S.lines.filter(l => l.remaining > 0 && !/complete|closed|shipped/i.test(l.order.status)).length,
+    bin: S.lines.filter(l => l.inBin > 0).length,
+    done: S.lines.filter(l => l.remaining === 0 && l.needed > 0).length,
+  };
+  const fbtn = (v, label, n) =>
+    `<button class="fbtn ${S.filter === v ? 'on' : ''}" data-filter="${v}">${label}${
+      n != null ? ` <span class="n">${n}</span>` : ''}</button>`;
+
+  const toolbar = `<div class="toolbar">
+    <input class="search" id="search" placeholder="Search colorway, order, customer..." value="${esc(S.search)}">
+    <div class="filters">${fbtn('open', 'Open', counts.open)}${fbtn('bin', 'In bin', counts.bin)}${
+      fbtn('done', 'Done', counts.done)}${fbtn('all', 'All')}</div>
+  </div>`;
+
+  let body;
+  if (!lines.length) {
+    body = `<div class="empty-note">Nothing matches this filter.</div>`;
+  } else {
+    // Grouped by order, because that's how the bins sit on the shelf.
+    const byOrder = new Map();
+    lines.forEach(l => {
+      if (!byOrder.has(l.woId)) byOrder.set(l.woId, []);
+      byOrder.get(l.woId).push(l);
+    });
+    const blocks = [...byOrder.entries()].map(([woId, ls]) => {
+      const o = S.orders[woId];
+      const allOn = ls.every(l => S.picked[l.id]);
+      const rem = ls.reduce((a, l) => a + l.remaining, 0);
+      return `<tr class="ord-head">
+          <td><input type="checkbox" ${allOn ? 'checked' : ''} data-pickorder="${woId}"></td>
+          <td colspan="6">
+            <span class="onum">${esc(o.num || '—')}</span>
+            <span class="ocust">${esc(o.custName || '')}</span>
+            <span class="ometa">&middot; ${ls.length} line${ls.length === 1 ? '' : 's'}${
+              rem ? ` &middot; ${rem} to go` : ' &middot; complete'}${
+              o.due ? ` &middot; due ${esc(fmtDate(o.due))}` : ''}</span>
+          </td>
+          <td class="acts"><button class="btn tiny" data-boxorder="${woId}" ${rem ? '' : 'disabled'}>Box all ${rem || ''}</button></td>
+        </tr>` + ls.map(lineRowHtml).join('');
+    }).join('');
+
+    body = `<table class="grid">
+      <thead><tr>
+        <th style="width:22px"></th><th>Colorway</th>
+        <th class="num" style="width:44px">Need</th>
+        <th class="num" style="width:44px">Bin</th>
+        <th class="num" style="width:44px">Boxed</th>
+        <th class="num" style="width:44px">Left</th>
+        <th style="width:60px"></th>
+        <th style="width:150px"></th>
+      </tr></thead>
+      <tbody>${blocks}</tbody>
+    </table>`;
+  }
+
+  const picked = pickedLines();
+  const pickedRem = picked.reduce((a, l) => a + rowQty(l), 0);
+  const foot = `<div class="footbar">
+    <div class="count">${picked.length
+      ? `<strong>${picked.length}</strong> line${picked.length === 1 ? '' : 's'} picked &middot; <strong>${pickedRem}</strong> spools`
+      : 'Tick lines to act on several at once.'}</div>
+    <button class="btn" id="pickShown">Pick all shown</button>
+    <button class="btn" id="pickNone" ${picked.length ? '' : 'disabled'}>Clear</button>
+    <button class="btn" id="bulkBin" ${pickedRem ? '' : 'disabled'}>Into bins</button>
+    <button class="btn solid" id="bulkBox" ${pickedRem ? '' : 'disabled'}>Wound &amp; boxed &#10003;</button>
+  </div>`;
+
+  document.getElementById('pane').innerHTML = toolbar + body + foot;
+  bind();
+}
+
+function lineRowHtml(l) {
+  const pill = l.needed === 0 ? `<span class="pill open">no qty</span>`
+    : l.remaining === 0 ? `<span class="pill done">done</span>`
+    : l.inBin > 0 ? `<span class="pill bin">in bin</span>`
+    : `<span class="pill open">open</span>`;
+  const q = rowQty(l);
+  const row = `<tr class="line ${S.picked[l.id] ? 'sel' : ''} ${l.remaining === 0 ? 'done' : ''}" data-line="${l.id}">
+    <td><input type="checkbox" ${S.picked[l.id] ? 'checked' : ''} data-pick="${l.id}"></td>
+    <td><span class="cw">${esc(l.name)}</span>${l.fiber ? `<span class="fib">${esc(l.fiber)}</span>` : ''} ${pill}</td>
+    <td class="num">${l.needed}</td>
+    <td class="num bin ${l.inBin ? '' : 'zero'}">${l.inBin || '—'}</td>
+    <td class="num boxed ${l.boxed ? '' : 'zero'}">${l.boxed || '—'}</td>
+    <td class="num rem ${l.remaining ? '' : 'zero'}">${l.remaining || '—'}</td>
+    <td><input class="qty-in" data-qty="${l.id}" value="${esc(S.qty[l.id] !== undefined ? S.qty[l.id] : l.remaining)}"></td>
+    <td class="acts">
+      <button class="btn tiny" data-bin="${l.id}" ${q ? '' : 'disabled'} title="Wound and bagged into the bin, labels still to do">Bin</button>
+      <button class="btn tiny solid" data-box="${l.id}" ${q ? '' : 'disabled'} title="Wound, labelled and in the box">Boxed &#10003;</button>
+      <button class="btn tiny" data-drawer="${l.id}">${S.openDrawer === l.id ? '&#9650;' : '&#8943;'}</button>
+    </td>
+  </tr>`;
+  return row + (S.openDrawer === l.id ? drawerHtml(l) : '');
+}
+
+function drawerHtml(l) {
+  const lots = S.lotsByRecipe[l.recipeId] || [];
+  const chosen = defaultLotFor(l);
+  const lotOpts = lots.length
+    ? lots.map(x => `<option value="${x.id}" ${chosen && chosen.id === x.id ? 'selected' : ''}>${
+        esc(x.number)} — ${x.free} free, ${x.stock} stock</option>`).join('')
+    : `<option value="">no lots for this colorway</option>`;
+
+  // Allocated spools on this line, the pool that transfers and returns draw from.
+  const allocated = l.inBin + l.boxed;
+  const targets = S.lines
+    .filter(x => x.id !== l.id && l.recipeId && x.recipeId === l.recipeId)
+    .sort((a, b) => String(a.order.custName).localeCompare(String(b.order.custName)));
+  const targetOpts = targets.length
+    ? `<option value="">choose a line...</option>` + targets.map(x =>
+        `<option value="${x.id}">${esc(x.order.custName || x.order.num)} — ${esc(x.order.num)} (${x.remaining} left)</option>`).join('')
+    : `<option value="">${l.recipeId ? 'no other line uses this colorway' : 'no recipe on this line'}</option>`;
+
+  return `<tr class="drawer"><td colspan="8"><div class="drawer-grid">
+
+    <div class="dblock">
+      <h4>Lot to draw from</h4>
+      <div class="drow"><select data-lotsel="${l.id}" ${lots.length ? '' : 'disabled'}>${lotOpts}</select></div>
+      <div class="dnote">${lots.length
+        ? 'Defaults to the oldest lot with free spools. Every Bin/Boxed action on this line writes against this lot.'
+        : 'No Production_Lots row exists for this colorway, so an allocation here would have no lot attached. Make the lot first if you want the count to reconcile.'}</div>
+    </div>
+
+    <div class="dblock">
+      <h4>Transfer to another line</h4>
+      <div class="drow"><select data-xfer="${l.id}" ${targets.length ? '' : 'disabled'}>${targetOpts}</select></div>
+      <div class="drow">
+        <input class="qty-in" data-xferqty="${l.id}" value="${esc(S.xferQty[l.id] !== undefined ? S.xferQty[l.id] : Math.min(allocated, 1) || '')}">
+        <span style="font-size:11px;color:var(--muted);">of ${allocated} allocated</span>
+        <button class="btn tiny solid" data-doxfer="${l.id}" ${allocated && targets.length ? '' : 'disabled'}>Move</button>
+      </div>
+      <div class="dnote">Moves spools already logged here over to another line, keeping the same lot and status. Only lines on the same colorway are offered — the spools are physically that colour.</div>
+    </div>
+
+    <div class="dblock">
+      <h4>Return to back stock</h4>
+      <div class="drow">
+        <input class="qty-in" data-stockqty="${l.id}" value="${esc(S.stockQty[l.id] !== undefined ? S.stockQty[l.id] : Math.min(allocated, 1) || '')}">
+        <span style="font-size:11px;color:var(--muted);">of ${allocated} allocated</span>
+        <button class="btn tiny" data-dostock="${l.id}" ${allocated && S.stockCol ? '' : 'disabled'}>To stock</button>
+      </div>
+      <div class="dnote">${S.stockCol
+        ? `Takes the spools off this line and adds them to <strong>${esc(S.stockColLabel)}</strong> on their lot. Use it when a wound spool comes back out of a box.`
+        : 'No stock column on Production_Lots — add <strong>General_Stock_Spools</strong> or <strong>Store_Stock_Spools</strong>.'}</div>
+    </div>
+
+  </div></td></tr>`;
+}
+
+function renderLog() {
+  document.getElementById('log').innerHTML = S.log.map((e, i) => `
+    <div class="log-line ${e.cls || ''}">
+      <span>${esc(e.text)}</span>
+      <span class="undo" data-undo="${i}">&#8634; undo</span>
+    </div>`).join('');
+  document.querySelectorAll('[data-undo]').forEach(el =>
+    el.addEventListener('click', () => undo(Number(el.dataset.undo))));
+}
+
+/* ---------- writes ----------
+   Each action builds its own inverse before applying, so undo replays exact
+   opposites rather than guessing at prior state.                             */
+
+function newAllocAction(line, lotId, qty, status) {
+  const { ALLOC } = S.cols;
+  const f = {};
+  f[ALLOC.lot] = lotId || 0;
+  f[ALLOC.qty] = qty;
+  f[ALLOC.status] = status;
+  f[ALLOC.line] = line.id;
+  if (ALLOC.customer && line.order.custId) f[ALLOC.customer] = line.order.custId;
+  return ['AddRecord', 'Lot_Allocations', null, f];
+}
+
+async function logSpools(lines, status, label) {
+  const jobs = lines.map(l => ({ line: l, qty: rowQty(l), lot: defaultLotFor(l) }))
+    .filter(j => j.qty > 0);
+  if (!jobs.length) { showToast('Nothing to log — set a quantity first'); return; }
+  const noLot = jobs.filter(j => !j.lot);
+  if (noLot.length === jobs.length) {
+    showToast(`No lot exists for ${noLot.length === 1 ? 'that colorway' : 'these colorways'} — make the lot first`);
+    return;
+  }
+  try {
+    const res = await grist.docApi.applyUserActions(
+      jobs.map(j => newAllocAction(j.line, j.lot ? j.lot.id : 0, j.qty, status)));
+    const ids = retValues(res);
+    const total = jobs.reduce((a, j) => a + j.qty, 0);
+    S.log.unshift({
+      text: `${total} spool${total === 1 ? '' : 's'} ${label}${jobs.length > 1 ? ` across ${jobs.length} lines` : ` — ${jobs[0].line.name}`}`,
+      cls: status === BIN_STATUS ? 'warnish' : '',
+      inverse: ids.filter(id => id != null).map(id => ['RemoveRecord', 'Lot_Allocations', id]),
+    });
+    S.picked = {}; S.qty = {}; S.openDrawer = null;
+    showToast(noLot.length ? `Logged — ${noLot.length} had no lot attached` : 'Logged \u2713');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: could not write allocations', e);
+    showToast('Write failed — check Lot_Allocations');
+  }
+}
+
+/* Take `qty` spools off a line's existing allocations, largest first so the
+   fewest rows get touched. Returns the actions plus what was consumed, so the
+   caller can put them somewhere else. */
+function consumeFromLine(line, qty) {
+  const pool = line.allocs
+    .filter(a => a.qty > 0 && allocBucket(a.status) !== 'pending')
+    .sort((a, b) => b.qty - a.qty);
+  const actions = [], inverse = [], taken = [];
+  let need = qty;
+  for (const a of pool) {
+    if (need <= 0) break;
+    const take = Math.min(a.qty, need);
+    need -= take;
+    taken.push({ lotId: a.lotId, qty: take, status: a.status });
+    if (take === a.qty) {
+      actions.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+      const { ALLOC } = S.cols;
+      const f = {};
+      f[ALLOC.lot] = a.lotId || 0; f[ALLOC.qty] = a.qty; f[ALLOC.status] = a.status; f[ALLOC.line] = line.id;
+      inverse.push(['AddRecord', 'Lot_Allocations', a.id, f]);
+    } else {
+      actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty - take }]);
+      inverse.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty }]);
+    }
+  }
+  return { actions, inverse, taken, short: need };
+}
+
+async function doTransfer(lineId) {
+  const from = lineById(lineId);
+  const toId = Number(S.xferTarget[lineId] || 0);
+  const to = lineById(toId);
+  const qty = Math.max(0, Number(S.xferQty[lineId]) || 0);
+  if (!from || !to) { showToast('Pick a line to move to'); return; }
+  if (!qty) { showToast('Set a quantity to move'); return; }
+  const c = consumeFromLine(from, qty);
+  if (c.short > 0) { showToast(`Only ${qty - c.short} allocated on that line`); return; }
+
+  const { ALLOC } = S.cols;
+  // One new row per source lot+status, so lot provenance survives the move.
+  const adds = c.taken.map(t => {
+    const f = {};
+    f[ALLOC.lot] = t.lotId || 0; f[ALLOC.qty] = t.qty; f[ALLOC.status] = t.status; f[ALLOC.line] = to.id;
+    if (ALLOC.customer && to.order.custId) f[ALLOC.customer] = to.order.custId;
+    return ['AddRecord', 'Lot_Allocations', null, f];
+  });
+  try {
+    const res = await grist.docApi.applyUserActions(c.actions.concat(adds));
+    const ids = retValues(res).slice(c.actions.length).filter(id => id != null);
+    S.log.unshift({
+      text: `${qty} × ${from.name} moved from ${from.order.custName || from.order.num} to ${to.order.custName || to.order.num}`,
+      inverse: ids.map(id => ['RemoveRecord', 'Lot_Allocations', id]).concat(c.inverse),
+    });
+    S.openDrawer = null; delete S.xferQty[lineId]; delete S.xferTarget[lineId];
+    showToast('Moved \u2713');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: transfer failed', e);
+    showToast('Transfer failed — check Lot_Allocations');
+  }
+}
+
+async function doToStock(lineId) {
+  const line = lineById(lineId);
+  const qty = Math.max(0, Number(S.stockQty[lineId]) || 0);
+  if (!line || !qty) { showToast('Set a quantity to return'); return; }
+  if (!S.stockCol) { showToast('No stock column on Production_Lots'); return; }
+  const c = consumeFromLine(line, qty);
+  if (c.short > 0) { showToast(`Only ${qty - c.short} allocated on that line`); return; }
+  const withLot = c.taken.filter(t => t.lotId);
+  if (!withLot.length) { showToast('Those allocations have no lot, so there is nowhere to return them'); return; }
+
+  // Roll up per lot so two allocations on one lot make a single update.
+  const byLot = {};
+  withLot.forEach(t => { byLot[t.lotId] = (byLot[t.lotId] || 0) + t.qty; });
+  const updates = [], invUpdates = [];
+  Object.entries(byLot).forEach(([lotId, add]) => {
+    const lot = S.lots.find(x => x.id === Number(lotId));
+    const before = lot ? lot.stockVal : 0;
+    updates.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before + add }]);
+    invUpdates.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before }]);
+  });
+  try {
+    await grist.docApi.applyUserActions(c.actions.concat(updates));
+    S.log.unshift({
+      text: `${qty} × ${line.name} returned to ${S.stockColLabel.toLowerCase()} from ${line.order.custName || line.order.num}`,
+      cls: 'warnish',
+      inverse: invUpdates.concat(c.inverse),
+    });
+    S.openDrawer = null; delete S.stockQty[lineId];
+    showToast('Back in stock \u2713');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: return to stock failed', e);
+    showToast('Return failed — check Production_Lots');
+  }
+}
+
+async function undo(i) {
+  const e = S.log[i];
+  if (!e || !e.inverse || !e.inverse.length) return;
+  try {
+    await grist.docApi.applyUserActions(e.inverse);
+    S.log.splice(i, 1);
+    showToast('Undone \u2713');
+    await loadAll();
+  } catch (err) {
+    console.error('Quick Log: undo failed', err);
+    showToast('Undo failed — the rows may have changed since');
+  }
+}
+
+/* ---------- events ---------- */
+function bind() {
+  const s = document.getElementById('search');
+  if (s) s.addEventListener('input', () => {
+    S.search = s.value;
+    const pos = s.selectionStart;
+    render();
+    const s2 = document.getElementById('search');
+    if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  document.querySelectorAll('[data-filter]').forEach(el =>
+    el.addEventListener('click', () => { S.filter = el.dataset.filter; render(); }));
+
+  document.querySelectorAll('[data-pick]').forEach(el => el.addEventListener('change', () => {
+    const id = Number(el.dataset.pick);
+    if (el.checked) S.picked[id] = true; else delete S.picked[id];
+    render();
+  }));
+  document.querySelectorAll('[data-pickorder]').forEach(el => el.addEventListener('change', () => {
+    const woId = Number(el.dataset.pickorder);
+    visibleLines().filter(l => l.woId === woId).forEach(l => {
+      if (el.checked) S.picked[l.id] = true; else delete S.picked[l.id];
+    });
+    render();
+  }));
+
+  // Typing a quantity must not re-render, or the field loses focus mid-number.
+  document.querySelectorAll('[data-qty]').forEach(el => el.addEventListener('input', () => {
+    S.qty[Number(el.dataset.qty)] = el.value;
+    const row = el.closest('tr');
+    const q = Math.max(0, Number(el.value) || 0);
+    row.querySelectorAll('[data-bin],[data-box]').forEach(b => { b.disabled = !q; });
+    updateFootCount();
+  }));
+
+  document.querySelectorAll('[data-drawer]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.drawer);
+    S.openDrawer = S.openDrawer === id ? null : id;
+    render();
+  }));
+  document.querySelectorAll('[data-lotsel]').forEach(el => el.addEventListener('change', () => {
+    S.lotChoice[Number(el.dataset.lotsel)] = Number(el.value) || null;
+  }));
+  document.querySelectorAll('[data-xfer]').forEach(el => el.addEventListener('change', () => {
+    S.xferTarget[Number(el.dataset.xfer)] = el.value;
+  }));
+  document.querySelectorAll('[data-xferqty]').forEach(el => el.addEventListener('input', () => {
+    S.xferQty[Number(el.dataset.xferqty)] = el.value;
+  }));
+  document.querySelectorAll('[data-stockqty]').forEach(el => el.addEventListener('input', () => {
+    S.stockQty[Number(el.dataset.stockqty)] = el.value;
+  }));
+
+  document.querySelectorAll('[data-bin]').forEach(el => el.addEventListener('click', () => {
+    const l = lineById(Number(el.dataset.bin));
+    if (l) logSpools([l], BIN_STATUS, 'into the bin');
+  }));
+  document.querySelectorAll('[data-box]').forEach(el => el.addEventListener('click', () => {
+    const l = lineById(Number(el.dataset.box));
+    if (l) logSpools([l], S.packedStatus, 'wound & boxed');
+  }));
+  document.querySelectorAll('[data-boxorder]').forEach(el => el.addEventListener('click', () => {
+    const woId = Number(el.dataset.boxorder);
+    const ls = visibleLines().filter(l => l.woId === woId && l.remaining > 0);
+    if (ls.length) logSpools(ls, S.packedStatus, 'wound & boxed');
+  }));
+  document.querySelectorAll('[data-doxfer]').forEach(el =>
+    el.addEventListener('click', () => doTransfer(Number(el.dataset.doxfer))));
+  document.querySelectorAll('[data-dostock]').forEach(el =>
+    el.addEventListener('click', () => doToStock(Number(el.dataset.dostock))));
+
+  const ps = document.getElementById('pickShown');
+  if (ps) ps.addEventListener('click', () => { visibleLines().forEach(l => { S.picked[l.id] = true; }); render(); });
+  const pn = document.getElementById('pickNone');
+  if (pn) pn.addEventListener('click', () => { S.picked = {}; render(); });
+  const bb = document.getElementById('bulkBox');
+  if (bb) bb.addEventListener('click', () => logSpools(pickedLines(), S.packedStatus, 'wound & boxed'));
+  const bn = document.getElementById('bulkBin');
+  if (bn) bn.addEventListener('click', () => logSpools(pickedLines(), BIN_STATUS, 'into the bin'));
+}
+
+function updateFootCount() {
+  const picked = pickedLines();
+  const total = picked.reduce((a, l) => a + rowQty(l), 0);
+  const el = document.querySelector('.footbar .count');
+  if (el) {
+    el.innerHTML = picked.length
+      ? `<strong>${picked.length}</strong> line${picked.length === 1 ? '' : 's'} picked &middot; <strong>${total}</strong> spools`
+      : 'Tick lines to act on several at once.';
+  }
+  ['bulkBox', 'bulkBin'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !total;
+  });
+}
+
+function showToast(msg, sticky) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), sticky ? 6000 : 2600);
+}
+
+document.getElementById('refreshBtn').addEventListener('click', () => {
+  S.picked = {}; S.qty = {}; S.openDrawer = null; loadAll();
+});
+
+/* Static shell is already in the DOM; only now do we touch the plugin API, so
+   a failure here shows a banner instead of killing the script silently. */
+try {
+  grist.ready({ requiredAccess: 'full' });
+  loadAll();
+} catch (e) {
+  console.error('Quick Log: grist.ready failed', e);
+  document.getElementById('banner').innerHTML =
+    `<strong>Couldn't reach Grist.</strong> Set this widget's access to Full document and reload the page.`;
+  document.getElementById('banner').className = 'banner';
+  document.getElementById('pane').innerHTML = '';
+}
+</script>
+</body>
+</html>
