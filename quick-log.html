@@ -38,6 +38,10 @@
     flex: 1; min-width: 150px; padding: 6px 9px; border: 1px solid var(--rule);
     border-radius: 5px; font-size: 12px; background: white; color: var(--ink);
   }
+  .toolbar select.cust-sel {
+    padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+    font-size: 12px; background: white; color: var(--ink); max-width: 200px;
+  }
   .filters { display: flex; gap: 3px; }
   .fbtn {
     padding: 5px 8px; font-size: 10.5px; font-weight: 700; border: 1px solid var(--rule);
@@ -215,7 +219,7 @@ let S = {
   cols: null, packedStatus: 'Packed',
   orders: {}, recipes: {}, lots: [], lotsByRecipe: {},
   lines: [], allocs: [],
-  search: '', filter: 'open',
+  search: '', filter: 'open', customer: '',
   picked: {},          // lineId -> true
   openDrawer: null,    // lineId whose action drawer is open
   qty: {},             // lineId -> qty override typed into the row
@@ -386,18 +390,31 @@ async function loadAll() {
 
 /* ---------- derived ---------- */
 function lineById(id) { return S.lines.find(l => l.id === id) || null; }
+function custKey(l) { return normalize(l.order.custName) || '(NO CUSTOMER)'; }
 function matchLine(l) {
   const q = normalize(S.search);
   if (!q) return true;
   return normalize(`${l.name} ${l.order.num} ${l.order.custName} ${l.fiber}`).includes(q);
 }
+function matchCustomer(l) { return !S.customer || custKey(l) === S.customer; }
 function passesFilter(l) {
   if (S.filter === 'open') return l.remaining > 0 && !/complete|closed|shipped/i.test(l.order.status);
   if (S.filter === 'bin') return l.inBin > 0;
   if (S.filter === 'done') return l.remaining === 0 && l.needed > 0;
   return true;
 }
-function visibleLines() { return S.lines.filter(l => matchLine(l) && passesFilter(l)); }
+function visibleLines() { return S.lines.filter(l => matchLine(l) && matchCustomer(l) && passesFilter(l)); }
+/* The dropdown deliberately ignores its own selection, so switching customer
+   never empties the list you'd switch from. */
+function customerOptions() {
+  const map = new Map();
+  S.lines.filter(l => matchLine(l) && passesFilter(l)).forEach(l => {
+    const k = custKey(l);
+    if (!map.has(k)) map.set(k, { key: k, label: l.order.custName || '(no customer)', n: 0 });
+    map.get(k).n++;
+  });
+  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
 function pickedLines() { return S.lines.filter(l => S.picked[l.id]); }
 
 /* Default lot for a one-click log: oldest lot of that colorway with free
@@ -430,8 +447,16 @@ function render() {
     `<button class="fbtn ${S.filter === v ? 'on' : ''}" data-filter="${v}">${label}${
       n != null ? ` <span class="n">${n}</span>` : ''}</button>`;
 
+  const custOpts = customerOptions();
+  const stillThere = !S.customer || custOpts.some(c => c.key === S.customer);
   const toolbar = `<div class="toolbar">
     <input class="search" id="search" placeholder="Search colorway, order, customer..." value="${esc(S.search)}">
+    <select class="cust-sel" id="custSel">
+      <option value="">All customers${custOpts.length ? ` (${custOpts.length})` : ''}</option>
+      ${custOpts.map(c => `<option value="${esc(c.key)}" ${c.key === S.customer ? 'selected' : ''}>${
+        esc(c.label)} — ${c.n}</option>`).join('')}
+      ${stillThere ? '' : `<option value="${esc(S.customer)}" selected>${esc(S.customer)} — 0</option>`}
+    </select>
     <div class="filters">${fbtn('open', 'Open', counts.open)}${fbtn('bin', 'In bin', counts.bin)}${
       fbtn('done', 'Done', counts.done)}${fbtn('all', 'All')}</div>
   </div>`;
@@ -747,6 +772,8 @@ function bind() {
   });
   document.querySelectorAll('[data-filter]').forEach(el =>
     el.addEventListener('click', () => { S.filter = el.dataset.filter; render(); }));
+  const cs = document.getElementById('custSel');
+  if (cs) cs.addEventListener('change', () => { S.customer = cs.value; render(); });
 
   document.querySelectorAll('[data-pick]').forEach(el => el.addEventListener('change', () => {
     const id = Number(el.dataset.pick);
