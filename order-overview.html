@@ -49,6 +49,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .stage-box .stage-count { font-family: 'DM Mono', monospace; font-size: 16px; font-weight: 700; margin-top: 3px; }
 .stage-box .stage-bar { height: 4px; border-radius: 2px; background: var(--rule); margin-top: 6px; overflow: hidden; }
 .stage-box .stage-bar-fill { height: 100%; background: var(--teal); }
+.stage-box .stage-bar-fill.labels { background: #6B3A7A; }
 
 table.lines-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
 table.lines-table thead th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: white; background: var(--ink); padding: 8px 10px; }
@@ -58,9 +59,11 @@ table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); 
 .fiber-tag { font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF; padding: 1px 5px; border-radius: 8px; }
 .qty-cell.complete { color: var(--done-text); font-weight: 700; }
 .qty-cell.zero { color: #8B7D72; }
+.qty-cell.inbin { color: #6B3A7A; font-weight: 700; }
 .line-stage-badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
 .line-stage-badge.packed { background: var(--done-bg); color: var(--done-text); }
 .line-stage-badge.wound { background: var(--teal-light); color: var(--teal); }
+.line-stage-badge.labels { background: #F3EAF5; color: #6B3A7A; }
 .line-stage-badge.dyed { background: var(--gold-light); color: var(--gold); }
 .line-stage-badge.notstarted { background: var(--rule); color: #6B5E52; }
 
@@ -70,8 +73,9 @@ table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); 
 .all-orders-table tbody tr:nth-child(even) { background: var(--paper); }
 .all-orders-table tbody tr:hover { background: var(--accent-light); }
 .all-orders-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; }
-.progress-mini { width: 100px; height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; }
+.progress-mini { width: 100px; height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; display: flex; }
 .progress-mini-fill { height: 100%; background: var(--teal); }
+.progress-mini-bin { height: 100%; background: #C9A8D4; }
 
 .empty-state { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; }
 </style>
@@ -132,14 +136,19 @@ let recipeIdBySku = {};   // normalized SKU -> recipe id, fallback when Work_Ord
 let currentView = 'one';
 let dryByRecipe = {}, wetByRecipe = {};
 
-// Five stages matching Work Overview: notstarted → make → drying → wind → boxed.
+// Six stages matching Work Overview: notstarted → make → drying → wind →
+// labels → boxed. Spools sitting in the bin awaiting labels are past winding
+// but not finished, so they get their own stage rather than counting as boxed.
 // `pool` is a per-render working copy of dry/wet availability, drawn down soonest
 // -first so two lines of one colorway don't both claim the same spools.
 function computeLineStage(line, pool) {
   const needed = Number(line.qtyNeeded) || 0;
   const boxed = Number(line.boxed) || 0;
-  const outstanding = Math.max(0, needed - boxed);
-  if (outstanding <= 0 && needed > 0) return 'boxed';
+  const inBin = Number(line.inBin) || 0;
+  if (boxed >= needed && needed > 0) return 'boxed';
+  // Wound spools are already off the rack, so they don't draw from the pool.
+  const outstanding = Math.max(0, needed - boxed - inBin);
+  if (outstanding <= 0 && needed > 0) return 'labels';
   const rid = line.recipeId;
   const dryAvail = pool.dry[rid] || 0;
   const takeDry = Math.min(outstanding, dryAvail);
@@ -150,13 +159,14 @@ function computeLineStage(line, pool) {
   pool.wet[rid] = wetAvail - takeWet;
   if (takeDry >= outstanding) return 'wind';
   if (takeDry + takeWet >= outstanding) return 'drying';
-  if (boxed > 0 || takeDry > 0 || takeWet > 0) return 'make';
+  if (boxed > 0 || inBin > 0 || takeDry > 0 || takeWet > 0) return 'make';
   return 'notstarted';
 }
 function freshPool() { return { dry: { ...dryByRecipe }, wet: { ...wetByRecipe } }; }
 
 const STAGE_BADGE = {
   boxed:     ['packed', 'Wound &amp; boxed ✓'],
+  labels:    ['labels', 'In bin — needs labels'],
   wind:      ['wound', 'Ready to wind'],
   drying:    ['dyed', 'Drying'],
   make:      ['dyed', 'To make'],
@@ -213,12 +223,26 @@ async function loadCoreData() {
   // ── Winding/packing now lives in Lot_Allocations, not on the line ──────────
   // Qty_Wound/Qty_Packed on Work_Order_Lines are deprecated: one line can be
   // filled from several lots, so a single per-line number can't say which bag
-  // the spools came from. Allocation rows can. Because winding, labelling and
-  // boxing are a single physical act here, an allocation past "in bin" counts
-  // as BOTH wound and packed.
+  // the spools came from. Allocation rows can.
+  //
+  // Winding and boxing are now TWO acts, not one: spools come off the winder
+  // bagged into the customer's bin (`Wound - Needs Labels`) and someone labels
+  // and boxes them later. So an allocation lands in one of three buckets:
+  //   pending — exists but nobody has wound it   (Unwound - Bagged, in bin)
+  //   wound   — in the bin, waiting for labels   (Wound - Needs Labels)
+  //   boxed   — labelled and in the box          (Packed, Wound, Shipped)
+  // Order matters: "Wound - Needs Labels" contains "Wound", so it has to be
+  // tested for the needs-labels marker BEFORE the catch-all.
   // Legacy Qty_Wound/Qty_Packed values are still honoured (whichever is higher)
   // so historic orders keep their stage until those columns are deleted.
-  const allocWoundByLine = {};
+  function allocBucket(status) {
+    const s = (status == null ? '' : status).toString();
+    if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+    if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+    return 'boxed';
+  }
+  const allocWoundByLine = {};   // in the bin, waiting on labels
+  const allocPackedByLine = {};  // labelled and boxed
   try {
     const allocTable = await grist.docApi.fetchTable('Lot_Allocations');
     const aLineCol = findColumn(allocTable, ['Work_Order_Line']);
@@ -228,10 +252,11 @@ async function loadCoreData() {
       (allocTable.id || []).forEach((id, i) => {
         const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
         if (!lineId) return;
-        const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
-        // "In bin / unwound" means it exists but nobody has wound it yet.
-        if (/unwound|in bin/i.test(status.toString())) return;
-        allocWoundByLine[lineId] = (allocWoundByLine[lineId] || 0) + (Number(columnAsArray(allocTable, aQtyCol)[i]) || 0);
+        const bucket = allocBucket(aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '');
+        if (bucket === 'pending') return;
+        const qty = Number(columnAsArray(allocTable, aQtyCol)[i]) || 0;
+        const target = bucket === 'wound' ? allocWoundByLine : allocPackedByLine;
+        target[lineId] = (target[lineId] || 0) + qty;
       });
     }
   } catch (e) {
@@ -240,7 +265,6 @@ async function loadCoreData() {
 
   // ── Rack availability, so stages can show Drying / Ready to wind like the
   // Work Overview widget does (both now read the physical racks). ──────────
-  const allocBoxedByLine = allocWoundByLine; // same map: spools past "in bin"
   dryByRecipe = {}; wetByRecipe = {};
   try {
     const [lotsTable, allocTable2] = await Promise.all([
@@ -296,16 +320,22 @@ async function loadCoreData() {
     const directRecipeId = getRefId(columnAsArray(wolTable, wRecipeCol)[i]);
     const sku = wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '';
     const recipeId = directRecipeId || recipeIdBySku[normalize(sku || '')] || null;
-    const fromAlloc = allocWoundByLine[id] || 0;
+    const fromAllocWound = allocWoundByLine[id] || 0;
+    const fromAllocPacked = allocPackedByLine[id] || 0;
     const legacyWound = wWoundCol ? Number(columnAsArray(wolTable, wWoundCol)[i]) || 0 : 0;
     const legacyPacked = wPackedCol ? Number(columnAsArray(wolTable, wPackedCol)[i]) || 0 : 0;
+    const boxed = Math.max(fromAllocPacked, legacyPacked);
     return {
     id,
     workOrderId: getRefId(columnAsArray(wolTable, wWorkOrderCol)[i]),
     recipeId,
     qtyNeeded: wNeededCol ? columnAsArray(wolTable, wNeededCol)[i] : 0,
     qtyDyed: wDyedCol ? columnAsArray(wolTable, wDyedCol)[i] : 0,
-    boxed: Math.max(fromAlloc, legacyPacked),
+    boxed,
+    // In the customer's bin, wound but not yet labelled. Legacy Qty_Wound only
+    // counts here if it exceeds what's already boxed, so old rows don't
+    // double-count themselves into both buckets.
+    inBin: Math.max(fromAllocWound, Math.max(0, legacyWound - boxed)),
     queueStatus: wStatusCol ? columnAsArray(wolTable, wStatusCol)[i] : '',
     priority: wPriorityCol ? columnAsArray(wolTable, wPriorityCol)[i] : '',
     sku: wSkuCol ? columnAsArray(wolTable, wSkuCol)[i] : '',
@@ -361,7 +391,7 @@ function orderRowHtml(o) {
   return `
     <div class="order-row" onclick="selectBrowsed(${o.id})">
       <div><span class="ord-num">${o.orderNumber}</span><span> — ${o.customerName}</span></div>
-      <div class="ord-meta">${total.packed}/${total.needed} packed · ${(o.orderDate || '').toString().slice(0, 10)}</div>
+      <div class="ord-meta">${total.packed}/${total.needed} boxed${total.inBin ? ` · ${total.inBin} in bin` : ''} · ${(o.orderDate || '').toString().slice(0, 10)}</div>
     </div>
   `;
 }
@@ -379,8 +409,12 @@ function selectBrowsed(workOrderId) {
 function orderProgress(workOrderId) {
   const lines = allLines.filter(l => l.workOrderId === workOrderId);
   const needed = lines.reduce((s, l) => s + (Number(l.qtyNeeded) || 0), 0);
-  const packed = lines.reduce((s, l) => s + Math.min(Number(l.boxed) || 0, Number(l.qtyNeeded) || Infinity), 0);
-  return { needed, packed, lineCount: lines.length };
+  const cap = l => Number(l.qtyNeeded) || Infinity;
+  const packed = lines.reduce((s, l) => s + Math.min(Number(l.boxed) || 0, cap(l)), 0);
+  // Wound but unlabelled, never counted past what the line still needs.
+  const inBin = lines.reduce((s, l) =>
+    s + Math.min(Number(l.inBin) || 0, Math.max(0, cap(l) - (Number(l.boxed) || 0))), 0);
+  return { needed, packed, inBin, lineCount: lines.length };
 }
 
 function renderOrderDetail(workOrderId) {
@@ -391,7 +425,8 @@ function renderOrderDetail(workOrderId) {
   const p = orderProgress(workOrderId);
   const overallBadge = p.needed === 0 ? ['notstarted', 'No quantities set']
     : p.packed >= p.needed ? ['ready', 'All wound &amp; boxed']
-    : p.packed === 0 ? ['notstarted', 'Nothing boxed yet']
+    : p.packed + p.inBin >= p.needed ? ['progress', 'All wound — needs labels']
+    : p.packed === 0 && p.inBin === 0 ? ['notstarted', 'Nothing boxed yet']
     : ['progress', 'In progress'];
 
 
@@ -408,12 +443,12 @@ function renderOrderDetail(workOrderId) {
       <tr>
         <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''}</td>
         <td class="qty-cell ${Number(line.boxed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.boxed ? 'zero' : '')}">${line.boxed || 0}/${line.qtyNeeded || 0}</td>
+        <td class="qty-cell ${line.inBin ? 'inbin' : 'zero'}">${line.inBin || '—'}</td>
         <td>${stageBadgeHtml(stage)}</td>
         <td style="font-size:11px; color:#8B7D72;">${line.queueStatus || ''}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
       </tr>
     `;
   }).join('') : `<tr><td colspan="5" style="text-align:center; color:#8B7D72; font-style:italic;">No line items on this order.</td></tr>`;
-
   document.getElementById('orderDetail').innerHTML = `
     <div class="order-header">
       <div class="order-header-top">
@@ -425,6 +460,11 @@ function renderOrderDetail(workOrderId) {
       </div>
       <div class="stage-summary">
         <div class="stage-box">
+          <div class="stage-label">In bin — needs labels</div>
+          <div class="stage-count">${p.inBin}</div>
+          <div class="stage-bar"><div class="stage-bar-fill labels" style="width:${p.needed ? Math.round(p.inBin / p.needed * 100) : 0}%"></div></div>
+        </div>
+        <div class="stage-box">
           <div class="stage-label">Wound &amp; boxed</div>
           <div class="stage-count">${p.packed}/${p.needed}</div>
           <div class="stage-bar"><div class="stage-bar-fill" style="width:${p.needed ? Math.round(p.packed / p.needed * 100) : 0}%"></div></div>
@@ -432,7 +472,7 @@ function renderOrderDetail(workOrderId) {
       </div>
     </div>
     <table class="lines-table">
-      <thead><tr><th>Colorway</th><th>Boxed</th><th>Stage</th><th>Queue</th></tr></thead>
+      <thead><tr><th>Colorway</th><th>Boxed</th><th>In bin</th><th>Stage</th><th>Queue</th></tr></thead>
       <tbody>${linesHtml}</tbody>
     </table>
   `;
@@ -448,21 +488,26 @@ function renderAllOrders() {
   const rows = active.map(o => {
     const p = orderProgress(o.id);
     const pct = p.needed ? Math.round(p.packed / p.needed * 100) : 0;
-    const label = p.needed === 0 ? '—' : p.packed >= p.needed ? 'All boxed' : p.packed === 0 ? 'Not started' : 'In progress';
+    const binPct = p.needed ? Math.round(p.inBin / p.needed * 100) : 0;
+    const label = p.needed === 0 ? '—'
+      : p.packed >= p.needed ? 'All boxed'
+      : p.packed + p.inBin >= p.needed ? 'Needs labels'
+      : p.packed === 0 && p.inBin === 0 ? 'Not started'
+      : 'In progress';
     return `
       <tr onclick="jumpToOrder(${o.id})">
         <td><strong>${o.orderNumber}</strong></td>
         <td>${o.customerName}</td>
         <td>${(o.dueDate || '').toString().slice(0, 10)}</td>
         <td>${p.lineCount}</td>
-        <td><div class="progress-mini"><div class="progress-mini-fill" style="width:${pct}%"></div></div> ${pct}%</td>
+        <td><div class="progress-mini"><div class="progress-mini-fill" style="width:${pct}%"></div><div class="progress-mini-bin" style="width:${binPct}%"></div></div> ${pct}%${p.inBin ? ` <span style="color:#6B3A7A; font-size:11px;">+${p.inBin}</span>` : ''}</td>
         <td>${label}</td>
       </tr>
     `;
   }).join('');
   box.innerHTML = `
     <table class="all-orders-table">
-      <thead><tr><th>Order</th><th>Customer</th><th>Due</th><th>Lines</th><th>Packed %</th><th>Status</th></tr></thead>
+      <thead><tr><th>Order</th><th>Customer</th><th>Due</th><th>Lines</th><th>Boxed %</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
