@@ -44,6 +44,12 @@ body {
 .btn.solid:hover { filter: brightness(1.08); }
 .btn.tiny { font-size: 10px; padding: 3px 8px; font-weight: 500; }
 .btn:disabled { opacity: .4; cursor: default; filter: none; }
+.zero-note {
+  margin: 8px 10px 10px; padding: 7px 10px; border-radius: 5px;
+  background: var(--warm, #F6F1E9); color: var(--mid, #6B5E52);
+  font-size: 11.5px; line-height: 1.5; display: flex; gap: 9px;
+  align-items: center; justify-content: space-between; flex-wrap: wrap;
+}
 
 .pane { padding: 14px 16px 0; }
 
@@ -83,6 +89,7 @@ body {
 
 .alert { margin-top: 10px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6; background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13; }
 .alert strong { font-weight: 700; }
+.alert.note { background: var(--warm, #F6F1E9); border-color: var(--rule, #DDD3C7); color: var(--mid, #6B5E52); }
 
 /* ---------- stock group ---------- */
 .group { margin-top: 18px; background: white; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
@@ -632,9 +639,14 @@ function stateFor(row) {
   if (!S.rowState[row.rowKey]) S.rowState[row.rowKey] = { include: !row.sheetOnHand, qty: row.defaultQty };
   return S.rowState[row.rowKey];
 }
+/* "Sheet on hand" sets the DEFAULT (don't reprint what you already printed),
+   but it must not be a hard block — it used to zero the row whatever the
+   include box said, and the box was disabled too, so a batch of all-on-hand
+   colorways greyed out both download buttons with nothing explaining why.
+   The tick is now the only authority. */
 function effectiveQty(row) {
   const st = stateFor(row);
-  if (!st.include || row.sheetOnHand) return 0;
+  if (!st.include) return 0;
   return Math.max(0, Number(st.qty) || 0);
 }
 
@@ -787,10 +799,10 @@ function linesPaneHtml() {
   const unmatched = rows.filter(r => !r.matched);
   const custCount = new Set(rows.map(r => r.custName).filter(Boolean)).size;
   return listBox +
-    (custCount > 1 ? `<div class="alert"><strong>${custCount} customers on this batch.</strong>
-      Back labels only carry the colorway name, so mixing is fine — but the merge CSV's Customer
-      column will vary row to row, and front logo sheets still have to be run one customer at a
-      time on the Front labels tab.</div>` : '') +
+    (custCount > 1 ? `<div class="alert note"><strong>Heads up — ${custCount} customers on this batch.</strong>
+      Not a problem: back labels only carry the colorway name, so they can share a sheet. Two knock-ons —
+      the merge CSV's Customer column varies row to row, and front logo sheets still have to be run one
+      customer at a time on the Front labels tab.</div>` : '') +
     (unmatched.length ? `<div class="alert"><strong>${unmatched.length} picked line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
       No colorway name and no fiber to pick a sheet from. Fix the SKU or link the recipe.</div>` : '') +
     groups.map(g => groupHtml(g)).join('');
@@ -867,7 +879,8 @@ function groupHtml(g) {
     const st = stateFor(r);
     const printing = effectiveQty(r);
     return `<tr class="${printing ? '' : 'skipped'}" data-row="${esc(r.rowKey)}">
-      <td class="col-chk"><input type="checkbox" data-include="${esc(r.rowKey)}" ${st.include ? 'checked' : ''} ${r.sheetOnHand ? 'disabled' : ''}></td>
+      <td class="col-chk"><input type="checkbox" data-include="${esc(r.rowKey)}" ${st.include ? 'checked' : ''}
+        title="${r.sheetOnHand ? 'Marked sheet on hand, so off by default — tick to reprint anyway' : 'Include on the sheet'}"></td>
       <td><div class="colorway">${esc(r.name)}</div><div class="sku">${esc(r.sku || '')}</div></td>
       <td>${r.fiber ? `<span class="fiber-tag">${esc(fiberCode(r.fiber) || r.fiber)}</span>` : ''}</td>
       <td class="col-num"><input class="qty-input" data-qty="${esc(r.rowKey)}" value="${esc(st.qty)}"></td>
@@ -881,6 +894,18 @@ function groupHtml(g) {
   }).join('');
 
   const sheetsNeeded = tpl && tpl.perSheet && g.total ? Math.ceil(g.total / tpl.perSheet) : null;
+  // A greyed download with no reason is a dead end. Say which of the two
+  // causes it is, and offer the one-click way out.
+  const offCount = rows.filter(r => !stateFor(r).include).length;
+  const onHandOff = rows.filter(r => !stateFor(r).include && r.sheetOnHand).length;
+  const zeroNote = g.total ? '' : `<div class="zero-note">
+    Nothing to print on this sheet — ${offCount === rows.length
+      ? (onHandOff === rows.length
+        ? `all ${rows.length} colorway${rows.length === 1 ? ' is' : 's are'} marked <strong>sheet on hand</strong>, so they're off by default.`
+        : `every row is unticked.`)
+      : `every included row has a quantity of 0.`}
+    <button class="btn tiny" data-includeall="${esc(g.key)}">Include all ${rows.length}</button>
+  </div>`;
 
   return `<div class="group ${tpl ? '' : 'unassigned'}">
     <div class="group-head">
@@ -915,6 +940,7 @@ function groupHtml(g) {
           ${geom.ok ? '' : `title="Add to Label_Templates: ${esc(geom.missing.join(', '))}"`}>Download PDF</button>
       </div>
     </div>
+    ${zeroNote}
     ${geom.ok ? '' : `<div class="geom-warn">PDF needs geometry on <strong>${esc(g.code || 'this template')}</strong> — missing ${esc(geom.missing.join(', '))}. CSV still works.</div>`}
   </div>`;
 }
@@ -1092,6 +1118,17 @@ function bindPane() {
     currentRows().forEach(r => { stateFor(r).qty = r.stock || 0; });
     render(); showToast('Quantities set from spool stock counts.');
   });
+  document.querySelectorAll('[data-includeall]').forEach(el => el.addEventListener('click', () => {
+    const g = findGroup(el.dataset.includeall);
+    if (!g) return;
+    g.rows.forEach(r => {
+      const st = stateFor(r);
+      st.include = true;
+      if (!Number(st.qty)) st.qty = r.defaultQty || 1;
+    });
+    render();
+  }));
+
   const sa = document.getElementById('selectAll');
   if (sa) sa.addEventListener('click', () => { currentRows().forEach(r => { if (!r.sheetOnHand) stateFor(r).include = true; }); render(); });
   const sn = document.getElementById('selectNone');
