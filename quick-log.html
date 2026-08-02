@@ -91,6 +91,7 @@
   .avail.ok { background: var(--done-bg); color: var(--done-text); }
   .avail.part { background: var(--warn-bg); color: var(--warn-text); }
   .avail.none { background: var(--rule); color: var(--muted); }
+  .avail.rack { background: #E8EEF6; color: #2A5B8B; }
 
   tr.drawer td { background: var(--warm); padding: 8px 10px; }
   .drawer-grid { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
@@ -548,15 +549,21 @@ function render() {
 function availFor(line) {
   return S.availByRecipe[line.recipeId] || { wound: 0, unwound: 0, lots: 0 };
 }
-/* Wound and unassigned — spools you could put in a box this second. Thread
-   still on the rack is a different question and stays out of this number. */
+/* Two different numbers, and hiding either one misleads:
+     wound   — on a spool, in back stock, assigned to nobody. Boxable now.
+     unwound — dyed and on the rack, unallocated. Needs winding first.
+   A colorway with 0 wound and 13 on the dry rack is NOT empty, so the chip
+   shows both rather than leading with a zero. */
 function availChipHtml(l) {
-  if (!l.recipeId || !availFor(l).lots) return '';
   const a = availFor(l);
-  const cls = l.remaining === 0 ? 'ok' : a.wound >= l.remaining ? 'ok' : a.wound > 0 ? 'part' : 'none';
-  const tip = `${a.wound} wound, in back stock, unassigned`
-    + (a.unwound ? ` · ${a.unwound} more dyed but not yet wound` : '');
-  return `<span class="avail ${cls}" title="${esc(tip)}">${a.wound} wound</span>`;
+  if (!l.recipeId || !a.lots) return '';
+  if (!a.wound && !a.unwound) return '';
+  const parts = [];
+  if (a.wound) parts.push(`<span class="avail ${l.remaining && a.wound < l.remaining ? 'part' : 'ok'}"
+    title="${esc(a.wound + ' wound, in back stock, assigned to nobody')}">${a.wound} wound</span>`);
+  if (a.unwound) parts.push(`<span class="avail rack"
+    title="${esc(a.unwound + ' dyed and unallocated, on the racks — needs winding before it can go in a box')}">${a.unwound} to wind</span>`);
+  return parts.join(' ');
 }
 
 function lineRowHtml(l) {
@@ -614,9 +621,9 @@ function drawerHtml(l) {
       <h4>Lot to draw from</h4>
       <div class="drow"><select data-lotsel="${l.id}" ${lots.length ? '' : 'disabled'}>${lotOpts}</select></div>
       ${lots.length ? `<div class="dstat">
-        <span><strong>${a.wound}</strong> wound &amp; unassigned</span>
-        <span class="dstat-sub">in back stock across ${a.lots} lot${a.lots === 1 ? '' : 's'}</span>
-        ${a.unwound ? `<span class="dstat-sub">${a.unwound} more dyed but not yet wound</span>` : ''}
+        <span><strong>${a.wound}</strong> wound &amp; unassigned <span class="dstat-sub">— boxable now, from back stock</span></span>
+        <span><strong>${a.unwound}</strong> dyed, not yet wound <span class="dstat-sub">— unallocated on the racks</span></span>
+        <span class="dstat-sub">across ${a.lots} lot${a.lots === 1 ? '' : 's'}</span>
       </div>` : ''}
       ${rivalNeed ? `<div class="dstat warn">${rivals.length} other open line${rivals.length === 1 ? '' : 's'}
         want ${rivalNeed} of this colorway — the wound stock is a shared pool.</div>` : ''}
