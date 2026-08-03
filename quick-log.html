@@ -457,11 +457,17 @@ function defaultLotFor(line) {
   const lots = S.lotsByRecipe[line.recipeId] || [];
   return lots.find(x => x.free > 0) || lots[0] || null;
 }
+/* The row's quantity box means "how many spools this action covers". It
+   defaults to everything not yet boxed — spools still to wind PLUS spools
+   already sitting in the bin, since boxing has to be able to reach those.
+   Bagging is capped separately: you can't bag what's already bagged. */
+function openQty(line) { return Math.max(0, (Number(line.remaining) || 0) + (Number(line.inBin) || 0)); }
 function rowQty(line) {
   const v = S.qty[line.id];
-  if (v === undefined || v === '') return line.remaining;
+  if (v === undefined || v === '') return openQty(line);
   return Math.max(0, Number(v) || 0);
 }
+function binQty(line) { return Math.min(rowQty(line), Number(line.remaining) || 0); }
 
 /* ---------- render ---------- */
 function render() {
@@ -505,14 +511,16 @@ function render() {
     const blocks = [...byOrder.entries()].map(([woId, ls]) => {
       const o = S.orders[woId];
       const allOn = ls.every(l => S.picked[l.id]);
-      const rem = ls.reduce((a, l) => a + l.remaining, 0);
+      // Everything not yet boxed, so "Box all" reaches spools sitting in the bin.
+      const rem = ls.reduce((a, l) => a + openQty(l), 0);
+      const inBin = ls.reduce((a, l) => a + l.inBin, 0);
       return `<tr class="ord-head">
           <td><input type="checkbox" ${allOn ? 'checked' : ''} data-pickorder="${woId}"></td>
           <td colspan="6">
             <span class="onum">${esc(o.num || '—')}</span>
             <span class="ocust">${esc(o.custName || '')}</span>
             <span class="ometa">&middot; ${ls.length} line${ls.length === 1 ? '' : 's'}${
-              rem ? ` &middot; ${rem} to go` : ' &middot; complete'}${
+              rem ? ` &middot; ${rem} to go${inBin ? `, ${inBin} in the bin` : ''}` : ' &middot; complete'}${
               o.due ? ` &middot; due ${esc(fmtDate(o.due))}` : ''}</span>
           </td>
           <td class="acts"><button class="btn tiny" data-boxorder="${woId}" ${rem ? '' : 'disabled'}>Box all ${rem || ''}</button></td>
@@ -575,17 +583,20 @@ function lineRowHtml(l) {
     : l.inBin > 0 ? `<span class="pill bin">in bin</span>`
     : `<span class="pill open">open</span>`;
   const q = rowQty(l);
-  const row = `<tr class="line ${S.picked[l.id] ? 'sel' : ''} ${l.remaining === 0 ? 'done' : ''}" data-line="${l.id}">
+  const bq = binQty(l);
+  const row = `<tr class="line ${S.picked[l.id] ? 'sel' : ''} ${l.remaining === 0 && !l.inBin ? 'done' : ''}" data-line="${l.id}">
     <td><input type="checkbox" ${S.picked[l.id] ? 'checked' : ''} data-pick="${l.id}"></td>
     <td><span class="cw">${esc(l.name)}</span>${l.fiber ? `<span class="fib">${esc(l.fiber)}</span>` : ''} ${availChipHtml(l)} ${pill}</td>
     <td class="num">${l.needed}</td>
     <td class="num bin ${l.inBin ? '' : 'zero'}">${l.inBin || '—'}</td>
     <td class="num boxed ${l.boxed ? '' : 'zero'}">${l.boxed || '—'}</td>
     <td class="num rem ${l.remaining ? '' : 'zero'}">${l.remaining || '—'}</td>
-    <td><input class="qty-in" data-qty="${l.id}" value="${esc(S.qty[l.id] !== undefined ? S.qty[l.id] : l.remaining)}"></td>
+    <td><input class="qty-in" data-qty="${l.id}" value="${esc(S.qty[l.id] !== undefined ? S.qty[l.id] : openQty(l))}"></td>
     <td class="acts">
-      <button class="btn tiny" data-bin="${l.id}" ${q ? '' : 'disabled'} title="Wound and bagged into the bin, labels still to do">Bin</button>
-      <button class="btn tiny solid" data-box="${l.id}" ${q ? '' : 'disabled'} title="Wound, labelled and in the box">Boxed &#10003;</button>
+      <button class="btn tiny" data-bin="${l.id}" ${bq ? '' : 'disabled'}
+        title="${l.remaining ? `Wind and bag ${bq} into the bin — labels still to do` : 'Nothing left to wind on this line'}">Bag ${bq || ''}</button>
+      <button class="btn tiny solid" data-box="${l.id}" ${q ? '' : 'disabled'}
+        title="${l.inBin ? `Box ${q} — ${Math.min(q, l.inBin)} of them come out of the bin` : `Wind, label and box ${q} in one go`}">Box ${q || ''} &#10003;</button>
       <button class="btn tiny" data-drawer="${l.id}">${S.openDrawer === l.id ? '&#9650;' : '&#8943;'}</button>
     </td>
   </tr>`;
@@ -691,27 +702,73 @@ function newAllocAction(line, lotId, qty, status) {
   return ['AddRecord', 'Lot_Allocations', null, f];
 }
 
+/* Boxing something that is already wound must PROMOTE the existing bin
+   allocation, not add a second one beside it. Adding left the original row
+   sitting at "Wound - Needs Labels" forever, so Wind & Box kept asking for it
+   and the spools were counted twice. Only the shortfall becomes a new row. */
 async function logSpools(lines, status, label) {
+  const toBin = status === BIN_STATUS;
   const jobs = lines.map(l => ({ line: l, qty: rowQty(l), lot: defaultLotFor(l) }))
     .filter(j => j.qty > 0);
   if (!jobs.length) { showToast('Nothing to log — set a quantity first'); return; }
-  const noLot = jobs.filter(j => !j.lot);
-  if (noLot.length === jobs.length) {
-    showToast(`No lot exists for ${noLot.length === 1 ? 'that colorway' : 'these colorways'} — make the lot first`);
+
+  const actions = [], inverse = [], addIdx = [];
+  let promoted = 0, fresh = 0, needLot = 0;
+
+  jobs.forEach(j => {
+    let need = j.qty;
+    if (!toBin) {
+      // Spools already in this customer's bin, biggest row first so the fewest
+      // records get touched.
+      const pool = j.line.allocs
+        .filter(a => a.qty > 0 && allocBucket(a.status) === 'wound')
+        .sort((a, b) => b.qty - a.qty);
+      for (const a of pool) {
+        if (need <= 0) break;
+        const take = Math.min(a.qty, need);
+        need -= take; promoted += take;
+        if (take === a.qty) {
+          actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.status]: S.packedStatus }]);
+          inverse.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.status]: a.status }]);
+        } else {
+          // Part of a bin row goes in the box: shrink it and split off a
+          // packed row carrying the same lot.
+          actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty - take }]);
+          inverse.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty }]);
+          addIdx.push(actions.length);
+          actions.push(newAllocAction(j.line, a.lotId, take, S.packedStatus));
+        }
+      }
+    }
+    if (need > 0) {
+      if (!j.lot) { needLot++; return; }
+      fresh += need;
+      addIdx.push(actions.length);
+      actions.push(newAllocAction(j.line, j.lot.id, need, status));
+    }
+  });
+
+  if (!actions.length) {
+    showToast(needLot ? 'No lot exists for that colorway — make the lot first' : 'Nothing to log');
     return;
   }
   try {
-    const res = await grist.docApi.applyUserActions(
-      jobs.map(j => newAllocAction(j.line, j.lot ? j.lot.id : 0, j.qty, status)));
-    const ids = retValues(res);
-    const total = jobs.reduce((a, j) => a + j.qty, 0);
+    const res = await grist.docApi.applyUserActions(actions);
+    const vals = retValues(res);
+    // Undo removes the new rows first, then restores the rows that were changed.
+    const inv = addIdx.map(i => vals[i]).filter(id => id != null)
+      .map(id => ['RemoveRecord', 'Lot_Allocations', id]).concat(inverse);
+    const total = promoted + fresh;
+    const detail = (promoted && fresh) ? ` (${promoted} from the bin, ${fresh} newly wound)`
+      : (promoted ? ' from the bin' : '');
     S.log.unshift({
-      text: `${total} spool${total === 1 ? '' : 's'} ${label}${jobs.length > 1 ? ` across ${jobs.length} lines` : ` — ${jobs[0].line.name}`}`,
-      cls: status === BIN_STATUS ? 'warnish' : '',
-      inverse: ids.filter(id => id != null).map(id => ['RemoveRecord', 'Lot_Allocations', id]),
+      text: `${total} spool${total === 1 ? '' : 's'} ${label}${detail}${
+        jobs.length > 1 ? ` across ${jobs.length} lines` : ` — ${jobs[0].line.name}`}`,
+      cls: toBin ? 'warnish' : '',
+      inverse: inv,
     });
     S.picked = {}; S.qty = {}; S.openDrawer = null;
-    showToast(noLot.length ? `Logged — ${noLot.length} had no lot attached` : 'Logged \u2713');
+    showToast(needLot ? `Logged — ${needLot} line${needLot === 1 ? '' : 's'} had no lot` : 'Logged \u2713');
     await loadAll();
   } catch (e) {
     console.error('Quick Log: could not write allocations', e);
@@ -892,7 +949,10 @@ function bind() {
 
   document.querySelectorAll('[data-bin]').forEach(el => el.addEventListener('click', () => {
     const l = lineById(Number(el.dataset.bin));
-    if (l) logSpools([l], BIN_STATUS, 'into the bin');
+    if (!l) return;
+    // Bagging can't exceed what's still unwound, whatever the box says.
+    S.qty[l.id] = binQty(l);
+    logSpools([l], BIN_STATUS, 'wound & bagged');
   }));
   document.querySelectorAll('[data-box]').forEach(el => el.addEventListener('click', () => {
     const l = lineById(Number(el.dataset.box));
@@ -900,7 +960,7 @@ function bind() {
   }));
   document.querySelectorAll('[data-boxorder]').forEach(el => el.addEventListener('click', () => {
     const woId = Number(el.dataset.boxorder);
-    const ls = visibleLines().filter(l => l.woId === woId && l.remaining > 0);
+    const ls = visibleLines().filter(l => l.woId === woId && openQty(l) > 0);
     if (ls.length) logSpools(ls, S.packedStatus, 'wound & boxed');
   }));
   document.querySelectorAll('[data-doxfer]').forEach(el =>
@@ -915,7 +975,11 @@ function bind() {
   const bb = document.getElementById('bulkBox');
   if (bb) bb.addEventListener('click', () => logSpools(pickedLines(), S.packedStatus, 'wound & boxed'));
   const bn = document.getElementById('bulkBin');
-  if (bn) bn.addEventListener('click', () => logSpools(pickedLines(), BIN_STATUS, 'into the bin'));
+  if (bn) bn.addEventListener('click', () => {
+    const ls = pickedLines();
+    ls.forEach(l => { S.qty[l.id] = binQty(l); });   // never bag more than is unwound
+    logSpools(ls, BIN_STATUS, 'wound & bagged');
+  });
 }
 
 function updateFootCount() {

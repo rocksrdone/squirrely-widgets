@@ -222,6 +222,15 @@ function todayEpochSeconds() {
    the old values and keep collapsing the two steps back into one. */
 const BIN_STATUS = 'Wound - Needs Labels';
 const PACKED_CANDIDATES = ['Packed', 'Packaged - Shipped', 'Wound'];
+/* Kept byte-identical with order-overview.html, quick-log.html and
+   label-batch.html. Order matters: "Wound - Needs Labels" contains "Wound",
+   so the needs-labels test has to run before the catch-all. */
+function allocBucket(status) {
+  const s = (status == null ? '' : status).toString();
+  if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+  if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+  return 'boxed';
+}
 function pickPackedStatus(existingValues) {
   for (const c of PACKED_CANDIDATES) if (existingValues.has(c)) return c;
   return 'Packed';
@@ -384,9 +393,13 @@ async function loadEverything() {
     });
     const binsByWo = {};
     allocs.forEach(a => {
-      const st = (a.status || '').toString();
-      const waiting = st === BIN_STATUS;
-      const boxed = !waiting && (st === S.packedStatus || /shipped/i.test(st));
+      // Same three-bucket test the other widgets use, rather than an exact
+      // match on whichever packed string happened to exist at load time. An
+      // exact match made this widget disagree with Quick Log about what
+      // "boxed" means, so boxed spools kept reappearing as needing labels.
+      const bucket = allocBucket(a.status);
+      const waiting = bucket === 'wound';
+      const boxed = bucket === 'boxed';
       if (!waiting && !boxed) return;
       const meta = lineMeta[a.lineId];
       if (!meta || !meta.woId) return;
