@@ -235,6 +235,12 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="footer-bar">
   <div class="footer-count"><strong id="totalCount">0</strong> labels across <span id="groupCount">0</span> sheet type(s)</div>
   <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool <span style="color:var(--muted)">(CSV)</span></label>
+  <label class="footer-opt">Spare positions: <select id="fillDefault">
+    <option value="FFN">blank FFN rings</option>
+    <option value="FFC">blank FFC rings</option>
+    <option value="EN">blank EN rings</option>
+    <option value="">leave empty</option>
+  </select></label>
   <label class="footer-opt"><input type="checkbox" id="netOnHand" checked> Skip labels I already have <span style="color:var(--muted)">(on hand)</span></label>
   <label class="footer-opt"><input type="checkbox" id="proofMode"> Proof outlines <span style="color:var(--muted)">(PDF)</span></label>
   <div class="footer-actions">
@@ -371,6 +377,7 @@ const S = {
   storeQtyDefault: 6,
   startAt: {},          // group key -> first label position on the sheet
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
+  fillDefault: 'FFN',   // what to fill spare positions with when you haven't said
   frontCust: null, frontStock: '', frontQty: 48, frontStart: 1,
   frontFit: '', frontScale: '', frontImg: null,
   labelSettings: [], clsCols: null,
@@ -1352,6 +1359,7 @@ function groupHtml(g) {
   const used = perSheet ? (g.total + (Number(S.startAt[g.key]) || 1) - 1) % perSheet : 0;
   const leftover = perSheet && g.total && used ? perSheet - used : 0;
   const fillOpts = fibersForTemplate(tpl);
+  const effFill = fillFor(g.key, fillOpts);
   const gFibers = fibersInGroup(g);
   const body = rows.map(r => {
     const st = stateFor(r);
@@ -1396,8 +1404,10 @@ function groupHtml(g) {
                    : `last sheet exactly full`}</span>
     </div>
     <div class="fill-bar"><div class="fill-bar-in" style="width:${fillPct}%"></div></div>
-    ${leftover ? `<div class="fill-hint">Add ${leftover} more, or fill the gap with blank rings below,
-      or bump <em>start at</em> to finish a part-used sheet.</div>` : ''}
+    ${leftover ? `<div class="fill-hint">${effFill
+      ? `Filling with ${leftover} blank ${effFill} ring${leftover === 1 ? '' : 's'} to hand-write — nothing wasted.`
+      : `Those ${leftover} position${leftover === 1 ? '' : 's'} will print empty.`}
+      Or add ${leftover} more label${leftover === 1 ? '' : 's'}, or bump <em>start at</em> to finish a part-used sheet.</div>` : ''}
   </div>` : '';
   // A greyed download with no reason is a dead end. Say which of the two
   // causes it is, and offer the one-click way out.
@@ -1444,8 +1454,8 @@ function groupHtml(g) {
       </label>` : ''}
       ${geom.ok && leftover ? `<label class="start-at" title="Print rings with no name on the unused positions, to write on by hand">
         ${leftover} spare: <select data-fill="${esc(g.key)}">
-          <option value="">leave empty</option>
-          ${fillOpts.map(f => `<option value="${esc(f)}" ${S.fillBlanks[g.key] === f ? 'selected' : ''}>blank ${esc(f)} rings</option>`).join('')}
+          <option value="" ${effFill === '' ? 'selected' : ''}>leave empty</option>
+          ${fillOpts.map(f => `<option value="${esc(f)}" ${effFill === f ? 'selected' : ''}>blank ${esc(f)} rings</option>`).join('')}
         </select>
       </label>` : ''}
       <div class="group-foot-actions">
@@ -1832,6 +1842,19 @@ function fibersForTemplate(tpl) {
   const listed = (tpl.fibers || []).filter(f => RING_SPEC[f]);
   return listed.length ? listed : Object.keys(RING_SPEC);
 }
+/* What actually fills the spare positions on the last sheet.
+   An explicit per-group choice wins — including an explicit "leave empty",
+   which is why this tests for undefined rather than falsiness. Otherwise the
+   global preference applies, but only if this sheet size can carry it: a 1"
+   EN sheet can't hold FFN rings, so it falls back to what the sheet does take
+   rather than silently printing nothing. */
+function fillFor(groupKey, fillOpts) {
+  const explicit = S.fillBlanks[groupKey];
+  if (explicit !== undefined) return explicit;
+  if (!S.fillDefault) return '';
+  if (fillOpts.includes(S.fillDefault)) return S.fillDefault;
+  return fillOpts.length === 1 ? fillOpts[0] : '';
+}
 
 // Every geometry field the generator needs, or a list of what's missing.
 function pdfGeometry(tpl) {
@@ -2014,7 +2037,7 @@ async function buildPdf(group) {
      the colorway gets written on by hand. Nothing is re-fed through the
      printer, so the remainder of the sheet stops being offcut.               */
   let blanks = 0;
-  const fillCode = S.fillBlanks[group.key];
+  const fillCode = fillFor(group.key, fibersForTemplate(group.tpl));
   const fillRing = fillCode ? ringText(fillCode) : null;
   if (fillRing && slot !== 0) {
     doc.setFont(NAME_FONT[0], NAME_FONT[1]);
@@ -2344,6 +2367,11 @@ document.getElementById('csvAllBtn').addEventListener('click', () => {
 document.getElementById('oneRowPerSpool').addEventListener('change', updateFooter);
 document.getElementById('proofMode').addEventListener('change', e => { S.proof = e.target.checked; });
 document.getElementById('netOnHand').addEventListener('change', e => { S.netOffOnHand = e.target.checked; render(); });
+document.getElementById('fillDefault').addEventListener('change', e => {
+  S.fillDefault = e.target.value;
+  S.fillBlanks = {};   // clear per-group overrides so the new default takes hold everywhere
+  render();
+});
 document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
