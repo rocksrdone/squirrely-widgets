@@ -74,6 +74,19 @@ body {
 }
 .reconcile-note strong { font-family: 'DM Mono', monospace; font-size: 13px; }
 .reconcile-note .short { color: #8B5A2A; }
+.ls-table { margin-top: 12px; }
+.ls-code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--mid); }
+.ls-when { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.ls-gap { font-size: 10px; color: var(--accent); font-weight: 700; }
+.ls-pill { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 9px; white-space: nowrap; }
+.ls-pill.ok { background: #E8F3E8; color: #2D6A2D; }
+.ls-pill.warn { background: var(--gold-light, #FBF0E4); color: #8B5A2A; }
+.ls-pill.bad { background: #F8E9E4; color: #A0522D; }
+.ls-pill.neutral { background: #EDF1F7; color: #2A5B8B; }
+.ls-pill.muted { background: transparent; color: var(--muted); }
+.filters { display: flex; gap: 3px; flex-wrap: wrap; }
+.fbtn { padding: 5px 8px; font-size: 10.5px; font-weight: 700; border: 1px solid var(--rule); border-radius: 5px; background: white; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.fbtn.on { background: var(--accent); border-color: var(--accent); color: white; }
 
 .pane { padding: 14px 16px 0; }
 
@@ -212,6 +225,7 @@ input[type=checkbox]:disabled { cursor: default; }
   <div class="tab" data-mode="lines">Pick lines</div>
   <div class="tab" data-mode="allorders">All orders</div>
   <div class="tab" data-mode="free">Free print</div>
+  <div class="tab" data-mode="stock">Label stock</div>
   <div class="tab" data-mode="store">Store listings</div>
   <div class="tab" data-mode="front">Front labels</div>
 </div>
@@ -366,6 +380,7 @@ const S = {
   netOffOnHand: true,   // subtract labels already printed from what gets printed
   freePicked: {},       // recipeId -> true, for the Free print tab
   freeSearch: '', freeQtyDefault: 12,
+  stockSearch: '', stockFilter: 'all',
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
@@ -550,6 +565,8 @@ async function loadLabelStock(problems) {
     S.labelStock[`${rid}|${code}`] = {
       id, recipeId: rid, code,
       qty: Math.max(0, Number(columnAsArray(t, c.qty)[i]) || 0),
+      updated: c.updated ? columnAsArray(t, c.updated)[i] : null,
+      note: c.note ? columnAsArray(t, c.note)[i] || '' : '',
     };
   });
 }
@@ -873,6 +890,7 @@ function rowFromLine(l) {
   };
 }
 function currentRows() {
+  if (S.mode === 'stock') return [];   // inventory view, not a print batch
   if (S.mode === 'order') {
     if (!S.selectedOrderId) return [];
     return S.lines.filter(l => l.woId === S.selectedOrderId && l.qty > 0).map(rowFromLine);
@@ -978,6 +996,7 @@ function render() {
     : S.mode === 'lines' ? linesPaneHtml()
     : S.mode === 'allorders' ? allOrdersPaneHtml()
     : S.mode === 'free' ? freePaneHtml()
+    : S.mode === 'stock' ? labelStockPaneHtml()
     : S.mode === 'front' ? frontPaneHtml() : storePaneHtml());
   bindPane();
   updateFooter();
@@ -1157,6 +1176,115 @@ function freePaneHtml() {
   </div>`;
   if (!picked.length) return box;
   return box + groupRows(currentRows()).map(g => groupHtml(g)).join('');
+}
+
+/* ---------- Label stock: the inventory itself ----------
+   Everywhere else, on-hand is an inline column that only shows up once you've
+   picked an order. This is the standing view: every colorway, what's printed,
+   what the active orders want, and whether that's a problem. */
+function labelStockPaneHtml() {
+  if (!S.hasLabelStock) {
+    return `<div class="empty-note" style="text-align:left; padding:18px 4px;">
+      <strong>No printed-label inventory yet.</strong><br><br>
+      Add a table <strong>Label_Stock</strong> in Grist with these columns, then reload:<br><br>
+      &bull; <strong>Recipe</strong> — Reference &rarr; Recipes<br>
+      &bull; <strong>Stock_Code</strong> — Text<br>
+      &bull; <strong>Qty_On_Hand</strong> — Integer<br>
+      &bull; <strong>Updated</strong> — DateTime<br>
+      &bull; <strong>Note</strong> — Text<br><br>
+      Leave it empty. Rows get created as you type counts in here.
+    </div>`;
+  }
+
+  // What the active orders want, per colorway.
+  const orderById = {};
+  S.orders.forEach(o => { orderById[o.id] = o; });
+  const demand = {};
+  S.lines.forEach(l => {
+    if (!l.qty || !l.recipeId) return;
+    const o = orderById[l.woId];
+    if (!o || (o.status && o.status !== 'Active')) return;
+    demand[l.recipeId] = (demand[l.recipeId] || 0) + l.qty;
+  });
+
+  const q = S.stockSearch.trim().toLowerCase();
+  let rows = Object.values(S.recipes).map(r => {
+    const pseudo = { recipeId: r.id, fiber: r.fiber };
+    const entry = labelStockEntry(pseudo);
+    const onHand = entry ? entry.qty : 0;
+    const need = demand[r.id] || 0;
+    const tpl = templateForRow(pseudo);
+    let status;
+    if (need && onHand >= need) status = 'covered';
+    else if (need && onHand) status = 'short';
+    else if (need) status = 'none';
+    else if (onHand) status = 'surplus';
+    else status = 'empty';
+    return { r, entry, onHand, need, status, code: tpl ? tpl.code : '', fiber: fiberCode(r.fiber) };
+  });
+
+  const counts = { all: rows.length };
+  ['covered', 'short', 'none', 'surplus'].forEach(k => { counts[k] = rows.filter(x => x.status === k).length; });
+  counts.stocked = rows.filter(x => x.onHand > 0).length;
+
+  if (S.stockFilter === 'stocked') rows = rows.filter(x => x.onHand > 0);
+  else if (S.stockFilter === 'needed') rows = rows.filter(x => x.need > 0);
+  else if (S.stockFilter === 'short') rows = rows.filter(x => x.status === 'short' || x.status === 'none');
+  else if (S.stockFilter === 'surplus') rows = rows.filter(x => x.status === 'surplus');
+  if (q) rows = rows.filter(x => `${x.r.name} ${x.r.sku} ${x.fiber} ${x.code}`.toLowerCase().includes(q));
+  rows.sort((a, b) => String(a.r.name).localeCompare(String(b.r.name)));
+
+  const totalOnHand = Object.values(S.labelStock).reduce((a, e) => a + e.qty, 0);
+  const totalNeed = Object.values(demand).reduce((a, n) => a + n, 0);
+
+  const fb = (v, label, n) => `<button class="fbtn ${S.stockFilter === v ? 'on' : ''}" data-stockfilter="${v}">${
+    label}${n != null ? ` <span style="opacity:.7">${n}</span>` : ''}</button>`;
+
+  const STATUS = {
+    covered: ['ok', 'covered'], short: ['warn', 'short'], none: ['bad', 'none printed'],
+    surplus: ['neutral', 'spare'], empty: ['muted', '—'],
+  };
+
+  const body = rows.length ? rows.map(x => {
+    const [cls, text] = STATUS[x.status];
+    const gap = x.need - x.onHand;
+    return `<tr>
+      <td><div class="colorway">${esc(x.r.name)}</div><div class="sku">${esc(x.r.sku || '')}</div></td>
+      <td>${x.fiber ? `<span class="fiber-tag">${esc(x.fiber)}</span>` : ''}</td>
+      <td class="ls-code">${esc(x.code || '—')}</td>
+      <td class="col-num"><input class="qty-input onhand ${x.onHand ? 'has' : ''}"
+        data-stockqty="${x.r.id}" value="${x.onHand}"></td>
+      <td class="col-num">${x.need || '—'}</td>
+      <td><span class="ls-pill ${cls}">${text}</span>${
+        gap > 0 && x.need ? ` <span class="ls-gap">${gap} short</span>` : ''}</td>
+      <td class="ls-when">${x.entry && x.entry.updated ? esc(fmtStockDate(x.entry.updated)) : ''}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="7" class="empty-note">Nothing matches.</td></tr>`;
+
+  return `<div class="pick-box">
+    <div class="pick-row" style="gap:10px;flex-wrap:wrap;">
+      <input id="stockSearch" placeholder="Search colorway, SKU, fiber or stock code..." value="${esc(S.stockSearch)}" style="flex:1;min-width:180px;">
+      <div class="filters">${fb('all', 'All', counts.all)}${fb('stocked', 'Have some', counts.stocked)}${
+        fb('needed', 'On orders')}${fb('short', 'Short', counts.short + counts.none)}${fb('surplus', 'Spare', counts.surplus)}</div>
+    </div>
+    <div class="pl-summary"><strong>${totalOnHand}</strong> printed labels on hand ·
+      <strong>${totalNeed}</strong> wanted by active orders ·
+      counts drop automatically as spools get boxed</div>
+  </div>
+  <table class="lbl ls-table">
+    <thead><tr>
+      <th>Colorway</th><th>Fiber</th><th>Sheet</th>
+      <th class="col-num">On hand</th><th class="col-num">Needed</th><th>Status</th><th>Updated</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
+}
+
+function fmtStockDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : new Date(v).getTime();
+  if (!ms || isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString();
 }
 
 function storePaneHtml() {  const rows = currentRows();
@@ -1354,6 +1482,23 @@ function bindPane() {
   }));
   document.querySelectorAll('[data-addstock]').forEach(el =>
     el.addEventListener('click', () => adjustGroupOnHand(el.dataset.addstock, 'add')));
+
+  const stSearch = document.getElementById('stockSearch');
+  if (stSearch) stSearch.addEventListener('input', () => {
+    S.stockSearch = stSearch.value;
+    const pos = stSearch.selectionStart;
+    render();
+    const s2 = document.getElementById('stockSearch');
+    if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  document.querySelectorAll('[data-stockfilter]').forEach(el =>
+    el.addEventListener('click', () => { S.stockFilter = el.dataset.stockfilter; render(); }));
+  document.querySelectorAll('[data-stockqty]').forEach(el => el.addEventListener('change', async () => {
+    const r = S.recipes[Number(el.dataset.stockqty)];
+    if (!r) return;
+    await setOnHand({ recipeId: r.id, fiber: r.fiber }, el.value);
+    render();
+  }));
 
   const fSearch = document.getElementById('freeSearch');
   if (fSearch) fSearch.addEventListener('input', () => {
@@ -1580,7 +1725,8 @@ function bindPane() {
 }
 
 function allGroups() {
-  if (S.mode === 'front') return [];
+  // 'front' and 'stock' are not print batches — neither produces sheet rows.
+  if (S.mode === 'front' || S.mode === 'stock') return [];
   return groupRows(currentRows());
 }
 function findGroup(key) { return allGroups().find(g => g.key === key) || null; }
