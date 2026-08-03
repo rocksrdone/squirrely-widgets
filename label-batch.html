@@ -50,6 +50,13 @@ body {
   font-size: 11.5px; line-height: 1.5; display: flex; gap: 9px;
   align-items: center; justify-content: space-between; flex-wrap: wrap;
 }
+.onhand-cell { display: flex; align-items: center; gap: 6px; }
+.qty-input.onhand { width: 48px; }
+.qty-input.onhand.has { border-color: #7FA88A; background: #F2F8F3; font-weight: 700; }
+.qty-input.onhand:disabled { background: var(--warm, #F6F1E9); color: var(--muted); }
+.from-stock { font-size: 10px; font-weight: 700; color: #2D6A2D; white-space: nowrap; }
+.stock-line { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); margin-right: auto; }
+.stock-line strong { font-family: 'DM Mono', monospace; color: var(--ink); }
 
 .pane { padding: 14px 16px 0; }
 
@@ -186,6 +193,8 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="tabs">
   <div class="tab active" data-mode="order">Order batch</div>
   <div class="tab" data-mode="lines">Pick lines</div>
+  <div class="tab" data-mode="allorders">All orders</div>
+  <div class="tab" data-mode="free">Free print</div>
   <div class="tab" data-mode="store">Store listings</div>
   <div class="tab" data-mode="front">Front labels</div>
 </div>
@@ -195,6 +204,7 @@ input[type=checkbox]:disabled { cursor: default; }
 <div class="footer-bar">
   <div class="footer-count"><strong id="totalCount">0</strong> labels across <span id="groupCount">0</span> sheet type(s)</div>
   <label class="footer-opt"><input type="checkbox" id="oneRowPerSpool" checked> One row per spool <span style="color:var(--muted)">(CSV)</span></label>
+  <label class="footer-opt"><input type="checkbox" id="netOnHand" checked> Skip labels I already have <span style="color:var(--muted)">(on hand)</span></label>
   <label class="footer-opt"><input type="checkbox" id="proofMode"> Proof outlines <span style="color:var(--muted)">(PDF)</span></label>
   <div class="footer-actions">
     <button class="btn solid" id="csvAllBtn">Download all files</button>
@@ -333,6 +343,11 @@ const S = {
   frontCust: null, frontStock: '', frontQty: 48, frontStart: 1,
   frontFit: '', frontScale: '', frontImg: null,
   labelSettings: [], clsCols: null,
+  labelStock: {},       // "recipeId|STOCKCODE" -> {id, recipeId, code, qty}
+  hasLabelStock: false, lsCols: null,
+  netOffOnHand: true,   // subtract labels already printed from what gets printed
+  freePicked: {},       // recipeId -> true, for the Free print tab
+  freeSearch: '', freeQtyDefault: 12,
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
 };
@@ -456,6 +471,7 @@ async function loadAll() {
 
   await loadTemplates(problems);
   await loadLabelSettings();
+  await loadLabelStock(problems);
   // Match the dropdown's own fallback so the two never disagree.
   if (!S.frontStock && S.templates.length) S.frontStock = S.templates[0].code;
 
@@ -473,6 +489,123 @@ async function loadAll() {
 
   setBanner(problems);
   S.ready = true;
+  render();
+}
+
+/* ---------- printed-label inventory ----------
+   Label_Stock counts labels you have ALREADY PRINTED and not yet stuck on a
+   spool, per colorway per stock code. The old Recipes toggle could only say
+   "yes I have some", which can't answer the question that matters: how many
+   still need printing. Keyed on recipe + stock code because one colorway can
+   exist in two fibers, and fiber is what picks the sheet.                    */
+async function loadLabelStock(problems) {
+  S.labelStock = {}; S.hasLabelStock = false; S.lsCols = null;
+  let t;
+  try {
+    t = await grist.docApi.fetchTable('Label_Stock');
+  } catch (e) {
+    problems.push({ title: 'No printed-label inventory yet',
+      body: 'Add a table <strong>Label_Stock</strong> with columns <strong>Recipe</strong> (Reference &rarr; Recipes), ' +
+        '<strong>Stock_Code</strong> (Text), <strong>Qty_On_Hand</strong> (Integer), <strong>Updated</strong> (DateTime) and ' +
+        '<strong>Note</strong> (Text). Then you can type how many printed labels you already have per colorway, and every ' +
+        'batch will print only the shortfall. Until then the on-hand column is read-only zeros.' });
+    return;
+  }
+  const c = {
+    recipe: findColumn(t, ['Recipe']),
+    code: findColumn(t, ['Stock_Code', 'Code']),
+    qty: findColumn(t, ['Qty_On_Hand', 'Qty', 'On_Hand']),
+    updated: findColumn(t, ['Updated', 'Updated_On', 'Last_Updated']),
+    note: findColumn(t, ['Note', 'Notes']),
+  };
+  if (!c.recipe || !c.qty) {
+    problems.push({ title: 'Label_Stock is missing columns',
+      body: 'Needs at least <strong>Recipe</strong> (Reference &rarr; Recipes) and <strong>Qty_On_Hand</strong> (Integer).' });
+    return;
+  }
+  S.lsCols = c; S.hasLabelStock = true;
+  (t.id || []).forEach((id, i) => {
+    const rid = getRefId(columnAsArray(t, c.recipe)[i]);
+    if (!rid) return;
+    const code = normalize(c.code ? columnAsArray(t, c.code)[i] : '') || '';
+    S.labelStock[`${rid}|${code}`] = {
+      id, recipeId: rid, code,
+      qty: Math.max(0, Number(columnAsArray(t, c.qty)[i]) || 0),
+    };
+  });
+}
+
+function stockCodeForRow(row) {
+  const tpl = templateForRow(row);
+  return normalize(tpl ? tpl.code : '');
+}
+function labelStockEntry(row) {
+  if (!row.recipeId) return null;
+  const code = stockCodeForRow(row);
+  // Exact stock-code match first; a row written before templates existed may
+  // have a blank code, so fall back to that rather than losing the count.
+  return S.labelStock[`${row.recipeId}|${code}`] || S.labelStock[`${row.recipeId}|`] || null;
+}
+function onHandFor(row) {
+  const e = labelStockEntry(row);
+  return e ? e.qty : 0;
+}
+/* Three numbers per row: what the order needs, what comes off the shelf, and
+   what actually gets printed. Only the last one reaches the PDF. */
+function neededQty(row) {
+  const st = stateFor(row);
+  if (!st.include) return 0;
+  return Math.max(0, Number(st.qty) || 0);
+}
+function fromStockQty(row) {
+  if (!S.netOffOnHand) return 0;
+  return Math.min(neededQty(row), onHandFor(row));
+}
+
+async function setOnHand(row, qty) {
+  if (!S.hasLabelStock) { showToast('Add a Label_Stock table first', true); return; }
+  const c = S.lsCols;
+  const e = labelStockEntry(row);
+  const n = Math.max(0, Math.round(Number(qty) || 0));
+  const fields = {};
+  fields[c.qty] = n;
+  if (c.updated) fields[c.updated] = Math.floor(Date.now() / 1000); // Grist wants epoch SECONDS
+  try {
+    if (e) {
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Label_Stock', e.id, fields]]);
+      e.qty = n;
+    } else {
+      fields[c.recipe] = row.recipeId;
+      if (c.code) fields[c.code] = stockCodeForRow(row);
+      const res = await grist.docApi.applyUserActions([['AddRecord', 'Label_Stock', null, fields]]);
+      const vals = Array.isArray(res) ? res : (res && res.retValues) || [];
+      const newId = vals[0];
+      if (newId) S.labelStock[`${row.recipeId}|${stockCodeForRow(row)}`] =
+        { id: newId, recipeId: row.recipeId, code: stockCodeForRow(row), qty: n };
+    }
+  } catch (err) {
+    console.error('Label_Stock write failed', err);
+    showToast('Could not save on-hand count', true);
+  }
+}
+
+/* After a print run or after sticking labels on spools, move the whole group's
+   counts in one go rather than editing rows one at a time. */
+async function adjustGroupOnHand(groupKey, direction) {
+  const g = findGroup(groupKey);
+  if (!g || !S.hasLabelStock) return;
+  const jobs = [];
+  g.rows.forEach(r => {
+    if (!r.recipeId) return;
+    const delta = direction === 'take' ? -fromStockQty(r) : effectiveQty(r);
+    if (!delta) return;
+    jobs.push({ row: r, next: Math.max(0, onHandFor(r) + delta) });
+  });
+  if (!jobs.length) { showToast('Nothing to adjust'); return; }
+  for (const j of jobs) await setOnHand(j.row, j.next);
+  showToast(direction === 'take'
+    ? 'Taken off the on-hand counts'
+    : 'Printed labels added to on-hand');
   render();
 }
 
@@ -627,6 +760,44 @@ function currentRows() {
       .map(rowFromLine)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
+  if (S.mode === 'allorders') {
+    // Total demand per colorway across every active order, so one print run
+    // covers the whole board instead of one order at a time.
+    const orderById = {};
+    S.orders.forEach(o => { orderById[o.id] = o; });
+    const byRecipe = new Map();
+    S.lines.forEach(l => {
+      if (!l.qty) return;
+      const o = orderById[l.woId];
+      if (!o || (o.status && o.status !== 'Active')) return;
+      const key = l.recipeId || ('sku:' + (l.sku || l.id));
+      if (!byRecipe.has(key)) byRecipe.set(key, { recipeId: l.recipeId, sku: l.sku, productName: l.productName, qty: 0, orders: new Set() });
+      const e = byRecipe.get(key);
+      e.qty += l.qty;
+      e.orders.add(l.woId);
+    });
+    return [...byRecipe.values()].map(e => {
+      const r = S.recipes[e.recipeId] || null;
+      return {
+        rowKey: 'A' + (e.recipeId || e.sku), recipeId: e.recipeId,
+        name: r ? r.name : (e.productName || e.sku || '(unmatched SKU)'),
+        sku: (r && r.sku) || e.sku, fiber: r ? r.fiber : '',
+        sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
+        defaultQty: e.qty, stock: r ? r.stock : 0,
+        orderNum: '', custName: '', orderCount: e.orders.size,
+      };
+    }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+  if (S.mode === 'free') {
+    // Anything at all, order or no order.
+    return Object.values(S.recipes).filter(r => S.freePicked[r.id])
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+      .map(r => ({
+        rowKey: 'F' + r.id, recipeId: r.id, name: r.name, sku: r.sku, fiber: r.fiber,
+        sheetOnHand: r.sheetOnHand, matched: true, defaultQty: S.freeQtyDefault, stock: r.stock,
+        orderNum: '', custName: '',
+      }));
+  }
   return Object.values(S.recipes).filter(r => r.storeActive)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map(r => ({
@@ -643,11 +814,11 @@ function stateFor(row) {
    but it must not be a hard block — it used to zero the row whatever the
    include box said, and the box was disabled too, so a batch of all-on-hand
    colorways greyed out both download buttons with nothing explaining why.
-   The tick is now the only authority. */
+   The tick is now the only authority.
+   effectiveQty is what actually gets PRINTED: the need, minus whatever the
+   printed-label inventory can already cover. */
 function effectiveQty(row) {
-  const st = stateFor(row);
-  if (!st.include) return 0;
-  return Math.max(0, Number(st.qty) || 0);
+  return Math.max(0, neededQty(row) - fromStockQty(row));
 }
 
 // Fiber alone decides the sheet: Label_Templates.Fiber_Codes is the whole
@@ -683,6 +854,8 @@ function render() {
   document.getElementById('pane').innerHTML =
     S.mode === 'order' ? orderPaneHtml()
     : S.mode === 'lines' ? linesPaneHtml()
+    : S.mode === 'allorders' ? allOrdersPaneHtml()
+    : S.mode === 'free' ? freePaneHtml()
     : S.mode === 'front' ? frontPaneHtml() : storePaneHtml();
   bindPane();
   updateFooter();
@@ -808,6 +981,62 @@ function linesPaneHtml() {
     groups.map(g => groupHtml(g)).join('');
 }
 
+/* Every active order's demand, rolled up per colorway. Answers "what do I need
+   printed across the whole board" rather than one order at a time. */
+function allOrdersPaneHtml() {
+  const rows = currentRows();
+  if (!rows.length) return `<div class="empty-note">No active orders with quantities.</div>`;
+  const need = rows.reduce((a, r) => a + neededQty(r), 0);
+  const stock = rows.reduce((a, r) => a + fromStockQty(r), 0);
+  const print = rows.reduce((a, r) => a + effectiveQty(r), 0);
+  const multi = rows.filter(r => r.orderCount > 1).length;
+  return `<div class="pick-box">
+    <div class="pl-summary">
+      <strong>${rows.length}</strong> colorway${rows.length === 1 ? '' : 's'} across all active orders ·
+      <strong>${need}</strong> labels needed · <strong>${stock}</strong> already on hand ·
+      <strong>${print}</strong> to print${multi ? ` · ${multi} colorway${multi === 1 ? '' : 's'} wanted by more than one order` : ''}
+    </div>
+  </div>` + groupRows(rows).map(g => groupHtml(g)).join('');
+}
+
+/* Print anything, order or no order — restocking, replacements, samples. */
+function freePaneHtml() {
+  const q = S.freeSearch.trim().toLowerCase();
+  const all = Object.values(S.recipes)
+    .filter(r => !q || `${r.name} ${r.sku} ${r.fiber}`.toLowerCase().includes(q))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const shown = all.slice(0, 250);
+  const list = shown.map(r => {
+    const on = !!S.freePicked[r.id];
+    const fib = fiberCode(r.fiber);
+    return `<div class="pl-line ${on ? 'on' : ''}" data-freeline="${r.id}">
+      <input type="checkbox" ${on ? 'checked' : ''} data-freebox="${r.id}">
+      <span class="pl-name">${esc(r.name)}</span>
+      ${fib ? `<span class="pl-fiber">${esc(fib)}</span>` : ''}
+      <span class="pl-qty">${onHandFor({ recipeId: r.id, fiber: r.fiber }) || ''}</span>
+    </div>`;
+  }).join('');
+  const picked = Object.values(S.recipes).filter(r => S.freePicked[r.id]);
+
+  const box = `<div class="pick-box">
+    <div class="pick-row" style="gap:10px;flex-wrap:wrap;">
+      <input id="freeSearch" placeholder="Search any colorway, SKU or fiber..." value="${esc(S.freeSearch)}" style="flex:1;min-width:180px;">
+      <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:5px;">
+        qty each <input class="qty-input" id="freeQty" value="${esc(S.freeQtyDefault)}"></label>
+      <button class="btn tiny" id="freeAllShown">Pick all shown</button>
+      <button class="btn tiny" id="freeNone">Clear</button>
+    </div>
+    <div class="pl-list">${list || '<div class="empty-note">No colorway matches.</div>'}</div>
+    <div class="pl-summary">${picked.length
+      ? `<strong>${picked.length}</strong> colorway${picked.length === 1 ? '' : 's'} picked`
+      : 'Pick any colorway — nothing here has to be on an order.'}${
+      all.length > shown.length ? ` · showing first ${shown.length} of ${all.length}, narrow the search to see more` : ''}
+      <span style="color:var(--muted);"> · the number on the right is what you already have printed</span></div>
+  </div>`;
+  if (!picked.length) return box;
+  return box + groupRows(currentRows()).map(g => groupHtml(g)).join('');
+}
+
 function storePaneHtml() {  const rows = currentRows();
   if (!rows.length) {
     return `<div class="empty-note">No recipes are marked active on the store. Tick <strong>Store_Listing_Active</strong> on the recipes you're listing, or add that column to Recipes.</div>`;
@@ -874,10 +1103,12 @@ function groupHtml(g) {
   const leftover = perSheet && g.total && used ? perSheet - used : 0;
   const fillOpts = fibersForTemplate(tpl);
   const gFibers = fibersInGroup(g);
-  const hasSheetCol = !!S.cols.recipe.sheet;
   const body = rows.map(r => {
     const st = stateFor(r);
     const printing = effectiveQty(r);
+    const need = neededQty(r);
+    const fromStock = fromStockQty(r);
+    const onHand = onHandFor(r);
     return `<tr class="${printing ? '' : 'skipped'}" data-row="${esc(r.rowKey)}">
       <td class="col-chk"><input type="checkbox" data-include="${esc(r.rowKey)}" ${st.include ? 'checked' : ''}
         title="${r.sheetOnHand ? 'Marked sheet on hand, so off by default — tick to reprint anyway' : 'Include on the sheet'}"></td>
@@ -885,11 +1116,15 @@ function groupHtml(g) {
       <td>${r.fiber ? `<span class="fiber-tag">${esc(fiberCode(r.fiber) || r.fiber)}</span>` : ''}</td>
       <td class="col-num"><input class="qty-input" data-qty="${esc(r.rowKey)}" value="${esc(st.qty)}"></td>
       <td class="col-stock">
-        <div class="stock-cell ${hasSheetCol ? '' : 'disabled'}">
-          <label><input type="checkbox" data-sheet="${esc(r.recipeId || '')}" ${r.sheetOnHand ? 'checked' : ''} ${hasSheetCol && r.recipeId ? '' : 'disabled'}> sheet on hand</label>
-        </div>${r.stock ? `<div class="hint-num">${r.stock} in stock</div>` : ''}
+        <div class="onhand-cell">
+          <input class="qty-input onhand ${onHand ? 'has' : ''}" data-onhand="${esc(r.rowKey)}"
+            value="${onHand}" ${S.hasLabelStock && r.recipeId ? '' : 'disabled'}
+            title="${S.hasLabelStock ? 'Printed labels you already have for this colorway' : 'Add a Label_Stock table to track this'}">
+          ${fromStock ? `<span class="from-stock">&minus;${fromStock} used</span>` : ''}
+        </div>${r.stock ? `<div class="hint-num">${r.stock} spools in stock</div>` : ''}
       </td>
-      <td class="col-num num print ${printing ? '' : 'zero'}">${printing}</td>
+      <td class="col-num num print ${printing ? '' : 'zero'}"
+        title="${need ? `needs ${need}, ${fromStock} off the shelf, ${printing} to print` : ''}">${printing}</td>
     </tr>`;
   }).join('');
 
@@ -898,13 +1133,25 @@ function groupHtml(g) {
   // causes it is, and offer the one-click way out.
   const offCount = rows.filter(r => !stateFor(r).include).length;
   const onHandOff = rows.filter(r => !stateFor(r).include && r.sheetOnHand).length;
+  const gNeed = rows.reduce((a, r) => a + neededQty(r), 0);
+  const gFromStock = rows.reduce((a, r) => a + fromStockQty(r), 0);
+  const coveredAll = gNeed > 0 && gFromStock >= gNeed;
+  const stockLine = (gFromStock || g.total) && S.hasLabelStock ? `<span class="stock-line">
+      ${gFromStock ? `<strong>${gFromStock}</strong> of ${gNeed} already on hand` : `none on hand`}
+      ${gFromStock ? `<button class="btn tiny" data-takestock="${esc(g.key)}"
+        title="Subtract those from the on-hand counts — you're about to stick them on spools">Use them</button>` : ''}
+      ${g.total ? `<button class="btn tiny" data-addstock="${esc(g.key)}"
+        title="Add the printed labels to on-hand instead — for a stock-up run you won't use straight away">Print to stock</button>` : ''}
+    </span>` : '';
   const zeroNote = g.total ? '' : `<div class="zero-note">
     Nothing to print on this sheet — ${offCount === rows.length
       ? (onHandOff === rows.length
         ? `all ${rows.length} colorway${rows.length === 1 ? ' is' : 's are'} marked <strong>sheet on hand</strong>, so they're off by default.`
         : `every row is unticked.`)
-      : `every included row has a quantity of 0.`}
-    <button class="btn tiny" data-includeall="${esc(g.key)}">Include all ${rows.length}</button>
+      : coveredAll
+        ? `all ${gNeed} needed label${gNeed === 1 ? ' is' : 's are'} already printed and on hand.`
+        : `every included row has a quantity of 0.`}
+    ${coveredAll ? '' : `<button class="btn tiny" data-includeall="${esc(g.key)}">Include all ${rows.length}</button>`}
   </div>`;
 
   return `<div class="group ${tpl ? '' : 'unassigned'}">
@@ -918,7 +1165,7 @@ function groupHtml(g) {
     </div>
     ${calibHtml(tpl)}
     <table class="lbl">
-      <thead><tr><th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Qty</th><th class="col-stock">Printed stock</th><th class="col-num">Print</th></tr></thead>
+      <thead><tr><th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Need</th><th class="col-stock">Labels on hand</th><th class="col-num">Print</th></tr></thead>
       <tbody>${body}</tbody>
     </table>
     <div class="group-foot">
@@ -933,6 +1180,7 @@ function groupHtml(g) {
         </select>
       </label>` : ''}
       <div class="group-foot-actions">
+        ${stockLine}
         <button class="btn tiny" data-copy="${esc(g.key)}">Copy</button>
         <button class="btn" data-csv="${esc(g.key)}" ${g.total ? '' : 'disabled'}
           title="${gFibers.length > 1 ? esc(gFibers.length + ' files, one per fiber (each needs its own Maestro design)') : 'One merge file'}">CSV${gFibers.length > 1 ? ' \u00d7' + gFibers.length : ''}</button>
@@ -957,6 +1205,50 @@ function frontSummaryHtml(rows, cust) {
 
 /* ---------- events ---------- */
 function bindPane() {
+  document.querySelectorAll('[data-onhand]').forEach(el => el.addEventListener('change', async () => {
+    const row = currentRows().find(r => r.rowKey === el.dataset.onhand);
+    if (!row) return;
+    await setOnHand(row, el.value);
+    render();
+  }));
+  document.querySelectorAll('[data-takestock]').forEach(el =>
+    el.addEventListener('click', () => adjustGroupOnHand(el.dataset.takestock, 'take')));
+  document.querySelectorAll('[data-addstock]').forEach(el =>
+    el.addEventListener('click', () => adjustGroupOnHand(el.dataset.addstock, 'add')));
+
+  const fSearch = document.getElementById('freeSearch');
+  if (fSearch) fSearch.addEventListener('input', () => {
+    S.freeSearch = fSearch.value;
+    const pos = fSearch.selectionStart;
+    render();
+    const f2 = document.getElementById('freeSearch');
+    if (f2) { f2.focus(); f2.setSelectionRange(pos, pos); }
+  });
+  const fq = document.getElementById('freeQty');
+  if (fq) fq.addEventListener('change', () => {
+    S.freeQtyDefault = Math.max(0, Number(fq.value) || 0);
+    currentRows().forEach(r => { stateFor(r).qty = S.freeQtyDefault; });
+    render();
+  });
+  document.querySelectorAll('[data-freebox]').forEach(el => el.addEventListener('change', () => {
+    const id = Number(el.dataset.freebox);
+    if (el.checked) S.freePicked[id] = true; else delete S.freePicked[id];
+    render();
+  }));
+  document.querySelectorAll('[data-freeline]').forEach(el => el.addEventListener('click', ev => {
+    if (ev.target && ev.target.matches('input')) return;
+    const id = Number(el.dataset.freeline);
+    if (S.freePicked[id]) delete S.freePicked[id]; else S.freePicked[id] = true;
+    render();
+  }));
+  const fa = document.getElementById('freeAllShown');
+  if (fa) fa.addEventListener('click', () => {
+    document.querySelectorAll('[data-freebox]').forEach(b => { S.freePicked[Number(b.dataset.freebox)] = true; });
+    render();
+  });
+  const fn = document.getElementById('freeNone');
+  if (fn) fn.addEventListener('click', () => { S.freePicked = {}; S.rowState = {}; render(); });
+
   const lsearch = document.getElementById('lineSearch');
   if (lsearch) lsearch.addEventListener('input', () => {
     S.lineSearch = lsearch.value;
@@ -1020,6 +1312,19 @@ function bindPane() {
     cell.textContent = q;
     cell.classList.toggle('zero', !q);
     tr.classList.toggle('skipped', !q);
+    // The "−N used" hint depends on the quantity, so keep it in step without a
+    // full re-render (which would steal focus mid-number).
+    const usedFromStock = fromStockQty(row);
+    const cellStock = tr.querySelector('.onhand-cell');
+    let hint = cellStock && cellStock.querySelector('.from-stock');
+    if (cellStock) {
+      if (usedFromStock && !hint) {
+        hint = document.createElement('span');
+        hint.className = 'from-stock';
+        cellStock.appendChild(hint);
+      }
+      if (hint) hint.textContent = usedFromStock ? `\u2212${usedFromStock} used` : '';
+    }
     refreshTotals();
   }));
   document.querySelectorAll('[data-sheet]').forEach(el =>
@@ -1448,8 +1753,9 @@ async function buildPdf(group) {
   const o = currentOrder();
   const base = S.mode === 'order'
     ? `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}`
-    : S.mode === 'lines'
-    ? `labels_picked-lines_${stock}`
+    : S.mode === 'lines' ? `labels_picked-lines_${stock}`
+    : S.mode === 'allorders' ? `labels_all-orders_${stock}`
+    : S.mode === 'free' ? `labels_free-print_${stock}`
     : `labels_store-listings_${stock}`;
   doc.save(`${base}_${stamp}.pdf`);
 
@@ -1720,6 +2026,8 @@ function csvFilename(g, onlyFiber) {
     return `labels_order-${String((o && o.num) || 'batch').replace(/[^A-Za-z0-9_-]/g, '')}_${stock}_${stamp}.csv`;
   }
   if (S.mode === 'lines') return `labels_picked-lines_${stock}_${stamp}.csv`;
+  if (S.mode === 'allorders') return `labels_all-orders_${stock}_${stamp}.csv`;
+  if (S.mode === 'free') return `labels_free-print_${stock}_${stamp}.csv`;
   return `labels_store-listings_${stock}_${stamp}.csv`;
 }
 function saveCsvFile(name, csv) {
@@ -1750,6 +2058,7 @@ document.getElementById('csvAllBtn').addEventListener('click', () => {
 });
 document.getElementById('oneRowPerSpool').addEventListener('change', updateFooter);
 document.getElementById('proofMode').addEventListener('change', e => { S.proof = e.target.checked; });
+document.getElementById('netOnHand').addEventListener('change', e => { S.netOffOnHand = e.target.checked; render(); });
 document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
