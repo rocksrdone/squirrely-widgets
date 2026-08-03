@@ -80,21 +80,24 @@
   button.go:disabled { background: #C3BCB2; cursor: not-allowed; }
 
   .done-line {
-    display: flex; justify-content: space-between; align-items: center; font-size: 11px;
-    background: var(--done-bg); color: var(--done-text); border-radius: 5px;
-    padding: 5px 8px; margin-bottom: 3px;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px;
+    border-radius: 5px; padding: 5px 8px; margin-bottom: 3px;
   }
+  .done-line.wound { background: var(--teal-light); color: var(--teal); }
+  .done-line.boxed { background: var(--done-bg); color: var(--done-text); }
   .undo-link { color: var(--teal); cursor: pointer; text-decoration: underline; font-size: 10px; white-space: nowrap; }
+  .done-line.boxed .undo-link { color: var(--done-text); }
   .warn { background: var(--warn-bg); color: var(--warn-text); border-radius: 5px; padding: 6px 8px; font-size: 11px; margin-bottom: 6px; }
 
 
   .search-input { width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:6px; font-size:13px; margin-bottom:8px; }
   .section-title.muted { color:#B0A596; }
-  .viewbar { display:flex; gap:4px; margin-bottom:6px; }
+  .viewbar { display:flex; gap:4px; margin-bottom:5px; }
   .viewbtn { flex:1; padding:6px 4px; font-size:11px; font-weight:700; border:1px solid var(--rule);
              border-radius:5px; background:white; color:#8B7D72; cursor:pointer; }
   .viewbtn.on { background:var(--teal); color:white; border-color:var(--teal); }
   .viewbtn .n { opacity:.75; font-weight:600; }
+  .view-hint { font-size:10.5px; color:#8B7D72; line-height:1.5; margin-bottom:8px; }
 
   .bin-card { background:white; border:1px solid var(--rule);
               border-radius:6px; padding:6px 8px; margin-bottom:5px; }
@@ -124,6 +127,7 @@
   .line-cust { font-weight:700; font-size:13px; white-space:nowrap; }
   .line-color { font-size:11px; color:#8B7D72; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .line-qty { font-size:12px; font-weight:700; color:var(--teal); white-space:nowrap; }
+  .line-qty .unit { font-size:9.5px; font-weight:600; opacity:.75; text-transform:uppercase; letter-spacing:.03em; }
   .line-sub { font-size:10px; color:#8B7D72; margin-top:1px; }
   .section-title { margin-top:8px; }
   .drying-note { color:var(--wet-text,#2A5B8B); }
@@ -516,7 +520,7 @@ function rowHtml(l) {
           <span class="line-cust">${esc(l.recipeName)}</span>
           <span class="line-color">${esc(l.customerName || '—')}</span>
         </div>
-        <span class="line-qty">${l.outstanding}</span>
+        <span class="line-qty" title="Spools still to wind for this line">${l.outstanding} <span class="unit">to wind</span></span>
       </div>
       <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
     </div>
@@ -532,27 +536,36 @@ function binMatch(b) {
 function binsHtml(withTitle) {
   const list = S.bins.filter(binMatch);
   if (!list.length) return '';
-  return (withTitle ? `<div class="section-title">In bins — needs labels</div>` : '') + list.map(b => {
+  return (withTitle ? `<div class="section-title">Step 2 — label &amp; box</div>` : '') + list.map(b => {
+    // Buttons are verbs (what pressing this does); chips are past tense (what
+    // already happened). The old wording used "In box ✓" for both, so the same
+    // words meant "do this" on one row and "done" on the next.
     const rows = b.itemList.map(it => it.qty === 0
       ? `<div class="bin-item done">
            <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty}</span>
-           <span class="bin-item-tick">in box</span>
+           <span class="bin-item-tick">&#10003; boxed</span>
          </div>`
       : `<div class="bin-item">
            <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span></span>
-           <button class="mini" onclick="markPacked(${b.woId}, '${it.key}')">In box &#10003;</button>
+           <button class="mini" onclick="markPacked(${b.woId}, '${it.key}')"
+             title="Labels are on these ${it.qty} spool${it.qty === 1 ? '' : 's'} and they're in the box">Labelled &rarr; box</button>
          </div>`).join('');
-    const left = b.itemList.filter(i => i.qty > 0).length;
-    const progress = b.doneCount ? ` &middot; ${b.doneCount} of ${b.itemList.length} in box` : '';
+    const openItems = b.itemList.filter(i => i.qty > 0).length;
+    // Spools and colorways are different units — say which is which rather
+    // than running "12 to go · 2 of 5" together and leaving it ambiguous.
+    const progress = b.doneCount
+      ? ` &middot; ${b.doneCount} of ${b.itemList.length} colorways boxed`
+      : '';
     return `
       <div class="bin-card">
         <div class="bin-head">
           <div class="bin-who">
             <div><span class="bin-name">${esc(b.customerName || 'order')}</span></div>
             <div class="bin-meta">${esc(b.orderNumber || '')}${b.orderNumber ? ' &middot; ' : ''}${
-              b.total} spool${b.total === 1 ? '' : 's'} to go${progress}</div>
+              b.total} spool${b.total === 1 ? '' : 's'} still to label${progress}</div>
           </div>
-          ${left > 1 ? `<button class="mini ghost" onclick="markPacked(${b.woId}, null)">All in &#10003;</button>` : ''}
+          ${openItems > 1 ? `<button class="mini ghost" onclick="markPacked(${b.woId}, null)"
+            title="Mark all ${openItems} remaining colorways labelled and boxed">All ${openItems} done</button>` : ''}
         </div>
         <div class="bin-items">${rows}</div>
       </div>`;
@@ -561,8 +574,15 @@ function binsHtml(withTitle) {
 
 /* Three views rather than one long scroll. The worker doing the labelling only
    ever wants the middle one, and reaching it should not mean scrolling past
-   every windable line. */
+   every windable line. The numbers say these are stages of one job, not three
+   unrelated screens. */
 function setView(v) { S.view = v; render(); }
+
+const VIEW_HINT = {
+  wind: 'Pick a line, choose which lots to draw from, then wind and bag into that customer\u2019s bin.',
+  labels: 'Print the labels, stick them on, then tick each colorway as it goes in the box.',
+  all: 'Everything at once — winding queue on top of what\u2019s waiting on labels.',
+};
 
 function viewBar() {
   const nWind = S.lines.filter(l => l.ready).length;
@@ -570,8 +590,9 @@ function viewBar() {
   const btn = (v, label, n) =>
     `<button class="viewbtn ${S.view === v ? 'on' : ''}" onclick="setView('${v}')">${label}${
       n != null ? ` <span class="n">${n}</span>` : ''}</button>`;
-  return `<div class="viewbar">${btn('wind', 'To wind', nWind)}${
-    btn('labels', 'Needs labels', nBins)}${btn('all', 'All')}</div>`;
+  return `<div class="viewbar">${btn('wind', '1 · Wind & bag', nWind)}${
+    btn('labels', '2 · Label & box', nBins)}${btn('all', 'Both')}</div>
+    <div class="view-hint">${VIEW_HINT[S.view] || ''}</div>`;
 }
 
 /* itemKey null = everything still waiting in this order's bin. */
@@ -621,15 +642,18 @@ function render() {
     return;
   }
 
+  // Two different events, so two different looks. Both used to be a grey strip
+  // with a tick, which made "wound into the bin" and "boxed and gone" read the
+  // same at a glance.
   const doneHtml = S.done.map((d, i) => `
-    <div class="done-line">
-      <span>✓ <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)}</span>
+    <div class="done-line wound">
+      <span>&#129525; <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} wound into the bin</span>
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
     </div>`).join('');
 
   const boxedHtml = S.boxed.map((d, i) => `
-    <div class="done-line">
-      <span>📦 <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} in box</span>
+    <div class="done-line boxed">
+      <span>&#128230; <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} labelled &amp; boxed</span>
       <span class="undo-link" onclick="undoBox(${i})">↺ undo</span>
     </div>`).join('');
 
@@ -654,11 +678,13 @@ function render() {
     ${showBins ? boxedHtml : ''}
     <div id="binSections">${binBlock}</div>
     <div id="lineSections">
-      ${showWind ? section(ready, 'Ready to wind', '') : ''}
-      ${showWind ? section(waiting, 'Made — still drying / short', 'muted') : ''}
+      ${showWind ? section(ready, S.view === 'all' ? 'Step 1 — wind &amp; bag' : 'Ready to wind now', '') : ''}
+      ${showWind ? section(waiting, 'Not windable yet — still drying or short', 'muted') : ''}
     </div>
     ${showBins && !binBlock && S.view === 'labels'
-      ? `<div class="empty-state">Nothing waiting for labels.</div>` : ''}
+      ? `<div class="empty-state">Nothing waiting on labels.<br>Bagged spools land here after you wind them.</div>` : ''}
+    ${showWind && !ready.length && !waiting.length && S.view === 'wind'
+      ? `<div class="empty-state">Nothing ready to wind.<br>Lines appear once their thread is dry.</div>` : ''}
   `;
   if (S.selected != null) updateTally();
 }
