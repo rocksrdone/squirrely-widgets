@@ -57,6 +57,23 @@ body {
 .from-stock { font-size: 10px; font-weight: 700; color: #2D6A2D; white-space: nowrap; }
 .stock-line { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); margin-right: auto; }
 .stock-line strong { font-family: 'DM Mono', monospace; color: var(--ink); }
+.fill-bar-wrap { padding: 8px 13px 2px; }
+.fill-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--mid); }
+.fill-head strong { font-family: 'DM Mono', monospace; color: var(--ink); font-size: 13px; }
+.fill-right { font-weight: 600; }
+.fill-right.full { color: #2D6A2D; }
+.fill-right.ok { color: #6E4C13; }
+.fill-right.poor { color: var(--accent); }
+.fill-bar { height: 7px; border-radius: 4px; background: var(--rule); overflow: hidden; margin-top: 5px; }
+.fill-bar-in { height: 100%; background: var(--accent); }
+.fill-hint { font-size: 10.5px; color: var(--muted); margin-top: 4px; }
+.reconcile-note {
+  margin: 0 0 12px; padding: 9px 12px; border-radius: 6px;
+  background: #F2F8F3; border: 1px solid #C6DFCB; color: #2D6A2D;
+  font-size: 11.5px; line-height: 1.6; display: flex; flex-direction: column; gap: 3px;
+}
+.reconcile-note strong { font-family: 'DM Mono', monospace; font-size: 13px; }
+.reconcile-note .short { color: #8B5A2A; }
 
 .pane { padding: 14px 16px 0; }
 
@@ -345,6 +362,7 @@ const S = {
   labelSettings: [], clsCols: null,
   labelStock: {},       // "recipeId|STOCKCODE" -> {id, recipeId, code, qty}
   hasLabelStock: false, lsCols: null,
+  lastReconcile: null,  // {rows, applied, shortfall, colorways} from the last load
   netOffOnHand: true,   // subtract labels already printed from what gets printed
   freePicked: {},       // recipeId -> true, for the Free print tab
   freeSearch: '', freeQtyDefault: 12,
@@ -472,6 +490,7 @@ async function loadAll() {
   await loadTemplates(problems);
   await loadLabelSettings();
   await loadLabelStock(problems);
+  await reconcileLabelUsage(problems);
   // Match the dropdown's own fallback so the two never disagree.
   if (!S.frontStock && S.templates.length) S.frontStock = S.templates[0].code;
 
@@ -589,24 +608,127 @@ async function setOnHand(row, qty) {
   }
 }
 
-/* After a print run or after sticking labels on spools, move the whole group's
-   counts in one go rather than editing rows one at a time. */
-async function adjustGroupOnHand(groupKey, direction) {
+/* Logging a print run. Consumption is automatic (see reconcileLabelUsage), so
+   this only ever adds — what you printed is now on the shelf. */
+async function adjustGroupOnHand(groupKey) {
   const g = findGroup(groupKey);
   if (!g || !S.hasLabelStock) return;
   const jobs = [];
   g.rows.forEach(r => {
     if (!r.recipeId) return;
-    const delta = direction === 'take' ? -fromStockQty(r) : effectiveQty(r);
-    if (!delta) return;
-    jobs.push({ row: r, next: Math.max(0, onHandFor(r) + delta) });
+    const printed = effectiveQty(r);
+    if (!printed) return;
+    jobs.push({ row: r, next: onHandFor(r) + printed });
   });
-  if (!jobs.length) { showToast('Nothing to adjust'); return; }
+  if (!jobs.length) { showToast('Nothing printed to log'); return; }
   for (const j of jobs) await setOnHand(j.row, j.next);
-  showToast(direction === 'take'
-    ? 'Taken off the on-hand counts'
-    : 'Printed labels added to on-hand');
+  showToast('Print run added to on-hand');
   render();
+}
+
+/* ---------- automatic consumption ----------
+   A printed label leaves inventory when it gets stuck on a spool, which happens
+   at the bench with this widget closed. So instead of asking you to remember,
+   every Lot_Allocations row carries a `Labels_Applied` toggle. On load we find
+   rows that are boxed but not yet flagged, subtract their spools from the
+   matching colorway's on-hand count, and set the flag.
+
+   Flag-per-row rather than a timestamp watermark on purpose: a row can be
+   created today and boxed next week, so anything ordered by time or row id
+   would miss it. A flag can't double-count and can't skip.                   */
+function allocBucketLB(status) {
+  const s = (status == null ? '' : status).toString();
+  if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+  if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+  return 'boxed';
+}
+
+async function reconcileLabelUsage(problems, opts) {
+  S.lastReconcile = null;
+  // Without an inventory there's nothing to decrement, and flipping flags now
+  // would throw away the only record that these labels were never counted.
+  if (!S.hasLabelStock) return;
+  let t;
+  try {
+    t = await grist.docApi.fetchTable('Lot_Allocations');
+  } catch (e) {
+    return;   // no allocations table; nothing to do, stay quiet
+  }
+  const c = {
+    line: findColumn(t, ['Work_Order_Line']),
+    qty: findColumn(t, ['Qty_Spools']),
+    status: findColumn(t, ['Status']),
+    applied: findColumn(t, ['Labels_Applied', 'Label_Applied', 'Labels_Used']),
+  };
+  if (!c.line || !c.qty) return;
+  if (!c.applied) {
+    problems.push({ title: 'Label counts are not self-maintaining yet',
+      body: 'Add a Toggle column <strong>Labels_Applied</strong> to <strong>Lot_Allocations</strong>. ' +
+        'Once it exists, every boxed allocation is subtracted from the printed-label inventory automatically, ' +
+        'exactly once, and you can stop pressing "Use them".' });
+    return;
+  }
+
+  const lineById = {};
+  S.lines.forEach(l => { lineById[l.id] = l; });
+  const pending = [];        // allocation rows to flag
+  const byRecipe = new Map();
+  (t.id || []).forEach((id, i) => {
+    if (columnAsArray(t, c.applied)[i]) return;                       // already counted
+    if (allocBucketLB(columnAsArray(t, c.status)[i]) !== 'boxed') return;
+    const line = lineById[getRefId(columnAsArray(t, c.line)[i])];
+    if (!line || !line.recipeId) return;
+    const qty = Number(columnAsArray(t, c.qty)[i]) || 0;
+    if (qty <= 0) { pending.push(id); return; }                       // flag it, nothing to subtract
+    pending.push(id);
+    byRecipe.set(line.recipeId, (byRecipe.get(line.recipeId) || 0) + qty);
+  });
+  if (!pending.length) return;
+
+  // Dry run: report without writing, so the first look is never a surprise.
+  let applied = 0, shortfall = 0;
+  const writes = [];
+  byRecipe.forEach((qty, recipeId) => {
+    const r = S.recipes[recipeId];
+    const row = { recipeId, fiber: r ? r.fiber : '' };
+    const entry = labelStockEntry(row);
+    const have = entry ? entry.qty : 0;
+    const take = Math.min(have, qty);
+    applied += take;
+    shortfall += qty - take;                 // used more than inventory knew about
+    if (entry && take) writes.push({ entry, next: have - take });
+  });
+  S.lastReconcile = { rows: pending.length, applied, shortfall,
+    colorways: byRecipe.size, dryRun: !!(opts && opts.dryRun) };
+  if (opts && opts.dryRun) return;
+
+  try {
+    const actions = writes.map(w => ['UpdateRecord', 'Label_Stock', w.entry.id,
+      S.lsCols.updated
+        ? { [S.lsCols.qty]: w.next, [S.lsCols.updated]: Math.floor(Date.now() / 1000) }
+        : { [S.lsCols.qty]: w.next }]);
+    // Flag the allocations in the SAME call, so a failure can't decrement
+    // inventory without recording that it happened.
+    actions.push(['BulkUpdateRecord', 'Lot_Allocations', pending,
+      { [c.applied]: pending.map(() => true) }]);
+    await grist.docApi.applyUserActions(actions);
+    writes.forEach(w => { w.entry.qty = w.next; });
+  } catch (e) {
+    console.error('Label reconcile failed', e);
+    S.lastReconcile = null;
+    showToast('Could not update label inventory', true);
+  }
+}
+
+function reconcileNoteHtml() {
+  const r = S.lastReconcile;
+  if (!r || (!r.applied && !r.shortfall)) return '';
+  return `<div class="reconcile-note">
+    <span>&#10003; <strong>${r.applied}</strong> label${r.applied === 1 ? '' : 's'} came off inventory —
+      ${r.rows} newly boxed allocation${r.rows === 1 ? '' : 's'} across ${r.colorways} colorway${r.colorways === 1 ? '' : 's'}.</span>
+    ${r.shortfall ? `<span class="short">${r.shortfall} more were applied than the inventory knew about,
+      so those counts were already at zero. Top them up if you had stock you hadn't logged.</span>` : ''}
+  </div>`;
 }
 
 async function loadTemplates(problems) {
@@ -851,12 +973,12 @@ function groupRows(rows) {
 /* ---------- render ---------- */
 function render() {
   if (!S.ready) return;
-  document.getElementById('pane').innerHTML =
+  document.getElementById('pane').innerHTML = reconcileNoteHtml() + (
     S.mode === 'order' ? orderPaneHtml()
     : S.mode === 'lines' ? linesPaneHtml()
     : S.mode === 'allorders' ? allOrdersPaneHtml()
     : S.mode === 'free' ? freePaneHtml()
-    : S.mode === 'front' ? frontPaneHtml() : storePaneHtml();
+    : S.mode === 'front' ? frontPaneHtml() : storePaneHtml());
   bindPane();
   updateFooter();
 }
@@ -1129,6 +1251,26 @@ function groupHtml(g) {
   }).join('');
 
   const sheetsNeeded = tpl && tpl.perSheet && g.total ? Math.ceil(g.total / tpl.perSheet) : null;
+  /* How full the LAST sheet ends up. This is where sheet labels quietly waste
+     money — a run of 50 on a 48-up sheet burns a second sheet for two labels.
+     `startAt` shifts the whole run, so it's part of the sum. */
+  const startPos = Math.max(1, Number(S.startAt[g.key]) || 1);
+  const consumed = perSheet ? g.total + startPos - 1 : 0;
+  const lastFilled = perSheet && g.total ? (consumed % perSheet || perSheet) : 0;
+  const fillPct = perSheet ? Math.round(lastFilled / perSheet * 100) : 0;
+  const sheetSummary = (perSheet && g.total) ? `<div class="fill-bar-wrap">
+    <div class="fill-head">
+      <span><strong>${g.total}</strong> label${g.total === 1 ? '' : 's'} on
+        <strong>${Math.ceil(consumed / perSheet)}</strong> sheet${Math.ceil(consumed / perSheet) === 1 ? '' : 's'}
+        of ${perSheet}-up${startPos > 1 ? `, starting at position ${startPos}` : ''}</span>
+      <span class="fill-right ${leftover ? (leftover > perSheet / 2 ? 'poor' : 'ok') : 'full'}">
+        ${leftover ? `last sheet ${lastFilled}/${perSheet} — ${leftover} position${leftover === 1 ? '' : 's'} wasted`
+                   : `last sheet exactly full`}</span>
+    </div>
+    <div class="fill-bar"><div class="fill-bar-in" style="width:${fillPct}%"></div></div>
+    ${leftover ? `<div class="fill-hint">Add ${leftover} more, or fill the gap with blank rings below,
+      or bump <em>start at</em> to finish a part-used sheet.</div>` : ''}
+  </div>` : '';
   // A greyed download with no reason is a dead end. Say which of the two
   // causes it is, and offer the one-click way out.
   const offCount = rows.filter(r => !stateFor(r).include).length;
@@ -1138,10 +1280,8 @@ function groupHtml(g) {
   const coveredAll = gNeed > 0 && gFromStock >= gNeed;
   const stockLine = (gFromStock || g.total) && S.hasLabelStock ? `<span class="stock-line">
       ${gFromStock ? `<strong>${gFromStock}</strong> of ${gNeed} already on hand` : `none on hand`}
-      ${gFromStock ? `<button class="btn tiny" data-takestock="${esc(g.key)}"
-        title="Subtract those from the on-hand counts — you're about to stick them on spools">Use them</button>` : ''}
       ${g.total ? `<button class="btn tiny" data-addstock="${esc(g.key)}"
-        title="Add the printed labels to on-hand instead — for a stock-up run you won't use straight away">Print to stock</button>` : ''}
+        title="Add this print run to the on-hand counts. They come back off automatically as the spools get boxed.">Log print run</button>` : ''}
     </span>` : '';
   const zeroNote = g.total ? '' : `<div class="zero-note">
     Nothing to print on this sheet — ${offCount === rows.length
@@ -1168,6 +1308,7 @@ function groupHtml(g) {
       <thead><tr><th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Need</th><th class="col-stock">Labels on hand</th><th class="col-num">Print</th></tr></thead>
       <tbody>${body}</tbody>
     </table>
+    ${sheetSummary}
     <div class="group-foot">
       <div class="group-total"><strong data-grouptotal="${esc(g.key)}">${g.total}</strong> labels on this sheet type</div>
       ${geom.ok ? `<label class="start-at" title="Skip this many positions so a part-used sheet gets finished">
@@ -1211,8 +1352,6 @@ function bindPane() {
     await setOnHand(row, el.value);
     render();
   }));
-  document.querySelectorAll('[data-takestock]').forEach(el =>
-    el.addEventListener('click', () => adjustGroupOnHand(el.dataset.takestock, 'take')));
   document.querySelectorAll('[data-addstock]').forEach(el =>
     el.addEventListener('click', () => adjustGroupOnHand(el.dataset.addstock, 'add')));
 

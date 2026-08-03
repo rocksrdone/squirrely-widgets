@@ -280,6 +280,7 @@ async function loadAll() {
   const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
     lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
     customer: opt(['Customer']), line: ['Work_Order_Line'],
+    labelsApplied: opt(['Labels_Applied', 'Label_Applied', 'Labels_Used']),
   }, missing);
   const WOL = resolveCols(wolT, 'Work_Order_Lines', {
     workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
@@ -341,6 +342,8 @@ async function loadAll() {
     lineId: getRefId(columnAsArray(allocT, ALLOC.line)[i]),
     qty: Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0,
     status: (columnAsArray(allocT, ALLOC.status)[i] || '').toString(),
+    // Whether the label widget has already deducted these from label stock.
+    applied: ALLOC.labelsApplied ? !!columnAsArray(allocT, ALLOC.labelsApplied)[i] : false,
   }));
   const statusValues = new Set(S.allocs.map(a => a.status).filter(Boolean));
   S.packedStatus = PACKED_CANDIDATES.find(c => statusValues.has(c)) || 'Packed';
@@ -680,6 +683,11 @@ function newAllocAction(line, lotId, qty, status) {
   f[ALLOC.status] = status;
   f[ALLOC.line] = line.id;
   if (ALLOC.customer && line.order.custId) f[ALLOC.customer] = line.order.custId;
+  // Labels_Applied is deliberately left false. The label widget owns that flag:
+  // it subtracts these spools from the printed-label inventory on its next load
+  // and sets the flag itself, exactly once. Setting it here would make those
+  // labels vanish from the count without ever being deducted.
+  if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = false;
   return ['AddRecord', 'Lot_Allocations', null, f];
 }
 
@@ -724,12 +732,13 @@ function consumeFromLine(line, qty) {
     if (need <= 0) break;
     const take = Math.min(a.qty, need);
     need -= take;
-    taken.push({ lotId: a.lotId, qty: take, status: a.status });
+    taken.push({ lotId: a.lotId, qty: take, status: a.status, applied: a.applied });
     if (take === a.qty) {
       actions.push(['RemoveRecord', 'Lot_Allocations', a.id]);
       const { ALLOC } = S.cols;
       const f = {};
       f[ALLOC.lot] = a.lotId || 0; f[ALLOC.qty] = a.qty; f[ALLOC.status] = a.status; f[ALLOC.line] = line.id;
+      if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = a.applied;
       inverse.push(['AddRecord', 'Lot_Allocations', a.id, f]);
     } else {
       actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty - take }]);
@@ -755,6 +764,9 @@ async function doTransfer(lineId) {
     const f = {};
     f[ALLOC.lot] = t.lotId || 0; f[ALLOC.qty] = t.qty; f[ALLOC.status] = t.status; f[ALLOC.line] = to.id;
     if (ALLOC.customer && to.order.custId) f[ALLOC.customer] = to.order.custId;
+    // Carry the flag across. A transfer moves spools, it doesn't un-stick
+    // labels — clearing it here would deduct the same labels a second time.
+    if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = t.applied;
     return ['AddRecord', 'Lot_Allocations', null, f];
   });
   try {
