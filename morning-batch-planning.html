@@ -125,6 +125,11 @@
     <option value="planned">Today's plan only</option>
     <option value="unplanned">Not in today's plan</option>
   </select>
+  <select class="filter-select" id="coverFilter" onchange="renderList()">
+    <option value="todye">Needs dyeing</option>
+    <option value="all">Include already covered</option>
+    <option value="covered">Covered only</option>
+  </select>
   <select class="filter-select" id="priorityFilter" onchange="renderList()">
     <option value="">All priorities</option>
     <option value="Urgent">Urgent only</option>
@@ -242,7 +247,7 @@ async function loadEverything() {
 
     // Coverage is derived, not stored: a "dyed" count written at the kettle goes
     // stale as soon as winding assigns those spools to a different customer.
-    const allocByLine = {}, unwoundByRecipe = {};
+    const allocByLine = {}, unwoundByRecipe = {}, backStockByRecipe = {};
     try {
       const [allocT, lotsT] = await Promise.all([
         grist.docApi.fetchTable('Lot_Allocations'),
@@ -260,14 +265,20 @@ async function loadEverything() {
         if (lo) byLot[lo] = (byLot[lo] || 0) + q;
       });
       const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
-      const buckets = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'General_Stock_Spools', 'Broken_Spools']
+      // Only spools that CANNOT fill an order reduce coverage: committed to a shop
+      // (store/vendor) or broken. Back stock is the whole point of back stock — it
+      // fills orders, so it counts as coverage, it does not cancel it out.
+      const spoken = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
         .map(c => findColumn(lotsT, [c]));
+      const cBack = findColumn(lotsT, ['General_Stock_Spools']);
       (lotsT.id || []).forEach((id, i) => {
         const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
         if (!rid) return;
-        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
-        buckets.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
+        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0) - back;
+        spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
         if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+        if (back > 0) backStockByRecipe[rid] = (backStockByRecipe[rid] || 0) + back;
       });
     } catch (e) {
       console.warn('Lots/allocations unavailable — planning will show full order need', e);
@@ -439,10 +450,12 @@ async function loadEverything() {
         return { dyeName: d, others };
       }).filter(p => p.others.length > 0);
 
-      const inBins = unwoundByRecipe[entry.recipe.id] || 0;
-      const stillToMake = Math.max(0, totalQty - inBins);
+      const inBins = unwoundByRecipe[entry.recipe.id] || 0;      // dyed, not yet wound
+      const inStock = backStockByRecipe[entry.recipe.id] || 0;    // wound, sitting in back stock
+      const covered = inBins + inStock;
+      const stillToMake = Math.max(0, totalQty - covered);
       const pastDue = entry.soonestDue < todayEpochSeconds();
-      return { ...entry, totalQty, inBins, stillToMake, stock, peek, pastDue, plan: planByRecipe[entry.recipe.id] || null };
+      return { ...entry, totalQty, inBins, inStock, covered, stillToMake, stock, peek, pastDue, plan: planByRecipe[entry.recipe.id] || null };
     }).sort((a, b) => {
       // Committed-to-today first, in the sequence Batch Planner set. Everything
       // else: past-due, then Priority_Bump, then soonest due — the SAME order
@@ -453,7 +466,7 @@ async function loadEverything() {
       return (b.pastDue - a.pastDue)
         || (b.anyBump - a.anyBump)
         || (a.soonestDue - b.soonestDue)
-        || (b.totalQty - a.totalQty);
+        || (b.stillToMake - a.stillToMake);
     });
 
     // Populate customer filter dropdown
@@ -484,8 +497,14 @@ function renderList() {
   const customerVal = document.getElementById('customerFilter').value;
   const priorityVal = document.getElementById('priorityFilter').value;
   const planVal = document.getElementById('planFilter').value;
+  const coverVal = document.getElementById('coverFilter').value;
 
   let filtered = recipeData.filter(e => {
+    if (coverVal !== 'all') {
+      const isCovered = e.stillToMake === 0;
+      if (coverVal === 'todye' && isCovered) return false;
+      if (coverVal === 'covered' && !isCovered) return false;
+    }
     if (planVal === 'planned' && !e.plan) return false;
     if (planVal === 'unplanned' && e.plan) return false;
     if (priorityVal && e.bestPriority !== priorityVal) return false;
@@ -500,10 +519,12 @@ function renderList() {
   // Counter reflects the FILTERED set, so it's useful when narrowing by customer etc.
   const totalSpools = filtered.reduce((s, e) => s + e.stillToMake, 0);
   const plannedShown = filtered.filter(e => e.plan).length;
+  const coveredCount = recipeData.filter(e => e.stillToMake === 0).length;
   document.getElementById('counterRow').innerHTML = `
-    <div class="counter-chip">${totalSpools}<span>spools left</span></div>
+    <div class="counter-chip">${totalSpools}<span>to dye</span></div>
     <div class="counter-chip">${filtered.length}<span>colorways</span></div>
     ${plannedShown ? `<div class="counter-chip">${plannedShown}<span>planned today</span></div>` : ''}
+    ${(coverVal === 'todye' && coveredCount) ? `<div class="counter-chip">${coveredCount}<span>covered, hidden</span></div>` : ''}
   `;
 
   const content = document.getElementById('content');
@@ -541,7 +562,7 @@ function renderList() {
           ${planSlots}
         </td>
         <td>${e.pastDue ? '<span class="priority-pill" style="background:#F5D8DC;color:#A01830;">past due</span>' : (e.anyBump ? '<span class="priority-pill" style="background:#FBECC9;color:#8B6A00;">bumped</span>' : `<span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span>`)}</td>
-        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to make` : '<span style="color:#2D6A2D">enough ✓</span>'}${e.inBins ? `<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed · ${e.inBins} in bins</div>` : ` <span style="font-size:9px;color:#8B7D72">of ${e.totalQty}</span>`}</td>
+        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${e.inStock} back stock` : ''}</div></td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>
       </tr>
@@ -554,7 +575,7 @@ function renderList() {
         <tr>
           <th>Colorway</th>
           <th>Priority</th>
-          <th>Total</th>
+          <th>To dye</th>
           <th>Premade Stock</th>
           <th>Peek Ahead</th>
         </tr>

@@ -292,7 +292,7 @@ async function loadEverything() {
 
     // Unwound spools sitting in lots, per colorway. "Still to make" is derived:
     // what orders need, minus what's allocated, minus what's already in a bin.
-    const unwoundByRecipe = {};
+    const unwoundByRecipe = {}, backStockByRecipe = {};
     try {
       const lotsT = await grist.docApi.fetchTable('Production_Lots');
       const allocT2 = await grist.docApi.fetchTable('Lot_Allocations');
@@ -303,19 +303,26 @@ async function loadEverything() {
         if (lid) byLot[lid] = (byLot[lid] || 0) + (Number(columnAsArray(allocT2, a2Qty)[i]) || 0);
       });
       const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
-      const cols = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'General_Stock_Spools', 'Broken_Spools']
+      // Store/vendor stock is committed to a shop and broken spools are gone; both
+      // reduce what's available. Back stock is NOT spoken for — it fills orders, so
+      // it is coverage, tracked separately because it is already wound.
+      const spoken = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
         .map(c => findColumn(lotsT, [c]));
+      const cBack = findColumn(lotsT, ['General_Stock_Spools']);
       (lotsT.id || []).forEach((id, i) => {
         const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
         if (!rid) return;
-        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
-        cols.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
+        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0) - back;
+        spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
         if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+        if (back > 0) backStockByRecipe[rid] = (backStockByRecipe[rid] || 0) + back;
       });
     } catch (e) {
       console.warn('Production_Lots unavailable — "in bins" will show 0', e);
     }
     window.__unwoundByRecipe = unwoundByRecipe;
+    window.__backStockByRecipe = backStockByRecipe;
 
     // Build SKU -> colorway name lookup from Recipes
     const rIds = recipesTable.id || [];
@@ -407,8 +414,9 @@ function buildBatches() {
     const totalBoxed = g.lines.reduce((s, l) => s + l.boxed, 0);
     const rid = (window.__skuToRecipeId || {})[normalize(g.sku)];
     const inBins = (window.__unwoundByRecipe || {})[rid] || 0;
+    const inStock = (window.__backStockByRecipe || {})[rid] || 0;
     const outstanding = g.lines.reduce((s, l) => s + Math.max(0, l.qtyNeeded - l.boxed), 0);
-    const stillToMake = Math.max(0, outstanding - inBins);
+    const stillToMake = Math.max(0, outstanding - inBins - inStock);
 
     let bestPriority = g.lines[0].priority;
     g.lines.forEach(l => { if (priorityRank(l.priority) < priorityRank(bestPriority)) bestPriority = l.priority; });
@@ -422,7 +430,7 @@ function buildBatches() {
 
     return {
       sku: g.sku, colorwayName: g.colorwayName, lines: g.lines,
-      totalNeeded, totalDyed, totalBoxed, inBins, outstanding, stillToMake,
+      totalNeeded, totalDyed, totalBoxed, inBins, inStock, outstanding, stillToMake,
       priority: bestPriority, dueDate: earliestDue,
     };
   });
@@ -498,8 +506,8 @@ function renderList() {
         <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
         <td class="due-cell">${dueLabel}</td>
         <td class="stage-cell">${batch.stillToMake > 0
-          ? `<strong style="color:#8B5A2A">make ${batch.stillToMake}</strong>`
-          : `<span style="color:var(--done-text)">enough ✓</span>`}${batch.inBins ? `<div style="font-size:9px;color:#8B7D72">${batch.inBins} in bins</div>` : ''}</td>
+          ? `<strong style="color:#8B5A2A">dye ${batch.stillToMake}</strong>`
+          : `<span style="color:var(--done-text)">covered ✓</span>`}${(batch.inBins || batch.inStock) ? `<div style="font-size:9px;color:#8B7D72">${batch.inBins ? `${batch.inBins} to wind` : ''}${(batch.inBins && batch.inStock) ? ' · ' : ''}${batch.inStock ? `${batch.inStock} back stock` : ''}</div>` : ''}</td>
         <td class="stage-cell">${miniStage(batch.totalBoxed, batch.totalNeeded)}</td>
         <td class="orders-cell">▾ ${orderCount} order${orderCount === 1 ? '' : 's'}</td>
       </tr>
