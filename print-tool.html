@@ -1,0 +1,313 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Squirrely Stash — print tool</title>
+<style>
+@page { size: Letter; margin: 0.25in; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; }
+
+/* ---------- controls (screen only) ---------- */
+.ctl { background: #2B2320; color: #F4EFE9; padding: 20px 26px; }
+.ctl h1 { margin: 0 0 4px; font-size: 19px; letter-spacing: .5px; }
+.ctl p { margin: 0 0 16px; font-size: 12.5px; color: #C9B8AE; line-height: 1.5; max-width: 60em; }
+.ctl .row { display: flex; gap: 26px; align-items: flex-end; flex-wrap: wrap; }
+.ctl label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px;
+             color: #C9B8AE; margin-bottom: 5px; }
+.ctl input[type=number] { width: 6.5em; font-size: 17px; padding: 7px 9px; border: none; border-radius: 3px; }
+.ctl .checks { display: flex; gap: 18px; }
+.ctl .checks span { font-size: 13.5px; }
+.ctl button { font-size: 15px; font-weight: bold; padding: 10px 22px; border: none; border-radius: 3px;
+              background: #B85042; color: #fff; cursor: pointer; }
+.ctl .hint { font-size: 11.5px; color: #9C8A80; margin-top: 14px; line-height: 1.6; max-width: 60em; }
+.ruler { padding: 10px 26px; font-size: 11px; background: #F4EFE9; }
+.ruler-bar { display: inline-block; width: 1in; height: 13px; border: 1px solid #000;
+             border-right-width: 3px; vertical-align: -2px; margin-right: 8px; }
+@media print { .noprint { display: none !important; } }
+
+/* ---------- pages ---------- */
+.page { page-break-after: always; display: flex; flex-wrap: wrap; align-content: flex-start; }
+.page:last-child { page-break-after: auto; }
+
+/* ---------- kettle tag : 4 x 3.5in, 6 per page ---------- */
+.tag { width: 4in; height: 3.5in; padding: .15in .17in; outline: 1px dashed #B9B9B9;
+       outline-offset: -.5px; display: flex; flex-direction: column; }
+.tag .r1 { display: flex; justify-content: space-between; align-items: flex-start; }
+.tag .r1 > * + * { margin-left: .1in; }
+.tag .code { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; letter-spacing: .5px; }
+.tag .bin { text-align: center; border: 2.5px solid #000; width: .85in; flex: none; }
+.tag .bin .l { font-size: 8.5px; font-weight: bold; letter-spacing: 1px; background: #000; color: #fff;
+               text-transform: uppercase; padding: 1px 0; }
+.tag .bin .b { height: .34in; }
+.tag .nameline { border-bottom: 1.5px solid #000; height: .32in; margin-top: 2px; }
+.tag .cap { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .8px; margin-top: 1px; }
+.tag .meta { display: flex; margin-top: 5px; }
+.tag .meta div + div { margin-left: .13in; }
+.tag .meta div { border-bottom: 1.5px solid #000; height: .27in; }
+.tag .mcap { display: flex; font-size: 9px; color: #444; text-transform: uppercase;
+             letter-spacing: .7px; }
+.tag .mcap span + span { margin-left: .13in; }
+.tag .photo { display: flex; margin-top: 6px; border: 2.5px solid #000; padding: 3px 7px; }
+.tag .photo span + span { margin-left: .28in; }
+.tag .photo span { font-size: 11.5px; font-weight: bold; text-transform: uppercase; letter-spacing: .6px;
+                   flex: none; white-space: nowrap; }
+.tag .photo i, .tag .flags i, .tag .state i, .tag .who i {
+  display: inline-block; border: 2px solid #000; vertical-align: -2px; }
+.tag .photo i { width: 13px; height: 13px; margin-right: 5px; }
+.tag .who { margin-top: 6px; }
+.tag .who table { width: 100%; border-collapse: collapse; }
+.tag .who td { border-bottom: 1.5px solid #000; height: .28in; }
+.tag .who td.c { width: .26in; border-bottom: none; }
+.tag .who td.q { width: .58in; }
+.tag .who i { width: 13px; height: 13px; }
+.tag .flags { display: flex; align-items: center; margin-top: 6px; }
+.tag .flags > * + * { margin-left: .12in; }
+.tag .flags span { flex: none; font-size: 11px; font-weight: bold; letter-spacing: .3px; border: 2px solid #000;
+                   padding: 2px 6px; white-space: nowrap; }
+.tag .flags i { width: 12px; height: 12px; margin-right: 4px; }
+.tag .flags .note { flex: 1; border-bottom: 1.5px solid #000; height: .26in; }
+.tag .state { display: flex; margin-top: auto; padding-top: 5px; border-top: 1.5px solid #000; }
+.tag .state span + span { margin-left: .3in; }
+.tag .state span { font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
+                   flex: none; white-space: nowrap; }
+.tag .state i { width: 12px; height: 12px; margin-right: 4px; }
+
+/* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
+.sh { width: 8in; height: 5.25in; padding: .16in .2in; outline: 1px dashed #B9B9B9;
+      outline-offset: -.5px; display: flex; flex-direction: column; }
+.sh .head { display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 2.5px solid #000; padding-bottom: 5px; }
+.sh .ttl { font-size: 17px; font-weight: bold; letter-spacing: .5px; text-transform: uppercase; }
+.sh .sub { font-size: 10px; color: #555; letter-spacing: .2px; }
+.sh .bagcode { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; text-align: right; }
+.sh .bagcap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .8px; text-align: right; }
+.sh .bagblank { border-bottom: 1.5px solid #000; width: 1.6in; height: .26in; }
+.sh .id { display: flex; margin-top: 6px; }
+.sh .id .f + .f { margin-left: .16in; }
+.sh .id .f { flex: 1; }
+.sh .id .f.s { flex: 0 0 .9in; }
+.sh .id .ln { border-bottom: 1.5px solid #000; height: .26in; }
+.sh .id .cp { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
+.sh .band { display: flex; align-items: center; margin-top: 8px; flex-wrap: nowrap; }
+.sh .band > * + * { margin-left: 9px; }
+.sh .band .who { flex: none; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
+                 background: #000; color: #fff; padding: 2px 9px; }
+.sh .band .rule { flex: 1 1 auto; min-width: .3in; border-top: 2px solid #000; }
+.sh .band .sg { flex: none; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: #555; }
+.sh .band .sgl { flex: none; border-bottom: 1.5px solid #000; width: .9in; height: .2in; }
+.sh .pbar { display: flex; align-items: center; margin-top: 6px; border: 2.5px solid #000; padding: 4px 8px; }
+.sh .pbar > * + * { margin-left: .22in; }
+.sh .pbar b { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; }
+.sh .pbar span { flex: none; white-space: nowrap; font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; }
+.sh .pbar em { flex: 0 1 auto; overflow: hidden; font-size: 9.5px; color: #555; font-style: italic; margin-left: auto; }
+.sh table { width: 100%; border-collapse: collapse; margin-top: 7px; }
+.sh th { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: #444;
+         border-bottom: 2px solid #000; padding: 0 4px 3px; text-align: left; font-weight: normal; }
+.sh td { border-bottom: 1.5px solid #000; height: .3in; padding: 0 4px; }
+.sh .lc { text-align: center; font-size: 10px; letter-spacing: .2px; white-space: nowrap; }
+.sh .pc { text-align: center; white-space: nowrap; }
+.sh .pc u { display: inline-block; border-bottom: 1.5px solid #000; width: 1.1in; height: .2in;
+            text-decoration: none; }
+.sh .stock { border: 2px solid #000; padding: 4px 8px; margin-top: 7px; display: flex;
+             align-items: center; }
+.sh .stock > * + * { margin-left: .14in; }
+.sh .stock b { flex: none; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.sh .stock .qb { flex: none; border: 1.5px solid #000; width: .6in; height: .26in; }
+.sh .stock em { flex: 0 1 auto; overflow: hidden; white-space: nowrap; font-size: 9.5px; color: #555; font-style: italic; }
+.sh .stock .sep { border-left: 2px solid #000; align-self: stretch; }
+.sh .stock u { flex: none; display: inline-block; border-bottom: 1.5px solid #000; width: 1.6in; height: .2in;
+               text-decoration: none; }
+.sh .nl { border-bottom: 1.5px solid #000; height: .28in; margin-top: 6px; }
+.sh .ncap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
+.sh .gate { border: 2.5px solid #000; padding: 5px 9px; margin-top: auto; }
+.sh .g { display: flex; align-items: center; }
+.sh .g > * + * { margin-left: .22in; }
+.sh .g + .g { margin-top: 5px; }
+.sh .g span { flex: none; white-space: nowrap; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; }
+.sh .g .gt { font-weight: bold; letter-spacing: .7px; }
+.sh .g .gn { font-size: 9.5px; color: #555; font-style: italic; text-transform: none; letter-spacing: 0; }
+.sh .back { display: flex; align-items: center; margin-top: 6px;
+            border-top: 1.5px dashed #000; padding-top: 6px; }
+.sh .back > * + * { margin-left: 9px; }
+.sh .back b { flex: none; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.sh .back u { flex: 1; border-bottom: 1.5px solid #000; height: .22in; text-decoration: none; }
+.sh i, .sh .cb { display: inline-block; border: 2px solid #000; vertical-align: -2px; }
+.sh .pbar i { width: 13px; height: 13px; margin-right: 5px; }
+.sh .lc i { width: 12px; height: 12px; margin: 0 3px 0 7px; }
+.sh .lc i:first-child { margin-left: 0; }
+.sh .pc i { width: 13px; height: 13px; margin-right: 6px; }
+.sh .cb { width: 14px; height: 14px; }
+.sh .stock i, .sh .g i, .sh .back i { width: 14px; height: 14px; margin-right: 5px; }
+
+/* ---------- outer bag label : 4 x 2.625in, 8 per page ---------- */
+.out { width: 4in; height: 2.625in; padding: .2in .22in; outline: 1px dashed #B9B9B9;
+       outline-offset: -.5px; display: flex; flex-direction: column; justify-content: center; }
+.out .n { border-bottom: 2px solid #000; height: .6in; }
+.out .s { border-bottom: 2px solid #000; height: .44in; margin-top: .26in; width: 2.6in; }
+.out .c { font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px; color: #333; margin-top: 3px; }
+</style></head><body>
+
+<div class="ctl noprint">
+  <h1>Squirrely Stash — print tool</h1>
+  <p>Set the numbers, print, then guillotine the whole stack at once. Cut piles are ordered so that
+     setting pile&nbsp;2 under pile&nbsp;1, pile&nbsp;3 under that, and so on gives you one run in sequence.</p>
+  <div class="row">
+    <div><label>First bag code</label><input type="number" id="start" value="1001" min="1"></div>
+    <div><label>Lots today</label><input type="number" id="count" value="12" min="1" max="400"></div>
+    <div><label>Outer labels</label><input type="number" id="outer" value="0" min="0" max="200"></div>
+    <div class="checks">
+      <span><input type="checkbox" id="wTags" checked> kettle tags</span>
+      <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
+      <span><input type="checkbox" id="wCode" checked> code on sheets</span>
+    </div>
+    <div><button onclick="window.print()">Print</button></div>
+  </div>
+  <div class="hint">Print at 100% — turn off &ldquo;fit to page&rdquo;. Tags come 6 to a page, sheets 2, outer labels 8.
+    Everything tiles edge to edge, so it cuts in straight passes.</div>
+</div>
+<div class="ruler noprint"><span class="ruler-bar"></span>this bar must measure exactly 1 inch on the printout</div>
+
+<div id="out"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function code(n) { return 'SS-' + n; }
+
+/* cut-and-stack: item at (page i, slot j) of P pages, K slots = j*P + i */
+function impose(total, perPage) {
+  const P = Math.ceil(total / perPage);
+  const pages = [];
+  for (let i = 0; i < P; i++) {
+    const slots = [];
+    for (let j = 0; j < perPage; j++) {
+      const idx = j * P + i;
+      slots.push(idx < total ? idx : null);
+    }
+    pages.push(slots);
+  }
+  return pages;
+}
+
+function tag(n) {
+  if (n === null) return '<div class="tag"></div>';
+  let rows = '';
+  for (let k = 0; k < 3; k++) rows += '<tr><td class="c"><i></i></td><td></td><td class="q"></td></tr>';
+  return `<div class="tag">
+    <div class="r1">
+      <div style="flex:1">
+        <div class="code">${code(n)}</div>
+        <div class="nameline"></div>
+        <div class="cap">colorway</div>
+      </div>
+      <div class="bin"><div class="l">bin</div><div class="b"></div></div>
+    </div>
+    <div class="meta"><div style="flex:1"></div><div style="flex:1"></div><div style="flex:0 0 .6in"></div><div style="flex:0 0 .6in"></div></div>
+    <div class="mcap"><span style="flex:1">lot</span><span style="flex:1">SKU</span><span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .6in">spools</span></div>
+    <div class="photo"><span><i></i>photo</span><span><i></i>no photo</span></div>
+    <div class="who">
+      <div class="cap">likely for</div>
+      <table>${rows}</table>
+    </div>
+    <div class="flags">
+      <span><i></i>LE</span>
+      <span><i></i>combining</span>
+      <div class="note"></div>
+    </div>
+    <div class="state">
+      <span><i></i>dry</span><span><i></i>binned</span><span><i></i>wound</span><span><i></i>empty</span>
+    </div>
+  </div>`;
+}
+
+function sheet(n, showCode) {
+  if (n === null) return '<div class="sh"></div>';
+  let rows = '';
+  for (let k = 0; k < 4; k++) rows +=
+    '<tr><td></td><td></td><td></td><td class="lc"><i></i>SS<i></i>custom</td>' +
+    '<td class="pc"><i></i><u></u></td><td style="text-align:center"><span class="cb"></span></td>' +
+    '<td style="text-align:center"><span class="cb"></span></td></tr>';
+  const head = showCode
+    ? `<div class="bagcap">bag</div><div class="bagcode">${code(n)}</div>`
+    : `<div class="bagcap">bag code</div><div class="bagblank"></div>`;
+  return `<div class="sh">
+    <div class="head">
+      <div><div class="ttl">One bag</div>
+        <div class="sub">Control fills it in &middot; labelling finishes it &middot; anything unresolved goes back to control.</div></div>
+      <div>${head}</div>
+    </div>
+    <div class="id">
+      <div class="f"><div class="ln"></div><div class="cp">colorway</div></div>
+      <div class="f"><div class="ln"></div><div class="cp">lot number</div></div>
+      <div class="f s"><div class="ln"></div><div class="cp">fiber</div></div>
+      <div class="f s"><div class="ln"></div><div class="cp">spools</div></div>
+    </div>
+    <div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
+      <span class="sg">initials</span><span class="sgl"></span></div>
+    <div class="pbar"><b>Photo</b>
+      <span><i></i>needed</span><span><i></i>taken</span><span><i></i>shares recorded</span>
+      <em>a good photo on file still needs the share</em></div>
+    <table>
+      <tr><th style="width:1.85in">customer</th><th style="width:.85in">order #</th>
+          <th style="width:.55in">spools</th><th style="width:1.25in;text-align:center">label</th>
+          <th style="width:1.55in;text-align:center">part of a larger order &mdash; rest in bag</th>
+          <th style="width:.7in;text-align:center">photo shared</th>
+          <th style="width:.6in;text-align:center">packed</th></tr>
+      ${rows}
+    </table>
+    <div class="stock">
+      <b>Back stock</b><div class="qb"></div><em>recount first</em>
+      <div class="sep"></div>
+      <b><i></i>Limited Edition</b><em>why</em><u></u>
+    </div>
+    <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
+      <span class="sg">initials</span><span class="sgl"></span></div>
+    <div class="nl"></div>
+    <div class="ncap">tick each order above as you finish it &mdash; anything that did not go to plan, here</div>
+    <div class="gate">
+      <div class="g"><span class="gt">All yes &rarr; finish it</span>
+        <span><i></i>counts match</span><span><i></i>right label on each</span>
+        <span><i></i>nothing waiting on a partner bag</span></div>
+      <div class="g"><span class="gn">then</span>
+        <span><i></i>weighed</span><span><i></i>shipping label</span>
+        <span><i></i>sealed</span><span><i></i>complete</span>
+        <span class="gn" style="margin-left:auto">LE goes back to control to be named</span></div>
+      <div class="back"><i></i><b>Any no &mdash; back to control</b><u></u></div>
+    </div>
+  </div>`;
+}
+
+const OUTER = `<div class="out">
+  <div class="n"></div><div class="c">colorway</div>
+  <div class="s"></div><div class="c">SKU</div>
+</div>`;
+
+function render() {
+  const start = Math.max(1, +$('start').value || 1001);
+  const n     = Math.max(1, +$('count').value || 1);
+  const nOut  = Math.max(0, +$('outer').value || 0);
+  const showCode = $('wCode').checked;
+  let html = '';
+
+  if ($('wTags').checked)
+    impose(n, 6).forEach(p => {
+      html += '<div class="page">' + p.map(i => tag(i === null ? null : start + i)).join('') + '</div>';
+    });
+
+  if ($('wSheets').checked)
+    impose(n, 2).forEach(p => {
+      html += '<div class="page">' + p.map(i => sheet(i === null ? null : start + i, showCode)).join('') + '</div>';
+    });
+
+  for (let i = 0; i < Math.ceil(nOut / 8); i++) {
+    let cells = '';
+    for (let j = 0; j < 8; j++) cells += (i * 8 + j < nOut) ? OUTER : '<div class="out"></div>';
+    html += '<div class="page">' + cells + '</div>';
+  }
+
+  $('out').innerHTML = html;
+}
+
+['start','count','outer','wTags','wSheets','wCode'].forEach(id =>
+  $(id).addEventListener('input', render));
+render();
+</script>
+</body></html>
