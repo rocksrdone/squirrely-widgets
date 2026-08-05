@@ -365,7 +365,10 @@ async function loadAll() {
       number: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
       date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
       total, stock,
+      // `free` is clamped because it describes ONE bag and a bag can't hold a
+      // negative. `freeSigned` is what gets summed per recipe — see availByRecipe.
       free: Math.max(0, total - (allocByLot[id] || 0) - stock - num(LOT.broken, i)),
+      freeSigned: total - (allocByLot[id] || 0) - stock - num(LOT.broken, i),
       stockVal: S.stockCol ? (Number(columnAsArray(lotsT, S.stockCol)[i]) || 0) : 0,
     };
     S.lots.push(lot);
@@ -381,7 +384,9 @@ async function loadAll() {
   Object.entries(S.lotsByRecipe).forEach(([rid, arr]) => {
     S.availByRecipe[rid] = {
       wound: arr.reduce((a, x) => a + x.stock, 0),
-      unwound: arr.reduce((a, x) => a + x.free, 0),
+      // Signed sum, clamped once: an over-allocated lot must cancel a sibling's
+      // surplus rather than be dropped, which would invent thread that isn't there.
+      unwound: Math.max(0, arr.reduce((a, x) => a + x.freeSigned, 0)),
       lots: arr.length,
     };
   });

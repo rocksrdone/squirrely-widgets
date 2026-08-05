@@ -195,6 +195,7 @@ async function loadAll() {
       if (lotId) allocByLot[lotId] = (allocByLot[lotId] || 0) + (Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0);
     });
 
+    const signedByRecipe = {};
     const DRY = /dry rack|wood rack|overnight|ready to assign/i;
     const WET = /wet rack|metal rack|day rack/i;
     const dryByRecipe = {}, wetByRecipe = {};
@@ -206,12 +207,26 @@ async function loadAll() {
       if (!total && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
       const stock = (Number(columnAsArray(lotsT, LOT.store)[i]) || 0) + (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0) + (LOT.general ? Number(columnAsArray(lotsT, LOT.general)[i]) || 0 : 0);
       const broken = LOT.broken ? Number(columnAsArray(lotsT, LOT.broken)[i]) || 0 : 0;
-      const free = Math.max(0, total - (allocByLot[id] || 0) - stock - broken);
-      if (free <= 0) return;
+      // SIGNED — an over-allocated lot has to cancel a sibling lot's surplus.
+      const free = total - (allocByLot[id] || 0) - stock - broken;
       const status = (columnAsArray(lotsT, LOT.drying)[i] || '').toString();
       const isDry = DRY.test(status) || (!WET.test(status) && !!status);
       if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free;
       else wetByRecipe[rid] = (wetByRecipe[rid] || 0) + free;
+      signedByRecipe[rid] = (signedByRecipe[rid] || 0) + free;
+    });
+    // Clamp each rack, then cap the pair at the recipe's real total; trim the wet
+    // rack first, since it's the less actionable of the two.
+    Object.keys(signedByRecipe).forEach(rid => {
+      if (dryByRecipe[rid] < 0) dryByRecipe[rid] = 0;
+      if (wetByRecipe[rid] < 0) wetByRecipe[rid] = 0;
+      const cap = Math.max(0, signedByRecipe[rid]);
+      let excess = (dryByRecipe[rid] || 0) + (wetByRecipe[rid] || 0) - cap;
+      if (excess > 0) {
+        const takeWet = Math.min(excess, wetByRecipe[rid] || 0);
+        wetByRecipe[rid] -= takeWet; excess -= takeWet;
+        if (excess > 0) dryByRecipe[rid] = Math.max(0, (dryByRecipe[rid] || 0) - excess);
+      }
     });
     // stock counts as available-to-wind too
     (lotsT.id || []).forEach((id, i) => {

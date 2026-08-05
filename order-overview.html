@@ -287,6 +287,7 @@ async function loadCoreData() {
       const lotId = getRefId(columnAsArray(allocTable2, aLot)[i]);
       if (lotId) allocByLot[lotId] = (allocByLot[lotId] || 0) + (Number(columnAsArray(allocTable2, aQty)[i]) || 0);
     });
+    const signedByRecipe = {};
     const DRY = /dry rack|wood rack|overnight|ready to assign/i;
     const WET = /wet rack|metal rack|day rack/i;
     const num = (col, i) => col ? (Number(columnAsArray(lotsTable, col)[i]) || 0) : 0;
@@ -296,11 +297,28 @@ async function loadCoreData() {
       let total = num(lSpools, i);
       if (!total && lYards) total = Math.round(num(lYards, i) / (fiberCode(columnAsArray(lotsTable, lFiber)[i]) === 'EN' ? 150 : 100));
       const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
-      const free = Math.max(0, total - (allocByLot[id] || 0) - stock - num(lBroken, i));
+      // SIGNED — an over-allocated lot must cancel a sibling lot's surplus. Clamping
+      // each lot on its own leaves the surplus standing as thread that isn't there.
+      const free = total - (allocByLot[id] || 0) - stock - num(lBroken, i);
       const status = (columnAsArray(lotsTable, lDry)[i] || '').toString();
       const isDry = DRY.test(status) || (!WET.test(status) && !!status);
-      if (free > 0) { if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free; else wetByRecipe[rid] = (wetByRecipe[rid] || 0) + free; }
+      if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free;
+      else wetByRecipe[rid] = (wetByRecipe[rid] || 0) + free;
       if (stock > 0) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + stock; // stock is windable now
+      signedByRecipe[rid] = (signedByRecipe[rid] || 0) + free + stock;
+    });
+    // Clamp each rack, then cap the pair at the recipe's true total. Trim the wet
+    // rack first — it's the less actionable of the two.
+    Object.keys(signedByRecipe).forEach(rid => {
+      if (dryByRecipe[rid] < 0) dryByRecipe[rid] = 0;
+      if (wetByRecipe[rid] < 0) wetByRecipe[rid] = 0;
+      const cap = Math.max(0, signedByRecipe[rid]);
+      let excess = (dryByRecipe[rid] || 0) + (wetByRecipe[rid] || 0) - cap;
+      if (excess > 0) {
+        const takeWet = Math.min(excess, wetByRecipe[rid] || 0);
+        wetByRecipe[rid] -= takeWet; excess -= takeWet;
+        if (excess > 0) dryByRecipe[rid] = Math.max(0, (dryByRecipe[rid] || 0) - excess);
+      }
     });
   } catch (e) {
     console.warn('Production_Lots unavailable — stages fall back to boxed-only', e);

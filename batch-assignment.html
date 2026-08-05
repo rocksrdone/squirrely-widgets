@@ -266,6 +266,7 @@ async function loadForRecipe(record) {
     // "dyed" guess made at the kettle goes stale the moment winding assigns the
     // spools differently, so we compute it from physical records instead.
     let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null;
+    const clampRecipeTotals = m => { Object.keys(m).forEach(k => { if (m[k] < 0) m[k] = 0; }); };
     try {
       const [lotsT, allocT] = await Promise.all([
         grist.docApi.fetchTable('Production_Lots'),
@@ -311,7 +312,10 @@ async function loadForRecipe(record) {
         }
         const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
         const free = total - (allocByLot[id] || 0) - stock - num(lBroken, i);
-        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+        // Sum SIGNED across a recipe's lots, clamp once at the end. Clamping per
+        // lot silently discards over-allocated lots (allocated > Spools_Made),
+        // leaving the surplus lots standing alone as thread that does not exist.
+        unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
         if (stock > 0 && stockColId) {
           stockByRecipe[rid] = (stockByRecipe[rid] || 0) + stock;
           (stockLotsByRecipe[rid] = stockLotsByRecipe[rid] || []).push({
@@ -320,6 +324,7 @@ async function loadForRecipe(record) {
           });
         }
       });
+      clampRecipeTotals(unwoundByRecipe);
       // oldest stock first — clear the bin's oldest thread before newer
       Object.values(stockLotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0)));
     } catch (err) {
