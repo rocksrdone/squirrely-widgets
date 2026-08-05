@@ -155,6 +155,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -214,7 +218,7 @@ function resolveCols(table, tableName, spec, missing) {
     const required = Array.isArray(def) ? true : def.required !== false;
     const hit = findColumn(table, cands);
     out[key] = hit;
-    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+    if (!hit && required) missing.push(`${esc(tableName)}.${cands[0]}`);
   }
   return out;
 }
@@ -489,7 +493,7 @@ function renderList() {
       return `
         <div class="order-row-block">
           <div class="order-row">
-            <span>#${l.orderNumber || '—'} · ${l.customerName || '—'}</span>
+            <span>#${esc(l.orderNumber || '—')} · ${esc(l.customerName || '—')}</span>
             <span>${l.qtyNeeded} needed · due ${lDue}</span>
           </div>
           <div class="line-pack-row">
@@ -505,10 +509,10 @@ function renderList() {
       <tr class="batch-row ${rowPriorityClass}" onclick="document.getElementById('${rowId}').classList.toggle('open')">
         <td>
           <div class="colorway-name" style="color:${guessColor(batch.colorwayName || batch.sku)}">${batch.colorwayName || batch.sku}</div>
-          <div class="colorway-sku">${batch.sku}</div>
+          <div class="colorway-sku">${esc(batch.sku)}</div>
         </td>
         <td><span class="priority-badge ${priorityClass}">${batch.priority}</span></td>
-        <td class="due-cell">${dueLabel}</td>
+        <td class="due-cell">${esc(dueLabel)}</td>
         <td class="stage-cell">${batch.stillToMake > 0
           ? `<strong style="color:#8B5A2A">dye ${batch.stillToMake}</strong>`
           : `<span style="color:var(--done-text)">covered ✓</span>`}${(batch.inBins || batch.inStock) ? `<div style="font-size:9px;color:#8B7D72">${batch.inBins ? `${batch.inBins} to wind` : ''}${(batch.inBins && batch.inStock) ? ' · ' : ''}${batch.inStock ? `${batch.inStock} back stock` : ''}</div>` : ''}</td>

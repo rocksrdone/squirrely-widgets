@@ -104,6 +104,10 @@ table.lines-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); 
 <div id="allOrdersPanel" style="display:none;"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function normalize(s) { return (s || '').toString().toLowerCase().trim().replace(/[^a-z0-9]/g, ''); }
 const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
 function fiberCode(v) {
@@ -174,7 +178,7 @@ const STAGE_BADGE = {
 };
 function stageBadgeHtml(stage) {
   const [cls, label] = STAGE_BADGE[stage] || STAGE_BADGE.notstarted;
-  return `<span class="line-stage-badge ${cls}">${label}</span>`;
+  return `<span class="line-stage-badge ${cls}">${esc(label)}</span>`;
 }
 
 async function loadCoreData() {
@@ -408,7 +412,7 @@ function orderRowHtml(o) {
   const total = orderProgress(o.id);
   return `
     <div class="order-row" onclick="selectBrowsed(${o.id})">
-      <div><span class="ord-num">${o.orderNumber}</span><span> — ${o.customerName}</span></div>
+      <div><span class="ord-num">${esc(o.orderNumber)}</span><span> — ${esc(o.customerName)}</span></div>
       <div class="ord-meta">${total.packed}/${total.needed} boxed${total.inBin ? ` · ${total.inBin} in bin` : ''} · ${(o.orderDate || '').toString().slice(0, 10)}</div>
     </div>
   `;
@@ -459,11 +463,11 @@ function renderOrderDetail(workOrderId) {
     const stage = computeLineStage(line, pool);
     return `
       <tr>
-        <td>${r.Recipe_Name || (line.sku ? `SKU: ${line.sku}` : '(no recipe on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''}</td>
+        <td>${r.Recipe_Name || (line.sku ? `SKU: ${esc(line.sku)}` : '(no recipe on this line)')} ${fib ? `<span class="fiber-tag">${fib}</span>` : ''}</td>
         <td class="qty-cell ${Number(line.boxed) >= Number(line.qtyNeeded) && line.qtyNeeded ? 'complete' : (!line.boxed ? 'zero' : '')}">${line.boxed || 0}/${line.qtyNeeded || 0}</td>
         <td class="qty-cell ${line.inBin ? 'inbin' : 'zero'}">${line.inBin || '—'}</td>
         <td>${stageBadgeHtml(stage)}</td>
-        <td style="font-size:11px; color:#8B7D72;">${line.queueStatus || ''}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
+        <td style="font-size:11px; color:#8B7D72;">${esc(line.queueStatus || '')}${line.priority && line.priority !== 'Normal' ? ' · ' + line.priority : ''}</td>
       </tr>
     `;
   }).join('') : `<tr><td colspan="5" style="text-align:center; color:#8B7D72; font-style:italic;">No line items on this order.</td></tr>`;
@@ -471,8 +475,8 @@ function renderOrderDetail(workOrderId) {
     <div class="order-header">
       <div class="order-header-top">
         <div>
-          <div class="order-title">${wo.orderNumber} — ${wo.customerName}</div>
-          <div class="order-sub">${wo.channel || ''}${wo.orderType ? ' · ' + wo.orderType : ''}${wo.dueDate ? ' · due ' + wo.dueDate.toString().slice(0, 10) : ''} · ${wo.paymentStatus || ''}</div>
+          <div class="order-title">${esc(wo.orderNumber)} — ${esc(wo.customerName)}</div>
+          <div class="order-sub">${wo.channel || ''}${wo.orderType ? ' · ' + wo.orderType : ''}${wo.dueDate ? ' · due ' + wo.dueDate.toString().slice(0, 10) : ''} · ${esc(wo.paymentStatus || '')}</div>
         </div>
         <span class="overall-badge ${overallBadge[0]}">${overallBadge[1]}</span>
       </div>
@@ -514,12 +518,12 @@ function renderAllOrders() {
       : 'In progress';
     return `
       <tr onclick="jumpToOrder(${o.id})">
-        <td><strong>${o.orderNumber}</strong></td>
-        <td>${o.customerName}</td>
+        <td><strong>${esc(o.orderNumber)}</strong></td>
+        <td>${esc(o.customerName)}</td>
         <td>${(o.dueDate || '').toString().slice(0, 10)}</td>
         <td>${p.lineCount}</td>
         <td><div class="progress-mini"><div class="progress-mini-fill" style="width:${pct}%"></div><div class="progress-mini-bin" style="width:${binPct}%"></div></div> ${pct}%${p.inBin ? ` <span style="color:#6B3A7A; font-size:11px;">+${p.inBin}</span>` : ''}</td>
-        <td>${label}</td>
+        <td>${esc(label)}</td>
       </tr>
     `;
   }).join('');

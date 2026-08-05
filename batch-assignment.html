@@ -121,6 +121,10 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function getRefId(ref) {
   if (typeof ref === 'number') return ref || null;
   if (Array.isArray(ref)) return ref[1];
@@ -151,7 +155,7 @@ function resolveCols(table, tableName, spec, missing) {
     const required = Array.isArray(def) ? true : def.required !== false;
     const hit = findColumn(table, cands);
     out[key] = hit;
-    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+    if (!hit && required) missing.push(`${esc(tableName)}.${cands[0]}`);
   }
   return out;
 }
@@ -693,7 +697,7 @@ function render() {
       <span><strong>${e.outstanding}</strong> owed</span>
       <span>·</span>
       <span><strong>${e.inBins}</strong> in bins</span>
-      ${e.inStock ? `<span>·</span><span><strong>${e.inStock}</strong> in stock</span>` : ''}
+      ${e.inStock ? `<span>·</span><span><strong>${esc(e.inStock)}</strong> in stock</span>` : ''}
       <span>·</span>
       <span class="${e.stillToMake > 0 ? 'make-more' : 'make-none'}">${e.stillToMake > 0 ? `make ${e.stillToMake} more` : 'enough ✓'}</span>
     </div>
@@ -705,7 +709,7 @@ function render() {
         return `
           <div class="order-card">
             <div class="order-top">
-              <span class="order-customer">${o.customerName || '—'}</span>
+              <span class="order-customer">${esc(o.customerName || '—')}</span>
               <span class="order-progress ${complete ? 'complete' : ''}">${o.allocated}/${o.qtyNeeded} boxed</span>
             </div>
           </div>`;
@@ -717,14 +721,14 @@ function render() {
     ? `<div class="running-total">This colorway so far: <strong>${sessionSpools} spool${sessionSpools === 1 ? '' : 's'}</strong> across ${sessionPots.length} lot${sessionPots.length === 1 ? '' : 's'}</div>` +
       sessionPots.map((p, i) => `
         <div class="pot-done">
-          <span>✓ <strong>${p.lotNumber}</strong> — ${p.spools} spool${p.spools === 1 ? '' : 's'}${p.leftover ? ` · to ${p.bucket} stock` : ''}</span>
+          <span>✓ <strong>${esc(p.lotNumber)}</strong> — ${p.spools} spool${p.spools === 1 ? '' : 's'}${p.leftover ? ` · to ${esc(p.bucket)} stock` : ''}</span>
           <span class="undo-link" onclick="undoPot(${i})">↺ undo</span>
         </div>`).join('')
     : '';
 
   const potPanelHtml = `
     <div class="pot-panel">
-      <div class="pot-method"><span class="method-badge ${methodClass}">${methodLabel}</span><span class="method-note">${methodNote}</span></div>
+      <div class="pot-method"><span class="method-badge ${methodClass}">${esc(methodLabel)}</span><span class="method-note">${esc(methodNote)}</span></div>
       <div class="pot-row">
         <input type="number" id="pot-spools" placeholder="Spools this pot" min="1">
         <button class="log-btn" onclick="logPot()">✓ Log pot</button>
@@ -746,25 +750,25 @@ function render() {
     let flagHtml;
     if (c.staging && c.staging.inReach) {
       // Used again soon enough today that a prep zone will still be free for it.
-      flagHtml = `<div class="cleanup-row cleanup-stage"><strong>${c.dyeDetail}</strong> — Keep out. Stage at <span class="slot-tag">${c.staging.slot}</span> (used next in ${c.staging.recipeName}). Don't put it away.</div>`;
+      flagHtml = `<div class="cleanup-row cleanup-stage"><strong>${esc(c.dyeDetail)}</strong> — Keep out. Stage at <span class="slot-tag">${esc(c.staging.slot)}</span> (used next in ${esc(c.staging.recipeName)}). Don't put it away.</div>`;
     } else if (c.staging) {
       // Needed later today, but too many groups out — the zone rotates before then.
-      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — needed again today in ${c.staging.recipeName} (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up before then. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${esc(c.dyeDetail)}</strong> — needed again today in ${esc(c.staging.recipeName)} (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up before then. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
     } else if (c.isOneOff) {
-      flagHtml = `<div class="cleanup-row cleanup-oneoff"><strong>${c.dyeDetail}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+      flagHtml = `<div class="cleanup-row cleanup-oneoff"><strong>${esc(c.dyeDetail)}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
     } else {
-      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${c.dyeDetail}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${c.suggestedBinNote})</span>.</div>`;
+      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${esc(c.dyeDetail)}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
     }
 
     const done = completedActions[idx];
     const actionBlock = done
       ? `<div class="action-done-banner">
-           <span>✓ ${done.label}</span>
+           <span>✓ ${esc(done.label)}</span>
            <span class="undo-link" onclick="undoAction(${idx})">Undo</span>
          </div>`
       : `<select id="action-${idx}" onchange="onDyeActionChange(${idx})">
            <option value="">What did you do with the leftover?</option>
-           ${c.staging && c.staging.inReach ? `<option value="stage">Left it out — staged at ${c.staging.slot}</option>` : ''}
+           ${c.staging && c.staging.inReach ? `<option value="stage">Left it out — staged at ${esc(c.staging.slot)}</option>` : ''}
            <option value="put_away">Put away in a bin</option>
            <option value="hold">Hold for later (no bin yet)</option>
            <option value="dump">Dump it</option>
@@ -785,7 +789,7 @@ function render() {
   `;
 
   document.getElementById('content').innerHTML = `
-    <div class="header-title">${e.recipeName}</div>
+    <div class="header-title">${esc(e.recipeName)}</div>
     <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
     ${coverageHtml}
     <div class="section-title">Log a pot</div>
@@ -1022,7 +1026,7 @@ async function onDyeActionChange(idx) {
     const c = currentEntry.cleanupInfo[idx];
     const slot = c.staging ? c.staging.slot : 'the prep table';
     wrap.innerHTML = `<div class="action-fields">
-      <button class="action-confirm-btn" onclick="stageDye(${idx})" style="flex:1;">Confirm — left out at ${slot}</button>
+      <button class="action-confirm-btn" onclick="stageDye(${idx})" style="flex:1;">Confirm — left out at ${esc(slot)}</button>
     </div>`;
   } else if (action === 'dump') {
     wrap.innerHTML = `<div class="action-fields">
@@ -1038,9 +1042,9 @@ async function onDyeActionChange(idx) {
 async function stageDye(idx) {
   const c = currentEntry.cleanupInfo[idx];
   const slot = c.staging ? c.staging.slot : 'prep table';
-  const next = c.staging ? ` for ${c.staging.recipeName}` : '';
+  const next = c.staging ? ` for ${esc(c.staging.recipeName)}` : '';
   completedActions[idx] = {
-    label: `Staged at ${slot}${next} — not put away`,
+    label: `Staged at ${esc(slot)}${next} — not put away`,
     undo: async () => {},
   };
   render();

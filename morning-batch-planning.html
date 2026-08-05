@@ -144,6 +144,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function getRefId(ref) {
   if (typeof ref === 'number') return ref || null;
   if (Array.isArray(ref)) return ref[1];
@@ -172,7 +176,7 @@ function resolveCols(table, tableName, spec, missing) {
     const required = Array.isArray(def) ? true : def.required !== false;
     const hit = findColumn(table, cands);
     out[key] = hit;
-    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+    if (!hit && required) missing.push(`${esc(tableName)}.${cands[0]}`);
   }
   return out;
 }
@@ -631,14 +635,14 @@ function renderList() {
   const rows = filtered.map(e => {
     const stockHtml = e.stock.map(s => {
       if (!s.total) {
-        return `<div class="stock-line no-stock">${s.dyeName}: none${s.powderLoc ? ` · powder <span class="bin-tag">${s.powderLoc}</span>` : ''}</div>`;
+        return `<div class="stock-line no-stock">${esc(s.dyeName)}: none${s.powderLoc ? ` · powder <span class="bin-tag">${s.powderLoc}</span>` : ''}</div>`;
       }
       const bins = s.bins.map(b => `<span class="bin-tag">${b}</span>`).join(' ');
-      return `<div class="stock-line">${s.dyeName}: ${s.total.toFixed(0)}mL ${bins}</div>`;
+      return `<div class="stock-line">${esc(s.dyeName)}: ${s.total.toFixed(0)}mL ${bins}</div>`;
     }).join('');
 
     const peekHtml = e.peek.map(p =>
-      `<div class="peek-line"><strong>${p.dyeName}</strong> → ${p.others.map(o => `${o.recipeName} (${o.qty})`).join(', ')}</div>`
+      `<div class="peek-line"><strong>${esc(p.dyeName)}</strong> → ${p.others.map(o => `${esc(o.recipeName)} (${o.qty})`).join(', ')}</div>`
     ).join('') || '<div class="peek-line" style="color:#8B7D72;font-style:italic;">No overlap with other pending recipes</div>';
 
     const isSelected = e.recipe.id === selectedRecipeId;
@@ -652,12 +656,12 @@ function renderList() {
     return `
       <tr class="recipe-row ${isSelected ? 'selected' : ''} ${e.plan ? 'planned' : ''}" onclick="jumpToRecipe(${e.recipe.id})">
         <td>
-          <div class="recipe-name-cell">${e.recipe.name}${planBadge}</div>
-          <div class="recipe-meta-cell">${e.recipe.sku || ''} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
+          <div class="recipe-name-cell">${esc(e.recipe.name)}${planBadge}</div>
+          <div class="recipe-meta-cell">${esc(e.recipe.sku || '')} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
           ${planSlots}
         </td>
         <td>${duePill(e)}<div style="font-size:9px;color:#8B7D72">${dueNote(e)}</div></td>
-        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${e.inStock} back stock` : ''}</div></td>
+        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${esc(e.inStock)} back stock` : ''}</div></td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>
       </tr>

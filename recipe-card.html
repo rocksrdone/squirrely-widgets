@@ -460,6 +460,10 @@
 </div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -578,12 +582,12 @@ function renderPhotoViewer() {
 
   wrap.innerHTML = `
     <div class="photo-viewer" onclick="nextPhoto()" title="${photos.length > 1 ? 'Click for next photo' : ''}">
-      <img src="${p.url}" alt="${p.label}" onerror="this.style.display='none'">
+      <img src="${p.url}" alt="${esc(p.label)}" onerror="this.style.display='none'">
       <div class="viewer-caption">
-        <span class="viewer-label">${p.label}${photos.length > 1 ? ` · ${currentPhotoIndex + 1}/${photos.length}` : ''}</span>
-        ${p.note ? `<span class="photo-note">${p.note}</span>` : ''}
+        <span class="viewer-label">${esc(p.label)}${photos.length > 1 ? ` · ${currentPhotoIndex + 1}/${photos.length}` : ''}</span>
+        ${p.note ? `<span class="photo-note">${esc(p.note)}</span>` : ''}
       </div>
-      <button class="viewer-undo-btn" onclick="event.stopPropagation(); sendPhotoToReview('${p.label}')" title="Send this photo back to the inbox for re-review">↩ Redo</button>
+      <button class="viewer-undo-btn" onclick="event.stopPropagation(); sendPhotoToReview('${esc(p.label)}')" title="Send this photo back to the inbox for re-review">↩ Redo</button>
     </div>
     ${dotsHTML}
   `;
@@ -786,7 +790,7 @@ function buildLayoutRingSvg(baseSegs, overlays) {
     if (label) {
       const midPct = ringGetMidPct(seg.startPct, seg.endPct);
       const pt = ringPolarToCartesian(CX, CY, (BASE_R_OUT + BASE_R_IN) / 2, (midPct / 100) * 360);
-      inner += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke">${label}</text>`;
+      inner += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke">${esc(label)}</text>`;
     }
   });
 
@@ -795,7 +799,7 @@ function buildLayoutRingSvg(baseSegs, overlays) {
     const label = ringAbbreviateLabel(mark.dyeName, 22);
     if (label) {
       const pt = ringPolarToCartesian(CX, CY, OVERLAY_R_OUT + 9, (midPct / 100) * 360);
-      inner += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="Inter, sans-serif" font-weight="600" fill="#6B5E52">${label}</text>`;
+      inner += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="Inter, sans-serif" font-weight="600" fill="#6B5E52">${esc(label)}</text>`;
     }
   });
 
@@ -810,9 +814,9 @@ function renderLeft() {
   const comps = [...currentComponents].sort((a,b) => (a.Step_Number||99) - (b.Step_Number||99));
 
   const tags = [
-    r.Dye_Method ? `<span class="meta-tag tag-method">${r.Dye_Method}</span>` : '',
+    r.Dye_Method ? `<span class="meta-tag tag-method">${esc(r.Dye_Method)}</span>` : '',
     r.Fiber_Type ? `<span class="meta-tag tag-fiber">${r.Fiber_Type}</span>` : '',
-    r.Recipe_Scope ? `<span class="meta-tag tag-scope">${r.Recipe_Scope}</span>` : '',
+    r.Recipe_Scope ? `<span class="meta-tag tag-scope">${esc(r.Recipe_Scope)}</span>` : '',
   ].join('');
 
   const dyeRows = comps.map(c => {
@@ -821,7 +825,7 @@ function renderLeft() {
     return `<tr>
       <td><div class="dye-name-cell">
         <span class="swatch" style="background:${col}"></span>
-        ${c.Dye_Name || '—'}
+        ${esc(c.Dye_Name || '—')}
         ${brand ? `<span class="brand">${brand[1]}</span>` : ''}
       </div></td>
       <td><span class="amt">${calcTsp(rowField(c, ['Std_Powder_tsp_']))}</span></td>
@@ -835,9 +839,9 @@ function renderLeft() {
     <div class="preview-picker-dropdown">
       ${currentProductPhotos.length ? currentProductPhotos.map(p => `
         <div class="preview-picker-row ${p.isPreview ? 'selected' : ''}" onclick="selectPreviewPhoto(${p.id})">
-          <img src="${p.url}" alt="${p.filename || ''}" onerror="this.style.opacity=0.2">
+          <img src="${p.url}" alt="${esc(p.filename || '')}" onerror="this.style.opacity=0.2">
           <div class="preview-picker-info">
-            <div class="ppr-name">${p.filename || 'Untitled'}</div>
+            <div class="ppr-name">${esc(p.filename || 'Untitled')}</div>
             ${p.isPreview ? '<div class="ppr-current">current preview</div>' : ''}
           </div>
         </div>
@@ -856,9 +860,9 @@ function renderLeft() {
       <div class="step-item" onclick="toggleStep(this)">
         <div class="step-num">${i+1}</div>
         <div class="step-content">
-          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${c.Dye_Name}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>` : ''}
-          <div class="step-text">${c.Is_Powder ? '<b>Sprinkle dry powder.</b> ' : ''}${c.Application_Notes || ''}</div>
-          ${c.Position ? `<div class="step-pos">📍 ${c.Position}</div>` : ''}
+          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${esc(c.Dye_Name)}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>` : ''}
+          <div class="step-text">${c.Is_Powder ? '<b>Sprinkle dry powder.</b> ' : ''}${esc(c.Application_Notes || '')}</div>
+          ${c.Position ? `<div class="step-pos">📍 ${esc(c.Position)}</div>` : ''}
           ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
         </div>
       </div>`;
@@ -867,7 +871,7 @@ function renderLeft() {
   document.getElementById('leftPanel').innerHTML = `
     <div class="recipe-header-row">
       <div>
-        <div class="recipe-name">${r.Recipe_Name || 'Unnamed Recipe'}</div>
+        <div class="recipe-name">${esc(r.Recipe_Name || 'Unnamed Recipe')}</div>
         <div class="recipe-meta">${tags}</div>
         ${currentSpoolStats.needed > 0 ? `
           <div class="spool-badge ${currentSpoolStats.made >= currentSpoolStats.needed ? 'spool-done' : currentSpoolStats.made > 0 ? 'spool-partial' : 'spool-none'}"
@@ -877,7 +881,7 @@ function renderLeft() {
         ` : ''}
         ${currentSpoolStats.perOrder && currentSpoolStats.perOrder.length ? `
           <div style="margin-top:6px; font-size:11px; color:#6B5E52;">
-            ${currentSpoolStats.perOrder.map(o => `<div>${o.customerName} — ${o.qty} spools</div>`).join('')}
+            ${currentSpoolStats.perOrder.map(o => `<div>${esc(o.customerName)} — ${o.qty} spools</div>`).join('')}
           </div>
         ` : ''}
         ${r.Created_Date ? `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${new Date(Number(r.Created_Date)*1000).toLocaleString('default',{month:'long'})} ${new Date(Number(r.Created_Date)*1000).getFullYear()}</div>` : ''}
@@ -934,7 +938,7 @@ function renderLeft() {
     ${r.Notes ? `
     <div class="notes-box">
       <div class="notes-title">Recipe notes</div>
-      ${r.Notes}
+      ${esc(r.Notes)}
     </div>` : ''}
 
     ${currentHistoryEntries.length ? `

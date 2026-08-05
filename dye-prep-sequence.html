@@ -119,6 +119,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -157,7 +161,7 @@ function resolveCols(table, tableName, spec, missing) {
     const required = Array.isArray(def) ? true : def.required !== false;
     const hit = findColumn(table, cands);
     out[key] = hit;
-    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+    if (!hit && required) missing.push(`${esc(tableName)}.${cands[0]}`);
   }
   return out;
 }
@@ -513,7 +517,7 @@ function renderList() {
     const ordersHtml = g.orders.map(o => {
       const due = o.dueDate ? new Date(Number(o.dueDate) * 1000).toLocaleDateString() : '—';
       const amount = o.hasRate ? `${o.mlNeeded.toFixed(0)}mL` : `${o.qty} spools (no rate yet)`;
-      return `<div class="order-line"><span>#${o.orderNumber || '—'} · ${o.customerName || '—'} · ${o.recipeName}</span><span>${amount} · due ${due}</span></div>`;
+      return `<div class="order-line"><span>#${esc(o.orderNumber || '—')} · ${esc(o.customerName || '—')} · ${esc(o.recipeName)}</span><span>${amount} · due ${due}</span></div>`;
     }).join('');
 
     const mixCellHtml = g.hasAnyRate
@@ -527,8 +531,8 @@ function renderList() {
     return `
       <tr class="dye-row ${rowClass}" onclick="document.getElementById('${rowId}').classList.toggle('open')">
         <td>
-          <div class="dye-name" style="color:${guessColor(g.dyeName)}">${g.dyeName}</div>
-          <div class="dye-brand">${g.brand || ''}</div>
+          <div class="dye-name" style="color:${guessColor(g.dyeName)}">${esc(g.dyeName)}</div>
+          <div class="dye-brand">${esc(g.brand || '')}</div>
         </td>
         <td>${stockHtml}</td>
         <td>${mixCellHtml}</td>

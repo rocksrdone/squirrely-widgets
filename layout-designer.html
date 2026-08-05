@@ -181,6 +181,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -278,7 +282,7 @@ function searchDyeSuggestions(boxId, query, onPick) {
 
   box.innerHTML = matches.map(d => `
     <div class="dye-suggestion-row" onmousedown="event.preventDefault(); ${onPick}('${d.name.replace(/'/g, "\\'")}')">
-      <strong>${d.name}</strong>${d.brand ? ` <span style="color:#8B7D72">(${d.brand})</span>` : ''}
+      <strong>${esc(d.name)}</strong>${d.brand ? ` <span style="color:#8B7D72">(${esc(d.brand)})</span>` : ''}
     </div>
   `).join('');
   box.style.display = 'block';
@@ -463,8 +467,8 @@ function renderStepPhotos(photoItems) {
     <div class="step-photos-row">
       ${photoItems.map(p => `
         <div class="step-photo">
-          <img src="${p.url}" alt="${p.label}" onclick="window.open('${p.url}', '_blank')" onerror="this.parentElement.style.display='none'">
-          <div class="step-photo-label">${p.label}</div>
+          <img src="${p.url}" alt="${esc(p.label)}" onclick="window.open('${p.url}', '_blank')" onerror="this.parentElement.style.display='none'">
+          <div class="step-photo-label">${esc(p.label)}</div>
         </div>
       `).join('')}
     </div>
@@ -526,7 +530,7 @@ function renderRing() {
       : abbreviateLabel(seg.dyeName, widthDeg);
     if (label) {
       const pt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (midPct / 100) * 360);
-      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${label}</text>`;
+      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${esc(label)}</text>`;
     }
   });
 
@@ -536,7 +540,7 @@ function renderRing() {
     const label = abbreviateLabel(mark.dyeName, 22);
     if (label) {
       const pt = polarToCartesian(OVERLAY_R_OUT + 9, (midPct / 100) * 360);
-      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="Inter, sans-serif" font-weight="600" fill="#6B5E52" style="pointer-events:none">${label}</text>`;
+      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="Inter, sans-serif" font-weight="600" fill="#6B5E52" style="pointer-events:none">${esc(label)}</text>`;
     }
   });
 
@@ -997,7 +1001,7 @@ function renderOverlayList() {
   wrap.innerHTML = overlayMarks.map(m => `
     <div class="overlay-list-item ${m.clientKey === selectedOverlayKey ? 'selected' : ''}" onclick="selectOverlay(${m.clientKey})">
       <span class="overlay-swatch" style="background:${guessColor(m.dyeName)}"></span>
-      <span class="overlay-item-label">${m.dyeName || 'Unnamed'} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
+      <span class="overlay-item-label">${esc(m.dyeName || 'Unnamed')} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
       <button class="icon-btn" onclick="event.stopPropagation(); removeOverlay(${m.clientKey})">✕</button>
     </div>
   `).join('');

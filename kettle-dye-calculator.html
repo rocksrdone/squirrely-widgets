@@ -340,6 +340,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -407,8 +411,8 @@ function onDyeSearchInput(query) {
 
   box.innerHTML = matches.map(d => `
     <div class="dye-suggestion-row" onmousedown="event.preventDefault(); pickDye(${d.id})">
-      <strong>${d.name}</strong> ${d.brand ? `<span style="color:#8B7D72">(${d.brand})</span>` : ''}
-      ${d.status && d.status !== 'Active' ? `<span class="status-flag">${d.status}</span>` : ''}
+      <strong>${esc(d.name)}</strong> ${d.brand ? `<span style="color:#8B7D72">(${esc(d.brand)})</span>` : ''}
+      ${d.status && d.status !== 'Active' ? `<span class="status-flag">${esc(d.status)}</span>` : ''}
     </div>
   `).join('');
   box.style.display = 'block';
@@ -438,8 +442,8 @@ function renderSelectedDyeBanner() {
   const isFlagged = selectedDye.status && selectedDye.status !== 'Active';
   wrap.innerHTML = `
     <div class="selected-dye-banner ${isFlagged ? 'warn' : ''}">
-      <span>Using <strong>${selectedDye.name}</strong>${selectedDye.brand ? ` (${selectedDye.brand})` : ''} — standard ratio autofilled</span>
-      ${isFlagged ? `<span>⚠ ${selectedDye.status}${selectedDye.statusNotes ? ': ' + selectedDye.statusNotes : ''}</span>` : ''}
+      <span>Using <strong>${esc(selectedDye.name)}</strong>${selectedDye.brand ? ` (${esc(selectedDye.brand)})` : ''} — standard ratio autofilled</span>
+      ${isFlagged ? `<span>⚠ ${esc(selectedDye.status)}${selectedDye.statusNotes ? ': ' + selectedDye.statusNotes : ''}</span>` : ''}
     </div>
   `;
 }
@@ -686,7 +690,7 @@ async function loadVendors() {
     })).filter(v => v.name && v.code);
     const select = document.getElementById('promoteVendor');
     select.innerHTML = '<option value="">— pick vendor —</option>' +
-      allVendors.map(v => `<option value="${v.code}">${v.name} (${v.code})</option>`).join('');
+      allVendors.map(v => `<option value="${esc(v.code)}">${esc(v.name)} (${esc(v.code)})</option>`).join('');
   } catch (e) {
     console.error('Failed to load vendors:', e);
   }
@@ -737,7 +741,7 @@ function renderSkuSuggestion() {
       <span>Suggested: <code>${suggestion}</code></span>
       <button type="button" class="btn btn-small" onclick="document.getElementById('promoteSku').value=computeSuggestedSku(); renderSkuSuggestion();">Use this</button>
     </div>
-    ${dup ? `<div class="sku-warning">⚠ "${currentVal}" is already used by "${dup.recipeName}"</div>` : ''}
+    ${dup ? `<div class="sku-warning">⚠ "${currentVal}" is already used by "${esc(dup.recipeName)}"</div>` : ''}
   `;
 }
 
@@ -778,7 +782,7 @@ async function promoteToRecipe() {
       ['AddRecord', 'Recipe_Dye_Components', null, {
         Recipe: newRecipeId,
         Dye_Name: selectedDye.id,
-        Dye_Full: selectedDye.brand ? `${selectedDye.name} (${selectedDye.brand})` : selectedDye.name,
+        Dye_Full: selectedDye.brand ? `${esc(selectedDye.name)} (${esc(selectedDye.brand)})` : selectedDye.name,
         [powderCol]: lastComputed.dyeMeasure,
         [waterCol]: lastComputed.stockVol,
         Measure_Mode: 'Dry Powder',

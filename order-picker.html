@@ -123,6 +123,10 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <div id="orderList" class="order-list"></div>
 
 <script>
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function normalize(s) { return (s || '').toString().toLowerCase().trim(); }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function findColumn(t, candidates) {
@@ -405,20 +409,20 @@ function renderList() {
     return `
       <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass}" onclick="selectOrder(${o.id})">
         <div class="card-top">
-          <span class="card-ordernum">${o.orderNumber || '—'}</span>
-          <span class="card-customer">${o.customerName || '(no customer)'}</span>
+          <span class="card-ordernum">${esc(o.orderNumber || '—')}</span>
+          <span class="card-customer">${esc(o.customerName || '(no customer)')}</span>
           <div class="card-badges">
             ${isRush ? '<span class="badge rush">★ Rush</span>' : ''}
             ${o.orderType === 'Draft' ? '<span class="badge draft">Draft</span>' : ''}
-            ${prodStatus ? `<span class="badge ${prodStatus.cls}">${prodStatus.label}</span>` : ''}
-            ${o.status ? `<span class="badge status ${o.status.toLowerCase() === 'closed' ? 'closed' : ''}">${o.status}</span>` : ''}
-            ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${o.paymentStatus}</span>` : ''}
+            ${prodStatus ? `<span class="badge ${prodStatus.cls}">${esc(prodStatus.label)}</span>` : ''}
+            ${o.status ? `<span class="badge status ${o.status.toLowerCase() === 'closed' ? 'closed' : ''}">${esc(o.status)}</span>` : ''}
+            ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${esc(o.paymentStatus)}</span>` : ''}
             ${o.channel ? `<span class="badge channel">${o.channel}</span>` : ''}
           </div>
         </div>
         <div class="card-meta-row">
           ${o.orderDate ? `<span>Ordered ${fmtDate(o.orderDate)}</span>` : ''}
-          ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${dueLabel}</span>` : ''}
+          ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${esc(dueLabel)}</span>` : ''}
         </div>
         ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${shopifyUrl}" target="_blank" onclick="event.stopPropagation()">Shopify #${o.shopifyId} ↗</a>` : `Shopify #${o.shopifyId}`}</div>` : ''}
         ${editingNoteId === o.id
