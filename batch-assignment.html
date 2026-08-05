@@ -785,7 +785,7 @@ function render() {
 
   const draftActionHtml = `
     <div class="section-title">Combined leftovers into something new?</div>
-    <button class="log-btn" style="width:100%;" onclick="createColorDraft()">🎨 Create new color draft from leftovers</button>
+    <button class="log-btn" id="draftBtn" style="width:100%;" onclick="createColorDraft()">🎨 New colour draft — get a code</button>
   `;
 
   document.getElementById('content').innerHTML = `
@@ -1204,20 +1204,81 @@ async function undoAction(idx) {
   }
 }
 
+// One click, no typing: mint the next draft code, create the Recipe named for it
+// and its Production_Lot, then show the code big enough to copy onto a tag with
+// dye on your hands. Everything else — dyes, amounts, what you were going for —
+// gets written on the tag and entered at control later.
+//
+// Format matches Quick Draft exactly (DR-YYMMDD-n) and the next number is read
+// from Production_Lots.Draft_Code, so the two can be used interchangeably and
+// will never collide.
 async function createColorDraft() {
+  const btn = document.getElementById('draftBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
   try {
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Recipes', null, {
-        Recipe_Name: 'Untitled Draft (from leftovers)',
-        Status: 'Researching',
-        Notes: `Created from leftover dyes while working on ${currentEntry.recipeName}`,
-      }]
-    ]);
-    showToast('New color draft created — find it in your Recipes drafts ✓');
+    const lotsT = await grist.docApi.fetchTable('Production_Lots');
+    const cDraft  = findColumn(lotsT, ['Draft_Code']);
+    const cRecipe = findColumn(lotsT, ['Recipe']);
+    const cStatus = findColumn(lotsT, ['Drying_Status']);
+    const cDate   = findColumn(lotsT, ['Date_Dyed']);
+    const cFiber  = findColumn(lotsT, ['Fiber']);
+    if (!cDraft) throw new Error('Production_Lots has no Draft_Code column');
+
+    const d = new Date(), pad = n => String(n).padStart(2, '0');
+    const prefix = 'DR-' + String(d.getFullYear()).slice(2) + pad(d.getMonth() + 1) + pad(d.getDate()) + '-';
+    let max = 0;
+    columnAsArray(lotsT, cDraft).forEach(v => {
+      const c = String(v || '');
+      if (c.indexOf(prefix) === 0) {
+        const n = parseInt(c.slice(prefix.length), 10);
+        if (!isNaN(n) && n > max) max = n;
+      }
+    });
+    const code = prefix + (max + 1);
+
+    const rec = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, {
+      Recipe_Name: code,
+      Notes: currentEntry ? `Draft started at the kettle while working on ${currentEntry.recipeName}` : 'Draft started at the kettle',
+    }]]);
+    const recipeId = rec && rec.retValues && rec.retValues[0];
+
+    const lot = {};
+    lot[cDraft] = code;
+    if (cRecipe && recipeId) lot[cRecipe] = recipeId;
+    if (cStatus) lot[cStatus] = 'Drying - Metal Rack';
+    if (cFiber && currentEntry && currentEntry.fiber) lot[cFiber] = currentEntry.fiber;
+    // Grist DateTime wants epoch SECONDS at UTC midnight, never milliseconds.
+    if (cDate) lot[cDate] = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000;
+    await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, lot]]);
+
+    showDraftCode(code);
   } catch (e) {
     console.error('Failed to create draft:', e);
-    showToast('Failed — check the Recipes table');
+    showToast('Failed — ' + (e && e.message ? e.message : 'check Production_Lots'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🎨 New colour draft — get a code'; }
   }
+}
+
+// Big, high-contrast, stays until dismissed. You're going to read this with dye
+// on your hands from a foot away, so it doesn't time out like a toast.
+function showDraftCode(code) {
+  let el = document.getElementById('draftCodeOverlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'draftCodeOverlay';
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(20,15,13,.93);z-index:9999;'
+      + 'display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;';
+    el.onclick = () => el.remove();
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<div style="color:#C9B8AE;font-size:15px;letter-spacing:2px;'
+    + 'text-transform:uppercase;margin-bottom:14px;">write this on the tag</div>'
+    + '<div style="font-family:\'Courier New\',monospace;font-size:64px;font-weight:bold;'
+    + 'color:#fff;letter-spacing:3px;">' + esc(code) + '</div>'
+    + '<div style="color:#9C8A80;font-size:14px;margin-top:22px;">'
+    + 'Lot created. Dyes, amounts and spool count go on the tag — control enters them later.</div>'
+    + '<div style="color:#6E5F58;font-size:12px;margin-top:30px;">tap anywhere to close</div>';
 }
 
 function showToast(msg) {

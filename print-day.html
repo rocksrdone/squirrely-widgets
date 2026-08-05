@@ -149,6 +149,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
      Bin and lot number stay blank &mdash; neither exists yet at the pot.</p>
   <div class="row">
     <div><label>First bag code</label><input type="number" id="start" value="1001" min="1"></div>
+    <div><label>Blank tags</label><input type="number" id="blanks" value="2" min="0" max="24"></div>
     <div class="checks">
       <span><input type="checkbox" id="wTags" checked> kettle tags</span>
       <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
@@ -364,6 +365,7 @@ async function load() {
 const code = n => 'SS-' + n;
 
 function tag(b, n) {
+  if (b === 'blank') return blankTag(n);
   if (!b) return '<div class="tag"></div>';
   let rows = '';
   for (let k = 0; k < 3; k++) {
@@ -387,6 +389,32 @@ function tag(b, n) {
     <div class="photo"><span><i class="${b.photo ? 'on' : ''}"></i>photo</span>
       <span><i class="${b.photo ? '' : 'on'}"></i>no photo</span></div>
     <div class="who"><div class="cap">likely for</div><table>${rows}</table></div>
+    <div class="flags"><span><i></i>LE</span><span><i></i>combining</span></div>
+    <div class="note"></div>
+  </div>`;
+}
+
+// Spare tag for anything the plan didn't foresee — a redo, an experiment, a pot
+// that went its own way. Carries a code so the bag is identifiable; everything
+// else is written by hand at the kettle.
+function blankTag(n) {
+  let rows = '';
+  for (let k = 0; k < 3; k++) rows += '<tr><td class="c"><i></i></td><td></td><td class="q"></td></tr>';
+  return `<div class="tag">
+    <div class="r1">
+      <div style="flex:1">
+        <div class="code">${code(n)}<span style="font-family:Helvetica,Arial,sans-serif;font-size:9px;font-weight:normal;letter-spacing:1px;color:#777;margin-left:8px;">SPARE &mdash; NOT PLANNED</span></div>
+        <div class="nameline"></div>
+        <div class="cap">colorway</div>
+      </div>
+      <div class="bin"><div class="l">bin</div><div class="b"></div></div>
+    </div>
+    <div class="meta"><div style="flex:1"></div><div style="flex:1"></div>
+      <div style="flex:0 0 .6in"></div><div style="flex:0 0 .6in"></div></div>
+    <div class="mcap"><span style="flex:1">lot</span><span style="flex:1">SKU</span>
+      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .6in">spools</span></div>
+    <div class="photo"><span><i></i>photo</span><span><i></i>no photo</span></div>
+    <div class="who"><div class="cap">likely for &mdash; leave blank if this is a one-off</div><table>${rows}</table></div>
     <div class="flags"><span><i></i>LE</span><span><i></i>combining</span></div>
     <div class="note"></div>
   </div>`;
@@ -456,12 +484,18 @@ function render() {
   const printable = skip ? BATCHES.filter(b => b.spools > 0) : BATCHES.slice();
   printable.forEach((b, i) => { b.code = start + i; });
 
+  const nBlank = Math.max(0, Number(document.getElementById('blanks').value) || 0);
+  // Blanks continue the sequence so no two bags can ever share a code, even if a
+  // spare goes unused today and gets picked up next week.
+  const tagList = printable.concat(Array.from({ length: nBlank }, (_, k) =>
+    ({ blank: true, code: start + printable.length + k })));
+
   const n = printable.length;
   let html = '';
-  if (n && document.getElementById('wTags').checked)
-    impose(n, 6).forEach(p => {
-      html += '<div class="page">' + p.map(i => tag(i === null ? null : printable[i],
-        i === null ? null : printable[i].code)).join('') + '</div>';
+  if (tagList.length && document.getElementById('wTags').checked)
+    impose(tagList.length, 6).forEach(p => {
+      html += '<div class="page">' + p.map(i => i === null ? tag(null, null)
+        : (tagList[i].blank ? tag('blank', tagList[i].code) : tag(tagList[i], tagList[i].code))).join('') + '</div>';
     });
   if (n && document.getElementById('wSheets').checked)
     impose(n, 2).forEach(p => {
@@ -487,7 +521,8 @@ function render() {
     </tr>`).join('')}</table>
     <div class="muted" style="margin-top:8px">
       ${n ? `Printing ${n} of ${BATCHES.length} planned &rarr; ${code(start)}&ndash;${code(start + n - 1)}.`
-          : `<span class="warn">Nothing to print &mdash; none of today's ${BATCHES.length} planned batches needs dyeing.</span>`}
+          : `<span class="warn">Nothing planned needs dyeing today.</span>`}
+      ${nBlank ? `${nBlank} spare tag${nBlank === 1 ? '' : 's'} &rarr; ${code(start + n)}&ndash;${code(start + n + nBlank - 1)}, no sheet. ` : ''}
       ${overflow.length ? `<span class="warn">${overflow.length} bag${overflow.length === 1 ? '' : 's'} serve more than 3 orders &mdash; the tag shows the 3 due soonest, the sheet shows 4.</span>` : ''}
       ${noDemand.length ? `<span class="warn">${noDemand.length} with no open orders</span> &mdash; already filled, or the plan is stale. ` : ''}
       ${covered.length ? `<span class="warn">${covered.length} covered by thread on hand</span> &mdash; ${coveredSpools} spools to wind or pull. That is work for the winder, not the kettle. ` : ''}
@@ -495,7 +530,7 @@ function render() {
     </div>` : '';
 }
 
-['start', 'wTags', 'wSheets', 'wSkip'].forEach(id =>
+['start', 'blanks', 'wTags', 'wSheets', 'wSkip'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 
 /* Static shell is already rendered above. Only now talk to Grist. */
