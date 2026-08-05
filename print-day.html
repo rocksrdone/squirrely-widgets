@@ -152,6 +152,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
     <div class="checks">
       <span><input type="checkbox" id="wTags" checked> kettle tags</span>
       <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
+      <span><input type="checkbox" id="wSkip" checked> skip batches needing no dye</span>
     </div>
     <div><button onclick="window.print()">Print</button></div>
     <div><button class="sec" onclick="load()">Reload plan</button></div>
@@ -447,16 +448,25 @@ function sheet(b, n) {
 /* ── render ───────────────────────────────────────────────────────────── */
 function render() {
   const start = Math.max(1, Number(document.getElementById('start').value) || 1001);
-  const n = BATCHES.length;
-  let html = '';
+  const skip = document.getElementById('wSkip').checked;
 
-  if (document.getElementById('wTags').checked)
+  // A batch only earns paper if it actually needs dyeing. Codes are assigned to
+  // the printed set, so a skipped batch never burns a bag code.
+  BATCHES.forEach(b => { b.code = null; });
+  const printable = skip ? BATCHES.filter(b => b.spools > 0) : BATCHES.slice();
+  printable.forEach((b, i) => { b.code = start + i; });
+
+  const n = printable.length;
+  let html = '';
+  if (n && document.getElementById('wTags').checked)
     impose(n, 6).forEach(p => {
-      html += '<div class="page">' + p.map(i => tag(i === null ? null : BATCHES[i], start + i)).join('') + '</div>';
+      html += '<div class="page">' + p.map(i => tag(i === null ? null : printable[i],
+        i === null ? null : printable[i].code)).join('') + '</div>';
     });
-  if (document.getElementById('wSheets').checked)
+  if (n && document.getElementById('wSheets').checked)
     impose(n, 2).forEach(p => {
-      html += '<div class="page">' + p.map(i => sheet(i === null ? null : BATCHES[i], start + i)).join('') + '</div>';
+      html += '<div class="page">' + p.map(i => sheet(i === null ? null : printable[i],
+        i === null ? null : printable[i].code)).join('') + '</div>';
     });
   document.getElementById('out').innerHTML = html;
 
@@ -464,9 +474,10 @@ function render() {
   const noDemand = BATCHES.filter(b => !b.owed);
   const covered  = BATCHES.filter(b => b.owed && !b.spools);
   const overAll  = BATCHES.filter(b => b.overAlloc > 0);
-  document.getElementById('summary').innerHTML = n ? `
-    <table>${BATCHES.map((b, i) => `<tr>
-      <td><strong>${esc(code(start + i))}</strong></td>
+  const coveredSpools = covered.reduce((s, b) => s + b.bins + b.stock, 0);
+  document.getElementById('summary').innerHTML = BATCHES.length ? `
+    <table>${BATCHES.map(b => `<tr>
+      <td>${b.code ? `<strong>${esc(code(b.code))}</strong>` : '<span class="muted">skipped</span>'}</td>
       <td>${esc(b.colorway)}</td>
       <td class="muted">${esc(b.fiber)}</td>
       <td><strong>${b.spools}</strong> spools</td>
@@ -475,15 +486,16 @@ function render() {
       <td class="muted">${b.photo ? '<span class="warn">needs photo</span>' : 'photo on file'}</td>
     </tr>`).join('')}</table>
     <div class="muted" style="margin-top:8px">
-      ${n} batch${n === 1 ? '' : 'es'} &rarr; ${code(start)}&ndash;${code(start + n - 1)}.
+      ${n ? `Printing ${n} of ${BATCHES.length} planned &rarr; ${code(start)}&ndash;${code(start + n - 1)}.`
+          : `<span class="warn">Nothing to print &mdash; none of today's ${BATCHES.length} planned batches needs dyeing.</span>`}
       ${overflow.length ? `<span class="warn">${overflow.length} bag${overflow.length === 1 ? '' : 's'} serve more than 3 orders &mdash; the tag shows the 3 due soonest, the sheet shows 4.</span>` : ''}
-      ${noDemand.length ? `<span class="warn">${noDemand.length} with no open orders &mdash; already filled, or the plan is stale. No tag will be useful.</span> ` : ''}
-      ${covered.length ? `<span class="warn">${covered.length} already covered by thread on hand &mdash; wind or pull instead of dyeing.</span> ` : ''}
+      ${noDemand.length ? `<span class="warn">${noDemand.length} with no open orders</span> &mdash; already filled, or the plan is stale. ` : ''}
+      ${covered.length ? `<span class="warn">${covered.length} covered by thread on hand</span> &mdash; ${coveredSpools} spools to wind or pull. That is work for the winder, not the kettle. ` : ''}
       ${overAll.length ? `<span class="warn">${overAll.length} recipe${overAll.length === 1 ? ' has' : 's have'} lots allocated beyond Spools_Made &mdash; the lot record is behind.</span>` : ''}
     </div>` : '';
 }
 
-['start', 'wTags', 'wSheets'].forEach(id =>
+['start', 'wTags', 'wSheets', 'wSkip'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 
 /* Static shell is already rendered above. Only now talk to Grist. */

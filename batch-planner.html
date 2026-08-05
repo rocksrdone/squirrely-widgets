@@ -272,6 +272,50 @@ async function loadAll() {
       if (!recipeDyes[recipeId].includes(dyeId)) recipeDyes[recipeId].push(dyeId);
     });
 
+    // Progress is DERIVED from Lot_Allocations, never read from Work_Order_Lines
+    // .Qty_Dyed — that stored field is not maintained (it is zero on every line)
+    // and treating it as truth makes finished work look untouched. This matches
+    // Morning Batch Planning and the Daily Work List exactly.
+    const allocLine = {};   // work order line id -> spools already allocated
+    const allocLot  = {};   // lot id            -> spools already allocated
+    const inBins    = {};   // recipe id         -> dyed, not yet wound
+    const inStock   = {};   // recipe id         -> wound, sitting in back stock
+    try {
+      const [allocT, lotT] = await Promise.all([
+        grist.docApi.fetchTable('Lot_Allocations'),
+        grist.docApi.fetchTable('Production_Lots'),
+      ]);
+      const aLot  = findColumn(allocT, ['Lot']);
+      const aLine = findColumn(allocT, ['Work_Order_Line']);
+      const aQty  = findColumn(allocT, ['Qty_Spools']);
+      (allocT.id || []).forEach((id, i) => {
+        const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
+        const l = getRefId(columnAsArray(allocT, aLot)[i]);
+        const w = getRefId(columnAsArray(allocT, aLine)[i]);
+        if (l) allocLot[l] = (allocLot[l] || 0) + q;
+        if (w) allocLine[w] = (allocLine[w] || 0) + q;
+      });
+      const lRec  = findColumn(lotT, ['Recipe']);
+      const lMade = findColumn(lotT, ['Spools_Made']);
+      const lBack = findColumn(lotT, ['General_Stock_Spools']);
+      const spoken = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
+        .map(c => findColumn(lotT, [c]));
+      (lotT.id || []).forEach((id, i) => {
+        const rid = lRec ? getRefId(columnAsArray(lotT, lRec)[i]) : null;
+        if (!rid) return;
+        const back = lBack ? Number(columnAsArray(lotT, lBack)[i]) || 0 : 0;
+        let free = (lMade ? Number(columnAsArray(lotT, lMade)[i]) || 0 : 0) - (allocLot[id] || 0) - back;
+        spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotT, c)[i]) || 0; });
+        // Signed, clamped once per recipe: an over-allocated lot must cancel a
+        // sibling lot's surplus rather than be discarded as a negative.
+        inBins[rid] = (inBins[rid] || 0) + free;
+        if (back > 0) inStock[rid] = (inStock[rid] || 0) + back;
+      });
+      Object.keys(inBins).forEach(k => { if (inBins[k] < 0) inBins[k] = 0; });
+    } catch (e) {
+      console.warn('Lots/allocations unavailable — planning will show full order need', e);
+    }
+
     const wolTable = await grist.docApi.fetchTable('Work_Order_Lines');
     const wc = (c) => findColumn(wolTable, c);
     const wRecipeCol = wc(['Recipe']) || 'Recipe';
@@ -300,7 +344,7 @@ async function loadAll() {
       if (STOPPED_STATUSES.includes(status)) return;
 
       const qtyNeeded = wQtyCol ? Number(columnAsArray(wolTable, wQtyCol)[i]) || 0 : 0;
-      const qtyDyed = wQtyDyedCol ? Number(columnAsArray(wolTable, wQtyDyedCol)[i]) || 0 : 0;
+      const qtyDyed = allocLine[id] || 0;      // derived, not the stored column
       if (qtyNeeded > 0 && qtyDyed >= qtyNeeded) { doneButOpen++; return; }
 
       const lineDue = wDueCol ? columnAsArray(wolTable, wDueCol)[i] : null;
@@ -349,14 +393,25 @@ async function loadAll() {
       if (ld !== null && (job.dueDate === null || ld < toEpochDays(job.dueDate))) job.dueDate = line.dueDate;
       if (line.customerName) job.customers.push(line.customerName);
     });
-    queueJobs = Object.values(jobsByRecipe);
+    // Thread already dyed but not yet tied to a line still fills these orders.
+    // Subtract it, then drop any colorway that no longer needs the kettle — that
+    // is winding work or a back-stock pull, not a batch.
+    let coveredJobs = 0, coveredSpools = 0;
+    Object.values(jobsByRecipe).forEach(job => {
+      job.onHand = (inBins[job.recipeId] || 0) + (inStock[job.recipeId] || 0);
+      job.qtyToDye = Math.max(0, job.qtyRemaining - job.onHand);
+      if (job.qtyToDye === 0) { coveredJobs++; coveredSpools += job.qtyRemaining; }
+      job.qtyRemaining = job.qtyToDye;   // everything downstream plans on this
+    });
+    queueJobs = Object.values(jobsByRecipe).filter(j => j.qtyToDye > 0);
 
-    const merged = queueLines.length - queueJobs.length;
+    const merged = queueLines.length - Object.keys(jobsByRecipe).length;
     document.getElementById('planStatus').textContent =
       `${queueJobs.length} colorway(s) to dye · from ${queueLines.length} open order line(s)` +
       (merged ? ` (${merged} merged — repeat orders)` : '') +
-      ` · ${Object.keys(dyes).length} dyes · ${Object.keys(recipeDyes).length} recipes with dye data` +
-      (doneButOpen ? ` · ${doneButOpen} fully-dyed line(s) skipped` : '');
+      (coveredJobs ? ` · ${coveredJobs} covered by thread on hand (${coveredSpools} spools to wind or pull)` : '') +
+      (doneButOpen ? ` · ${doneButOpen} already filled` : '') +
+      ` · ${Object.keys(dyes).length} dyes`;
 
     runPlan();
   } catch (e) {
