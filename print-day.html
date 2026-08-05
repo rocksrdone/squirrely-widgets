@@ -272,7 +272,7 @@ async function load() {
     });
 
     // coverage, same rule as the planner: only store/vendor/broken reduce it
-    const inBins = {}, inStock = {};
+    const inBins = {}, inStock = {}, overAlloc = {};
     (lotT.id || []).forEach((id, i) => {
       const rid = getRefId(columnAsArray(lotT, LOT.recipe)[i]); if (!rid) return;
       const back = LOT.back ? Number(columnAsArray(lotT, LOT.back)[i]) || 0 : 0;
@@ -280,9 +280,13 @@ async function load() {
       ['store', 'vendor', 'broken'].forEach(k => {
         if (LOT[k]) free -= Number(columnAsArray(lotT, LOT[k])[i]) || 0;
       });
-      if (free > 0) inBins[rid] = (inBins[rid] || 0) + free;
+      // Signed, then clamped per recipe: a lot allocated beyond Spools_Made must
+      // cancel out a sibling lot's surplus, not be discarded.
+      inBins[rid] = (inBins[rid] || 0) + free;
       if (back > 0) inStock[rid] = (inStock[rid] || 0) + back;
+      overAlloc[rid] = (overAlloc[rid] || 0) + Math.max(0, (byLot[id] || 0) - (Number(columnAsArray(lotT, LOT.made)[i]) || 0));
     });
+    Object.keys(inBins).forEach(k => { if (inBins[k] < 0) inBins[k] = 0; });
 
     // open demand per recipe
     const demand = {};
@@ -339,6 +343,7 @@ async function load() {
         fiber: recFiber[p.rid] || '',
         spools: Math.max(0, owed - bins - stock),
         owed, bins, stock,
+        overAlloc: overAlloc[p.rid] || 0,
         orders,
         photo: !hasPhoto[p.rid],
       };
@@ -456,7 +461,9 @@ function render() {
   document.getElementById('out').innerHTML = html;
 
   const overflow = BATCHES.filter(b => b.orders.length > 3);
-  const noSpools = BATCHES.filter(b => !b.spools);
+  const noDemand = BATCHES.filter(b => !b.owed);
+  const covered  = BATCHES.filter(b => b.owed && !b.spools);
+  const overAll  = BATCHES.filter(b => b.overAlloc > 0);
   document.getElementById('summary').innerHTML = n ? `
     <table>${BATCHES.map((b, i) => `<tr>
       <td><strong>${esc(code(start + i))}</strong></td>
@@ -464,12 +471,15 @@ function render() {
       <td class="muted">${esc(b.fiber)}</td>
       <td><strong>${b.spools}</strong> spools</td>
       <td class="muted">${b.orders.length} order${b.orders.length === 1 ? '' : 's'}${b.orders.length > 3 ? ' <span class="warn">(only 3 fit the tag)</span>' : ''}</td>
+      <td class="muted">${!b.owed ? '<span class="warn">nothing open</span>' : (!b.spools ? `covered &mdash; ${b.bins ? b.bins + ' to wind' : ''}${(b.bins && b.stock) ? ', ' : ''}${b.stock ? b.stock + ' back stock' : ''}` : '')}</td>
       <td class="muted">${b.photo ? '<span class="warn">needs photo</span>' : 'photo on file'}</td>
     </tr>`).join('')}</table>
     <div class="muted" style="margin-top:8px">
       ${n} batch${n === 1 ? '' : 'es'} &rarr; ${code(start)}&ndash;${code(start + n - 1)}.
       ${overflow.length ? `<span class="warn">${overflow.length} bag${overflow.length === 1 ? '' : 's'} serve more than 3 orders &mdash; the tag shows the 3 due soonest, the sheet shows 4.</span>` : ''}
-      ${noSpools.length ? `<span class="warn">${noSpools.length} already covered by stock &mdash; check these belong in today's plan.</span>` : ''}
+      ${noDemand.length ? `<span class="warn">${noDemand.length} with no open orders &mdash; already filled, or the plan is stale. No tag will be useful.</span> ` : ''}
+      ${covered.length ? `<span class="warn">${covered.length} already covered by thread on hand &mdash; wind or pull instead of dyeing.</span> ` : ''}
+      ${overAll.length ? `<span class="warn">${overAll.length} recipe${overAll.length === 1 ? ' has' : 's have'} lots allocated beyond Spools_Made &mdash; the lot record is behind.</span>` : ''}
     </div>` : '';
 }
 

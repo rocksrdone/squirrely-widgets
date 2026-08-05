@@ -295,8 +295,14 @@ async function loadEverything() {
         const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
         let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0) - back;
         spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
-        if (free > 0) unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
+        // Accumulate SIGNED, then clamp per recipe. Clamping per lot would throw
+        // away over-allocated lots (allocated > Spools_Made) and leave the
+        // positive lots standing alone as thread that does not exist.
+        unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
         if (back > 0) backStockByRecipe[rid] = (backStockByRecipe[rid] || 0) + back;
+      });
+      Object.keys(unwoundByRecipe).forEach(k => {
+        if (unwoundByRecipe[k] < 0) unwoundByRecipe[k] = 0;
       });
     } catch (e) {
       console.warn('Lots/allocations unavailable — planning will show full order need', e);
