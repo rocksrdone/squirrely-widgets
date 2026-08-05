@@ -185,6 +185,24 @@ let planByRecipe = {};  // recipeId -> {seq, slots} from today's saved Day_Plan
 
 // Grist Date columns store epoch seconds at UTC midnight of the calendar day.
 function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
+// Grist dates are epoch SECONDS.
+// Every order gets an effective due date: the one you set, or Order_Date + this
+// many days when you haven't. Setting Due_Date later than the default pushes the
+// work down the list; setting it earlier pulls it up. One number, no second rule.
+const DEFAULT_WINDOW_DAYS = 14;
+const DAY = 86400;
+function epoch(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : null; }
+function effectiveDue(orderDate, dueDate) {
+  const due = epoch(dueDate);
+  if (due) return { at: due, explicit: true };
+  const ord = epoch(orderDate);
+  if (ord) return { at: ord + DEFAULT_WINDOW_DAYS * DAY, explicit: false };
+  return { at: Infinity, explicit: false };           // no dates at all: sorts last
+}
+function daysOverdue(at) {
+  if (!isFinite(at)) return -Infinity;
+  return Math.floor((Date.now() / 1000 - at) / DAY);
+}
 function todayEpochSeconds() {
   const n = new Date();
   return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
@@ -289,7 +307,7 @@ async function loadEverything() {
     const opt = cands => ({ cands, required: false });
     const WO = resolveCols(woTable, 'Work_Orders', {
       status: ['Status'], orderNumber: opt(['Order_Number']), customerName: opt(['Customer_Name']),
-      dueDate: opt(['Due_Date']), bump: opt(['Priority_Bump']),
+      dueDate: opt(['Due_Date']), orderDate: opt(['Order_Date']), bump: opt(['Priority_Bump']),
     }, missing);
     const REC = resolveCols(recipesTable, 'Recipes', {
       name: ['Recipe_Name'], sku: opt(['SKU_Base']),
@@ -325,6 +343,7 @@ async function loadEverything() {
         orderNumber: columnAsArray(woTable, WO.orderNumber)[i],
         customerName: columnAsArray(woTable, WO.customerName)[i],
         dueDate: WO.dueDate ? columnAsArray(woTable, WO.dueDate)[i] : null,
+        orderDate: WO.orderDate ? columnAsArray(woTable, WO.orderDate)[i] : null,
         bump: WO.bump ? !!columnAsArray(woTable, WO.bump)[i] : false,
       };
     });
@@ -406,6 +425,8 @@ async function loadEverything() {
           orders: [],
           bestPriority: priority,
           soonestDue: Infinity,
+          effDue: Infinity,
+          anyExplicitDue: false,
           anyBump: false,
         };
       }
@@ -413,12 +434,15 @@ async function loadEverything() {
       if (priorityRank(priority) < priorityRank(entry.bestPriority)) entry.bestPriority = priority;
       const due = dueValue(info.dueDate);
       if (due < entry.soonestDue) entry.soonestDue = due;
+      const eff = effectiveDue(info.orderDate, info.dueDate);
+      if (eff.at < entry.effDue) { entry.effDue = eff.at; entry.anyExplicitDue = eff.explicit; }
       if (info.bump) entry.anyBump = true;
       entry.orders.push({
         orderNumber: info.orderNumber,
         customerName: info.customerName,
         qty: remaining,
         dueDate: info.dueDate,
+        orderDate: info.orderDate,
         bump: info.bump,
       });
     }
@@ -454,8 +478,12 @@ async function loadEverything() {
       const inStock = backStockByRecipe[entry.recipe.id] || 0;    // wound, sitting in back stock
       const covered = inBins + inStock;
       const stillToMake = Math.max(0, totalQty - covered);
-      const pastDue = entry.soonestDue < todayEpochSeconds();
-      return { ...entry, totalQty, inBins, inStock, covered, stillToMake, stock, peek, pastDue, plan: planByRecipe[entry.recipe.id] || null };
+      const overdue = daysOverdue(entry.effDue);   // >0 = past its date
+      const isLate = overdue > 0;
+      // Rows only get reshuffled for dye efficiency against others with the same key.
+      const urgencyKey = isLate ? 'L' + overdue : 'D' + entry.effDue;
+      return { ...entry, totalQty, inBins, inStock, covered, stillToMake, stock, peek,
+               overdue, isLate, urgencyKey, plan: planByRecipe[entry.recipe.id] || null };
     }).sort((a, b) => {
       // Committed-to-today first, in the sequence Batch Planner set. Everything
       // else: past-due, then Priority_Bump, then soonest due — the SAME order
@@ -463,11 +491,22 @@ async function loadEverything() {
       if (a.plan && b.plan) return a.plan.seq - b.plan.seq;
       if (a.plan !== null && b.plan === null) return -1;
       if (a.plan === null && b.plan !== null) return 1;
-      return (b.pastDue - a.pastDue)
+      // Past its effective due date first, worst overrun leading. Then a manual
+      // bump, then whatever is due soonest. Efficiency is applied afterwards and
+      // can never move an overdue batch behind a newer one.
+      return (b.isLate - a.isLate)
+        || (b.overdue - a.overdue)
         || (b.anyBump - a.anyBump)
-        || (a.soonestDue - b.soonestDue)
+        || (a.effDue - b.effDue)
         || (b.stillToMake - a.stillToMake);
     });
+
+    // ── Efficiency pass ──────────────────────────────────────────────────
+    // Within a run of equally-urgent recipes (same age, neither committed to
+    // today's plan) reorder greedily so consecutive batches share dyes. This
+    // only ever shuffles rows that already tie on urgency, so no late order
+    // can be pushed behind a newer one to save a dye change.
+    recipeData = clusterByDye(recipeData);
 
     // Populate customer filter dropdown
     const allCustomers = new Set();
@@ -490,6 +529,54 @@ async function loadEverything() {
     const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
     document.getElementById('headerSub').textContent = 'Failed to load — ' + msg;
   }
+}
+
+function duePill(e) {
+  if (e.isLate) return `<span class="priority-pill" style="background:#F5D8DC;color:#A01830;">${e.overdue}d over</span>`;
+  if (e.anyBump) return '<span class="priority-pill" style="background:#FBECC9;color:#8B6A00;">bumped</span>';
+  if (!isFinite(e.effDue)) return `<span class="priority-pill priority-${e.bestPriority}">no date</span>`;
+  const inDays = -e.overdue;
+  const style = inDays <= 3 ? 'background:#FBECC9;color:#8B6A00;' : '';
+  return `<span class="priority-pill ${style ? '' : 'priority-' + e.bestPriority}" style="${style}">due in ${inDays}d</span>`;
+}
+function dueNote(e) {
+  if (!isFinite(e.effDue)) return 'no order or due date';
+  const d = new Date(e.effDue * 1000);
+  const when = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return e.anyExplicitDue ? `due ${when}` : `${when} — default ${DEFAULT_WINDOW_DAYS}d`;
+}
+
+// Greedy dye clustering, applied only inside runs that tie on urgency.
+function clusterByDye(list) {
+  const out = [];
+  let i = 0;
+  while (i < list.length) {
+    let j = i + 1;
+    while (j < list.length
+           && !list[j].plan && !list[i].plan
+           && list[j].urgencyKey === list[i].urgencyKey) j++;
+    const run = list.slice(i, j);
+    if (run.length > 2) {
+      const setOf = e => new Set((e.dyes || []).map(normalize));
+      const pool = run.map((e, idx) => ({ e, idx, set: setOf(e) }));
+      const ordered = [pool.shift()];
+      while (pool.length) {
+        const prev = ordered[ordered.length - 1].set;
+        let best = 0, bestShared = -1;
+        pool.forEach((c, k) => {
+          let shared = 0;
+          c.set.forEach(d => { if (prev.has(d)) shared++; });
+          if (shared > bestShared) { bestShared = shared; best = k; }
+        });
+        ordered.push(pool.splice(best, 1)[0]);
+      }
+      ordered.forEach(o => out.push(o.e));
+    } else {
+      run.forEach(e => out.push(e));
+    }
+    i = j;
+  }
+  return out;
 }
 
 function renderList() {
@@ -520,10 +607,12 @@ function renderList() {
   const totalSpools = filtered.reduce((s, e) => s + e.stillToMake, 0);
   const plannedShown = filtered.filter(e => e.plan).length;
   const coveredCount = recipeData.filter(e => e.stillToMake === 0).length;
+  const lateShown = filtered.filter(e => e.isLate).length;
   document.getElementById('counterRow').innerHTML = `
     <div class="counter-chip">${totalSpools}<span>to dye</span></div>
     <div class="counter-chip">${filtered.length}<span>colorways</span></div>
     ${plannedShown ? `<div class="counter-chip">${plannedShown}<span>planned today</span></div>` : ''}
+    ${lateShown ? `<div class="counter-chip" style="background:#F5D8DC;color:#A01830;">${lateShown}<span>past due</span></div>` : ''}
     ${(coverVal === 'todye' && coveredCount) ? `<div class="counter-chip">${coveredCount}<span>covered, hidden</span></div>` : ''}
   `;
 
@@ -561,7 +650,7 @@ function renderList() {
           <div class="recipe-meta-cell">${e.recipe.sku || ''} · ${e.dyes.length} color${e.dyes.length === 1 ? '' : 's'}</div>
           ${planSlots}
         </td>
-        <td>${e.pastDue ? '<span class="priority-pill" style="background:#F5D8DC;color:#A01830;">past due</span>' : (e.anyBump ? '<span class="priority-pill" style="background:#FBECC9;color:#8B6A00;">bumped</span>' : `<span class="priority-pill priority-${e.bestPriority}">${e.bestPriority}</span>`)}</td>
+        <td>${duePill(e)}<div style="font-size:9px;color:#8B7D72">${dueNote(e)}</div></td>
         <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${e.inStock} back stock` : ''}</div></td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>

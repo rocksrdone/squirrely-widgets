@@ -1,0 +1,489 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Print today's tags &amp; sheets</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@page { size: Letter; margin: 0.25in; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; background: #fff; }
+
+/* ---------- controls (screen only) ---------- */
+.ctl { background: #2B2320; color: #F4EFE9; padding: 16px 22px; }
+.ctl h1 { margin: 0 0 3px; font-size: 17px; letter-spacing: .4px; }
+.ctl p  { margin: 0 0 14px; font-size: 12px; color: #C9B8AE; line-height: 1.5; max-width: 62em; }
+.ctl .row { display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap; }
+.ctl label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+             color: #C9B8AE; margin-bottom: 4px; }
+.ctl input[type=number] { width: 6em; font-size: 16px; padding: 6px 8px; border: none; border-radius: 3px; }
+.ctl .checks { display: flex; gap: 16px; }
+.ctl .checks span { font-size: 13px; }
+.ctl button { font-size: 15px; font-weight: bold; padding: 9px 20px; border: none; border-radius: 3px;
+              background: #B85042; color: #fff; cursor: pointer; }
+.ctl button.sec { background: #4F423C; font-weight: normal; }
+.banner { background: #F5D8DC; color: #7A1024; padding: 10px 22px; font-size: 12.5px; line-height: 1.5; }
+.banner.info { background: #FBECC9; color: #6B5100; }
+.summary { background: #F4EFE9; padding: 12px 22px; font-size: 12.5px; }
+.summary table { border-collapse: collapse; }
+.summary td { padding: 2px 14px 2px 0; }
+.summary .muted { color: #7A6A62; }
+.summary .warn { color: #A01830; font-weight: bold; }
+@media print { .noprint { display: none !important; } }
+
+/* ---------- pages ---------- */
+.page { page-break-after: always; display: flex; flex-wrap: wrap; align-content: flex-start; }
+.page:last-child { page-break-after: auto; }
+
+/* ---------- kettle tag : 4 x 3.5in, 6 per page ---------- */
+.tag { width: 4in; height: 3.5in; padding: .15in .17in; outline: 1px dashed #B9B9B9;
+       outline-offset: -.5px; display: flex; flex-direction: column; }
+.tag > * { flex: none; }
+.tag .r1 { display: flex; justify-content: space-between; align-items: flex-start; }
+.tag .r1 > * + * { margin-left: .1in; }
+.tag .code { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; letter-spacing: .5px; }
+.tag .bin { text-align: center; border: 2.5px solid #000; width: .85in; flex: none; }
+.tag .bin .l { font-size: 8.5px; font-weight: bold; letter-spacing: 1px; background: #000; color: #fff;
+               text-transform: uppercase; padding: 1px 0; }
+.tag .bin .b { height: .34in; }
+.tag .nameline { border-bottom: 1.5px solid #000; height: .32in; margin-top: 2px;
+                 font-size: 17px; font-weight: bold; line-height: .32in; overflow: hidden;
+                 white-space: nowrap; }
+.tag .cap { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .8px; margin-top: 1px; }
+.tag .meta { display: flex; margin-top: 5px; }
+.tag .meta div + div { margin-left: .13in; }
+.tag .meta div { border-bottom: 1.5px solid #000; height: .27in; font-size: 12.5px; font-weight: bold;
+                 line-height: .27in; overflow: hidden; white-space: nowrap; }
+.tag .mcap { display: flex; font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .7px; }
+.tag .mcap span + span { margin-left: .13in; }
+.tag .photo { display: flex; margin-top: 6px; border: 2.5px solid #000; padding: 3px 7px; }
+.tag .photo span + span { margin-left: .28in; }
+.tag .photo span { font-size: 11.5px; font-weight: bold; text-transform: uppercase; letter-spacing: .6px;
+                   flex: none; white-space: nowrap; }
+.tag .photo i, .tag .flags i, .tag .who i { display: inline-block; border: 2px solid #000; vertical-align: -2px; }
+.tag .photo i { width: 13px; height: 13px; margin-right: 5px; }
+.tag .photo i.on { background: #000; }
+.tag .who { margin-top: 6px; }
+.tag .who table { width: 100%; border-collapse: collapse; }
+.tag .who td { border-bottom: 1.5px solid #000; height: .28in; font-size: 12px; line-height: .28in;
+               overflow: hidden; white-space: nowrap; }
+.tag .who td.c { width: .26in; border-bottom: none; }
+.tag .who td.q { width: .58in; font-weight: bold; text-align: right; padding-right: 3px; }
+.tag .who i { width: 13px; height: 13px; }
+.tag .flags { display: flex; align-items: center; margin-top: 6px; }
+.tag .flags > * + * { margin-left: .12in; }
+.tag .flags span { flex: none; font-size: 11px; font-weight: bold; letter-spacing: .3px;
+                   border: 2px solid #000; padding: 2px 6px; white-space: nowrap; }
+.tag .flags i { width: 12px; height: 12px; margin-right: 4px; }
+.tag .note { flex: none; border-bottom: 1.5px solid #000; height: .34in; margin-top: auto; }
+
+/* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
+.sh { width: 8in; height: 5.25in; padding: .16in .2in; outline: 1px dashed #B9B9B9;
+      outline-offset: -.5px; display: flex; flex-direction: column; }
+.sh .head { display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 2.5px solid #000; padding-bottom: 5px; }
+.sh .ttl { font-size: 17px; font-weight: bold; letter-spacing: .5px; text-transform: uppercase; }
+.sh .sub { font-size: 10px; color: #555; }
+.sh .bagcode { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; text-align: right; }
+.sh .bagcap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .8px; text-align: right; }
+.sh .id { display: flex; margin-top: 6px; }
+.sh .id .f + .f { margin-left: .16in; }
+.sh .id .f { flex: 1; } .sh .id .f.s { flex: 0 0 .9in; }
+.sh .id .ln { border-bottom: 1.5px solid #000; height: .26in; font-size: 13px; font-weight: bold;
+              line-height: .26in; overflow: hidden; white-space: nowrap; }
+.sh .id .cp { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
+.sh .band { display: flex; align-items: center; margin-top: 8px; flex-wrap: nowrap; }
+.sh .band > * + * { margin-left: 9px; }
+.sh .band .who { flex: none; font-size: 11px; font-weight: bold; text-transform: uppercase;
+                 letter-spacing: 1px; background: #000; color: #fff; padding: 2px 9px; }
+.sh .band .rule { flex: 1 1 auto; min-width: .3in; border-top: 2px solid #000; }
+.sh .band .sg { flex: none; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: #555; }
+.sh .band .sgl { flex: none; border-bottom: 1.5px solid #000; width: .9in; height: .2in; }
+.sh .pbar { display: flex; align-items: center; margin-top: 6px; border: 2.5px solid #000; padding: 4px 8px; }
+.sh .pbar > * + * { margin-left: .22in; }
+.sh .pbar b { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; }
+.sh .pbar span { flex: none; white-space: nowrap; font-size: 10.5px; text-transform: uppercase; }
+.sh .pbar em { flex: 0 1 auto; overflow: hidden; font-size: 9.5px; color: #555; margin-left: auto; }
+.sh table { width: 100%; border-collapse: collapse; margin-top: 7px; }
+.sh th { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: #444;
+         border-bottom: 2px solid #000; padding: 0 4px 3px; text-align: left; font-weight: normal; }
+.sh td { border-bottom: 1.5px solid #000; height: .3in; padding: 0 4px; font-size: 12px;
+         overflow: hidden; white-space: nowrap; }
+.sh .lc { text-align: center; font-size: 10px; white-space: nowrap; }
+.sh .pc { text-align: center; white-space: nowrap; }
+.sh .pc u { display: inline-block; border-bottom: 1.5px solid #000; width: 1.1in; height: .2in;
+            text-decoration: none; }
+.sh .stock { border: 2px solid #000; padding: 4px 8px; margin-top: 7px; display: flex; align-items: center; }
+.sh .stock > * + * { margin-left: .14in; }
+.sh .stock b { flex: none; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.sh .stock .qb { flex: none; border: 1.5px solid #000; width: .6in; height: .26in; text-align: center;
+                 font-size: 13px; font-weight: bold; line-height: .26in; }
+.sh .stock em { flex: 0 1 auto; overflow: hidden; white-space: nowrap; font-size: 9.5px; color: #555; }
+.sh .stock .sep { border-left: 2px solid #000; align-self: stretch; }
+.sh .stock u { flex: none; display: inline-block; border-bottom: 1.5px solid #000; width: 1.6in;
+               height: .2in; text-decoration: none; }
+.sh .nl { border-bottom: 1.5px solid #000; height: .28in; margin-top: 6px; }
+.sh .ncap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
+.sh .gate { border: 2.5px solid #000; padding: 5px 9px; margin-top: auto; }
+.sh .g { display: flex; align-items: center; }
+.sh .g > * + * { margin-left: .22in; }
+.sh .g + .g { margin-top: 5px; }
+.sh .g span { flex: none; white-space: nowrap; font-size: 10.5px; text-transform: uppercase; }
+.sh .g .gt { font-weight: bold; letter-spacing: .7px; }
+.sh .g .gn { font-size: 9.5px; color: #555; font-style: italic; text-transform: none; }
+.sh .back { display: flex; align-items: center; margin-top: 6px; border-top: 1.5px dashed #000; padding-top: 6px; }
+.sh .back > * + * { margin-left: 9px; }
+.sh .back b { flex: none; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.sh .back u { flex: 1; border-bottom: 1.5px solid #000; height: .22in; text-decoration: none; }
+.sh i, .sh .cb { display: inline-block; border: 2px solid #000; vertical-align: -2px; }
+.sh .pbar i { width: 13px; height: 13px; margin-right: 5px; }
+.sh .pbar i.on { background: #000; }
+.sh .lc i { width: 12px; height: 12px; margin: 0 3px 0 7px; }
+.sh .lc i:first-child { margin-left: 0; }
+.sh .lc i.on { background: #000; }
+.sh .pc i { width: 13px; height: 13px; margin-right: 6px; }
+.sh .cb { width: 14px; height: 14px; }
+.sh .stock i, .sh .g i, .sh .back i { width: 14px; height: 14px; margin-right: 5px; }
+</style></head><body>
+
+<div class="ctl noprint">
+  <h1>Print today's tags &amp; sheets</h1>
+  <p>Pulls today's Day&nbsp;Plan and prefills a kettle tag and a bag sheet for each batch, in plan order.
+     Bin and lot number stay blank &mdash; neither exists yet at the pot.</p>
+  <div class="row">
+    <div><label>First bag code</label><input type="number" id="start" value="1001" min="1"></div>
+    <div class="checks">
+      <span><input type="checkbox" id="wTags" checked> kettle tags</span>
+      <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
+    </div>
+    <div><button onclick="window.print()">Print</button></div>
+    <div><button class="sec" onclick="load()">Reload plan</button></div>
+  </div>
+</div>
+<div id="banner"></div>
+<div id="summary" class="summary noprint">Loading today's plan&hellip;</div>
+<div id="out"></div>
+
+<script>
+/* ── shared helpers (same contracts as the other widgets) ─────────────── */
+function getRefId(ref) {
+  if (Array.isArray(ref)) return ref[0] === 'R' ? ref[1] : null;
+  const n = Number(ref);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, cands) {
+  for (const c of cands) if (Object.prototype.hasOwnProperty.call(t, c)) return c;
+  const lower = {};
+  Object.keys(t).forEach(k => { lower[k.toLowerCase()] = k; });
+  for (const c of cands) { const hit = lower[c.toLowerCase()]; if (hit) return hit; }
+  return null;
+}
+function resolveCols(table, name, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.names;
+    const optional = !Array.isArray(def) && def.optional;
+    const col = findColumn(table, cands);
+    if (!col && !optional) missing.push(`${name}.${cands[0]}`);
+    out[key] = col;
+  }
+  return out;
+}
+const opt = names => ({ names, optional: true });
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function todayEpochSeconds() {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000) - d.getTimezoneOffset() * -60 + d.getTimezoneOffset() * 60;
+}
+function startOfTodayUTC() {
+  const d = new Date();
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000);
+}
+
+const DAY = 86400, DEFAULT_WINDOW_DAYS = 14;
+function epoch(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : null; }
+function effectiveDue(orderDate, dueDate) {
+  const due = epoch(dueDate); if (due) return due;
+  const ord = epoch(orderDate); if (ord) return ord + DEFAULT_WINDOW_DAYS * DAY;
+  return Infinity;
+}
+
+let BATCHES = [];   // what we print
+
+function banner(msg, kind) {
+  document.getElementById('banner').innerHTML =
+    msg ? `<div class="banner ${kind || ''}">${esc(msg)}</div>` : '';
+}
+
+/* ── cut-and-stack imposition ─────────────────────────────────────────── */
+function impose(total, perPage) {
+  const P = Math.ceil(total / perPage), pages = [];
+  for (let i = 0; i < P; i++) {
+    const slots = [];
+    for (let j = 0; j < perPage; j++) { const k = j * P + i; slots.push(k < total ? k : null); }
+    pages.push(slots);
+  }
+  return pages;
+}
+
+/* ── load from Grist ──────────────────────────────────────────────────── */
+async function load() {
+  try {
+    const [dp, recT, wolT, woT, lotT, allocT, phT] = await Promise.all([
+      grist.docApi.fetchTable('Day_Plan'),
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Product_Photos').catch(() => null),
+    ]);
+
+    const missing = [];
+    const DP  = resolveCols(dp,   'Day_Plan',          { planDate: ['Plan_Date'], recipe: ['Recipe'], sequence: ['Sequence'] }, missing);
+    const REC = resolveCols(recT, 'Recipes',           { name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']) }, missing);
+    const WOL = resolveCols(wolT, 'Work_Order_Lines',  { workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], recipe: opt(['Recipe']), sku: opt(['SKU']), status: opt(['Queue_Status']) }, missing);
+    const WO  = resolveCols(woT,  'Work_Orders',       { status: ['Status'], customerName: opt(['Customer_Name']), orderNumber: opt(['Order_Number']), orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']) }, missing);
+    const LOT = resolveCols(lotT, 'Production_Lots',   { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']) }, missing);
+    const ALC = resolveCols(allocT,'Lot_Allocations',  { lot: ['Lot'], line: ['Work_Order_Line'], qty: ['Qty_Spools'] }, missing);
+    if (missing.length) throw new Error('Columns not found: ' + missing.join(', '));
+
+    // orders
+    const woInfo = {};
+    (woT.id || []).forEach((id, i) => {
+      woInfo[id] = {
+        active: String(columnAsArray(woT, WO.status)[i] || '') === 'Active',
+        customer: WO.customerName ? columnAsArray(woT, WO.customerName)[i] : '',
+        number: WO.orderNumber ? columnAsArray(woT, WO.orderNumber)[i] : '',
+        due: effectiveDue(WO.orderDate ? columnAsArray(woT, WO.orderDate)[i] : null,
+                          WO.dueDate   ? columnAsArray(woT, WO.dueDate)[i]   : null),
+      };
+    });
+
+    // allocations
+    const byLot = {}, byLine = {};
+    (allocT.id || []).forEach((id, i) => {
+      const q = Number(columnAsArray(allocT, ALC.qty)[i]) || 0;
+      const l = getRefId(columnAsArray(allocT, ALC.lot)[i]);
+      const w = getRefId(columnAsArray(allocT, ALC.line)[i]);
+      if (l) byLot[l] = (byLot[l] || 0) + q;
+      if (w) byLine[w] = (byLine[w] || 0) + q;
+    });
+
+    // coverage, same rule as the planner: only store/vendor/broken reduce it
+    const inBins = {}, inStock = {};
+    (lotT.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(lotT, LOT.recipe)[i]); if (!rid) return;
+      const back = LOT.back ? Number(columnAsArray(lotT, LOT.back)[i]) || 0 : 0;
+      let free = (Number(columnAsArray(lotT, LOT.made)[i]) || 0) - (byLot[id] || 0) - back;
+      ['store', 'vendor', 'broken'].forEach(k => {
+        if (LOT[k]) free -= Number(columnAsArray(lotT, LOT[k])[i]) || 0;
+      });
+      if (free > 0) inBins[rid] = (inBins[rid] || 0) + free;
+      if (back > 0) inStock[rid] = (inStock[rid] || 0) + back;
+    });
+
+    // open demand per recipe
+    const demand = {};
+    (wolT.id || []).forEach((id, i) => {
+      const st = WOL.status ? String(columnAsArray(wolT, WOL.status)[i] || '') : 'Open';
+      if (st !== 'Open') return;
+      const rid = WOL.recipe ? getRefId(columnAsArray(wolT, WOL.recipe)[i]) : null; if (!rid) return;
+      const woId = getRefId(columnAsArray(wolT, WOL.workOrder)[i]);
+      const info = woInfo[woId]; if (!info || !info.active) return;
+      const rem = (Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0) - (byLine[id] || 0);
+      if (rem <= 0) return;
+      (demand[rid] = demand[rid] || []).push({
+        customer: info.customer || '(no name)', number: info.number || '', qty: rem, due: info.due,
+      });
+    });
+
+    // recipes with a standard photo on file
+    const hasPhoto = {};
+    if (phT) {
+      const pr = findColumn(phT, ['Recipe']);
+      if (pr) (phT.id || []).forEach((id, i) => {
+        const rid = getRefId(columnAsArray(phT, pr)[i]); if (rid) hasPhoto[rid] = true;
+      });
+    }
+
+    // recipe lookup
+    const recName = {}, recSku = {}, recFiber = {};
+    (recT.id || []).forEach((id, i) => {
+      recName[id] = columnAsArray(recT, REC.name)[i];
+      if (REC.sku)   recSku[id]   = columnAsArray(recT, REC.sku)[i];
+      if (REC.fiber) recFiber[id] = columnAsArray(recT, REC.fiber)[i];
+    });
+
+    // today's plan
+    const today = startOfTodayUTC();
+    const planned = [];
+    (dp.id || []).forEach((id, i) => {
+      const pd = Number(columnAsArray(dp, DP.planDate)[i]);
+      if (pd !== today) return;
+      const rid = getRefId(columnAsArray(dp, DP.recipe)[i]); if (!rid) return;
+      if (planned.some(p => p.rid === rid)) return;
+      planned.push({ rid, seq: Number(columnAsArray(dp, DP.sequence)[i]) || 0 });
+    });
+    planned.sort((a, b) => a.seq - b.seq);
+
+    BATCHES = planned.map(p => {
+      const orders = (demand[p.rid] || []).slice().sort((a, b) => a.due - b.due);
+      const owed = orders.reduce((s, o) => s + o.qty, 0);
+      const bins = inBins[p.rid] || 0, stock = inStock[p.rid] || 0;
+      return {
+        rid: p.rid,
+        colorway: recName[p.rid] || '',
+        sku: recSku[p.rid] || '',
+        fiber: recFiber[p.rid] || '',
+        spools: Math.max(0, owed - bins - stock),
+        owed, bins, stock,
+        orders,
+        photo: !hasPhoto[p.rid],
+      };
+    });
+
+    if (!BATCHES.length) banner('Nothing in today\u2019s Day Plan yet. Plan the day in the batch planner, then reload.', 'info');
+    else banner('');
+    render();
+  } catch (e) {
+    banner('Could not read the plan: ' + (e && e.message ? e.message : e));
+    document.getElementById('summary').innerHTML = '';
+    document.getElementById('out').innerHTML = '';
+  }
+}
+
+/* ── printable pieces ─────────────────────────────────────────────────── */
+const code = n => 'SS-' + n;
+
+function tag(b, n) {
+  if (!b) return '<div class="tag"></div>';
+  let rows = '';
+  for (let k = 0; k < 3; k++) {
+    const o = b.orders[k];
+    rows += `<tr><td class="c"><i></i></td><td>${o ? esc(o.customer) : ''}</td>` +
+            `<td class="q">${o ? o.qty : ''}</td></tr>`;
+  }
+  return `<div class="tag">
+    <div class="r1">
+      <div style="flex:1">
+        <div class="code">${code(n)}</div>
+        <div class="nameline">${esc(b.colorway)}</div>
+        <div class="cap">colorway</div>
+      </div>
+      <div class="bin"><div class="l">bin</div><div class="b"></div></div>
+    </div>
+    <div class="meta"><div style="flex:1"></div><div style="flex:1">${esc(b.sku)}</div>
+      <div style="flex:0 0 .6in">${esc(b.fiber)}</div><div style="flex:0 0 .6in">${b.spools || ''}</div></div>
+    <div class="mcap"><span style="flex:1">lot</span><span style="flex:1">SKU</span>
+      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .6in">spools</span></div>
+    <div class="photo"><span><i class="${b.photo ? 'on' : ''}"></i>photo</span>
+      <span><i class="${b.photo ? '' : 'on'}"></i>no photo</span></div>
+    <div class="who"><div class="cap">likely for</div><table>${rows}</table></div>
+    <div class="flags"><span><i></i>LE</span><span><i></i>combining</span></div>
+    <div class="note"></div>
+  </div>`;
+}
+
+function sheet(b, n) {
+  if (!b) return '<div class="sh"></div>';
+  let rows = '';
+  for (let k = 0; k < 4; k++) {
+    const o = b.orders[k];
+    rows += `<tr><td>${o ? esc(o.customer) : ''}</td><td>${o ? esc(o.number) : ''}</td>` +
+      `<td>${o ? o.qty : ''}</td><td class="lc"><i></i>SS<i></i>custom</td>` +
+      `<td class="pc"><i></i><u></u></td><td style="text-align:center"><span class="cb"></span></td>` +
+      `<td style="text-align:center"><span class="cb"></span></td></tr>`;
+  }
+  const spare = Math.max(0, b.spools - b.orders.reduce((s, o) => s + o.qty, 0));
+  return `<div class="sh">
+    <div class="head">
+      <div><div class="ttl">One bag</div>
+        <div class="sub">Control fills it in &middot; labelling finishes it &middot; anything unresolved goes back to control.</div></div>
+      <div><div class="bagcap">bag</div><div class="bagcode">${code(n)}</div></div>
+    </div>
+    <div class="id">
+      <div class="f"><div class="ln">${esc(b.colorway)}</div><div class="cp">colorway</div></div>
+      <div class="f"><div class="ln"></div><div class="cp">lot number</div></div>
+      <div class="f s"><div class="ln">${esc(b.fiber)}</div><div class="cp">fiber</div></div>
+      <div class="f s"><div class="ln"></div><div class="cp">spools</div></div>
+    </div>
+    <div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
+      <span class="sg">initials</span><span class="sgl"></span></div>
+    <div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
+      <span><i></i>taken</span><span><i></i>shares recorded</span>
+      <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
+    <table>
+      <tr><th style="width:1.85in">customer</th><th style="width:.85in">order #</th>
+          <th style="width:.55in">spools</th><th style="width:1.25in;text-align:center">label</th>
+          <th style="width:1.55in;text-align:center">part of a larger order &mdash; rest in bag</th>
+          <th style="width:.7in;text-align:center">photo shared</th>
+          <th style="width:.6in;text-align:center">packed</th></tr>
+      ${rows}
+    </table>
+    <div class="stock"><b>Back stock</b><div class="qb">${spare || ''}</div><em>recount first</em>
+      <div class="sep"></div><b><i></i>Limited Edition</b><em>why</em><u></u></div>
+    <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
+      <span class="sg">initials</span><span class="sgl"></span></div>
+    <div class="nl"></div>
+    <div class="ncap">tick each order above as you finish it &mdash; anything that did not go to plan, here</div>
+    <div class="gate">
+      <div class="g"><span class="gt">All yes &rarr; finish it</span><span><i></i>counts match</span>
+        <span><i></i>right label on each</span><span><i></i>nothing waiting on a partner bag</span></div>
+      <div class="g"><span class="gn">then</span><span><i></i>weighed</span><span><i></i>shipping label</span>
+        <span><i></i>sealed</span><span><i></i>complete</span>
+        <span class="gn" style="margin-left:auto">LE goes back to control to be named</span></div>
+      <div class="back"><i></i><b>Any no &mdash; back to control</b><u></u></div>
+    </div>
+  </div>`;
+}
+
+/* ── render ───────────────────────────────────────────────────────────── */
+function render() {
+  const start = Math.max(1, Number(document.getElementById('start').value) || 1001);
+  const n = BATCHES.length;
+  let html = '';
+
+  if (document.getElementById('wTags').checked)
+    impose(n, 6).forEach(p => {
+      html += '<div class="page">' + p.map(i => tag(i === null ? null : BATCHES[i], start + i)).join('') + '</div>';
+    });
+  if (document.getElementById('wSheets').checked)
+    impose(n, 2).forEach(p => {
+      html += '<div class="page">' + p.map(i => sheet(i === null ? null : BATCHES[i], start + i)).join('') + '</div>';
+    });
+  document.getElementById('out').innerHTML = html;
+
+  const overflow = BATCHES.filter(b => b.orders.length > 3);
+  const noSpools = BATCHES.filter(b => !b.spools);
+  document.getElementById('summary').innerHTML = n ? `
+    <table>${BATCHES.map((b, i) => `<tr>
+      <td><strong>${esc(code(start + i))}</strong></td>
+      <td>${esc(b.colorway)}</td>
+      <td class="muted">${esc(b.fiber)}</td>
+      <td><strong>${b.spools}</strong> spools</td>
+      <td class="muted">${b.orders.length} order${b.orders.length === 1 ? '' : 's'}${b.orders.length > 3 ? ' <span class="warn">(only 3 fit the tag)</span>' : ''}</td>
+      <td class="muted">${b.photo ? '<span class="warn">needs photo</span>' : 'photo on file'}</td>
+    </tr>`).join('')}</table>
+    <div class="muted" style="margin-top:8px">
+      ${n} batch${n === 1 ? '' : 'es'} &rarr; ${code(start)}&ndash;${code(start + n - 1)}.
+      ${overflow.length ? `<span class="warn">${overflow.length} bag${overflow.length === 1 ? '' : 's'} serve more than 3 orders &mdash; the tag shows the 3 due soonest, the sheet shows 4.</span>` : ''}
+      ${noSpools.length ? `<span class="warn">${noSpools.length} already covered by stock &mdash; check these belong in today's plan.</span>` : ''}
+    </div>` : '';
+}
+
+['start', 'wTags', 'wSheets'].forEach(id =>
+  document.getElementById(id).addEventListener('input', render));
+
+/* Static shell is already rendered above. Only now talk to Grist. */
+try {
+  grist.ready({ requiredAccess: 'read table' });
+  grist.onRecords(() => {});
+  load();
+} catch (e) {
+  banner('Grist plugin API unavailable: ' + (e && e.message ? e.message : e));
+  document.getElementById('summary').innerHTML = '';
+}
+</script>
+</body></html>
