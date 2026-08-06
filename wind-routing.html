@@ -140,6 +140,14 @@
   .lot-line-info { display:flex; flex-direction:column; }
   .lot-line-no { font-weight:700; font-size:12px; }
   .lot-line-src { font-size:10px; color:#5B7B7B; }
+  /* The bin chip is the thing someone reads from across the room before
+     walking to a shelf, so it is deliberately louder than the lot number. */
+  .lot-bin {
+    display:inline-block; margin-left:6px; padding:1px 7px; border-radius:4px;
+    font-family:'DM Mono', monospace; font-size:12px; font-weight:700;
+    background:#2F5D62; color:#fff; letter-spacing:.03em;
+  }
+  .lot-bin-none { background:#EDE7E0; color:#A89A8C; font-weight:600; }
   .lot-line input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
   .mix-warn { background:#FBECC9; color:#8B5A2A; font-size:10px; border-radius:4px; padding:5px 7px; margin-top:6px; }
   .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
@@ -260,11 +268,29 @@ async function loadEverything() {
       generalStock: opt(['General_Stock_Spools']),
       broken: opt(['Broken_Spools', 'Broken_Spool_Count']),
       date: opt(['Date_Dyed']),
+      bin: opt(['Storage_Bin']),
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
       method: opt(['Dye_Method']),
     }, missing);
+
+    /* Where each lot physically sits. Fetched separately and swallowed on
+       failure on purpose: Storage_Locations is new, and a doc that hasn't got
+       it yet must still be able to wind. No table, or no Storage_Bin column,
+       just means no bin chip — never a broken widget. */
+    let binById = {};
+    try {
+      const binsT = await grist.docApi.fetchTable('Storage_Locations');
+      const BIN = resolveCols(binsT, 'Storage_Locations', { code: ['Bin_Code'] }, []);
+      if (BIN.code) {
+        (binsT.id || []).forEach((id, i) => {
+          binById[id] = (columnAsArray(binsT, BIN.code)[i] || '').toString();
+        });
+      }
+    } catch (e) {
+      console.warn('Storage_Locations not available — bin locations hidden.', e);
+    }
     const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
       lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
       customer: opt(['Customer']), line: opt(['Work_Order_Line']),
@@ -373,6 +399,7 @@ async function loadEverything() {
         freshDry: windableFresh ? unwound : 0,
         freshWet: (unwound > 0 && !isDry) ? unwound : 0,
         stock,
+        bin: LOT.bin ? (binById[getRefId(columnAsArray(lotsT, LOT.bin)[i])] || '') : '',
         storeCol: LOT.generalStock || LOT.storeStock,
         storeVal: general || store,
       });
@@ -714,6 +741,7 @@ function fillPanel(l) {
       <div class="lot-line">
         <div class="lot-line-info">
           <span class="lot-line-no">${esc(lot.lotNumber)}</span>
+          ${lot.bin ? `<span class="lot-bin">${esc(lot.bin)}</span>` : `<span class="lot-bin lot-bin-none">no bin</span>`}
           <span class="lot-line-src">${src} · ${cap} avail</span>
         </div>
         <input type="number" min="0" max="${cap}" id="draw-${lot.lotId}"
