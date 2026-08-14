@@ -172,6 +172,32 @@
   .legend { font-size: 12.5px; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
   .legend .ico { margin-right: 2px; }
   .legend strong { color: var(--ink); }
+  /* ── Put-away strip: pen-and-paper, filled in by me while I work ── */
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+  tr.pa td { padding: 0 10px 9px 44px; border-bottom: 1px solid var(--warm); }
+  tr.pa.last td { border-bottom: none; }
+  .pa-strip {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline;
+    background: #FBF8F4; border: 1px dashed var(--rule); border-radius: 6px; padding: 7px 11px;
+  }
+  .pa-grp { display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap; }
+  .pa-lbl {
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); font-weight: 700; white-space: nowrap;
+  }
+  .pa-opt { white-space: nowrap; font-size: 13px; font-weight: 600; }
+  .pabox {
+    display: inline-block; width: 14px; height: 14px; border: 1.6px solid var(--ink);
+    border-radius: 3px; vertical-align: -2px; margin-right: 5px; background: white;
+  }
+  .rule { display: inline-block; border-bottom: 1.3px solid var(--rule); height: 16px; min-width: 90px; flex: 1; }
+  .tray-foot {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: baseline;
+    padding: 9px 11px; border-top: 1.5px solid var(--ink); background: #FBF8F4;
+  }
+  .ff { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 240px; }
+  .ff .rule { min-width: 130px; }
+
   .empty-state { text-align: center; color: var(--muted); padding: 50px 20px; font-size: 14px; }
   .warn-banner {
     background: var(--urgent-light); border: 1px solid #E0A5AF; color: var(--urgent);
@@ -183,7 +209,8 @@
     @page { margin: 11mm; }
     body { background: white; padding: 0; font-size: 12.5px; }
     .no-print { display: none !important; }
-    .tray-head, .dot, .tag { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .tray-head, .dot, .tag, .pa-strip, .tray-foot { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .pa-strip, .tray-foot { background: white; }
     .box { width: 18px; height: 18px; }
     .box.checked { background: white; border-color: var(--ink); }
     .box.checked::after { color: var(--ink); }
@@ -210,6 +237,7 @@
       <option value="day">Everything for the day, one list</option>
     </select>
   </div>
+  <label class="chk"><input type="checkbox" id="paToggle" onchange="render()" checked> put-away section</label>
   <div class="ctl">
     <label for="lowInput">Jar is low under (mL)</label>
     <input type="number" id="lowInput" value="10" min="0" step="5" onchange="render()">
@@ -643,6 +671,46 @@ const ITEM_HEAD = () => `<tr>
   <th style="text-align:right">Bring</th>
 </tr>`;
 
+// ── Put-away strip ───────────────────────────────────────────────
+// Printed empty. I tick it at the kettle, hand the paper back, and he clears
+// the table from it while I carry on. The options differ by what's actually
+// on the line: a container can go back, be dumped, or stay out for the next
+// batch — a powder tub only ever goes back on the shelf.
+const box = label => `<span class="pa-opt"><span class="pabox"></span>${label}</span>`;
+
+function putAwayRow(comp, it, isLast) {
+  const parts = [];
+
+  if (it.jar) {
+    const bin = it.jar.bins.length ? 'Bin ' + esc(it.jar.bins[0]) : 'Bin ___';
+    parts.push(`<span class="pa-grp"><span class="pa-lbl">Made dye</span>
+      ${box(bin)}${box('Dumped')}${box('Kept out')}</span>`);
+    // Whether the solution is fresh decides its shelf life from today, so it
+    // has to be recorded at the kettle — nobody can reconstruct it later.
+    parts.push(`<span class="pa-grp"><span class="pa-lbl">Solution</span>
+      ${box('Made new')}${box('Same as before')}</span>`);
+  }
+  if (it.powder) {
+    parts.push(`<span class="pa-grp"><span class="pa-lbl">Powder</span>
+      ${box('Back to ' + esc(it.powder))}</span>`);
+  }
+  parts.push(`<span class="pa-grp" style="flex:1;min-width:150px">
+    <span class="pa-lbl">Note</span><span class="rule"></span></span>`);
+
+  return `<tr class="pa${isLast ? ' last' : ''}"><td colspan="5">
+    <div class="pa-strip">${parts.join('')}</div>
+  </td></tr>`;
+}
+
+// Per batch, not per line: how many spools in each lot, so he can log them
+// while I move on, plus room for anything the sheet can't anticipate.
+function trayFooter() {
+  return `<div class="tray-foot">
+    <div class="ff"><span class="pa-lbl">Lots to log</span><span class="rule"></span></div>
+    <div class="ff"><span class="pa-lbl">Extra steps</span><span class="rule"></span></div>
+  </div>`;
+}
+
 function itemRow(comp, it, slot, extraSub, id) {
   const on = ticks.has(id);
   return `<tr class="${on ? 'ticked' : ''}">
@@ -673,6 +741,7 @@ function render() {
   const dateVal = Number(document.getElementById('dateSel').value);
   const lowMl = Number(document.getElementById('lowInput').value) || 0;
   const mode = document.getElementById('viewSel').value;
+  const showPA = document.getElementById('paToggle').checked;
   const batches = planByDate[dateVal] || [];
 
   if (!batches.length) {
@@ -698,13 +767,14 @@ function render() {
       const comps = compsByRecipe[b.recipeId] || [];
       const slots = parseSlots(b.prepSlot);
 
-      const rows = comps.map(comp => {
+      const rows = comps.map((comp, i) => {
         if (comp.unresolved) unresolved++;
         const it = itemFor(comp, lowMl);
         const others = (usedIn[comp.key] || []).filter(s => s !== b.seq);
         const again = others.length
           ? `<span class="sub again">also batch ${others.join(', ')} — don't put it back</span>` : '';
-        return itemRow(comp, it, slots[normalize(comp.name)], again, tickId(dateVal, b.seq, comp.key));
+        return itemRow(comp, it, slots[normalize(comp.name)], again, tickId(dateVal, b.seq, comp.key))
+             + (showPA ? putAwayRow(comp, it, i === comps.length - 1) : '');
       }).join('') || `<tr><td class="c-box"></td><td colspan="4"><span class="where none">No dyes recorded for this recipe.</span></td></tr>`;
 
       const strip = comps.slice(0, 6).map(c => dot(c.swatch)).join('');
@@ -720,6 +790,7 @@ function render() {
             title="Tick the whole tray"><span class="mark">☐</span><span>0 of ${n}</span></span>
         </div>
         <table class="items">${ITEM_HEAD()}${rows}</table>
+        ${showPA ? trayFooter() : ''}
       </div>`;
     }).join('');
     subline = `${batches.length} tray${batches.length === 1 ? '' : 's'} — one per batch, in the order I'll work them`;
@@ -738,7 +809,8 @@ function render() {
       const it = itemFor(comp, lowMl);
       const seqs = [...new Set(usedIn[comp.key])].sort((a, b) => a - b);
       return itemRow(comp, it, null, `<span class="sub">batch ${seqs.join(', ')}</span>`,
-                     tickId(dateVal, 'day', comp.key));
+                     tickId(dateVal, 'day', comp.key))
+           + (showPA ? putAwayRow(comp, it, false) : '');
     }).join('');
     body = `<div class="tray">
       <div class="tray-head">
@@ -763,7 +835,8 @@ function render() {
       <div class="sheet-title">Dye Prep Sheet</div>
       <div class="sheet-sub">${esc(dateLabel(dateVal))} · ${esc(subline)}</div>
       <div class="how">Set out whatever each line asks for, together, so a whole batch can be picked up and carried to the kettle in one go. Don't open or mix anything.
-      <strong>Tick each one off as it lands on the tray</strong> — the count is kept if the page reloads.</div>
+      <strong>Tick each one off as it lands on the tray</strong> — the count is kept if the page reloads.
+      The dashed strips stay empty: I fill those in at the kettle and hand the sheet back for putting away.</div>
       <div class="progress" id="progress"></div>
     </div>
     ${warn}
