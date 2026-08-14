@@ -74,7 +74,8 @@ function render(r) {
         ${stat(c.lines_updated || 0, 'Qty updated')}
         ${stat(c.lines_added || 0, 'Lines added')}
         ${stat(c.orders_imported || 0, 'Orders imported')}
-        ${stat(c.matched || 0, 'Drafts checked')}
+        ${stat(c.matched || 0, 'Orders checked')}
+        ${stat((r.unmatched || []).length, 'Not checked')}
         ${stat(c.skipped_blank_sku || 0, 'Blank SKU')}
       </div>
       <h3>Changes</h3>
@@ -82,7 +83,10 @@ function render(r) {
       <h3>New orders imported</h3>
       ${list(r.imported_orders, 'No new orders.')}
       <h3>Needs a look</h3>
-      ${list((r.notes || []).filter(n => /^(HOLD|SKIP)/.test(n)), 'Nothing flagged.')}
+      ${list((r.notes || []).filter(n => /^(HOLD|SKIP|WARN)/.test(n)), 'Nothing flagged.')}
+      <h3>Not checked against Shopify</h3>
+      ${list((r.unmatched || []).map(u => `${u.order} — ${u.reason}`),
+             'Every active order was checked.')}
     </div>`;
 }
 
