@@ -81,7 +81,7 @@
   .swatch-strip { display: flex; gap: 3px; flex: none; }
   .swatch-strip .dot { width: 19px; height: 19px; }
 
-  /* ── Item table: jar and powder side by side ────────────────── */
+  /* ── Item table: made dye and powder side by side ───────────── */
   table.items { width: 100%; border-collapse: collapse; }
   table.items th {
     font-size: 10px; text-transform: uppercase; letter-spacing: .07em; font-weight: 700;
@@ -105,7 +105,9 @@
   .mono { font-family: 'DM Mono', monospace; font-size: 13.5px; font-weight: 500; }
 
   /* Liquid vs powder, told apart at a glance without reading a word. */
-  .ico { display: inline-block; width: 17px; height: 17px; vertical-align: -4px; flex: none; }
+  /* 20px, not 18 — the powder pile needs the extra two pixels to keep its
+     grains from merging into the outline. */
+  .ico { display: inline-block; width: 20px; height: 20px; vertical-align: -5px; flex: none; }
   .bring { display: inline-flex; align-items: center; gap: 5px; justify-content: flex-end;
     font-size: 13px; font-weight: 700; white-space: nowrap; }
   .bring.made { color: #1F5A4C; }
@@ -152,7 +154,6 @@
   }
   .tag.ready  { background: var(--teal-light); color: #1F5A4C; border-color: #8FC4B7; }
   .tag.mix    { background: var(--gold-light); color: #7A5410; border-color: #D9BC7C; }
-  .tag.nojar  { background: var(--urgent-light); color: var(--urgent); border-color: #E0A5AF; }
   .tag.dry    { background: #EDE7F5; color: #4B3A73; border-color: #BFB0DC; }
   .tag.slot   { background: white; color: var(--ink); border-color: var(--ink); font-family: 'DM Mono', monospace; }
 
@@ -468,18 +469,26 @@ function buildDateOptions() {
 // Two forms only, because that's the whole decision at the shelf: a jar of
 // made dye, a tub of powder, or both. Why a jar needs topping up is my
 // problem at the kettle, not something he has to read on this sheet.
+// Two shapes, no reading required: the square container the made dye lives in
+// (straight sides, snap lid, liquid with a wavy surface) and an open pile of
+// powder with grains in it. Solid-with-light-detail against outline-with-dots,
+// so they stay apart at 20px and in black-and-white on the printed sheet.
+//
+// The liquid wave spans 3.15 → 12.85, the full inner width between the walls.
+// Four segments of 2.425, not 2.13 — at 2.13 it stops short of the right wall
+// and leaves a notch that looks like a rendering fault.
 const ICO_JAR = `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">
-  <rect x="4.2" y="1" width="7.6" height="2.1" rx=".6" fill="currentColor"/>
-  <path d="M3.7 4.1h8.6v9.1a1.7 1.7 0 0 1-1.7 1.7H5.4a1.7 1.7 0 0 1-1.7-1.7z" fill="none" stroke="currentColor" stroke-width="1.3"/>
-  <path d="M3.7 8.5c1.07 0 1.07.95 2.15.95S6.92 8.5 8 8.5s1.08.95 2.15.95 1.07-.95 2.15-.95v4.7a1.7 1.7 0 0 1-1.7 1.7H5.4a1.7 1.7 0 0 1-1.7-1.7z" fill="currentColor" opacity=".8"/>
+  <rect x="1.2" y="2.5" width="13.6" height="2.3" rx=".7" fill="currentColor"/>
+  <rect x="2.5" y="4.8" width="11" height="9.4" rx="1.1" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  <path d="M3.15 8.3c1.2125 0 1.2125.85 2.425.85s1.2125-.85 2.425-.85 1.2125.85 2.425.85 1.2125-.85 2.425-.85v4.85a1.05 1.05 0 0 1-1.05 1.05H4.2a1.05 1.05 0 0 1-1.05-1.05z" fill="currentColor" opacity=".8"/>
 </svg>`;
 const ICO_TUB = `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">
-  <rect x="2.4" y="2.6" width="11.2" height="2.3" rx=".7" fill="currentColor"/>
-  <path d="M3.7 5.5h8.6v7.6a1.7 1.7 0 0 1-1.7 1.7H5.4a1.7 1.7 0 0 1-1.7-1.7z" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  <path d="M.9 13.9c1.95 0 2.95-1.65 3.95-3.25C5.85 9.05 6.8 7.75 8 7.75s2.15 1.3 3.15 2.9c1 1.6 2 3.25 3.95 3.25z"
+        fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
   <g fill="currentColor">
-    <circle cx="6" cy="9.3" r="1.05"/><circle cx="9.2" cy="8.7" r=".9"/>
-    <circle cx="7.6" cy="11.7" r="1"/><circle cx="10.4" cy="11.3" r=".85"/>
-    <circle cx="5.3" cy="12.4" r=".75"/>
+    <circle cx="6.1" cy="12.2" r=".78"/><circle cx="9.9" cy="12.4" r=".7"/>
+    <circle cx="8" cy="10.6" r=".68"/>
+    <circle cx="3.8" cy="13" r=".55"/><circle cx="12.2" cy="13" r=".55"/>
   </g>
 </svg>`;
 
@@ -652,9 +661,9 @@ function itemRow(comp, it, slot, extraSub, id) {
 }
 
 const LEGEND = `<div class="legend">
-  <span>${ICO_JAR} <strong>Made dye</strong> — the jar from its bin</span>
-  <span>${ICO_TUB} <strong>Powder</strong> — the tub</span>
-  <span>${ICO_JAR}${ICO_TUB} <strong>Made dye + powder</strong> — bring both, the jar is nearly out</span>
+  <span>${ICO_JAR} <strong>Made dye</strong> — the container, from its bin</span>
+  <span>${ICO_TUB} <strong>Powder</strong> — the powder tub</span>
+  <span>${ICO_JAR}${ICO_TUB} <strong>Made dye + powder</strong> — both; the container is nearly out</span>
 </div>`;
 
 function render() {
@@ -753,7 +762,7 @@ function render() {
     <div class="sheet-head">
       <div class="sheet-title">Dye Prep Sheet</div>
       <div class="sheet-sub">${esc(dateLabel(dateVal))} · ${esc(subline)}</div>
-      <div class="how">Set out the <strong>jar and the powder tub</strong> for every line, together, so each batch can be picked up and carried to the kettle in one go. Don't open or mix anything.
+      <div class="how">Set out whatever each line asks for, together, so a whole batch can be picked up and carried to the kettle in one go. Don't open or mix anything.
       <strong>Tick each one off as it lands on the tray</strong> — the count is kept if the page reloads.</div>
       <div class="progress" id="progress"></div>
     </div>
