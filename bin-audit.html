@@ -155,6 +155,40 @@
     height: 15px; margin-left: 4px;
   }
 
+  /* ── Fix controls ───────────────────────────────────────────── */
+  .fixrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
+  .fixlabel { font-size: 11px; color: #7A2233; min-width: 150px; }
+  .fixbtn {
+    font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+    padding: 4px 9px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--rule); background: white; color: var(--ink);
+  }
+  .fixbtn:hover:not(:disabled) { background: var(--warm); }
+  .fixbtn:disabled { opacity: .45; cursor: default; }
+  .fixbtn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .fixbtn.danger { color: var(--urgent); border-color: #E0A5AF; }
+  .fix { display: inline-flex; gap: 4px; align-items: center; }
+  .fixin {
+    font-family: 'Inter', sans-serif; font-size: 11px; padding: 4px 7px; width: 78px;
+    border: 1px solid var(--rule); border-radius: 5px; background: white; color: var(--ink);
+  }
+  .fixin.wide { width: 200px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 22px);
+    background: var(--ink); color: var(--paper); border-radius: 8px;
+    padding: 10px 14px; font-size: 12.5px; display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25); opacity: 0; pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease; z-index: 50; max-width: 90vw;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  .undo-btn {
+    font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 700;
+    background: none; border: 1px solid var(--paper); color: var(--paper);
+    border-radius: 5px; padding: 3px 10px; cursor: pointer; flex: none;
+  }
+  .undo-btn:hover { background: var(--paper); color: var(--ink); }
+
   .empty-state { text-align: center; color: var(--muted); padding: 50px 20px; font-size: 14px; }
   .warn-banner {
     background: var(--urgent-light); border: 1px solid #E0A5AF; color: var(--urgent);
@@ -165,6 +199,7 @@
     @page { margin: 11mm; }
     body { background: white; padding: 0; font-size: 10.5px; }
     .no-print { display: none !important; }
+    .fixrow, .toast { display: none !important; }
     .bin-head, .dot, .tag, .problems, .allgood, .chip, .fill span {
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
@@ -185,6 +220,9 @@
 </div>
 
 <div id="content"><div class="empty-state">Loading…</div></div>
+<datalist id="dyebins"></datalist>
+<datalist id="threadbins"></datalist>
+<div id="toast" class="toast"></div>
 
 <script>
 // ── Shared helpers (keep in sync with the rest of the widget suite) ──
@@ -255,6 +293,9 @@ function fiberKey(s) {
 
 // ── State ────────────────────────────────────────────────────────
 let tab = 'dyes';
+let COLS = {};
+let busy = false;
+let lastUndo = null;
 let loadError = null;
 let D = null;   // made-dye audit model
 let T = null;   // thread / back-stock audit model
@@ -313,6 +354,7 @@ async function loadEverything() {
       return;
     }
 
+    COLS = { stock: STOCK, lot: LOT, dye: DYE };
     buildDyeAudit(dyesT, stockT, DYE, STOCK);
     buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC);
     render();
@@ -402,7 +444,7 @@ function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
   Object.values(bins).forEach(l => l.sort((a, b) => a.label.localeCompare(b.label)));
 
   D = {
-    containers, bins, nameCounts,
+    containers, bins, nameCounts, dye,
     problems: { splitBins, doubleJars, orphanDye, noBin, emptyJar, expired },
     totalMl: containers.reduce((s, c) => s + c.qty, 0),
   };
@@ -530,6 +572,160 @@ function groupLots(lots, amountOf, showEmpty) {
 // ══════════════════════════════════════════════════════════════════
 // RENDER
 // ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// FIXES — the only code here that writes
+// ══════════════════════════════════════════════════════════════════
+// Every destructive fix carries its own undo, built from the row's values
+// BEFORE the change. A re-added row gets a new row id, which matters only if
+// something else referenced it — Dye_Stock rows aren't referenced anywhere,
+// so an undo restores the jar exactly.
+
+async function runFix(actions, label, buildUndo) {
+  if (busy) return;
+  busy = true;
+  document.querySelectorAll('.fixbtn').forEach(b => b.disabled = true);
+  try {
+    await grist.docApi.applyUserActions(actions);
+    lastUndo = buildUndo ? { actions: buildUndo(), label } : null;
+    await loadEverything();
+    showToast(label, !!lastUndo);
+  } catch (e) {
+    console.error('Fix failed:', e);
+    lastUndo = null;
+    showToast('Failed — ' + ((e && e.message) ? e.message : String(e)), false);
+  } finally {
+    busy = false;
+  }
+}
+
+async function undoLast() {
+  if (!lastUndo || busy) return;
+  const u = lastUndo;
+  lastUndo = null;
+  busy = true;
+  try {
+    await grist.docApi.applyUserActions(u.actions);
+    await loadEverything();
+    showToast('Undone — ' + u.label, false);
+  } catch (e) {
+    showToast('Undo failed — ' + ((e && e.message) ? e.message : String(e)), false);
+  } finally {
+    busy = false;
+  }
+}
+
+function showToast(msg, undoable) {
+  const t = document.getElementById('toast');
+  t.innerHTML = `<span>${esc(msg)}</span>` +
+    (undoable ? `<button class="undo-btn" onclick="undoLast()">Undo</button>` : '');
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), undoable ? 12000 : 5000);
+}
+
+function jarFields(c) {
+  const f = {};
+  if (COLS.stock.dye) f[COLS.stock.dye] = c.dyeId || 0;
+  if (COLS.stock.quantity) f[COLS.stock.quantity] = c.qty;
+  if (COLS.stock.bin) f[COLS.stock.bin] = c.bin;
+  if (COLS.stock.mixed && c.mixed) f[COLS.stock.mixed] = c.mixed;
+  return f;
+}
+const jarById = id => D.containers.find(c => c.id === Number(id));
+const lotById = id => T.lots.find(l => l.id === Number(id));
+
+// ── Made-dye fixes ───────────────────────────────────────────────
+function deleteJar(id) {
+  const c = jarById(id); if (!c) return;
+  runFix([['RemoveRecord', 'Dye_Stock', c.id]],
+    `Removed ${c.label}${c.bin ? ' from bin ' + c.bin : ''}`,
+    () => [['AddRecord', 'Dye_Stock', null, jarFields(c)]]);
+}
+
+// "This is the one on the shelf" — the others were dumped or used up and the
+// row was never cleared. Removes them, keeps this one exactly as it is.
+function keepOnly(dyeId, keepId) {
+  const others = D.containers.filter(c => c.dyeId === Number(dyeId) && c.id !== Number(keepId));
+  if (!others.length) return;
+  const keep = jarById(keepId);
+  runFix([['BulkRemoveRecord', 'Dye_Stock', others.map(c => c.id)]],
+    `Kept ${keep.label} in bin ${keep.bin || '—'}, removed ${others.length} other row${others.length === 1 ? '' : 's'}`,
+    () => others.map(c => ['AddRecord', 'Dye_Stock', null, jarFields(c)]));
+}
+
+// Two rows, one physical container in one bin: add the volumes onto the
+// newest row and drop the rest. Newest wins because its mixed date is the
+// one that governs shelf life.
+function combineJars(dyeId) {
+  const list = D.containers.filter(c => c.dyeId === Number(dyeId));
+  if (list.length < 2) return;
+  const sorted = list.slice().sort((a, b) => (Number(b.mixed) || 0) - (Number(a.mixed) || 0));
+  const keep = sorted[0], drop = sorted.slice(1);
+  const total = list.reduce((s, c) => s + c.qty, 0);
+  const acts = [['UpdateRecord', 'Dye_Stock', keep.id, { [COLS.stock.quantity]: total }],
+                ['BulkRemoveRecord', 'Dye_Stock', drop.map(c => c.id)]];
+  runFix(acts, `Combined ${list.length} rows of ${keep.label} into ${Math.round(total)}mL`,
+    () => [['UpdateRecord', 'Dye_Stock', keep.id, { [COLS.stock.quantity]: keep.qty }]]
+      .concat(drop.map(c => ['AddRecord', 'Dye_Stock', null, jarFields(c)])));
+}
+
+function saveJarBin(id) {
+  const c = jarById(id); if (!c) return;
+  const bin = (document.getElementById('jb-' + id).value || '').trim();
+  if (!bin) { showToast('Enter a bin first', false); return; }
+  if (bin === c.bin) return;
+  runFix([['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.bin]: bin }]],
+    `${c.label} moved to bin ${bin}`,
+    () => [['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.bin]: c.bin }]]);
+}
+
+function linkJarDye(id) {
+  const c = jarById(id); if (!c) return;
+  const dyeId = Number(document.getElementById('jd-' + id).value);
+  if (!dyeId) { showToast('Pick a dye first', false); return; }
+  runFix([['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.dye]: dyeId }]],
+    `Linked the ${c.bin ? 'bin ' + c.bin + ' ' : ''}jar to ${D.dye[dyeId] ? D.dye[dyeId].name : 'a dye'}`,
+    () => [['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.dye]: c.dyeId || 0 }]]);
+}
+
+// ── Thread fixes ─────────────────────────────────────────────────
+function saveLotBin(id) {
+  const l = lotById(id); if (!l) return;
+  const bin = (document.getElementById('lb-' + id).value || '').trim();
+  if (!bin) { showToast('Enter a bin first', false); return; }
+  if (bin === l.bin) return;
+  runFix([['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: bin }]],
+    `${l.lotNumber} assigned to bin ${bin}`,
+    () => [['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: l.bin }]]);
+}
+
+// ── Fix controls ─────────────────────────────────────────────────
+function binDatalist(id, options) {
+  return `<datalist id="${id}">${options.map(o => `<option value="${esc(o)}"></option>`).join('')}</datalist>`;
+}
+function jarBinFix(c) {
+  return `<span class="fix">
+    <input class="fixin" id="jb-${c.id}" list="dyebins" placeholder="bin" value="${esc(c.bin)}">
+    <button class="fixbtn" onclick="saveJarBin(${c.id})">Save bin</button>
+  </span>`;
+}
+function lotBinFix(l) {
+  return `<span class="fix">
+    <input class="fixin" id="lb-${l.id}" list="threadbins" placeholder="bin" value="${esc(l.bin)}">
+    <button class="fixbtn" onclick="saveLotBin(${l.id})">Save bin</button>
+  </span>`;
+}
+
+// Every dye in the catalog, brand-suffixed when the name is shared, so an
+// orphan jar can be pointed at the right one of three Turquoises.
+function dyeOptions() {
+  return Object.values(D.dye)
+    .filter(d => d.name)
+    .sort((a, b) => a.name.localeCompare(b.name) || (a.brand || '').localeCompare(b.brand || ''))
+    .map(d => `<option value="${d.id}">${esc(d.name)}${d.brand ? ' (' + esc(d.brand) + ')' : ''}</option>`)
+    .join('');
+}
+
 function probGroup(title, why, items) {
   if (!items.length) return '';
   return `<div class="prob-group">
@@ -566,6 +762,15 @@ function render() {
   if (loadError) { content.innerHTML = `<div class="warn-banner">${esc(loadError)}</div>`; return; }
   if (!D || !T) { content.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
   const stamp = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  // Bin suggestions: dye bins from what's already in use, thread bins from
+  // Storage_Locations. Both are free text — the lists are a convenience, not
+  // a constraint, so a brand-new bin can still be typed in.
+  const dyeBins = [...new Set(D.containers.map(c => c.bin).filter(Boolean))].sort(binSort);
+  document.getElementById('dyebins').innerHTML =
+    dyeBins.map(b => `<option value="${esc(b)}"></option>`).join('');
+  document.getElementById('threadbins').innerHTML =
+    T.locations.map(l => `<option value="${esc(l.code)}"></option>`).join('');
+
   content.innerHTML =
     tab === 'dyes' ? renderDyes(stamp) :
     tab === 'thread' ? renderThread(stamp) : renderBack(stamp);
@@ -578,25 +783,47 @@ function renderDyes(stamp) {
   const panel = problemsPanel(
     'Count these jars before trusting anything below.',
     [
-      probGroup('One dye in two bins', 'A dye is only remade after the old jar is dumped or used up, so this is always a mis-typed bin or a jar that was never zeroed out.',
+      probGroup('One dye in two bins', 'Walk the bins before touching these — the extra row is either a mis-typed bin, or a container that is genuinely still sitting there. Only you can tell which.',
         P.splitBins.map(s => `<div class="prob-item">
           <strong>${esc(s.info ? s.info.name : '?')}</strong>${s.info && s.info.brand ? ` <span class="mono">(${esc(s.info.brand)})</span>` : ''}
           — bins <span class="mono">${esc(s.bins.join(', '))}</span>
-          <span class="sub">${s.list.map(c => `${esc(c.bin || 'no bin')}: ${Math.round(c.qty)}mL${c.mixed ? ', mixed ' + esc(shortDate(c.mixed)) : ''}`).join(' · ')} — keep the newest, zero the rest</span>
+          ${s.list.slice().sort((a, b) => (Number(b.mixed) || 0) - (Number(a.mixed) || 0)).map(c => `
+            <div class="fixrow">
+              <span class="fixlabel">bin <strong>${esc(c.bin || '—')}</strong> · ${Math.round(c.qty)}mL${c.mixed ? ' · mixed ' + esc(shortDate(c.mixed)) : ''}</span>
+              <button class="fixbtn primary" onclick="keepOnly(${c.dyeId}, ${c.id})">Only this one is real</button>
+              ${jarBinFix(c)}
+              <button class="fixbtn danger" onclick="deleteJar(${c.id})">Gone</button>
+            </div>`).join('')}
         </div>`)),
-      probGroup('Two jars of one dye in the same bin', 'Should be a single container. Combine them, or zero the empty one.',
+      probGroup('Two jars of one dye in the same bin', 'One container, two rows. Combining adds the volumes onto the newest row and drops the rest.',
         P.doubleJars.map(s => `<div class="prob-item">
           <strong>${esc(s.info ? s.info.name : '?')}</strong> — bin <span class="mono">${esc(s.bin || 'none')}</span>, ${s.list.length} rows
           <span class="sub">${s.list.map(c => `${Math.round(c.qty)}mL${c.mixed ? ' (' + esc(shortDate(c.mixed)) + ')' : ''}`).join(' · ')}</span>
+          <div class="fixrow">
+            <button class="fixbtn primary" onclick="combineJars(${s.dyeId})">Combine into one</button>
+            ${s.list.map(c => `<button class="fixbtn danger" onclick="deleteJar(${c.id})">Drop the ${Math.round(c.qty)}mL row</button>`).join('')}
+          </div>
         </div>`)),
-      probGroup('Jar with no bin recorded', 'It exists somewhere but the sheet can\'t send anyone to it.',
-        P.noBin.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${c.brand ? ` <span class="mono">(${esc(c.brand)})</span>` : ''} — ${Math.round(c.qty)}mL</div>`)),
-      probGroup('Jar not linked to a dye', 'The Dye reference is empty, so nothing can find it.',
-        P.orphanDye.map(c => `<div class="prob-item">bin <span class="mono">${esc(c.bin || 'none')}</span> — ${Math.round(c.qty)}mL${c.mixed ? ', mixed ' + esc(shortDate(c.mixed)) : ''}</div>`)),
-      probGroup('Empty jar still on record', 'Zero or blank volume. Either it was used up and never removed, or the volume was never entered.',
-        P.emptyJar.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span></div>`)),
-      probGroup('Past its shelf life', 'Older than the shelf life set on the dye.',
-        P.expired.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>, ${c.age}d old, shelf life ${c.shelf}d</div>`)),
+      probGroup('Jar with no bin recorded', 'It exists somewhere but the prep sheet can\'t send anyone to it.',
+        P.noBin.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${c.brand ? ` <span class="mono">(${esc(c.brand)})</span>` : ''} — ${Math.round(c.qty)}mL
+          <div class="fixrow">${jarBinFix(c)}<button class="fixbtn danger" onclick="deleteJar(${c.id})">Gone</button></div>
+        </div>`)),
+      probGroup('Jar not linked to a dye', 'The Dye reference is empty, so nothing can find it. Pick which dye it is.',
+        P.orphanDye.map(c => `<div class="prob-item">bin <span class="mono">${esc(c.bin || 'none')}</span> — ${Math.round(c.qty)}mL${c.mixed ? ', mixed ' + esc(shortDate(c.mixed)) : ''}
+          <div class="fixrow">
+            <select class="fixin wide" id="jd-${c.id}"><option value="">pick a dye…</option>${dyeOptions()}</select>
+            <button class="fixbtn primary" onclick="linkJarDye(${c.id})">Link</button>
+            <button class="fixbtn danger" onclick="deleteJar(${c.id})">Gone</button>
+          </div>
+        </div>`)),
+      probGroup('Empty jar still on record', 'Zero or blank volume — used up and never cleared, or the volume was never entered.',
+        P.emptyJar.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>
+          <div class="fixrow"><button class="fixbtn danger" onclick="deleteJar(${c.id})">Used up — remove</button></div>
+        </div>`)),
+      probGroup('Past its shelf life', 'Older than the shelf life set on the dye. Remove it once it\'s dumped.',
+        P.expired.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>, ${c.age}d old, shelf life ${c.shelf}d
+          <div class="fixrow"><button class="fixbtn danger" onclick="deleteJar(${c.id})">Dumped — remove</button></div>
+        </div>`)),
     ]
   );
 
@@ -657,13 +884,16 @@ function renderThread(stamp) {
     'These lots can\'t be counted against a bin until they\'re sorted.',
     [
       probGroup('Spools with no bin', 'Off the rack but never assigned a bin, so no audit can find them.',
-        P.unbinned.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}</div>`)),
+        P.unbinned.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.fiber)}
+          <div class="fixrow">${lotBinFix(l)}</div></div>`)),
       probGroup('Bin code not in Storage_Locations', 'Typo, or a bin that was never set up.',
-        P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> — bin <span class="mono">${esc(l.bin)}</span></div>`)),
+        P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> — bin <span class="mono">${esc(l.bin)}</span>
+          <div class="fixrow">${lotBinFix(l)}</div></div>`)),
       probGroup('Wrong fibre for the bin', 'The bin is set up for one fibre and holds another.',
         P.fiberMismatch.map(l => {
           const loc = T.locByCode[normalize(l.bin)];
-          return `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.fiber)} in bin <span class="mono">${esc(l.bin)}</span> (${esc(loc.fiber)})</div>`;
+          return `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.fiber)} in bin <span class="mono">${esc(l.bin)}</span> (${esc(loc.fiber)})
+            <div class="fixrow">${lotBinFix(l)}</div></div>`;
         })),
       probGroup('Allocated more than exists', 'Allocations plus back stock exceed what the lot made — someone double-allocated, or a spool count is wrong.',
         P.negative.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — made ${l.made}, packed ${l.packed}, reserved ${l.reserved}, back stock ${l.backStock}</div>`)),
@@ -716,7 +946,8 @@ function renderBack(stamp) {
     'Back stock the shop can sell but nobody can find.',
     [
       probGroup('Back stock with no bin', 'Listed as sellable but not assigned to a bin.',
-        noBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.backStock} spool${l.backStock === 1 ? '' : 's'}</div>`)),
+        noBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.backStock} spool${l.backStock === 1 ? '' : 's'}
+          <div class="fixrow">${lotBinFix(l)}</div></div>`)),
     ]
   );
 
@@ -776,7 +1007,8 @@ function binCard(g, amountOf, extraCells, extraHead) {
   </div>`;
 }
 
-grist.ready({ requiredAccess: 'read table' });
+// 'full' rather than 'read table' — the audit now writes the fixes it finds.
+grist.ready({ requiredAccess: 'full' });
 loadEverything();
 </script>
 </body>
