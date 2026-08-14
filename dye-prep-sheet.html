@@ -98,6 +98,7 @@
   .dye-name .brand { display: inline; font-weight: 400; color: var(--muted); font-size: 11px; }
   .sub { display: block; font-size: 10px; color: var(--muted); }
   .sub.again { color: var(--accent); font-style: italic; }
+  .sub.flag { color: var(--urgent); font-weight: 600; }
   .where { font-size: 11.5px; }
   .where.none { color: var(--muted); font-style: italic; }
   .mono { font-family: 'DM Mono', monospace; font-size: 11px; }
@@ -576,8 +577,18 @@ function jarCell(it) {
   if (!it.jar) {
     return `<span class="where none">${it.flagCls === 'dry' ? 'no jar — dry powder recipe' : 'none on record'}</span>`;
   }
-  const binTxt = it.jar.bins.length ? 'bin ' + it.jar.bins.join(' + ') : 'bin not recorded';
-  return `<span class="where"><strong>${esc(binTxt)}</strong><span class="sub">${Math.round(it.jar.total)}mL on hand</span></span>`;
+  const bins = it.jar.bins;
+  if (!bins.length) {
+    return `<span class="where"><strong>bin not recorded</strong><span class="sub">${Math.round(it.jar.total)}mL on hand</span></span>`;
+  }
+  // One dye lives in one bin — the old jar is dumped or used up before a new
+  // one is made. Two bins is always a data error, so say so rather than send
+  // someone hunting through three bins for a jar that should be in one.
+  if (bins.length > 1) {
+    return `<span class="where"><strong>bin ${esc(bins[0])}</strong>
+      <span class="sub flag">⚠ also recorded in bin ${esc(bins.slice(1).join(', '))} — should only be one, check the audit</span></span>`;
+  }
+  return `<span class="where"><strong>bin ${esc(bins[0])}</strong><span class="sub">${Math.round(it.jar.total)}mL on hand</span></span>`;
 }
 function powderCell(it) {
   return it.powder

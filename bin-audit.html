@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bin Audit</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --ink: #1A1614;
+    --paper: #F7F3EE;
+    --warm: #E8DFD4;
+    --rule: #D4C9BC;
+    --muted: #8B7D72;
+    --accent: #8B3A2A;
+    --teal-light: #E5F2EF;
+    --gold: #B07D2A;
+    --gold-light: #F5EDD8;
+    --urgent: #A01830;
+    --urgent-light: #F5E0E4;
+    --good: #2D6A2D;
+    --good-light: #EAF3DE;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.45; padding: 16px;
+  }
+
+  /* ── Controls ───────────────────────────────────────────────── */
+  .controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-bottom: 12px; margin-bottom: 16px; border-bottom: 2px solid var(--rule);
+  }
+  .tab {
+    font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
+    padding: 7px 14px; border-radius: 6px; border: 1px solid var(--rule);
+    background: white; color: var(--ink); cursor: pointer;
+  }
+  .tab.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .tab:hover:not(.active) { background: var(--warm); }
+  .ctl-spacer { flex: 1; }
+  .btn {
+    font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
+    padding: 7px 14px; border-radius: 6px; border: 1px solid var(--ink);
+    background: var(--ink); color: var(--paper); cursor: pointer;
+  }
+  .btn.secondary { background: white; color: var(--ink); border-color: var(--rule); }
+  .btn:hover { opacity: .88; }
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); cursor: pointer; }
+
+  /* ── Sheet head ─────────────────────────────────────────────── */
+  .sheet-head { margin-bottom: 14px; }
+  .sheet-title { font-family: 'Libre Baskerville', serif; font-size: 22px; font-weight: 700; }
+  .sheet-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .how { font-size: 11px; background: var(--warm); border-radius: 5px; padding: 7px 10px; margin-top: 8px; }
+
+  .totals { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 16px; }
+  .chip {
+    background: white; border: 1px solid var(--rule); border-radius: 6px;
+    padding: 6px 11px; font-size: 17px; font-weight: 700; font-family: 'DM Mono', monospace;
+  }
+  .chip span { display: block; font-family: 'Inter', sans-serif; font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .chip.bad { background: var(--urgent-light); border-color: #E0A5AF; color: var(--urgent); }
+  .chip.bad span { color: var(--urgent); }
+
+  /* ── Problems ───────────────────────────────────────────────── */
+  .problems {
+    border: 1.5px solid var(--urgent); border-radius: 8px; background: var(--urgent-light);
+    padding: 10px 12px; margin-bottom: 18px; break-inside: avoid; page-break-inside: avoid;
+  }
+  .problems h3 { font-family: 'Libre Baskerville', serif; font-size: 14px; color: var(--urgent); margin-bottom: 2px; }
+  .problems .lead { font-size: 10.5px; color: var(--urgent); margin-bottom: 8px; }
+  .prob-group { margin-bottom: 9px; }
+  .prob-group:last-child { margin-bottom: 0; }
+  .prob-title { font-size: 11px; font-weight: 700; color: var(--urgent); }
+  .prob-why { font-size: 10px; color: #7A2233; margin-bottom: 3px; }
+  .prob-item {
+    font-size: 11.5px; padding: 3px 0 3px 9px; border-left: 2px solid #E0A5AF;
+    margin-left: 2px;
+  }
+  .prob-item .mono { font-family: 'DM Mono', monospace; font-size: 11px; }
+  .problems.info { border-color: var(--gold); background: var(--gold-light); }
+  .problems.info h3, .problems.info .lead, .problems.info .prob-title { color: #7A5410; }
+  .problems.info .prob-why { color: #8B6A00; }
+  .problems.info .prob-item { border-left-color: #D9BC7C; }
+  .allgood {
+    border: 1.5px solid var(--good); background: var(--good-light); color: #1E4A1E;
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; font-size: 12px;
+  }
+
+  /* ── Bin cards ──────────────────────────────────────────────── */
+  .bin {
+    break-inside: avoid; page-break-inside: avoid;
+    border: 1.5px solid var(--ink); border-radius: 8px; background: white;
+    margin-bottom: 11px; overflow: hidden;
+  }
+  .bin.empty { border-color: var(--rule); opacity: .72; }
+  .bin.over { border-color: var(--urgent); }
+  .bin-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 11px; background: var(--warm); border-bottom: 1.5px solid var(--ink);
+  }
+  .bin.empty .bin-head { background: var(--paper); border-bottom-color: var(--rule); }
+  .bin.over .bin-head { background: var(--urgent-light); border-bottom-color: var(--urgent); }
+  .bin-code {
+    flex: none; font-family: 'DM Mono', monospace; font-weight: 500; font-size: 15px;
+    min-width: 42px; height: 28px; line-height: 26px; text-align: center; padding: 0 7px;
+    border: 1.6px solid var(--ink); border-radius: 5px; background: var(--paper);
+  }
+  .bin-what { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); }
+  .bin-what strong { display: block; font-size: 12.5px; color: var(--ink); font-weight: 600; }
+  .bin-tally { flex: none; text-align: right; font-size: 11px; color: var(--muted); }
+  .bin-tally strong { font-family: 'DM Mono', monospace; font-size: 15px; color: var(--ink); }
+
+  .fill { height: 5px; background: var(--warm); }
+  .fill span { display: block; height: 100%; background: var(--good); }
+  .fill span.warn { background: var(--gold); }
+  .fill span.over { background: var(--urgent); }
+
+  table.rows { width: 100%; border-collapse: collapse; }
+  table.rows th {
+    font-size: 8.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 700;
+    color: var(--muted); text-align: left; padding: 5px 9px 3px; border-bottom: 1px solid var(--rule);
+  }
+  table.rows td { padding: 5px 9px; border-bottom: 1px solid var(--warm); vertical-align: top; font-size: 12px; }
+  table.rows tr:last-child td { border-bottom: none; }
+  table.rows td.num, table.rows th.num { text-align: right; font-family: 'DM Mono', monospace; }
+  .sub { display: block; font-size: 10px; color: var(--muted); font-family: 'Inter', sans-serif; }
+  .sub.flag { color: var(--urgent); font-weight: 600; }
+  .name { font-weight: 600; }
+  .name .brand { font-weight: 400; color: var(--muted); font-size: 11px; }
+  .empty-note { padding: 9px 11px; font-size: 11.5px; color: var(--muted); font-style: italic; }
+
+  .dot {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,.28); vertical-align: -2px; margin-right: 5px;
+  }
+  .dot.unknown { background: repeating-linear-gradient(45deg,#fff,#fff 3px,#DDD4C8 3px,#DDD4C8 6px); }
+
+  .tag {
+    display: inline-block; font-size: 8.5px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; padding: 2px 5px; border-radius: 3px; white-space: nowrap; border: 1px solid;
+  }
+  .tag.ok   { background: var(--teal-light); color: #1F5A4C; border-color: #8FC4B7; }
+  .tag.warn { background: var(--gold-light); color: #7A5410; border-color: #D9BC7C; }
+  .tag.bad  { background: var(--urgent-light); color: var(--urgent); border-color: #E0A5AF; }
+
+  .count-box {
+    display: inline-block; min-width: 46px; border-bottom: 1.4px solid var(--ink);
+    height: 15px; margin-left: 4px;
+  }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 50px 20px; font-size: 14px; }
+  .warn-banner {
+    background: var(--urgent-light); border: 1px solid #E0A5AF; color: var(--urgent);
+    padding: 8px 11px; border-radius: 6px; font-size: 11.5px; margin-bottom: 14px;
+  }
+
+  @media print {
+    @page { margin: 11mm; }
+    body { background: white; padding: 0; font-size: 10.5px; }
+    .no-print { display: none !important; }
+    .bin-head, .dot, .tag, .problems, .allgood, .chip, .fill span {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="controls no-print">
+  <button class="tab active" id="tab-dyes" onclick="setTab('dyes')">Made dyes</button>
+  <button class="tab" id="tab-thread" onclick="setTab('thread')">Thread in bins</button>
+  <button class="tab" id="tab-back" onclick="setTab('back')">Back stock</button>
+  <label class="chk"><input type="checkbox" id="showEmpty" onchange="render()"> show empty bins</label>
+  <label class="chk"><input type="checkbox" id="countCols" onchange="render()" checked> counting column</label>
+  <div class="ctl-spacer"></div>
+  <button class="btn secondary" onclick="loadEverything()">↻ Refresh</button>
+  <button class="btn" onclick="window.print()">🖨 Print this audit</button>
+</div>
+
+<div id="content"><div class="empty-state">Loading…</div></div>
+
+<script>
+// ── Shared helpers (keep in sync with the rest of the widget suite) ──
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+function hexOf(s) {
+  const v = (s || '').toString().trim();
+  return /^#?[0-9a-fA-F]{6}$/.test(v) ? (v[0] === '#' ? v : '#' + v) : null;
+}
+function ageDays(dateVal) {
+  if (!dateVal) return null;
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return null;
+  return Math.floor((Date.now() - ms) / 86400000);
+}
+function shortDate(dateVal) {
+  if (!dateVal) return '';
+  const d = typeof dateVal === 'number' ? new Date(dateVal * 1000) : new Date(dateVal);
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' });
+}
+// Bins sort naturally: A1 before A2 before A10, and 2 before 12.
+function binSort(a, b) {
+  const pa = String(a).match(/^([A-Za-z]*)(\d*)/), pb = String(b).match(/^([A-Za-z]*)(\d*)/);
+  if (pa[1] !== pb[1]) return pa[1].localeCompare(pb[1]);
+  const na = Number(pa[2] || 0), nb = Number(pb[2] || 0);
+  if (na !== nb) return na - nb;
+  return String(a).localeCompare(String(b));
+}
+// Lots write 'FFN'; Storage_Locations writes 'FF Nylon'. Same fibre, so a
+// mismatch check has to compare the meaning, not the spelling.
+function fiberKey(s) {
+  const v = normalize(s).replace(/[^A-Z]/g, '');
+  if (!v) return '';
+  if (v === 'FFN' || v === 'FFNYLON') return 'FFN';
+  if (v === 'FFC' || v === 'FFCOTTON') return 'FFC';
+  if (v === 'EN' || v === 'ENYLON') return 'EN';
+  return v;
+}
+
+// ── State ────────────────────────────────────────────────────────
+let tab = 'dyes';
+let loadError = null;
+let D = null;   // made-dye audit model
+let T = null;   // thread / back-stock audit model
+
+function setTab(t) {
+  tab = t;
+  ['dyes', 'thread', 'back'].forEach(k =>
+    document.getElementById('tab-' + k).classList.toggle('active', k === t));
+  render();
+}
+
+async function loadEverything() {
+  loadError = null;
+  document.getElementById('content').innerHTML = '<div class="empty-state">Loading…</div>';
+  try {
+    const [dyesT, stockT, lotsT, allocT, recipesT] = await Promise.all([
+      grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+    // Storage_Locations is optional scaffolding — without it the audit still
+    // works, it just can't show empty bins or compare against a target.
+    let locT = null;
+    try { locT = await grist.docApi.fetchTable('Storage_Locations'); } catch (e) { locT = null; }
+
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const DYE = resolveCols(dyesT, 'Dyes', {
+      name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']),
+      swatch: opt(['Swatch_Hex']), shelf: opt(['Shelf_Life_days_']),
+    }, missing);
+    const STOCK = resolveCols(stockT, 'Dye_Stock', {
+      dye: ['Dye'], quantity: ['Quantity_mL'],
+      bin: opt(['Bin_Location']), mixed: opt(['Mixed_Date']),
+    }, missing);
+    const LOT = resolveCols(lotsT, 'Production_Lots', {
+      lotNumber: ['Lot_Number'], recipe: ['Recipe'],
+      spoolsMade: opt(['Spools_Made']), broken: opt(['Broken_Spools']),
+      general: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']),
+      vendor: opt(['Vendor_Stock_Spools']), fiber: opt(['Fiber']),
+      bin: opt(['Storage_Bin']), dried: opt(['Drying_Status']), date: opt(['Date_Dyed']),
+    }, missing);
+    const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
+      lot: ['Lot'], qty: ['Qty_Spools'], status: opt(['Status']), customer: opt(['Customer']),
+    }, missing);
+    const REC = resolveCols(recipesT, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']),
+    }, missing);
+
+    if (missing.length) {
+      loadError = 'Missing columns: ' + [...new Set(missing)].join(', ') +
+                  ' — a table or column was likely renamed.';
+      render();
+      return;
+    }
+
+    buildDyeAudit(dyesT, stockT, DYE, STOCK);
+    buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC);
+    render();
+  } catch (e) {
+    console.error('Bin audit failed to load:', e);
+    loadError = 'Failed to load — ' + ((e && e.message) ? e.message : String(e));
+    render();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MADE DYES
+// ══════════════════════════════════════════════════════════════════
+function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
+  // Catalog keyed by row id. Names are shared across brands (Turquoise is CC,
+  // J and PF), so a name is a label only — never a key.
+  const dye = {}, nameCounts = {};
+  (dyesT.id || []).forEach((id, i) => {
+    const name = (columnAsArray(dyesT, DYE.name)[i] || '').toString();
+    dye[id] = {
+      id, name,
+      brand: (columnAsArray(dyesT, DYE.brand)[i] || '').toString().trim(),
+      swatch: hexOf(columnAsArray(dyesT, DYE.swatch)[i]),
+      shelf: Number(columnAsArray(dyesT, DYE.shelf)[i]) || null,
+    };
+    const k = normalize(name);
+    if (k) nameCounts[k] = (nameCounts[k] || 0) + 1;
+  });
+
+  const containers = [];
+  (stockT.id || []).forEach((id, i) => {
+    const dyeRef = getRefId(columnAsArray(stockT, STOCK.dye)[i]);
+    const info = dyeRef ? dye[dyeRef] : null;
+    const mixed = columnAsArray(stockT, STOCK.mixed)[i];
+    const age = ageDays(mixed);
+    containers.push({
+      id, dyeId: dyeRef, info,
+      label: info ? info.name : '(no dye linked)',
+      brand: info ? info.brand : '',
+      ambiguous: !!(info && nameCounts[normalize(info.name)] > 1),
+      swatch: info ? info.swatch : null,
+      qty: Number(columnAsArray(stockT, STOCK.quantity)[i]) || 0,
+      bin: (columnAsArray(stockT, STOCK.bin)[i] || '').toString().trim(),
+      mixed, age,
+      expired: !!(info && info.shelf && age !== null && age > info.shelf),
+      shelf: info ? info.shelf : null,
+    });
+  });
+
+  // ── The one hard rule: one dye, one bin ─────────────────────────
+  // A dye is made fresh only after the old jar is dumped or used up, so a
+  // dye recorded in two bins is always a data error — a put-away that typed
+  // the wrong bin, or an empty jar that was never zeroed out.
+  const byDye = {};
+  containers.forEach(c => {
+    if (!c.dyeId) return;
+    (byDye[c.dyeId] = byDye[c.dyeId] || []).push(c);
+  });
+
+  const splitBins = [];      // same dye recorded in more than one bin
+  const doubleJars = [];     // same dye, same bin, more than one container row
+  Object.entries(byDye).forEach(([dyeId, list]) => {
+    const bins = [...new Set(list.map(c => c.bin).filter(Boolean))];
+    if (bins.length > 1) {
+      splitBins.push({ dyeId: Number(dyeId), info: dye[dyeId], list, bins: bins.sort(binSort) });
+    } else if (list.length > 1) {
+      doubleJars.push({ dyeId: Number(dyeId), info: dye[dyeId], list, bin: bins[0] || '' });
+    }
+  });
+  splitBins.sort((a, b) => (a.info ? a.info.name : '').localeCompare(b.info ? b.info.name : ''));
+
+  const orphanDye = containers.filter(c => !c.dyeId);
+  const noBin = containers.filter(c => c.dyeId && !c.bin);
+  const emptyJar = containers.filter(c => c.qty <= 0);
+  const expired = containers.filter(c => c.expired);
+
+  // Flag every container that is part of a split so the bin listing shows it too.
+  const splitIds = new Set();
+  splitBins.forEach(s => s.list.forEach(c => splitIds.add(c.id)));
+  containers.forEach(c => { c.split = splitIds.has(c.id); });
+
+  const bins = {};
+  containers.forEach(c => {
+    const key = c.bin || '(no bin)';
+    (bins[key] = bins[key] || []).push(c);
+  });
+  Object.values(bins).forEach(l => l.sort((a, b) => a.label.localeCompare(b.label)));
+
+  D = {
+    containers, bins, nameCounts,
+    problems: { splitBins, doubleJars, orphanDye, noBin, emptyJar, expired },
+    totalMl: containers.reduce((s, c) => s + c.qty, 0),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// THREAD + BACK STOCK
+// ══════════════════════════════════════════════════════════════════
+function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
+  const recipe = {};
+  (recipesT.id || []).forEach((id, i) => {
+    recipe[id] = {
+      id,
+      name: (columnAsArray(recipesT, REC.name)[i] || '').toString(),
+      fiber: (columnAsArray(recipesT, REC.fiber)[i] || '').toString(),
+    };
+  });
+
+  // Allocations split two ways: packed has physically left the bin; anything
+  // else is still sitting there, just already spoken for.
+  const packedByLot = {}, reservedByLot = {}, reservedWho = {};
+  (allocT.id || []).forEach((id, i) => {
+    const lotId = getRefId(columnAsArray(allocT, ALLOC.lot)[i]);
+    if (!lotId) return;
+    const qty = Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0;
+    const status = (columnAsArray(allocT, ALLOC.status)[i] || '').toString();
+    const gone = /packed|shipped|sent|delivered/i.test(status);
+    if (gone) packedByLot[lotId] = (packedByLot[lotId] || 0) + qty;
+    else {
+      reservedByLot[lotId] = (reservedByLot[lotId] || 0) + qty;
+      const who = columnAsArray(allocT, ALLOC.customer)[i];
+      const name = (typeof who === 'string' ? who : '').trim();
+      if (name) (reservedWho[lotId] = reservedWho[lotId] || new Set()).add(name);
+    }
+  });
+
+  const lots = [];
+  (lotsT.id || []).forEach((id, i) => {
+    const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+    const rec = recipe[recipeId] || { name: 'Recipe #' + recipeId, fiber: '' };
+    const made = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
+    const broken = Number(columnAsArray(lotsT, LOT.broken)[i]) || 0;
+    const general = Number(columnAsArray(lotsT, LOT.general)[i]) || 0;
+    const store = Number(columnAsArray(lotsT, LOT.store)[i]) || 0;
+    const vendor = Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0;
+    const packed = packedByLot[id] || 0;
+    const reserved = reservedByLot[id] || 0;
+    const backStock = general + store + vendor;
+    // What should physically be in the bin: everything made, less what broke
+    // and less what has already been boxed and sent out.
+    const inBin = made - broken - packed;
+    const free = inBin - reserved - backStock;
+    const drying = (columnAsArray(lotsT, LOT.dried)[i] || '').toString();
+    lots.push({
+      id, recipeId, recipe: rec,
+      lotNumber: (columnAsArray(lotsT, LOT.lotNumber)[i] || 'Lot #' + id).toString(),
+      fiber: (columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber || '').toString(),
+      bin: (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim(),
+      date: columnAsArray(lotsT, LOT.date)[i],
+      drying, onRack: /dry|wet|rack/i.test(drying),
+      made, broken, packed, reserved, backStock, inBin, free,
+      who: reservedWho[id] ? [...reservedWho[id]] : [],
+    });
+  });
+
+  // Storage_Locations gives the full bin list (so empty bins can be shown)
+  // plus the target and cap to measure against.
+  const locations = [];
+  if (locT) {
+    const LOC = resolveCols(locT, 'Storage_Locations', {
+      code: ['Bin_Code'], fiber: { cands: ['Fiber'], required: false },
+      reserved: { cands: ['Reserved_For'], required: false },
+      target: { cands: ['Target_Spools'], required: false },
+      max: { cands: ['Max_Spools'], required: false },
+    }, []);
+    if (LOC.code) {
+      (locT.id || []).forEach((id, i) => {
+        const code = (columnAsArray(locT, LOC.code)[i] || '').toString().trim();
+        if (!code) return;
+        locations.push({
+          code,
+          fiber: (columnAsArray(locT, LOC.fiber)[i] || '').toString().trim(),
+          reservedFor: (columnAsArray(locT, LOC.reserved)[i] || '').toString().trim(),
+          target: Number(columnAsArray(locT, LOC.target)[i]) || 0,
+          max: Number(columnAsArray(locT, LOC.max)[i]) || 0,
+        });
+      });
+    }
+  }
+  const locByCode = {};
+  locations.forEach(l => { locByCode[normalize(l.code)] = l; });
+
+  const problems = {
+    unbinned: lots.filter(l => !l.bin && l.inBin > 0 && !l.onRack),
+    unknownBin: lots.filter(l => l.bin && locations.length && !locByCode[normalize(l.bin)]),
+    fiberMismatch: lots.filter(l => {
+      const loc = l.bin ? locByCode[normalize(l.bin)] : null;
+      return !!(loc && loc.fiber && l.fiber && fiberKey(loc.fiber) !== fiberKey(l.fiber));
+    }),
+    negative: lots.filter(l => l.inBin < 0 || l.free < 0),
+    stillDrying: lots.filter(l => l.onRack && l.inBin > 0),
+  };
+
+  T = { lots, locations, locByCode, problems };
+}
+
+// ── Grouping a set of lots into bins for display ─────────────────
+function groupLots(lots, amountOf, showEmpty) {
+  const byBin = {};
+  lots.forEach(l => {
+    const amt = amountOf(l);
+    if (amt <= 0) return;
+    const key = l.bin || '(no bin)';
+    (byBin[key] = byBin[key] || []).push(l);
+  });
+  if (showEmpty) T.locations.forEach(loc => { if (!byBin[loc.code]) byBin[loc.code] = []; });
+  return Object.keys(byBin).sort(binSort).map(code => ({
+    code,
+    loc: T.locByCode[normalize(code)] || null,
+    lots: byBin[code].sort((a, b) => (a.date || 0) - (b.date || 0)),
+    total: byBin[code].reduce((s, l) => s + amountOf(l), 0),
+  }));
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════════════════════════════
+function probGroup(title, why, items) {
+  if (!items.length) return '';
+  return `<div class="prob-group">
+    <div class="prob-title">${esc(title)} — ${items.length}</div>
+    <div class="prob-why">${esc(why)}</div>
+    ${items.join('')}
+  </div>`;
+}
+function problemsPanel(lead, groups) {
+  const body = groups.filter(Boolean).join('');
+  if (!body) return `<div class="allgood"><strong>Nothing to fix.</strong> Every record here passes its checks — the bins below are what the system believes you have.</div>`;
+  return `<div class="problems"><h3>Fix these first</h3><div class="lead">${esc(lead)}</div>${body}</div>`;
+}
+function infoPanel(title, lead, groups) {
+  const body = groups.filter(Boolean).join('');
+  if (!body) return '';
+  return `<div class="problems info"><h3>${esc(title)}</h3><div class="lead">${esc(lead)}</div>${body}</div>`;
+}
+function dot(hex) {
+  return hex ? `<span class="dot" style="background:${esc(hex)}"></span>`
+             : `<span class="dot unknown"></span>`;
+}
+function countCell() {
+  return document.getElementById('countCols').checked
+    ? '<td class="num"><span class="count-box"></span></td>' : '';
+}
+function countHead(label) {
+  return document.getElementById('countCols').checked
+    ? `<th class="num">${esc(label)}</th>` : '';
+}
+
+function render() {
+  const content = document.getElementById('content');
+  if (loadError) { content.innerHTML = `<div class="warn-banner">${esc(loadError)}</div>`; return; }
+  if (!D || !T) { content.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  const stamp = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  content.innerHTML =
+    tab === 'dyes' ? renderDyes(stamp) :
+    tab === 'thread' ? renderThread(stamp) : renderBack(stamp);
+}
+
+// ── Made dyes ────────────────────────────────────────────────────
+function renderDyes(stamp) {
+  const P = D.problems;
+
+  const panel = problemsPanel(
+    'Count these jars before trusting anything below.',
+    [
+      probGroup('One dye in two bins', 'A dye is only remade after the old jar is dumped or used up, so this is always a mis-typed bin or a jar that was never zeroed out.',
+        P.splitBins.map(s => `<div class="prob-item">
+          <strong>${esc(s.info ? s.info.name : '?')}</strong>${s.info && s.info.brand ? ` <span class="mono">(${esc(s.info.brand)})</span>` : ''}
+          — bins <span class="mono">${esc(s.bins.join(', '))}</span>
+          <span class="sub">${s.list.map(c => `${esc(c.bin || 'no bin')}: ${Math.round(c.qty)}mL${c.mixed ? ', mixed ' + esc(shortDate(c.mixed)) : ''}`).join(' · ')} — keep the newest, zero the rest</span>
+        </div>`)),
+      probGroup('Two jars of one dye in the same bin', 'Should be a single container. Combine them, or zero the empty one.',
+        P.doubleJars.map(s => `<div class="prob-item">
+          <strong>${esc(s.info ? s.info.name : '?')}</strong> — bin <span class="mono">${esc(s.bin || 'none')}</span>, ${s.list.length} rows
+          <span class="sub">${s.list.map(c => `${Math.round(c.qty)}mL${c.mixed ? ' (' + esc(shortDate(c.mixed)) + ')' : ''}`).join(' · ')}</span>
+        </div>`)),
+      probGroup('Jar with no bin recorded', 'It exists somewhere but the sheet can\'t send anyone to it.',
+        P.noBin.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${c.brand ? ` <span class="mono">(${esc(c.brand)})</span>` : ''} — ${Math.round(c.qty)}mL</div>`)),
+      probGroup('Jar not linked to a dye', 'The Dye reference is empty, so nothing can find it.',
+        P.orphanDye.map(c => `<div class="prob-item">bin <span class="mono">${esc(c.bin || 'none')}</span> — ${Math.round(c.qty)}mL${c.mixed ? ', mixed ' + esc(shortDate(c.mixed)) : ''}</div>`)),
+      probGroup('Empty jar still on record', 'Zero or blank volume. Either it was used up and never removed, or the volume was never entered.',
+        P.emptyJar.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span></div>`)),
+      probGroup('Past its shelf life', 'Older than the shelf life set on the dye.',
+        P.expired.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>, ${c.age}d old, shelf life ${c.shelf}d</div>`)),
+    ]
+  );
+
+  const codes = Object.keys(D.bins).sort(binSort);
+  const cards = codes.map(code => {
+    const list = D.bins[code];
+    const ml = list.reduce((s, c) => s + c.qty, 0);
+    return `<div class="bin">
+      <div class="bin-head">
+        <span class="bin-code">${esc(code)}</span>
+        <span class="bin-what"><strong>${code === '(no bin)' ? 'No bin recorded' : 'Made dye'}</strong>${list.length} jar${list.length === 1 ? '' : 's'} on record</span>
+        <span class="bin-tally"><strong>${Math.round(ml)}</strong> mL</span>
+      </div>
+      <table class="rows">
+        <tr><th>Dye</th><th class="num">Should hold</th><th>Mixed</th>${countHead('Counted')}<th></th></tr>
+        ${list.map(c => {
+          const state = c.split ? ['bad', 'Split bin']
+            : c.expired ? ['bad', 'Expired']
+            : c.qty <= 0 ? ['bad', 'Empty']
+            : (c.info && c.info.shelf && c.age !== null && c.info.shelf - c.age <= 5) ? ['warn', 'Ageing']
+            : ['ok', 'OK'];
+          return `<tr>
+            <td><span class="name">${dot(c.swatch)}${esc(c.label)}${c.ambiguous && c.brand ? ` <span class="brand">(${esc(c.brand)})</span>` : ''}</span>
+              ${c.split ? '<span class="sub flag">also recorded in another bin</span>' : ''}</td>
+            <td class="num">${Math.round(c.qty)}mL</td>
+            <td>${esc(shortDate(c.mixed)) || '<span class="sub">not recorded</span>'}${c.age !== null ? `<span class="sub">${c.age}d old</span>` : ''}</td>
+            ${countCell()}
+            <td><span class="tag ${state[0]}">${state[1]}</span></td>
+          </tr>`;
+        }).join('')}
+      </table>
+    </div>`;
+  }).join('') || '<div class="empty-state">No dye containers on record.</div>';
+
+  const probCount = Object.values(P).reduce((s, l) => s + l.length, 0);
+  return `
+    <div class="sheet-head">
+      <div class="sheet-title">Made dye audit</div>
+      <div class="sheet-sub">${esc(stamp)} · every mixed jar the system thinks you have</div>
+      <div class="how">Walk the bins and count. The <strong>Should hold</strong> column is what Grist believes; write what you actually find beside it.</div>
+    </div>
+    <div class="totals">
+      <div class="chip">${D.containers.length}<span>jars</span></div>
+      <div class="chip">${codes.length}<span>bins</span></div>
+      <div class="chip">${Math.round(D.totalMl)}<span>mL total</span></div>
+      <div class="chip ${probCount ? 'bad' : ''}">${probCount}<span>to fix</span></div>
+    </div>
+    ${panel}${cards}`;
+}
+
+// ── Thread in bins ───────────────────────────────────────────────
+function renderThread(stamp) {
+  const showEmpty = document.getElementById('showEmpty').checked;
+  const P = T.problems;
+  const groups = groupLots(T.lots, l => l.inBin, showEmpty);
+
+  const panel = problemsPanel(
+    'These lots can\'t be counted against a bin until they\'re sorted.',
+    [
+      probGroup('Spools with no bin', 'Off the rack but never assigned a bin, so no audit can find them.',
+        P.unbinned.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}</div>`)),
+      probGroup('Bin code not in Storage_Locations', 'Typo, or a bin that was never set up.',
+        P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> — bin <span class="mono">${esc(l.bin)}</span></div>`)),
+      probGroup('Wrong fibre for the bin', 'The bin is set up for one fibre and holds another.',
+        P.fiberMismatch.map(l => {
+          const loc = T.locByCode[normalize(l.bin)];
+          return `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.fiber)} in bin <span class="mono">${esc(l.bin)}</span> (${esc(loc.fiber)})</div>`;
+        })),
+      probGroup('Allocated more than exists', 'Allocations plus back stock exceed what the lot made — someone double-allocated, or a spool count is wrong.',
+        P.negative.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — made ${l.made}, packed ${l.packed}, reserved ${l.reserved}, back stock ${l.backStock}</div>`)),
+    ]
+  );
+
+  // Drying thread hasn't reached a bin yet, so it isn't a fault — but it has
+  // to be listed or the spool numbers won't reconcile against what's on the racks.
+  const drying = infoPanel('Still on the racks — not in a bin yet',
+    'Nothing to fix. These spools are drying, so they belong on the rack, not in a bin.',
+    [probGroup('Lots on the wet or dry rack', 'Count them on the racks, not in the bins.',
+      P.stillDrying.slice(0, 40).map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.drying)}</div>`)
+        .concat(P.stillDrying.length > 40 ? [`<div class="prob-item">…and ${P.stillDrying.length - 40} more</div>`] : []))]
+  );
+
+  const cards = groups.map(g => binCard(g, l => l.inBin, l => `
+    <td class="num">${l.free}</td>
+    <td class="num">${l.reserved || '—'}${l.who.length ? `<span class="sub">${esc(l.who.join(', '))}</span>` : ''}</td>
+    <td class="num">${l.backStock || '—'}</td>`,
+    `<th class="num">Free</th><th class="num">Reserved</th><th class="num">Back stock</th>`
+  )).join('') || '<div class="empty-state">No lots assigned to a bin yet.</div>';
+
+  const total = T.lots.reduce((s, l) => s + Math.max(0, l.inBin), 0);
+  const binned = T.lots.filter(l => l.bin).reduce((s, l) => s + Math.max(0, l.inBin), 0);
+  // Drying lots aren't faults, so they don't inflate the count of things to fix.
+  const probCount = P.unbinned.length + P.unknownBin.length + P.fiberMismatch.length + P.negative.length;
+  return `
+    <div class="sheet-head">
+      <div class="sheet-title">Thread bin audit</div>
+      <div class="sheet-sub">${esc(stamp)} · every spool made, less what broke and what shipped</div>
+      <div class="how"><strong>Free</strong> is uncommitted, <strong>Reserved</strong> is wound or waiting for an order but still in the bin, <strong>Back stock</strong> is shop stock. All three are physically in the bin — count the total.</div>
+    </div>
+    <div class="totals">
+      <div class="chip">${binned}<span>spools in bins</span></div>
+      <div class="chip">${groups.length}<span>bins in use</span></div>
+      <div class="chip">${total - binned}<span>spools unbinned</span></div>
+      <div class="chip">${P.stillDrying.length}<span>lots drying</span></div>
+      <div class="chip ${probCount ? 'bad' : ''}">${probCount}<span>to fix</span></div>
+    </div>
+    ${panel}${drying}${cards}`;
+}
+
+// ── Back stock ───────────────────────────────────────────────────
+function renderBack(stamp) {
+  const showEmpty = document.getElementById('showEmpty').checked;
+  const groups = groupLots(T.lots, l => l.backStock, showEmpty);
+  const noBin = T.lots.filter(l => l.backStock > 0 && !l.bin);
+
+  const panel = problemsPanel(
+    'Back stock the shop can sell but nobody can find.',
+    [
+      probGroup('Back stock with no bin', 'Listed as sellable but not assigned to a bin.',
+        noBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.backStock} spool${l.backStock === 1 ? '' : 's'}</div>`)),
+    ]
+  );
+
+  const cards = groups.map(g => binCard(g, l => l.backStock, () => '', '')).join('') || '<div class="empty-state">No back stock recorded in any bin.</div>';
+
+  const total = T.lots.reduce((s, l) => s + l.backStock, 0);
+  const colorways = new Set(T.lots.filter(l => l.backStock > 0).map(l => l.recipeId)).size;
+  return `
+    <div class="sheet-head">
+      <div class="sheet-title">Back stock audit</div>
+      <div class="sheet-sub">${esc(stamp)} · wound spools available to sell, by bin</div>
+      <div class="how">Oldest lot first in each bin — that's the one to pull from. Count the spools and write the real number beside the expected one.</div>
+    </div>
+    <div class="totals">
+      <div class="chip">${total}<span>spools</span></div>
+      <div class="chip">${colorways}<span>colorways</span></div>
+      <div class="chip">${groups.length}<span>bins</span></div>
+      <div class="chip ${noBin.length ? 'bad' : ''}">${noBin.length}<span>to fix</span></div>
+    </div>
+    ${panel}${cards}`;
+}
+
+// Shared bin card for both thread audits.
+function binCard(g, amountOf, extraCells, extraHead) {
+  const loc = g.loc;
+  const cap = loc && loc.max ? loc.max : 0;
+  const pct = cap ? Math.min(100, Math.round((g.total / cap) * 100)) : 0;
+  const over = cap && g.total > cap;
+  const fillCls = over ? 'over' : (cap && g.total > cap * 0.85) ? 'warn' : '';
+  const what = loc
+    ? `<strong>${esc(loc.reservedFor ? loc.reservedFor + ' box' : (loc.fiber || 'Storage'))}</strong>${cap ? `target ${loc.target} · max ${cap}` : 'no cap set'}`
+    : g.code === '(no bin)'
+      ? `<strong>No bin recorded</strong>these lots aren't assigned anywhere`
+      : `<strong>Not in Storage_Locations</strong>bin code isn't set up`;
+
+  const body = g.lots.length ? `
+    <table class="rows">
+      <tr><th>Colorway</th><th>Lot</th>${extraHead}<th class="num">In bin</th>${countHead('Counted')}</tr>
+      ${g.lots.map(l => `<tr>
+        <td><span class="name">${esc(l.recipe.name)}</span><span class="sub">${esc(l.fiber)}${l.onRack ? ' · still on the rack' : ''}</span></td>
+        <td><span class="sub" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--ink)">${esc(l.lotNumber)}</span>
+          <span class="sub">${esc(shortDate(l.date))}</span></td>
+        ${extraCells(l)}
+        <td class="num"><strong>${amountOf(l)}</strong></td>
+        ${countCell()}
+      </tr>`).join('')}
+    </table>` : '<div class="empty-note">Empty — nothing recorded here.</div>';
+
+  return `<div class="bin ${g.lots.length ? '' : 'empty'} ${over ? 'over' : ''}">
+    <div class="bin-head">
+      <span class="bin-code">${esc(g.code)}</span>
+      <span class="bin-what">${what}</span>
+      <span class="bin-tally"><strong>${g.total}</strong> spools${over ? ' <span class="tag bad">over max</span>' : ''}</span>
+    </div>
+    ${cap ? `<div class="fill"><span class="${fillCls}" style="width:${pct}%"></span></div>` : ''}
+    ${body}
+  </div>`;
+}
+
+grist.ready({ requiredAccess: 'read table' });
+loadEverything();
+</script>
+</body>
+</html>
