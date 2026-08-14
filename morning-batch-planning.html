@@ -323,7 +323,7 @@ async function loadEverything() {
       name: ['Recipe_Name'], sku: opt(['SKU_Base']),
     }, missing);
     const DYE = resolveCols(dyesTable, 'Dyes', {
-      name: ['Dye_Name'], powderLoc: opt(['Powder_Location']),
+      name: ['Dye_Name'], brand: opt(['Brand']), powderLoc: opt(['Powder_Location']),
     }, missing);
     const COMP = resolveCols(compTable, 'Recipe_Dye_Components', {
       recipe: ['Recipe'], dye: ['Dye_Name'],
@@ -368,42 +368,77 @@ async function loadEverything() {
       if (sku) recipeBySku[sku] = rec;
     });
 
-    // Dyes lookup — needed to resolve Recipe_Dye_Components.Dye_Name, which is
-    // a Ref:Dyes reference, not text.
+    // ── Dye catalog, keyed by ROW ID ────────────────────────────────────
+    // Twenty-six dye names in the catalog belong to more than one brand —
+    // Turquoise exists as CC, J and PF. Keying stock, powder location or
+    // peek-ahead by NAME merges those into one dye, so a recipe using CC
+    // Turquoise shows the bins of all three. Everything below keys on the
+    // Dyes row id; a name is only ever a display label or a last-resort
+    // match for a component that stored free text instead of a reference.
     const dIds = dyesTable.id || [];
-    const dyeNameById = {};
-    dIds.forEach((id, i) => { dyeNameById[id] = columnAsArray(dyesTable, DYE.name)[i] || ''; });
+    const dyeById = {};
+    const dyeNameCounts = {};
+    dIds.forEach((id, i) => {
+      const name = (columnAsArray(dyesTable, DYE.name)[i] || '').toString();
+      dyeById[id] = {
+        id,
+        name,
+        brand: (columnAsArray(dyesTable, DYE.brand)[i] || '').toString(),
+        powderLoc: (columnAsArray(dyesTable, DYE.powderLoc)[i] || '').toString(),
+      };
+      const k = normalize(name);
+      if (k) dyeNameCounts[k] = (dyeNameCounts[k] || 0) + 1;
+    });
+
+    // Free text can only be resolved when the name belongs to exactly one dye.
+    // An ambiguous name resolves to nothing rather than to a coin flip.
+    const dyeIdByUniqueName = {};
+    dIds.forEach(id => {
+      const k = normalize(dyeById[id].name);
+      if (k && dyeNameCounts[k] === 1) dyeIdByUniqueName[k] = id;
+    });
+
+    // A name shared by two brands is never shown bare — the brand is the only
+    // thing that tells the two jars apart on the shelf.
+    const dyeLabel = info => {
+      if (!info) return '';
+      return (dyeNameCounts[normalize(info.name)] > 1 && info.brand)
+        ? `${info.name} (${info.brand})`
+        : info.name;
+    };
+    const dyeKey = (id, name) => (id ? 'id:' + id : 'nm:' + normalize(name));
 
     const cIds = compTable.id || [];
     const dyesByRecipe = {};
     cIds.forEach((id, i) => {
       const recipeRef = getRefId(columnAsArray(compTable, COMP.recipe)[i]);
       const rawDyeVal = columnAsArray(compTable, COMP.dye)[i];
-      const dyeRefId = getRefId(rawDyeVal);
-      const dyeName = dyeRefId ? dyeNameById[dyeRefId] : (typeof rawDyeVal === 'string' ? rawDyeVal : '');
+      let dyeRefId = getRefId(rawDyeVal);
+      if (!dyeRefId && typeof rawDyeVal === 'string') {
+        dyeRefId = dyeIdByUniqueName[normalize(rawDyeVal)] || null;
+      }
+      const info = dyeRefId ? dyeById[dyeRefId] : null;
+      const dyeName = info ? info.name : (typeof rawDyeVal === 'string' ? rawDyeVal : '');
       if (!recipeRef || !dyeName) return;
       if (!dyesByRecipe[recipeRef]) dyesByRecipe[recipeRef] = [];
-      dyesByRecipe[recipeRef].push(dyeName);
-    });
-
-    const powderLocationByDye = {};
-    dIds.forEach((id, i) => {
-      const name = normalize(columnAsArray(dyesTable, DYE.name)[i]);
-      if (name) powderLocationByDye[name] = columnAsArray(dyesTable, DYE.powderLoc)[i] || '';
+      dyesByRecipe[recipeRef].push({
+        id: dyeRefId,
+        name: dyeName,
+        label: info ? dyeLabel(info) : dyeName,
+        key: dyeKey(dyeRefId, dyeName),
+      });
     });
 
     const sIds = stockTable.id || [];
-    const stockByDyeName = {};
+    const stockByDyeKey = {};
     sIds.forEach((id, i) => {
       const dyeRef = getRefId(columnAsArray(stockTable, STOCK.dye)[i]);
-      if (!dyeRef) return;
-      const dyeIdx = dIds.indexOf(dyeRef);
-      const dyeName = dyeIdx !== -1 ? normalize(columnAsArray(dyesTable, DYE.name)[dyeIdx]) : null;
-      if (!dyeName) return;
-      if (!stockByDyeName[dyeName]) stockByDyeName[dyeName] = [];
-      stockByDyeName[dyeName].push({
+      if (!dyeRef || !dyeById[dyeRef]) return;
+      const key = 'id:' + dyeRef;
+      if (!stockByDyeKey[key]) stockByDyeKey[key] = [];
+      stockByDyeKey[key].push({
         qty: Number(columnAsArray(stockTable, STOCK.quantity)[i]) || 0,
-        binLocation: columnAsArray(stockTable, STOCK.bin)[i] || '',
+        binLocation: (columnAsArray(stockTable, STOCK.bin)[i] || '').toString().trim(),
       });
     });
 
@@ -462,26 +497,25 @@ async function loadEverything() {
     Object.values(pendingByRecipe).forEach(entry => {
       const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
       entry.dyes.forEach(d => {
-        const key = normalize(d);
-        if (!dyeUsageMap[key]) dyeUsageMap[key] = [];
-        dyeUsageMap[key].push({ recipeName: entry.recipe.name, qty: totalQty });
+        if (!dyeUsageMap[d.key]) dyeUsageMap[d.key] = [];
+        dyeUsageMap[d.key].push({ recipeName: entry.recipe.name, qty: totalQty });
       });
     });
 
     recipeData = Object.values(pendingByRecipe).map(entry => {
       const totalQty = entry.orders.reduce((s, o) => s + o.qty, 0);
       const stock = entry.dyes.map(d => {
-        const key = normalize(d);
-        const rows = stockByDyeName[key] || [];
+        const rows = stockByDyeKey[d.key] || [];
         const total = rows.reduce((s, r) => s + r.qty, 0);
-        const bins = rows.map(r => r.binLocation).filter(Boolean);
-        const powderLoc = powderLocationByDye[key] || '';
-        return { dyeName: d, total, bins, powderLoc };
+        // Two containers of the same dye in the same bin is one place to look.
+        // Two genuinely different bins still both show — that one is real.
+        const bins = [...new Set(rows.map(r => r.binLocation).filter(Boolean))];
+        const powderLoc = (d.id && dyeById[d.id]) ? dyeById[d.id].powderLoc : '';
+        return { dyeName: d.label, total, bins, powderLoc };
       });
       const peek = entry.dyes.map(d => {
-        const key = normalize(d);
-        const others = (dyeUsageMap[key] || []).filter(u => u.recipeName !== entry.recipe.name);
-        return { dyeName: d, others };
+        const others = (dyeUsageMap[d.key] || []).filter(u => u.recipeName !== entry.recipe.name);
+        return { dyeName: d.label, others };
       }).filter(p => p.others.length > 0);
 
       const inBins = unwoundByRecipe[entry.recipe.id] || 0;      // dyed, not yet wound
@@ -567,7 +601,7 @@ function clusterByDye(list) {
            && list[j].urgencyKey === list[i].urgencyKey) j++;
     const run = list.slice(i, j);
     if (run.length > 2) {
-      const setOf = e => new Set((e.dyes || []).map(normalize));
+      const setOf = e => new Set((e.dyes || []).map(d => d.key));
       const pool = run.map((e, idx) => ({ e, idx, set: setOf(e) }));
       const ordered = [pool.shift()];
       while (pool.length) {
@@ -635,9 +669,9 @@ function renderList() {
   const rows = filtered.map(e => {
     const stockHtml = e.stock.map(s => {
       if (!s.total) {
-        return `<div class="stock-line no-stock">${esc(s.dyeName)}: none${s.powderLoc ? ` · powder <span class="bin-tag">${s.powderLoc}</span>` : ''}</div>`;
+        return `<div class="stock-line no-stock">${esc(s.dyeName)}: none${s.powderLoc ? ` · powder <span class="bin-tag">${esc(s.powderLoc)}</span>` : ''}</div>`;
       }
-      const bins = s.bins.map(b => `<span class="bin-tag">${b}</span>`).join(' ');
+      const bins = s.bins.map(b => `<span class="bin-tag">${esc(b)}</span>`).join(' ');
       return `<div class="stock-line">${esc(s.dyeName)}: ${s.total.toFixed(0)}mL ${bins}</div>`;
     }).join('');
 
