@@ -89,7 +89,7 @@
   }
   table.items td { padding: 6px 8px; border-bottom: 1px solid var(--warm); vertical-align: top; }
   table.items tr:last-child td { border-bottom: none; }
-  td.c-box { width: 24px; padding-right: 0; }
+  td.c-box { width: 30px; padding-right: 0; }
   td.c-dye { width: 34%; }
   td.c-jar, td.c-powder { width: 24%; }
   td.c-flag { width: 90px; text-align: right; }
@@ -103,14 +103,31 @@
   .mono { font-family: 'DM Mono', monospace; font-size: 11px; }
 
   .box {
-    display: block; width: 15px; height: 15px; border: 1.6px solid var(--ink);
-    border-radius: 3px; cursor: pointer; background: white; margin-top: 1px;
+    display: block; width: 21px; height: 21px; border: 2px solid var(--ink);
+    border-radius: 4px; cursor: pointer; background: white; margin-top: 1px;
   }
-  .box.checked { background: var(--ink); position: relative; }
+  .box:hover { background: var(--warm); }
+  .box.checked { background: #2D6A2D; border-color: #2D6A2D; position: relative; }
   .box.checked::after {
-    content: '✓'; color: var(--paper); font-size: 11px; line-height: 13px;
+    content: '✓'; color: white; font-size: 16px; font-weight: 700; line-height: 18px;
     position: absolute; inset: 0; text-align: center;
   }
+  tr.ticked td { background: #F3F8EE; }
+  tr.ticked .dye-name, tr.ticked .where, tr.ticked .sub { opacity: .5; }
+  tr.ticked .dye-name { text-decoration: line-through; }
+
+  /* Tray-level reassurance: a running count, and the whole tray turns green
+     the moment every line in it has been ticked. */
+  .tray-check {
+    flex: none; display: flex; align-items: center; gap: 7px; cursor: pointer;
+    border: 2px solid var(--ink); border-radius: 6px; padding: 3px 9px; background: var(--paper);
+    font-size: 11px; font-weight: 700; white-space: nowrap;
+  }
+  .tray-check:hover { background: white; }
+  .tray-check .mark { font-size: 15px; line-height: 1; }
+  .tray.done { border-color: #2D6A2D; }
+  .tray.done .tray-head { background: #E4F1DA; border-bottom-color: #2D6A2D; }
+  .tray.done .tray-check { background: #2D6A2D; color: white; border-color: #2D6A2D; }
 
   .dot {
     display: inline-block; width: 12px; height: 12px; border-radius: 50%;
@@ -129,6 +146,18 @@
   .tag.dry    { background: #EDE7F5; color: #4B3A73; border-color: #BFB0DC; }
   .tag.slot   { background: white; color: var(--ink); border-color: var(--ink); font-family: 'DM Mono', monospace; }
 
+  .progress { margin-top: 9px; }
+  .progress-bar {
+    height: 7px; background: var(--warm); border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--rule);
+  }
+  .progress-bar span { display: block; height: 100%; background: #2D6A2D; transition: width .18s ease; }
+  .progress-text { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+  .linkbtn {
+    font-family: 'Inter', sans-serif; font-size: 10.5px; color: var(--accent);
+    background: none; border: none; text-decoration: underline; cursor: pointer; padding: 0 0 0 6px;
+  }
+
   .legend { font-size: 10px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
   .empty-state { text-align: center; color: var(--muted); padding: 50px 20px; font-size: 14px; }
   .warn-banner {
@@ -142,8 +171,15 @@
     body { background: white; padding: 0; font-size: 10.5px; }
     .no-print { display: none !important; }
     .tray-head, .dot, .tag { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .box.checked { background: white; }
+    .box { width: 18px; height: 18px; }
+    .box.checked { background: white; border-color: var(--ink); }
     .box.checked::after { color: var(--ink); }
+    tr.ticked td { background: white; }
+    tr.ticked .dye-name, tr.ticked .where, tr.ticked .sub { opacity: 1; }
+    tr.ticked .dye-name { text-decoration: none; }
+    .tray.done .tray-head { background: var(--warm); }
+    .tray.done .tray-check { background: var(--paper); color: var(--ink); }
+    .progress-bar { display: none; }
   }
 </style>
 </head>
@@ -445,6 +481,87 @@ function itemFor(comp, lowMl) {
   return { jar, powder: comp.powder, flag, flagCls, bins, total };
 }
 
+// ── Ticks ────────────────────────────────────────────────────────
+// Purely the assistant's own checklist — nothing is written to Grist. It's
+// remembered across a refresh so an accidental reload doesn't wipe half an
+// hour of pulling, and it's keyed by plan date so yesterday's ticks don't
+// carry over onto today's sheet.
+const TICK_STORE = 'ss-prep-ticks';
+let ticks = new Set();
+
+function loadTicks() {
+  try {
+    const raw = window.localStorage.getItem(TICK_STORE);
+    ticks = new Set(raw ? JSON.parse(raw) : []);
+  } catch (e) {
+    // Storage blocked in this frame — ticks still work, just for this session.
+    ticks = new Set();
+    return;
+  }
+  // Every id starts with its plan date, so anything older than a fortnight is
+  // a finished day nobody will look at again. Drop it rather than let the
+  // store grow without bound.
+  const cutoff = todayEpochSeconds() - 14 * 86400;
+  let pruned = false;
+  [...ticks].forEach(id => {
+    const d = Number(String(id).split('|')[0]);
+    if (!isNaN(d) && d < cutoff) { ticks.delete(id); pruned = true; }
+  });
+  if (pruned) saveTicks();
+}
+function saveTicks() {
+  try { window.localStorage.setItem(TICK_STORE, JSON.stringify([...ticks])); } catch (e) {}
+}
+function tickId(dateVal, scope, key) { return `${dateVal}|${scope}|${key}`; }
+
+function toggleTick(id, el) {
+  if (ticks.has(id)) ticks.delete(id); else ticks.add(id);
+  saveTicks();
+  el.classList.toggle('checked', ticks.has(id));
+  const row = el.closest('tr');
+  if (row) row.classList.toggle('ticked', ticks.has(id));
+  refreshTrayState(el.closest('.tray'));
+  refreshProgress();
+}
+
+// Tick or clear a whole tray in one go — if anything is outstanding, fill it
+// in; only a fully ticked tray clears back to empty.
+function toggleTray(trayEl) {
+  const boxes = [...trayEl.querySelectorAll('.box[data-tick]')];
+  if (!boxes.length) return;
+  const target = boxes.some(b => !ticks.has(b.dataset.tick));
+  boxes.forEach(b => {
+    const id = b.dataset.tick;
+    if (target) ticks.add(id); else ticks.delete(id);
+    b.classList.toggle('checked', target);
+    const row = b.closest('tr');
+    if (row) row.classList.toggle('ticked', target);
+  });
+  saveTicks();
+  refreshTrayState(trayEl);
+  refreshProgress();
+}
+
+function refreshTrayState(trayEl) {
+  if (!trayEl) return;
+  const boxes = [...trayEl.querySelectorAll('.box[data-tick]')];
+  const done = boxes.filter(b => ticks.has(b.dataset.tick)).length;
+  const all = boxes.length && done === boxes.length;
+  trayEl.classList.toggle('done', all);
+  const badge = trayEl.querySelector('.tray-check');
+  if (badge) {
+    badge.innerHTML = `<span class="mark">${all ? '✓' : '☐'}</span><span>${done} of ${boxes.length}</span>`;
+  }
+}
+function refreshAllTrays() {
+  document.querySelectorAll('.tray').forEach(refreshTrayState);
+}
+function clearTicks() {
+  ticks = new Set();
+  saveTicks();
+  render();
+}
+
 function dot(hex) {
   return hex ? `<span class="dot" style="background:${esc(hex)}"></span>`
              : `<span class="dot unknown" title="no swatch recorded"></span>`;
@@ -484,9 +601,11 @@ const ITEM_HEAD = `<tr>
   <th></th><th>Dye</th><th>Made dye — jar</th><th>Powder tub</th><th></th>
 </tr>`;
 
-function itemRow(comp, it, slot, extraSub) {
-  return `<tr>
-    <td class="c-box"><span class="box" onclick="this.classList.toggle('checked')"></span></td>
+function itemRow(comp, it, slot, extraSub, id) {
+  const on = ticks.has(id);
+  return `<tr class="${on ? 'ticked' : ''}">
+    <td class="c-box"><span class="box${on ? ' checked' : ''}" data-tick="${esc(id)}"
+      onclick="toggleTick('${esc(id)}', this)" title="Tick when it's on the tray"></span></td>
     <td class="c-dye">
       <span class="dye-name">${dot(comp.swatch)}${nameHtml(comp)}</span>
       ${slot ? `<span class="sub"><span class="tag slot">${esc(slot)}</span></span>` : ''}
@@ -544,7 +663,7 @@ function render() {
         const others = (usedIn[comp.key] || []).filter(s => s !== b.seq);
         const again = others.length
           ? `<span class="sub again">also batch ${others.join(', ')} — don't put it back</span>` : '';
-        return itemRow(comp, it, slots[normalize(comp.name)], again);
+        return itemRow(comp, it, slots[normalize(comp.name)], again, tickId(dateVal, b.seq, comp.key));
       }).join('') || `<tr><td class="c-box"></td><td colspan="4"><span class="where none">No dyes recorded for this recipe.</span></td></tr>`;
 
       const strip = comps.slice(0, 6).map(c => dot(c.swatch)).join('');
@@ -556,7 +675,8 @@ function render() {
             ${recipe.sku ? `<span class="sku">${esc(recipe.sku)}${recipe.fiber ? ' · ' + esc(recipe.fiber) : ''}</span>` : ''}
           </span>
           <span class="swatch-strip">${strip}</span>
-          <span class="tray-count">${n} dye${n === 1 ? '' : 's'}</span>
+          <span class="tray-check" onclick="toggleTray(this.closest('.tray'))"
+            title="Tick the whole tray"><span class="mark">☐</span><span>0 of ${n}</span></span>
         </div>
         <table class="items">${ITEM_HEAD}${rows}</table>
       </div>`;
@@ -576,13 +696,16 @@ function render() {
       if (comp.unresolved) unresolved++;
       const it = itemFor(comp, lowMl);
       const seqs = [...new Set(usedIn[comp.key])].sort((a, b) => a - b);
-      return itemRow(comp, it, null, `<span class="sub">batch ${seqs.join(', ')}</span>`);
+      return itemRow(comp, it, null, `<span class="sub">batch ${seqs.join(', ')}</span>`,
+                     tickId(dateVal, 'day', comp.key));
     }).join('');
     body = `<div class="tray">
       <div class="tray-head">
         <span class="tray-name">Everything for the day
           <span class="sku">${flat.length} dye${flat.length === 1 ? '' : 's'} across ${batches.length} batch${batches.length === 1 ? '' : 'es'}</span>
         </span>
+        <span class="tray-check" onclick="toggleTray(this.closest('.tray'))"
+          title="Tick the whole list"><span class="mark">☐</span><span>0 of ${flat.length}</span></span>
       </div>
       <table class="items">${ITEM_HEAD}${rows}</table>
     </div>`;
@@ -598,13 +721,33 @@ function render() {
     <div class="sheet-head">
       <div class="sheet-title">Dye Prep Sheet</div>
       <div class="sheet-sub">${esc(dateLabel(dateVal))} · ${esc(subline)}</div>
-      <div class="how">Set out the <strong>jar and the powder tub</strong> for every line, together, so each batch can be picked up and carried to the kettle in one go. Don't open or mix anything.</div>
+      <div class="how">Set out the <strong>jar and the powder tub</strong> for every line, together, so each batch can be picked up and carried to the kettle in one go. Don't open or mix anything.
+      <strong>Tick each one off as it lands on the tray</strong> — the count is kept if the page reloads.</div>
+      <div class="progress" id="progress"></div>
     </div>
     ${warn}
     ${body}
     ${LEGEND}`;
+
+  refreshAllTrays();
+  refreshProgress();
 }
 
+// Whole-sheet progress, so they can see at a glance how much is left.
+function refreshProgress() {
+  const el = document.getElementById('progress');
+  if (!el) return;
+  const boxes = [...document.querySelectorAll('.box[data-tick]')];
+  const done = boxes.filter(b => ticks.has(b.dataset.tick)).length;
+  if (!boxes.length) { el.innerHTML = ''; return; }
+  const pct = Math.round((done / boxes.length) * 100);
+  el.innerHTML = `
+    <div class="progress-bar"><span style="width:${pct}%"></span></div>
+    <div class="progress-text">${done} of ${boxes.length} pulled${done === boxes.length ? ' — tray set is complete ✓' : ''}
+      ${done ? `<button class="linkbtn no-print" onclick="clearTicks()">clear ticks</button>` : ''}</div>`;
+}
+
+loadTicks();
 grist.ready({ requiredAccess: 'read table' });
 loadEverything();
 </script>
