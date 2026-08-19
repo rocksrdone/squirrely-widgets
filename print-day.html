@@ -283,7 +283,7 @@ let BATCHES = [];   // what we print
 
 function banner(msg, kind) {
   document.getElementById('banner').innerHTML =
-    msg ? `<div class="banner ${kind || ''}">${esc(msg)}</div>` : '';
+    msg ? `<div class="banner noprint ${kind || ''}">${esc(msg)}</div>` : '';
 }
 
 /* ── cut-and-stack imposition ─────────────────────────────────────────── */
@@ -897,7 +897,9 @@ function pl_manifest(b) {
     <ul>${items || '<li class="fyi"><em>no dye components recorded</em></li>'}</ul></div>`;
 }
 
-function renderPull(printable) {
+// leadBreak: whether tag/sheet pages precede us. Without it the first pull page
+// carries a forced break with nothing before it, and the PDF opens on a blank.
+function renderPull(printable, leadBreak) {
   const B = buildPull(printable);
   if (!B) return { html: '', warn: [] };
   const spoolTotal = B.active.reduce((t, b) => t + b.spools, 0);
@@ -917,7 +919,7 @@ function renderPull(printable) {
   if (B.powders.length) body += pl_group('Dry powder shelf', 'recipe calls for powder', B.powders.length, B.powders.map(pl_powder).join(''), true);
   if (B.orphans.length) body += pl_group('Nothing to pull', 'flag these to control', B.orphans.length, B.orphans.map(pl_orphan).join(''), true);
 
-  const html = `<div class="pl-doc pl-brk">
+  const html = `<div class="pl-doc${leadBreak ? ' pl-brk' : ''}">
       ${head('Dye pull \u2014 mixed bins')}
       <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its staging
         bin, and put that pot's tag and bag sheet in the same bin. A jar marked <b>shared jar</b> serves more
@@ -986,7 +988,7 @@ function render() {
   // guillotine. Same printable array, so staging bin N is always bag code N.
   let pullWarn = [];
   if (PULL && document.getElementById('wPull').checked && printable.length) {
-    const r = renderPull(printable);
+    const r = renderPull(printable, html.length > 0);
     html += r.html;
     pullWarn = r.warn;
   }
