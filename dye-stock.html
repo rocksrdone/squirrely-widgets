@@ -345,80 +345,6 @@ function dyeFor(id) { return allDyes.find(d => d.id === id); }
 
 // ── STOCK TAB ──
 
-/* Existing duplicates. These are not two jars — one is a record that was never
-   cleared when the mix was remade. Keeping one is a judgement call about which
-   container is physically on the shelf, so this asks rather than guesses. */
-function duplicateGroups() {
-  const by = {};
-  stockRows.forEach(r => { if (r.dyeId) (by[r.dyeId] = by[r.dyeId] || []).push(r); });
-  return Object.entries(by)
-    .filter(([, rows]) => rows.length > 1)
-    .map(([dyeId, rows]) => ({
-      dyeId: Number(dyeId),
-      rows: rows.slice().sort((a, b) => dateSort(b.Mixed_Date) - dateSort(a.Mixed_Date)),
-    }))
-    .sort((a, b) => b.rows.length - a.rows.length);
-}
-
-function renderDuplicatePanel() {
-  const groups = duplicateGroups();
-  if (!groups.length) return '';
-  const extra = groups.reduce((t, g) => t + g.rows.length - 1, 0);
-  const blocks = groups.map(g => {
-    const d = dyeFor(g.dyeId);
-    const rows = g.rows.map((r, i) => `
-      <div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;">
-        <button class="btn btn-small" onclick="mergeKeep(${g.dyeId}, ${r.id})">Keep this</button>
-        <span style="font-weight:600;">${r.Quantity_mL || 0} mL</span>
-        <span style="color:#8B7D72;">bin ${r.Bin_Location || '\u2014'}</span>
-        <span style="color:#8B7D72;">mixed ${toDateInputValue(r.Mixed_Date) || 'unknown'}</span>
-        ${i === 0 ? '<span style="color:#8B7D72;font-style:italic;">newest</span>' : ''}
-      </div>`).join('');
-    return `
-      <div style="padding:7px 0;border-bottom:1px solid rgba(0,0,0,.08);">
-        <div style="display:flex;align-items:center;gap:7px;">
-          <span class="swatch-dot" style="background:${resolvedColor(d)}"></span>
-          <strong style="font-size:12px;">${d ? d.Dye_Name : '(unknown dye)'}</strong>
-          <span style="font-size:10px;color:#8B7D72;">${d ? dyeDetailLine(d) : ''}</span>
-          <span style="font-size:10px;color:#8B7D72;">\u00b7 ${g.rows.length} rows</span>
-        </div>${rows}
-      </div>`;
-  }).join('');
-  return `
-    <div style="background:var(--gold-light,#F6ECD2);border:1px solid rgba(0,0,0,.12);border-radius:4px;
-                padding:11px 13px;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-        <strong style="font-size:13px;">${groups.length} dye${groups.length === 1 ? '' : 's'} with more than one jar logged</strong>
-        <span style="font-size:11px;color:#6B5B50;">${extra} extra row${extra === 1 ? '' : 's'} \u2014 only one jar should ever exist.</span>
-        <button class="btn btn-small" onclick="mergeAllNewest()">Keep the newest for all</button>
-      </div>
-      <div style="margin-top:6px;">${blocks}</div>
-    </div>`;
-}
-
-async function mergeKeep(dyeId, keepId) {
-  const drop = stockRows.filter(r => r.dyeId === dyeId && r.id !== keepId);
-  if (!drop.length) return;
-  try {
-    await grist.docApi.applyUserActions(drop.map(r => ['RemoveRecord', 'Dye_Stock', r.id]));
-    await loadAll();
-    showToast(`Cleared ${drop.length} stale row${drop.length === 1 ? '' : 's'}.`);
-  } catch (e) { console.error(e); showToast('Merge failed \u2014 check the console.'); }
-}
-
-async function mergeAllNewest() {
-  const groups = duplicateGroups();
-  if (!groups.length) return;
-  const drop = [];
-  groups.forEach(g => g.rows.slice(1).forEach(r => drop.push(r.id)));
-  if (!confirm(`Keep the newest jar for ${groups.length} dyes and remove ${drop.length} older rows?\n\nThis cannot be undone.`)) return;
-  try {
-    await grist.docApi.applyUserActions(drop.map(id => ['RemoveRecord', 'Dye_Stock', id]));
-    await loadAll();
-    showToast(`Cleared ${drop.length} stale rows.`);
-  } catch (e) { console.error(e); showToast('Merge failed \u2014 check the console.'); }
-}
-
 function renderStockPanel() {
   const panel = document.getElementById('stockPanel');
   panel.innerHTML = `
@@ -442,9 +368,8 @@ function renderStockPanel() {
       </div>
       <button class="btn btn-teal" onclick="addStock()">${newStockDyeId && stockRows.some(r => r.dyeId === newStockDyeId) ? 'Replace jar' : '+ Log Stock'}</button>
       ${newStockDyeId && stockRows.some(r => r.dyeId === newStockDyeId)
-        ? `<div style="font-size:10px;color:#8B7D72;flex-basis:100%;margin-top:-4px;">This dye already has a jar \u2014 logging replaces it. One jar per dye.</div>` : ''}
+        ? `<div style="font-size:10px;color:#8B7D72;flex-basis:100%;margin-top:-4px;">This dye already has a jar \u2014 logging replaces it. One jar per dye; use Bin Audit to reconcile what is already doubled up.</div>` : ''}
     </div>
-    ${renderDuplicatePanel()}
     ${renderStockTable()}
   `;
 }
