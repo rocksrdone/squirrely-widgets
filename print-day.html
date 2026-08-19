@@ -141,12 +141,76 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .sh .pc i { width: 13px; height: 13px; margin-right: 6px; }
 .sh .cb { width: 14px; height: 14px; }
 .sh .stock i, .sh .g i, .sh .back i { width: 14px; height: 14px; margin-right: 5px; }
+
+/* ---------- sheet ---------- */
+.pl-doc { padding: 0; }
+@media print { .pl-doc { padding: .15in .2in; } }
+@media screen { .pl-doc { max-width: 8.1in; margin: 18px auto 40px; padding: .4in; background: #fff;
+                       box-shadow: 0 2px 14px rgba(0,0,0,.18); } }
+.pl-brk { page-break-before: always; }
+
+.pl-hdr { display: flex; justify-content: space-between; align-items: flex-end;
+       border-bottom: 3px solid #000; padding-bottom: 6px; margin-bottom: 4px; }
+.pl-hdr .t { font-size: 20px; font-weight: bold; letter-spacing: .6px; text-transform: uppercase; }
+.pl-hdr .d { font-size: 12px; color: #444; margin-top: 2px; }
+.pl-hdr .stats { text-align: right; font-size: 11px; color: #333; line-height: 1.5; }
+.pl-hdr .stats b { font-size: 15px; }
+.pl-lede { font-size: 11px; color: #555; margin: 6px 0 12px; line-height: 1.45; }
+
+.pl-grp { margin-bottom: 13px; page-break-inside: avoid; }
+.pl-grp .gh { display: flex; align-items: baseline; border-bottom: 2px solid #000; padding-bottom: 3px; }
+.pl-grp .gh .bin { font-size: 17px; font-weight: bold; letter-spacing: 1px; }
+.pl-grp .gh .sub { font-size: 10px; color: #555; margin-left: 10px; letter-spacing: .4px;
+                text-transform: uppercase; }
+.pl-grp .gh .ct { margin-left: auto; font-size: 10.5px; color: #555; text-transform: uppercase;
+               letter-spacing: .6px; white-space: nowrap; }
+.pl-grp.alt .gh { border-bottom-style: double; border-bottom-width: 4px; }
+
+.pl-ln { display: flex; align-items: flex-start; padding: 5px 0 4px; border-bottom: 1px solid #CFC7C0; }
+.pl-ln:last-child { border-bottom: none; }
+.pl-ln .cb { flex: none; width: 15px; height: 15px; border: 2px solid #000; margin: 1px 9px 0 1px; }
+.pl-ln .body { flex: 1 1 auto; min-width: 0; }
+.pl-ln .nm { font-size: 13.5px; font-weight: bold; line-height: 1.2; }
+.pl-ln .id { font-family: "Courier New", monospace; font-size: 10.5px; color: #333; margin-top: 1px; }
+.pl-ln .sub2 { font-size: 10px; color: #555; margin-top: 2px; line-height: 1.35; }
+.pl-ln .dest { flex: none; text-align: right; margin-left: 12px; white-space: nowrap; }
+.pl-ln .dest .to { font-size: 16px; font-weight: bold; border: 2.5px solid #000; padding: 1px 8px;
+                display: inline-block; letter-spacing: .5px; }
+.pl-ln .dest .rc { font-size: 11px; font-weight: bold; margin-top: 3px; max-width: 2.3in;
+                overflow: hidden; text-overflow: ellipsis; }
+.pl-ln .dest .sp { font-size: 9.5px; color: #555; text-transform: uppercase; letter-spacing: .5px; }
+.pl-ln .qty { flex: none; width: 1.05in; text-align: right; margin-left: 10px; }
+.pl-ln .qty .have { font-size: 13px; font-weight: bold; }
+.pl-ln .qty .need { font-size: 9.5px; color: #555; }
+.pl-flag { display: inline-block; border: 1.5px solid #000; font-size: 9px; font-weight: bold;
+        text-transform: uppercase; letter-spacing: .6px; padding: 0 4px; margin-right: 4px;
+        vertical-align: 1px; }
+.pl-flag.hot { background: #000; color: #fff; }
+
+/* ---------- manifest ---------- */
+.pl-mf { display: flex; flex-wrap: wrap; gap: 0; }
+.pl-mfb { width: 50%; padding: 0 10px 11px 0; page-break-inside: avoid; }
+.pl-mfb .h { display: flex; align-items: baseline; border-bottom: 2px solid #000; padding-bottom: 2px; }
+.pl-mfb .h .s { font-size: 14px; font-weight: bold; border: 2px solid #000; padding: 0 6px; letter-spacing: .5px; }
+.pl-mfb .h .n { font-size: 12.5px; font-weight: bold; margin-left: 7px; overflow: hidden;
+             white-space: nowrap; text-overflow: ellipsis; }
+.pl-mfb .h .q { margin-left: auto; font-size: 10px; color: #555; white-space: nowrap; }
+.pl-mfb ul { margin: 3px 0 0; padding: 0; list-style: none; }
+.pl-mfb li { font-size: 10.5px; line-height: 1.45; padding: 1px 0; border-bottom: 1px dotted #D5CDC6; }
+.pl-mfb li b { font-size: 11px; }
+.pl-mfb li em { font-style: normal; color: #555; }
+.pl-mfb li.fyi { color: #555; }
+
+.pl-foot { border-top: 2px solid #000; margin-top: 14px; padding-top: 6px; font-size: 10px; color: #555;
+        line-height: 1.5; }
+.pl-foot b { color: #000; }
 </style></head><body>
 
 <div class="ctl noprint">
   <h1>Print today's tags &amp; sheets</h1>
   <p>Pulls today's Day&nbsp;Plan and prefills a kettle tag and a bag sheet for each batch, in plan order.
-     Bin and lot number stay blank &mdash; neither exists yet at the pot.</p>
+     Bin and lot number stay blank &mdash; neither exists yet at the pot.<br>
+     The dye pull sheet prints <b>last</b>, on its own pages &mdash; take it off the stack before you cut.</p>
   <div class="row">
     <div><label>First bag code</label><input type="number" id="start" value="1001" min="1"></div>
     <div><label>Blank tags</label><input type="number" id="blanks" value="2" min="0" max="24"></div>
@@ -154,6 +218,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
       <span><input type="checkbox" id="wTags" checked> kettle tags</span>
       <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
       <span><input type="checkbox" id="wSkip" checked> skip batches needing no dye</span>
+      <span><input type="checkbox" id="wPull" checked> dye pull sheet</span>
     </div>
     <div><button onclick="window.print()">Print</button></div>
     <div><button class="sec" onclick="load()">Reload plan</button></div>
@@ -173,9 +238,12 @@ function getRefId(ref) {
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function findColumn(t, cands) {
   for (const c of cands) if (Object.prototype.hasOwnProperty.call(t, c)) return c;
-  const lower = {};
-  Object.keys(t).forEach(k => { lower[k.toLowerCase()] = k; });
-  for (const c of cands) { const hit = lower[c.toLowerCase()]; if (hit) return hit; }
+  const loose = {};
+  Object.keys(t).forEach(k => { loose[k.toLowerCase().replace(/[^a-z0-9]/g, '')] = k; });
+  for (const c of cands) {
+    const hit = loose[c.toLowerCase().replace(/[^a-z0-9]/g, '')];
+    if (hit) return hit;
+  }
   return null;
 }
 function resolveCols(table, name, spec, missing) {
@@ -232,7 +300,7 @@ function impose(total, perPage) {
 /* ── load from Grist ──────────────────────────────────────────────────── */
 async function load() {
   try {
-    const [dp, recT, wolT, woT, lotT, allocT, phT] = await Promise.all([
+    const [dp, recT, wolT, woT, lotT, allocT, phT, compT, dyeT, stkT] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Work_Order_Lines'),
@@ -240,11 +308,15 @@ async function load() {
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Lot_Allocations'),
       grist.docApi.fetchTable('Product_Photos').catch(() => null),
+      grist.docApi.fetchTable('Recipe_Dye_Components').catch(() => null),
+      grist.docApi.fetchTable('Dyes').catch(() => null),
+      grist.docApi.fetchTable('Dye_Stock').catch(() => null),
     ]);
 
     const missing = [];
     const DP  = resolveCols(dp,   'Day_Plan',          { planDate: ['Plan_Date'], recipe: ['Recipe'], sequence: ['Sequence'] }, missing);
     const REC = resolveCols(recT, 'Recipes',           { name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']) }, missing);
+    const PULL_READY = !!(compT && dyeT && stkT);
     const WOL = resolveCols(wolT, 'Work_Order_Lines',  { workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], recipe: opt(['Recipe']), sku: opt(['SKU']), status: opt(['Queue_Status']) }, missing);
     const WO  = resolveCols(woT,  'Work_Orders',       { status: ['Status'], customerName: opt(['Customer_Name']), orderNumber: opt(['Order_Number']), orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']) }, missing);
     const LOT = resolveCols(lotT, 'Production_Lots',   { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']) }, missing);
@@ -350,6 +422,11 @@ async function load() {
         photo: !hasPhoto[p.rid],
       };
     });
+
+    PULL = PULL_READY ? buildPullState(compT, dyeT, stkT, today) : null;
+    if (!PULL) pullNote = compT || dyeT || stkT
+      ? 'Dye pull sheet is off \u2014 one of Recipe_Dye_Components, Dyes or Dye_Stock could not be read.'
+      : '';
 
     if (!BATCHES.length) banner('Nothing in today\u2019s Day Plan yet. Plan the day in the batch planner, then reload.', 'info');
     else banner('');
@@ -473,6 +550,409 @@ function sheet(b, n) {
   </div>`;
 }
 
+
+/* ══ dye pull sheet ═══════════════════════════════════════════════════════
+   The morning pull, derived from the same printable list as the tags above,
+   so a staging bin code always names the same pot as the bag code beside it.
+   Shelf geometry lives here — change it if the racks change. */
+const PULL_CFG = { srcRows: 4, srcCols: 4, srcCap: 12, stgRows: 6, stgCols: 5 };
+const LETTERS = 'ABCDEFGHIJKL';
+
+function normalize(s) { return (s == null ? '' : String(s)).trim().toUpperCase(); }
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function fiberCode(f) {
+  const s = normalize(f);
+  if (!s) return '';
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/BLACKWING/.test(s)) return 'BW';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+function shortDate(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const d = new Date(n * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+function longDate(sec) {
+  return new Date(sec * 1000).toLocaleDateString(undefined,
+    { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+/* Grid codes: row letter + column number, like the back stock bins. Reading a
+   bin accepts "B3", "b-3", "M-B3" and — so this works before the shelf is
+   relabelled — a plain 1..N that fills the grid left to right. */
+function gridCode(index0, cols) {
+  return LETTERS[Math.floor(index0 / cols)] + String((index0 % cols) + 1);
+}
+function parseBin(raw, rows, cols) {
+  const s = normalize(raw).replace(/[\s\-_.]/g, '');
+  if (!s) return null;
+  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
+  if (m) {
+    const r = LETTERS.indexOf(m[1]), c = Number(m[2]) - 1;
+    if (r >= 0 && c >= 0) return { code: m[1] + (c + 1), order: r * cols + c, legacy: '', offGrid: !(r < rows && c < cols) };
+  }
+  m = /^(\d{1,3})$/.exec(s);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= rows * cols) return { code: gridCode(n - 1, cols), order: n - 1, legacy: 'bin ' + n, offGrid: false };
+    return { code: 'bin ' + n, order: 9000 + n, legacy: '', offGrid: true };
+  }
+  return { code: normalize(raw), order: 9500, legacy: '', offGrid: true };
+}
+
+let PULL = null;      // { dye, jarsByDye, binCount, compsByRecipe, planDate }
+let pullNote = '';
+
+/* Reads the dye side of the doc once per load. Kept apart from the plan read
+   so a missing dye table costs the pull sheet, never the tags. */
+function buildPullState(compT, dyeT, stkT, planDate) {
+  try {
+    const miss = [];
+    const CMP = resolveCols(compT, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'], full: opt(['Dye_Full']),
+      dilution: opt(['Dilution', 'Dilution_Ratio']), isPowder: opt(['Is_Powder']),
+      step: opt(['Step_Number']), mode: opt(['Measure_Mode']), notes: opt(['Application_Notes']),
+      effRate: opt(['Effective_mL_per_100_yd']), defRate: opt(['Default_mL_per_100_yds']),
+    }, miss);
+    const DYE = resolveCols(dyeT, 'Dyes', {
+      name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']),
+      dyeType: opt(['Dye_Type']), blend: opt(['Blend_Description']),
+      shelf: opt(['Shelf_Life_days_']), defRate: opt(['Default_mL_per_100_yds']),
+      powder: opt(['Std_Powder_tsp_']), water: opt(['Std_Water_mL_']), dryWt: opt(['Std_Dry_Weight_g']),
+    }, miss);
+    const STK = resolveCols(stkT, 'Dye_Stock', {
+      dye: ['Dye'], qty: ['Quantity_mL'], mixed: opt(['Mixed_Date']), bin: opt(['Bin_Location']),
+    }, miss);
+    if (miss.length) { pullNote = 'Dye pull sheet is off \u2014 columns not found: ' + [...new Set(miss)].join(', '); return null; }
+
+    const dye = {}, byName = {}, ambiguous = {};
+    (dyeT.id || []).forEach((id, i) => {
+      const nm = columnAsArray(dyeT, DYE.name)[i] || '';
+      dye[id] = {
+        id, name: nm,
+        brand: DYE.brand ? columnAsArray(dyeT, DYE.brand)[i] || '' : '',
+        serial: DYE.serial ? columnAsArray(dyeT, DYE.serial)[i] || '' : '',
+        dyeType: DYE.dyeType ? columnAsArray(dyeT, DYE.dyeType)[i] || '' : '',
+        blend: DYE.blend ? columnAsArray(dyeT, DYE.blend)[i] || '' : '',
+        shelf: DYE.shelf ? num(columnAsArray(dyeT, DYE.shelf)[i]) : 0,
+        defRate: DYE.defRate ? num(columnAsArray(dyeT, DYE.defRate)[i]) : 0,
+        powder: DYE.powder ? columnAsArray(dyeT, DYE.powder)[i] : '',
+        water: DYE.water ? columnAsArray(dyeT, DYE.water)[i] : '',
+        dryWt: DYE.dryWt ? columnAsArray(dyeT, DYE.dryWt)[i] : '',
+      };
+      const k = normalize(nm);
+      if (!k) return;
+      if (byName[k] !== undefined) ambiguous[k] = true; else byName[k] = id;
+    });
+
+    const jarsByDye = {}, binCount = {};
+    (stkT.id || []).forEach((id, i) => {
+      const did = getRefId(columnAsArray(stkT, STK.dye)[i]);
+      if (!did) return;
+      const bin = parseBin(STK.bin ? columnAsArray(stkT, STK.bin)[i] : '', PULL_CFG.srcRows, PULL_CFG.srcCols);
+      (jarsByDye[did] = jarsByDye[did] || []).push({
+        id, dyeId: did,
+        qty: num(columnAsArray(stkT, STK.qty)[i]),
+        mixed: STK.mixed ? num(columnAsArray(stkT, STK.mixed)[i]) : 0,
+        bin,
+      });
+      if (bin) binCount[bin.code] = (binCount[bin.code] || 0) + 1;
+    });
+
+    const compsByRecipe = {};
+    (compT.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(compT, CMP.recipe)[i]);
+      if (!rid) return;
+      const raw = columnAsArray(compT, CMP.dye)[i];
+      let did = getRefId(raw), matched = false;
+      if (!did && typeof raw === 'string' && raw.trim()) {
+        const k = normalize(raw);
+        if (byName[k] !== undefined && !ambiguous[k]) { did = byName[k]; matched = true; }
+        else if (ambiguous[k]) matched = 'ambiguous';
+      }
+      (compsByRecipe[rid] = compsByRecipe[rid] || []).push({
+        id, dyeId: did, byName: matched,
+        rawName: typeof raw === 'string' ? raw : '',
+        full: CMP.full ? columnAsArray(compT, CMP.full)[i] || '' : '',
+        dilution: CMP.dilution ? columnAsArray(compT, CMP.dilution)[i] || '' : '',
+        isPowder: CMP.isPowder ? !!columnAsArray(compT, CMP.isPowder)[i] : false,
+        mode: CMP.mode ? columnAsArray(compT, CMP.mode)[i] || '' : '',
+        step: CMP.step ? num(columnAsArray(compT, CMP.step)[i]) : 0,
+        notes: CMP.notes ? columnAsArray(compT, CMP.notes)[i] || '' : '',
+        rate: (CMP.effRate ? num(columnAsArray(compT, CMP.effRate)[i]) : 0) ||
+              (CMP.defRate ? num(columnAsArray(compT, CMP.defRate)[i]) : 0),
+      });
+    });
+    Object.values(compsByRecipe).forEach(a => a.sort((x, y) => (x.step || 99) - (y.step || 99)));
+
+    pullNote = '';
+    const dupeDyes = Object.values(jarsByDye).filter(a => a.length > 1).length;
+    return { dye, jarsByDye, binCount, compsByRecipe, planDate, dupeDyes };
+  } catch (e) {
+    pullNote = 'Dye pull sheet is off \u2014 ' + (e && e.message ? e.message : e);
+    return null;
+  }
+}
+
+function buildPull(printable) {
+  if (!PULL) return null;
+  const { stgRows, stgCols } = PULL_CFG;
+  const active = printable.slice();
+  active.forEach((b, i) => {
+    b.stage = i < stgRows * stgCols ? 'S-' + gridCode(i, stgCols) : null;
+    b.yards = b.spools * yardsPerSpool(b.fiber);
+    b.manifest = [];
+    b.comps = PULL.compsByRecipe[b.rid] || [];
+  });
+
+  /* A liquid dye is claimed by the first pot that needs it — one jar, one bin.
+     Later pots are told where it went instead of getting a second jar. */
+  const claims = new Map(), powders = [], orphans = [];
+  active.forEach(b => {
+    b.comps.forEach(c => {
+      const d = c.dyeId ? PULL.dye[c.dyeId] : null;
+      const rate = c.rate > 0 ? c.rate : (d ? d.defRate : 0);
+      const need = rate > 0 ? rate * (b.yards / 100) : 0;
+      if (!d) { orphans.push({ batch: b, comp: c }); b.manifest.push({ kind: 'orphan', comp: c }); return; }
+      if (c.isPowder || /powder/i.test(c.mode || '')) {
+        powders.push({ batch: b, comp: c, dye: d });
+        b.manifest.push({ kind: 'powder', comp: c, dye: d });
+        return;
+      }
+      let cl = claims.get(d.id);
+      if (!cl) { cl = { dye: d, owner: b, need: 0, users: [], comp: c }; claims.set(d.id, cl); }
+      cl.need += need;
+      cl.users.push({ batch: b, comp: c, need });
+      b.manifest.push({ kind: 'liquid', comp: c, dye: d, claim: cl });
+    });
+  });
+
+  /* Skip anything past shelf life, take the oldest jar first so stock rotates,
+     and add a second jar only when the first cannot cover the estimate. */
+  const pulls = [], noStock = [], remakes = [];
+  const jarsFor = id => (PULL.jarsByDye[id] || []);
+  claims.forEach(cl => {
+    const all = jarsFor(cl.dye.id).map(j => {
+      const ageDays = j.mixed ? Math.round((PULL.planDate - j.mixed) / DAY) : null;
+      return { ...j, ageDays, expired: cl.dye.shelf > 0 && ageDays !== null && ageDays > cl.dye.shelf };
+    });
+    // One jar per dye is the rule: a new mix replaces the old, it never stands
+    // beside it. A second row is a stale record, not a second jar \u2014 take the
+    // newest and print the problem rather than sending anyone hunting.
+    const newestFirst = all.slice().sort((a, b) => (b.mixed || 0) - (a.mixed || 0));
+    const jar = newestFirst.find(j => j.qty > 0) || null;
+    cl.dupes = all.length > 1 ? all.length : 0;
+    if (!jar) {
+      cl.jar = null;
+      noStock.push({ claim: cl, reason: all.length ? 'jar is empty' : 'no premade jar' });
+      return;
+    }
+    cl.jar = jar;
+    cl.short = cl.need > 0 && jar.qty < cl.need;
+    // Shelf life never decides the pull \u2014 that call belongs at the pot. It does
+    // mean the powder comes along, so the old can be dumped and remade.
+    if (jar.expired) remakes.push({ batch: cl.owner, comp: cl.comp, dye: cl.dye, claim: cl, jar });
+    pulls.push({ claim: cl, jar });
+  });
+
+  const groups = new Map();
+  pulls.forEach(p => {
+    const b = p.jar.bin, key = b ? b.code : '\u0000none';
+    if (!groups.has(key)) groups.set(key, {
+      code: b ? b.code : 'No bin recorded', legacy: b ? b.legacy : '',
+      order: b ? b.order : 9800, offGrid: b ? b.offGrid : true, unbinned: !b, lines: [],
+    });
+    groups.get(key).lines.push(p);
+  });
+  const binGroups = [...groups.values()].sort((a, b) => a.order - b.order);
+  binGroups.forEach(g => g.lines.sort((a, b) => String(a.claim.dye.name).localeCompare(String(b.claim.dye.name))));
+
+  return { active, binGroups, powders, noStock, orphans, remakes, pulls, claims };
+}
+
+/* ── pull sheet pieces ──────────────────────────────────────────────────── */
+function pl_idLine(d, c) {
+  const bits = [];
+  if (d.brand) bits.push(esc(d.brand));
+  if (d.serial) bits.push(esc(d.serial));
+  if (c && c.dilution) bits.push(esc(c.dilution));
+  if (d.dyeType) bits.push(esc(d.dyeType));
+  return bits.length ? `<div class="id">${bits.join(' \u00b7 ')}</div>` : '';
+}
+function pl_dest(b) {
+  if (!b) return '';
+  return `<div class="dest">
+    <div class="to">${esc(b.stage || '\u2014')}</div>
+    <div class="rc">${esc(b.colorway)}</div>
+    <div class="sp">${b.spools} spool${b.spools === 1 ? '' : 's'}${b.code ? ' \u00b7 ' + esc(code(b.code)) : ''}</div>
+  </div>`;
+}
+function pl_also(cl) {
+  const seen = new Set(), out = [];
+  cl.users.filter(u => u.batch !== cl.owner).forEach(u => {
+    const k = u.batch.stage + u.batch.colorway;
+    if (!seen.has(k)) { seen.add(k); out.push(u.batch); }
+  });
+  if (!out.length) return '';
+  return `<div class="sub2"><b>Shared jar</b> \u2014 also needed by ${
+    out.map(b => `${esc(b.stage || '?')} ${esc(b.colorway)}`).join(', ')
+  }. It lives in ${esc(cl.owner.stage || '?')}; those pots come and get it.</div>`;
+}
+function pl_jar(p) {
+  const cl = p.claim, jar = p.jar, d = cl.dye, flags = [];
+  if (jar.expired) flags.push('<span class="pl-flag hot">past shelf life \u2014 bring the powder too</span>');
+  if (cl.dupes) flags.push(`<span class="pl-flag hot">${cl.dupes} jars logged \u2014 take the newest, merge the rest</span>`);
+  if (jar.qty > 0 && jar.qty <= 5) flags.push('<span class="pl-flag">nearly empty</span>');
+  if (cl.short) flags.push('<span class="pl-flag hot">may be short \u2014 bring powder</span>');
+  if (cl.comp && cl.comp.byName) flags.push('<span class="pl-flag">name-matched \u2014 check brand</span>');
+  const need = cl.need > 0 ? `need ~${Math.round(cl.need)} mL` : 'no rate set';
+  return `<div class="pl-ln"><div class="cb"></div>
+    <div class="body">
+      <div class="nm">${esc(d.name)}${flags.length ? ' ' + flags.join('') : ''}</div>
+      ${pl_idLine(d, cl.comp)}
+      ${d.blend ? `<div class="sub2">${esc(d.blend)}</div>` : ''}
+      ${pl_also(cl)}
+    </div>
+    <div class="qty"><div class="have">${jar.qty} mL</div>
+      <div class="need">${esc(need)}${jar.mixed ? ' \u00b7 mixed ' + shortDate(jar.mixed) : ''}</div></div>
+    ${pl_dest(cl.owner)}</div>`;
+}
+function pl_powder(p) {
+  const d = p.dye, c = p.comp, spec = [];
+  if (d.powder !== '' && d.powder != null) spec.push(`${esc(d.powder)} tsp`);
+  if (d.water !== '' && d.water != null) spec.push(`per ${esc(d.water)} mL`);
+  if (d.dryWt) spec.push(`${esc(d.dryWt)} g std`);
+  return `<div class="pl-ln"><div class="cb"></div>
+    <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag">dry powder</span></div>
+      ${pl_idLine(d, c)}
+      ${spec.length ? `<div class="sub2">${spec.join(' \u00b7 ')}</div>` : ''}
+      ${c.notes ? `<div class="sub2">${esc(c.notes)}</div>` : ''}</div>
+    <div class="qty"><div class="have">&mdash;</div><div class="need">from the powder shelf</div></div>
+    ${pl_dest(p.batch)}</div>`;
+}
+function pl_noStock(n) {
+  const cl = n.claim, d = cl.dye;
+  return `<div class="pl-ln"><div class="cb"></div>
+    <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag hot">${esc(n.reason)}</span></div>
+      ${pl_idLine(d, cl.comp)}
+      <div class="sub2">Grab the dry powder instead, or tell control before the pot goes on.</div>
+      ${pl_also(cl)}</div>
+    <div class="qty"><div class="have">&mdash;</div>
+      <div class="need">${cl.need > 0 ? 'need ~' + Math.round(cl.need) + ' mL' : 'no rate set'}</div></div>
+    ${pl_dest(cl.owner)}</div>`;
+}
+function pl_orphan(o) {
+  return `<div class="pl-ln"><div class="cb"></div>
+    <div class="body"><div class="nm">${esc(o.comp.rawName || o.comp.full || '(dye not named)')}
+      <span class="pl-flag hot">no dye record</span></div>
+      <div class="sub2">The recipe names a dye that is not in the Dyes table, or the reference is empty.
+        Nothing to pull \u2014 leave it for control.</div></div>
+    <div class="qty"><div class="have">&mdash;</div><div class="need"></div></div>
+    ${pl_dest(o.batch)}</div>`;
+}
+
+/* Past shelf life. The jar still gets pulled — that call belongs at the pot,
+   not here — but the powder rides along so the old can be dumped and remade. */
+function pl_remake(r) {
+  const d = r.dye, spec = [];
+  if (d.powder !== '' && d.powder != null) spec.push(`${esc(d.powder)} tsp`);
+  if (d.water !== '' && d.water != null) spec.push(`per ${esc(d.water)} mL`);
+  if (d.dryWt) spec.push(`${esc(d.dryWt)} g std`);
+  return `<div class="pl-ln"><div class="cb"></div>
+    <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag hot">remake</span></div>
+      ${pl_idLine(d, r.comp)}
+      <div class="sub2"><b>Bring the powder as well as the jar.</b> The jar is
+        ${r.jar.ageDays} days old, past its ${d.shelf}-day shelf life — mix fresh, dump the old.</div>
+      ${spec.length ? `<div class="sub2">${spec.join(' · ')}</div>` : ''}</div>
+    <div class="qty"><div class="have">&mdash;</div><div class="need">powder shelf</div></div>
+    ${pl_dest(r.batch)}</div>`;
+}
+
+function pl_group(title, sub, count, lines, alt) {
+  return `<div class="pl-grp${alt ? ' alt' : ''}">
+    <div class="gh"><div class="bin">${esc(title)}</div>
+      ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+      <div class="ct">${count} to pull</div></div>${lines}</div>`;
+}
+function pl_manifest(b) {
+  const items = b.manifest.map(m => {
+    if (m.kind === 'powder') return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 dry powder, from the shelf</em></li>`;
+    if (m.kind === 'orphan') return `<li class="fyi"><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>\u2014 no dye record, ask control</em></li>`;
+    const cl = m.claim;
+    if (!cl.jar) return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 no premade, use powder</em></li>`;
+    if (cl.owner !== b) return `<li class="fyi"><b>${esc(m.dye.name)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
+    const from = cl.jar.bin ? cl.jar.bin.code : 'no bin recorded';
+    return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 jar from ${esc(from)}${
+      cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
+  }).join('');
+  return `<div class="pl-mfb">
+    <div class="h"><div class="s">${esc(b.stage || '\u2014')}</div>
+      <div class="n">${esc(b.colorway)}</div>
+      <div class="q">${b.spools} sp${b.fiber ? ' \u00b7 ' + esc(fiberCode(b.fiber)) : ''}</div></div>
+    <ul>${items || '<li class="fyi"><em>no dye components recorded</em></li>'}</ul></div>`;
+}
+
+function renderPull(printable) {
+  const B = buildPull(printable);
+  if (!B) return { html: '', warn: [] };
+  const spoolTotal = B.active.reduce((t, b) => t + b.spools, 0);
+  const head = title => `<div class="pl-hdr">
+    <div><div class="t">${esc(title)}</div><div class="d">${esc(longDate(PULL.planDate))}</div></div>
+    <div class="stats"><b>${B.active.length}</b> pots &nbsp; <b>${spoolTotal}</b> spools<br>
+      <b>${B.pulls.length}</b> jars to pull &nbsp; <b>${B.powders.length}</b> powder</div></div>`;
+
+  let body = '';
+  B.binGroups.forEach(g => {
+    body += pl_group(g.unbinned ? 'No bin recorded' : 'Mixed bin ' + g.code,
+      g.legacy ? '(' + g.legacy + ' today)' : (g.offGrid && !g.unbinned ? 'off the grid' : ''),
+      g.lines.length, g.lines.map(pl_jar).join(''));
+  });
+  if (B.noStock.length) body += pl_group('No premade jar', 'grab dry powder', B.noStock.length, B.noStock.map(pl_noStock).join(''), true);
+  if (B.remakes.length) body += pl_group('Past shelf life \u2014 bring the powder too', 'jar comes out, powder comes with it', B.remakes.length, B.remakes.map(pl_remake).join(''), true);
+  if (B.powders.length) body += pl_group('Dry powder shelf', 'recipe calls for powder', B.powders.length, B.powders.map(pl_powder).join(''), true);
+  if (B.orphans.length) body += pl_group('Nothing to pull', 'flag these to control', B.orphans.length, B.orphans.map(pl_orphan).join(''), true);
+
+  const html = `<div class="pl-doc pl-brk">
+      ${head('Dye pull \u2014 mixed bins')}
+      <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its staging
+        bin, and put that pot's tag and bag sheet in the same bin. A jar marked <b>shared jar</b> serves more
+        than one pot \u2014 it still goes to the one bin named on the right.</div>
+      ${body || '<div class="pl-lede">Nothing to pull for this day.</div>'}
+      <div class="pl-foot"><b>Spool check:</b> ${spoolTotal} spools across ${B.active.length} pots.
+        If a jar looks thin against what the pot needs, pull the dry powder too and leave it in the bin.<br>
+        <b>Put-back:</b> every jar goes home to the bin printed above it.</div>
+    </div>
+    <div class="pl-doc pl-brk">
+      ${head('Staging bins \u2014 what should be in each')}
+      <div class="pl-lede">One block per staging bin, in pot order. <b>Already sorted</b> means the jar is
+        shared and sits in another bin \u2014 nothing to pull, just know where it is.</div>
+      <div class="pl-mf">${B.active.map(pl_manifest).join('')}</div>
+      <div class="pl-foot"><b>End of day:</b> read this list backwards \u2014 each jar goes back to the mixed
+        bin shown on the pull page.</div>
+    </div>`;
+
+  const warn = [];
+  const over = B.active.filter(b => !b.stage);
+  if (over.length) warn.push(`<span class="warn">${over.length} pot${over.length === 1 ? '' : 's'} past the last staging bin</span> &mdash; the grid holds ${PULL_CFG.stgRows * PULL_CFG.stgCols}.`);
+  if (PULL.dupeDyes) warn.push(`<span class="warn">${PULL.dupeDyes} dye${PULL.dupeDyes === 1 ? '' : 's'} with more than one jar logged</span> &mdash; only one jar should ever exist; merge them in Dye Stock.`);
+  const full = Object.entries(PULL.binCount).filter(([, n]) => n > PULL_CFG.srcCap);
+  if (full.length) warn.push(`<span class="warn">${full.map(([c, n]) => `${esc(c)} holds ${n}`).join(', ')}</span> &mdash; over the ${PULL_CFG.srcCap}-jar limit.`);
+  const unbinned = B.binGroups.filter(g => g.unbinned).reduce((t, g) => t + g.lines.length, 0);
+  if (unbinned) warn.push(`<span class="warn">${unbinned} jar${unbinned === 1 ? '' : 's'} with no bin recorded</span> &mdash; last group on the pull sheet.`);
+  if (B.noStock.length) warn.push(`<span class="warn">${B.noStock.length} dye${B.noStock.length === 1 ? '' : 's'} with no usable premade</span> &mdash; powder instead.`);
+  if (B.orphans.length) warn.push(`<span class="warn">${B.orphans.length} component${B.orphans.length === 1 ? '' : 's'} with no dye record</span>.`);
+  const noComps = B.active.filter(b => !b.comps.length);
+  if (noComps.length) warn.push(`<span class="warn">${noComps.length} pot${noComps.length === 1 ? ' has' : 's have'} no dye components</span>: ${noComps.map(b => esc(b.colorway)).join(', ')}.`);
+  const shorts = [...B.claims.values()].filter(c => c.short).length;
+  if (shorts) warn.push(`<span class="warn">${shorts} jar${shorts === 1 ? '' : 's'} may not cover the estimate</span> &mdash; flagged on the sheet.`);
+  return { html, warn };
+}
+
 /* ── render ───────────────────────────────────────────────────────────── */
 function render() {
   const start = Math.max(1, Number(document.getElementById('start').value) || 1001);
@@ -502,6 +982,14 @@ function render() {
       html += '<div class="page">' + p.map(i => sheet(i === null ? null : printable[i],
         i === null ? null : printable[i].code)).join('') + '</div>';
     });
+  // Pull pages go last so the tag and sheet pages stay one contiguous stack to
+  // guillotine. Same printable array, so staging bin N is always bag code N.
+  let pullWarn = [];
+  if (PULL && document.getElementById('wPull').checked && printable.length) {
+    const r = renderPull(printable);
+    html += r.html;
+    pullWarn = r.warn;
+  }
   document.getElementById('out').innerHTML = html;
 
   const overflow = BATCHES.filter(b => b.orders.length > 3);
@@ -527,10 +1015,14 @@ function render() {
       ${noDemand.length ? `<span class="warn">${noDemand.length} with no open orders</span> &mdash; already filled, or the plan is stale. ` : ''}
       ${covered.length ? `<span class="warn">${covered.length} covered by thread on hand</span> &mdash; ${coveredSpools} spools to wind or pull. That is work for the winder, not the kettle. ` : ''}
       ${overAll.length ? `<span class="warn">${overAll.length} recipe${overAll.length === 1 ? ' has' : 's have'} lots allocated beyond Spools_Made &mdash; the lot record is behind.</span>` : ''}
-    </div>` : '';
+    </div>
+    ${pullNote ? `<div class="muted" style="margin-top:6px"><span class="warn">${esc(pullNote)}</span></div>` : ''}
+    ${pullWarn.length ? `<div class="muted" style="margin-top:6px">
+        Dye pull: staging ${esc(printable[0] && printable[0].stage || '?')}&ndash;${esc(printable[printable.length - 1] && printable[printable.length - 1].stage || '?')}.
+        ${pullWarn.join(' ')}</div>` : ''}` : '';
 }
 
-['start', 'blanks', 'wTags', 'wSheets', 'wSkip'].forEach(id =>
+['start', 'blanks', 'wTags', 'wSheets', 'wSkip', 'wPull'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 
 /* Static shell is already rendered above. Only now talk to Grist. */

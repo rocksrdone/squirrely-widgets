@@ -175,6 +175,7 @@ function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
 function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
 
 let dyeGroups = [];
+let STOCK_COLS = { dye: 'Dye', quantity: 'Quantity_mL', mixedDate: 'Mixed_Date', bin: 'Bin_Location' };
 
 async function loadEverything() {
   document.getElementById('headerSub').textContent = 'Loading...';
@@ -256,7 +257,12 @@ async function loadEverything() {
     });
     const STK = rc(stockTable, 'Dye_Stock', {
       dye: ['Dye'], quantity: ['Quantity_mL'], mixedDate: optC(['Mixed_Date']),
+      bin: optC(['Bin_Location']),
     });
+    STOCK_COLS = {
+      dye: STK.dye || 'Dye', quantity: STK.quantity || 'Quantity_mL',
+      mixedDate: STK.mixedDate || 'Mixed_Date', bin: STK.bin || 'Bin_Location',
+    };
     const WOL = rc(wolTable, 'Work_Order_Lines', {
       workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
       sku: optC(['SKU']), recipe: optC(['Recipe']), priority: optC(['Production_Priority']),
@@ -302,17 +308,17 @@ async function loadEverything() {
       const rawDye = columnAsArray(compTable, COMP.dye)[i];
       const dyeRefId = getRefId(rawDye);
       const resolvedName = dyeRefId ? (dyeNameById[dyeRefId] || '') : (typeof rawDye === 'string' ? rawDye : '');
-      const entry = { dyeName: resolvedName, rate };
+      const entry = { dyeId: dyeRefId, dyeName: resolvedName, rate };
       if (!compsByRecipe[recipeRef]) compsByRecipe[recipeRef] = [];
       compsByRecipe[recipeRef].push(entry);
     });
 
     const dIds = dyesTable.id || [];
-    const dyeByName = {};
+    // Keyed by row id, never by name: 26 dye names are shared across brands, and
+    // a name-keyed map silently hands you the last brand loaded.
+    const dyeById = {};
     dIds.forEach((id, i) => {
-      const name = normalize(columnAsArray(dyesTable, DYE.name)[i]);
-      if (!name) return;
-      dyeByName[name] = {
+      dyeById[id] = {
         id,
         name: columnAsArray(dyesTable, DYE.name)[i],
         brand: columnAsArray(dyesTable, DYE.brand)[i],
@@ -328,13 +334,15 @@ async function loadEverything() {
       if (!dyeRef) return;
       const qty = Number(columnAsArray(stockTable, STK.quantity)[i]) || 0;
       const mixedDate = columnAsArray(stockTable, STK.mixedDate)[i];
+      const bin = STK.bin ? columnAsArray(stockTable, STK.bin)[i] : '';
       if (!stockByDyeId[dyeRef]) stockByDyeId[dyeRef] = [];
-      stockByDyeId[dyeRef].push({ id, qty, mixedDate });
+      stockByDyeId[dyeRef].push({ id, qty, mixedDate, bin });
     });
 
     const wolIds = wolTable.id || [];
     const groups = {};
-    const recipeDyeSets = {}; // recipeId -> Set of dye names, for clustering
+    const recipeDyeSets = {}; // recipeId -> Set of dye keys (row id), for clustering
+    const dyeKey = comp => comp.dyeId ? 'd' + comp.dyeId : 'n:' + normalize(comp.dyeName);
 
     for (let i = 0; i < wolIds.length; i++) {
       const woId = getRefId(columnAsArray(wolTable, WOL.workOrder)[i]);
@@ -363,20 +371,22 @@ async function loadEverything() {
 
       if (!recipeDyeSets[recipe.id]) recipeDyeSets[recipe.id] = new Set();
       compsByRecipe[recipe.id].forEach(comp => {
-        if (comp.dyeName) recipeDyeSets[recipe.id].add(comp.dyeName);
+        if (comp.dyeId || comp.dyeName) recipeDyeSets[recipe.id].add(dyeKey(comp));
       });
 
       const priority = columnAsArray(wolTable, WOL.priority)[i] || 'Normal';
 
       compsByRecipe[recipe.id].forEach(comp => {
-        if (!comp.dyeName) return;
-        const key = normalize(comp.dyeName);
+        if (!comp.dyeId && !comp.dyeName) return;
+        const key = dyeKey(comp);
         const hasRate = comp.rate > 0;
         const mlNeeded = hasRate ? comp.rate * remaining : 0;
 
         if (!groups[key]) {
-          const dyeInfo = dyeByName[key] || { id: null, name: comp.dyeName, brand: '', cleanupOrder: 999, shelfLifeDays: null };
+          const dyeInfo = (comp.dyeId && dyeById[comp.dyeId])
+            || { id: null, name: comp.dyeName, brand: '', cleanupOrder: 999, shelfLifeDays: null };
           groups[key] = {
+            key,
             dyeName: dyeInfo.name,
             brand: dyeInfo.brand,
             dyeId: dyeInfo.id,
@@ -423,25 +433,25 @@ async function loadEverything() {
     while (clusterRemaining.length > 0) {
       const dyeDemand = {};
       clusterRemaining.forEach(r => r.dyes.forEach(d => {
-        const key = normalize(d);
+        const key = d;
         dyeDemand[key] = (dyeDemand[key] || 0) + 1;
       }));
 
-      const isolated = clusterRemaining.filter(r => r.dyes.every(d => dyeDemand[normalize(d)] === 1));
+      const isolated = clusterRemaining.filter(r => r.dyes.every(d => dyeDemand[d] === 1));
       let thisRoundIds;
       if (isolated.length > 0) {
         thisRoundIds = new Set(isolated.map(r => r.recipeId));
         isolated.forEach(r => r.dyes.forEach(d => {
-          const key = normalize(d);
+          const key = d;
           if (!(key in dyeEfficiencyRank)) dyeEfficiencyRank[key] = round;
         }));
       } else {
         let smallestDye = null, smallestCount = Infinity;
         Object.entries(dyeDemand).forEach(([d, c]) => { if (c < smallestCount) { smallestCount = c; smallestDye = d; } });
-        const cluster = clusterRemaining.filter(r => r.dyes.some(d => normalize(d) === smallestDye));
+        const cluster = clusterRemaining.filter(r => r.dyes.some(d => d === smallestDye));
         thisRoundIds = new Set(cluster.map(r => r.recipeId));
         cluster.forEach(r => r.dyes.forEach(d => {
-          const key = normalize(d);
+          const key = d;
           if (!(key in dyeEfficiencyRank)) dyeEfficiencyRank[key] = round;
         }));
       }
@@ -464,10 +474,11 @@ async function loadEverything() {
         }
       });
 
+      g.stockRows = stockRows.slice().sort((a, b) => (Number(b.mixedDate) || 0) - (Number(a.mixedDate) || 0));
       g.stockMl = totalStock;
       g.expiryDaysLeft = soonestExpiryDays;
       g.mlToMix = Math.max(0, g.totalMlNeeded - totalStock);
-      g.efficiencyRank = dyeEfficiencyRank[normalize(g.dyeName)] ?? 999;
+      g.efficiencyRank = dyeEfficiencyRank[g.key] ?? 999;
     });
 
     dyeGroups = Object.values(groups).sort((a, b) => {
@@ -575,15 +586,34 @@ async function logMixedStock(idx) {
   if (!amount || amount <= 0) { showToast('Enter a valid mL amount'); return; }
   if (!g.dyeId) { showToast('This dye isn\'t linked to a Dyes row — cannot log stock'); return; }
 
+  // One jar per dye, always. A fresh mix replaces what was there — it is used up
+  // or dumped, never set beside the old — so this updates the existing jar and
+  // clears any stale extra rows rather than adding a second container.
+  const rows = g.stockRows || [];
+  const now = Math.floor(Date.now() / 1000);
+  const actions = [];
+  let note;
+  if (rows.length) {
+    const keep = rows[0];
+    const fields = { [STOCK_COLS.quantity]: amount, [STOCK_COLS.mixedDate]: now };
+    if (keep.bin) fields[STOCK_COLS.bin] = keep.bin;
+    actions.push(['UpdateRecord', 'Dye_Stock', keep.id, fields]);
+    rows.slice(1).forEach(r => actions.push(['RemoveRecord', 'Dye_Stock', r.id]));
+    note = rows.length > 1
+      ? `${g.dyeName} jar updated to ${amount}mL · ${rows.length - 1} stale row${rows.length === 2 ? '' : 's'} cleared`
+      : `${g.dyeName} jar updated to ${amount}mL${keep.bin ? ' · bin ' + keep.bin : ''}`;
+  } else {
+    actions.push(['AddRecord', 'Dye_Stock', null, {
+      [STOCK_COLS.dye]: g.dyeId,
+      [STOCK_COLS.quantity]: amount,
+      [STOCK_COLS.mixedDate]: now,
+    }]);
+    note = `New jar of ${g.dyeName} — ${amount}mL, needs a bin`;
+  }
+
   try {
-    await grist.docApi.applyUserActions([
-      ['AddRecord', 'Dye_Stock', null, {
-        Dye: g.dyeId,
-        Quantity_mL: amount,
-        Mixed_Date: Math.floor(Date.now() / 1000),
-      }]
-    ]);
-    showToast(`Logged ${amount}mL of ${g.dyeName} ✓`);
+    await grist.docApi.applyUserActions(actions);
+    showToast(note);
     await loadEverything();
   } catch (e) {
     console.error('Failed to log stock:', e);
