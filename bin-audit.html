@@ -133,7 +133,9 @@
   .sub { display: block; font-size: 10px; color: var(--muted); font-family: 'Inter', sans-serif; }
   .sub.flag { color: var(--urgent); font-weight: 600; }
   .name { font-weight: 600; }
-  .name .brand { font-weight: 400; color: var(--muted); font-size: 11px; }
+  .name .brand { font-weight: 500; color: var(--ink); font-size: 10.5px;
+    font-family: 'DM Mono', monospace; margin-left: 5px; }
+  .prob-item .brand { font-weight: 500; font-family: 'DM Mono', monospace; font-size: 10.5px; }
   .chk input[type=number] { width: 2.9em; font-family: inherit; font-size: 11px; padding: 2px 4px;
     border: 1px solid var(--rule); border-radius: 4px; background: white; color: var(--ink); }
   .rows tr.wi td { padding-top: 7px; padding-bottom: 2px; }
@@ -338,6 +340,9 @@ async function loadEverything() {
     const DYE = resolveCols(dyesT, 'Dyes', {
       name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']),
       swatch: opt(['Swatch_Hex']), shelf: opt(['Shelf_Life_days_']),
+      powder: opt(['Std_Powder_tsp_']), water: opt(['Std_Water_mL_']),
+      source: opt(['Dye_Source_Type']), dyeType: opt(['Dye_Type']),
+      blend: opt(['Blend_Description']), notes: opt(['Notes']),
     }, missing);
     const STOCK = resolveCols(stockT, 'Dye_Stock', {
       dye: ['Dye'], quantity: ['Quantity_mL'],
@@ -387,6 +392,13 @@ function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
     dye[id] = {
       id, name,
       brand: (columnAsArray(dyesT, DYE.brand)[i] || '').toString().trim(),
+      serial: (columnAsArray(dyesT, DYE.serial)[i] || '').toString().trim(),
+      powder: columnAsArray(dyesT, DYE.powder)[i],
+      water: columnAsArray(dyesT, DYE.water)[i],
+      source: (columnAsArray(dyesT, DYE.source)[i] || '').toString().trim(),
+      dyeType: (columnAsArray(dyesT, DYE.dyeType)[i] || '').toString().trim(),
+      blend: (columnAsArray(dyesT, DYE.blend)[i] || '').toString().trim(),
+      notes: (columnAsArray(dyesT, DYE.notes)[i] || '').toString().trim(),
       swatch: hexOf(columnAsArray(dyesT, DYE.swatch)[i]),
       shelf: Number(columnAsArray(dyesT, DYE.shelf)[i]) || null,
     };
@@ -404,6 +416,9 @@ function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
       id, dyeId: dyeRef, info,
       label: info ? info.name : '(no dye linked)',
       brand: info ? info.brand : '',
+      serial: info ? info.serial : '',
+      // Every brand is shown, not just the clashing ones. Six companies are in
+      // play and a jar is only identifiable by name *and* maker.
       ambiguous: !!(info && nameCounts[normalize(info.name)] > 1),
       swatch: info ? info.swatch : null,
       qty: Number(columnAsArray(stockT, STOCK.quantity)[i]) || 0,
@@ -728,11 +743,39 @@ function lotBinFix(l) {
 
 // Every dye in the catalog, brand-suffixed when the name is shared, so an
 // orphan jar can be pointed at the right one of three Turquoises.
+
+// A dye is identified by name *and* maker: 26 names are shared across the six
+// brands, and the serial is the only thing that separates two jars of the same
+// colour. Both go on every line, never just the clashing ones.
+function dyeIdent(info) {
+  if (!info) return '';
+  const bits = [info.brand, info.serial].filter(Boolean);
+  // Mix strength rides on the same line rather than its own: it is part of what
+  // names the jar, and a second row on all 138 of them would bury the handful
+  // that actually differ.
+  const p = Number(info.powder), w = Number(info.water);
+  if (p > 0 && w > 0) bits.push(`${trimNum(p)} tsp/${trimNum(w)} mL`);
+  if (info.dyeType) bits.push(info.dyeType);
+  return bits.length ? ` <span class="brand">${esc(bits.join(' \u00b7 '))}</span>` : '';
+}
+// The rest of what tells two jars apart: how strong it was mixed, and for a
+// custom colour the blend it was mixed from — that recipe *is* its identity.
+function dyeDetail(info) {
+  if (!info) return '';
+  const line = [];
+  if (info.source && !/^commercial/i.test(info.source)) line.push(info.source);
+  const recipe = (info.blend || info.notes || '').replace(/\s+/g, ' ').trim();
+  if (recipe) line.push(recipe);
+  return line.length ? `<span class="sub">${esc(line.join(' \u00b7 '))}</span>` : '';
+}
+function trimNum(n) { return String(Math.round(n * 100) / 100); }
+
 function dyeOptions() {
   return Object.values(D.dye)
     .filter(d => d.name)
     .sort((a, b) => a.name.localeCompare(b.name) || (a.brand || '').localeCompare(b.brand || ''))
-    .map(d => `<option value="${d.id}">${esc(d.name)}${d.brand ? ' (' + esc(d.brand) + ')' : ''}</option>`)
+    .map(d => `<option value="${d.id}">${esc(d.name)}${
+      [d.brand, d.serial].filter(Boolean).length ? ' \u2014 ' + esc([d.brand, d.serial].filter(Boolean).join(' \u00b7 ')) : ''}</option>`)
     .join('');
 }
 
@@ -824,8 +867,9 @@ function renderDyes(stamp) {
     [
       probGroup('One dye in two bins', 'Walk the bins before touching these — the extra row is either a mis-typed bin, or a container that is genuinely still sitting there. Only you can tell which.',
         P.splitBins.map(s => `<div class="prob-item">
-          <strong>${esc(s.info ? s.info.name : '?')}</strong>${s.info && s.info.brand ? ` <span class="mono">(${esc(s.info.brand)})</span>` : ''}
+          <strong>${esc(s.info ? s.info.name : '?')}</strong>${dyeIdent(s.info)}
           — bins <span class="mono">${esc(s.bins.join(', '))}</span>
+          ${dyeDetail(s.info)}
           ${s.list.slice().sort((a, b) => (Number(b.mixed) || 0) - (Number(a.mixed) || 0)).map(c => `
             <div class="fixrow">
               <span class="fixlabel">bin <strong>${esc(c.bin || '—')}</strong> · ${Math.round(c.qty)}mL${c.mixed ? ' · mixed ' + esc(shortDate(c.mixed)) : ''}</span>
@@ -836,7 +880,7 @@ function renderDyes(stamp) {
         </div>`)),
       probGroup('Two jars of one dye in the same bin', 'One container, two rows. Combining adds the volumes onto the newest row and drops the rest.',
         P.doubleJars.map(s => `<div class="prob-item">
-          <strong>${esc(s.info ? s.info.name : '?')}</strong> — bin <span class="mono">${esc(s.bin || 'none')}</span>, ${s.list.length} rows
+          <strong>${esc(s.info ? s.info.name : '?')}</strong>${dyeIdent(s.info)} — bin <span class="mono">${esc(s.bin || 'none')}</span>, ${s.list.length} rows
           <span class="sub">${s.list.map(c => `${Math.round(c.qty)}mL${c.mixed ? ' (' + esc(shortDate(c.mixed)) + ')' : ''}`).join(' · ')}</span>
           <div class="fixrow">
             <button class="fixbtn primary" onclick="combineJars(${s.dyeId})">Combine into one</button>
@@ -844,7 +888,7 @@ function renderDyes(stamp) {
           </div>
         </div>`)),
       probGroup('Jar with no bin recorded', 'It exists somewhere but the prep sheet can\'t send anyone to it.',
-        P.noBin.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${c.brand ? ` <span class="mono">(${esc(c.brand)})</span>` : ''} — ${Math.round(c.qty)}mL
+        P.noBin.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${dyeIdent(c.info)} — ${Math.round(c.qty)}mL${dyeDetail(c.info)}
           <div class="fixrow">${jarBinFix(c)}<button class="fixbtn danger" onclick="deleteJar(${c.id})">Gone</button></div>
         </div>`)),
       probGroup('Jar not linked to a dye', 'The Dye reference is empty, so nothing can find it. Pick which dye it is.',
@@ -856,11 +900,11 @@ function renderDyes(stamp) {
           </div>
         </div>`)),
       probGroup('Empty jar still on record', 'Zero or blank volume — used up and never cleared, or the volume was never entered.',
-        P.emptyJar.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>
+        P.emptyJar.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${dyeIdent(c.info)} — bin <span class="mono">${esc(c.bin || 'none')}</span>
           <div class="fixrow"><button class="fixbtn danger" onclick="deleteJar(${c.id})">Used up — remove</button></div>
         </div>`)),
       probGroup('Past its shelf life', 'Older than the shelf life set on the dye. Remove it once it\'s dumped.',
-        P.expired.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong> — bin <span class="mono">${esc(c.bin || 'none')}</span>, ${c.age}d old, shelf life ${c.shelf}d
+        P.expired.map(c => `<div class="prob-item"><strong>${esc(c.label)}</strong>${dyeIdent(c.info)} — bin <span class="mono">${esc(c.bin || 'none')}</span>, ${c.age}d old, shelf life ${c.shelf}d
           <div class="fixrow"><button class="fixbtn danger" onclick="deleteJar(${c.id})">Dumped — remove</button></div>
         </div>`)),
     ]
@@ -892,7 +936,8 @@ function renderDyes(stamp) {
             : (c.info && c.info.shelf && c.age !== null && c.info.shelf - c.age <= 5) ? ['warn', 'Ageing']
             : ['ok', 'OK'];
           return `<tr>
-            <td><span class="name">${dot(c.swatch)}${esc(c.label)}${c.ambiguous && c.brand ? ` <span class="brand">(${esc(c.brand)})</span>` : ''}</span>
+            <td><span class="name">${dot(c.swatch)}${esc(c.label)}${dyeIdent(c.info)}</span>
+              ${dyeDetail(c.info)}
               ${c.split ? '<span class="sub flag">also recorded in another bin</span>' : ''}</td>
             <td class="num">${Math.round(c.qty)}mL</td>
             <td>${esc(shortDate(c.mixed)) || '<span class="sub">not recorded</span>'}${c.age !== null ? `<span class="sub">${c.age}d old</span>` : ''}</td>
