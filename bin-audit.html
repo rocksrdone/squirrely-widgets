@@ -134,6 +134,12 @@
   .sub.flag { color: var(--urgent); font-weight: 600; }
   .name { font-weight: 600; }
   .name .brand { font-weight: 400; color: var(--muted); font-size: 11px; }
+  .chk input[type=number] { width: 2.9em; font-family: inherit; font-size: 11px; padding: 2px 4px;
+    border: 1px solid var(--rule); border-radius: 4px; background: white; color: var(--ink); }
+  .rows tr.wi td { padding-top: 7px; padding-bottom: 2px; }
+  .wl { display: block; border-bottom: 1px solid var(--ink); height: 13px; }
+  .rows tr.wi-cap td { font-size: 9px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .6px; padding-top: 1px; border-bottom: none; }
   .empty-note { padding: 9px 11px; font-size: 11.5px; color: var(--muted); font-style: italic; }
 
   .dot {
@@ -214,6 +220,10 @@
   <button class="tab" id="tab-back" onclick="setTab('back')">Back stock</button>
   <label class="chk"><input type="checkbox" id="showEmpty" onchange="render()"> show empty bins</label>
   <label class="chk"><input type="checkbox" id="countCols" onchange="render()" checked> counting column</label>
+  <label class="chk"><input type="checkbox" id="writeIn" onchange="render()" checked> write-in rows</label>
+  <label class="chk">dye shelf
+    <input type="number" id="binRows" value="4" min="1" max="12" onchange="render()">&times;<input
+           type="number" id="binCols" value="4" min="1" max="12" onchange="render()"></label>
   <div class="ctl-spacer"></div>
   <button class="btn secondary" onclick="loadEverything()">↻ Refresh</button>
   <button class="btn" onclick="window.print()">🖨 Print this audit</button>
@@ -752,6 +762,35 @@ function countCell() {
   return document.getElementById('countCols').checked
     ? '<td class="num"><span class="count-box"></span></td>' : '';
 }
+const BIN_LETTERS = 'ABCDEFGHIJKL';
+// Dye bins are free text with no Storage_Locations to list them, so the shelf
+// size is configured rather than derived. The naming scheme is read from the
+// bins already in use — plain numbers before the relabel, row-letter plus
+// column after — because guessing it would invent bins that do not exist.
+function expectedDyeBins() {
+  const rows = Math.max(1, Number(document.getElementById('binRows').value) || 4);
+  const cols = Math.max(1, Number(document.getElementById('binCols').value) || 4);
+  const inUse = Object.keys(D.bins).filter(c => c !== '(no bin)');
+  const numeric = inUse.filter(c => /^\d+$/.test(c)).length;
+  const grid = inUse.filter(c => /^[A-La-l]\d{1,2}$/.test(c)).length;
+  // Half-relabelled shelf: both schemes are live, so either guess would print a
+  // column of bins that do not exist. Listing nothing is the honest answer.
+  if (numeric && grid) return { codes: [], note: `${numeric} bin${numeric === 1 ? ' is' : 's are'} numbered and ${grid} use row letters, so the empty ones can't be worked out. Finish the relabel, or fix the odd ones out, and they'll appear.` };
+  if (!numeric && !grid && inUse.length) return { codes: [], note: 'Bin codes don\'t follow a pattern this can extend, so empty ones can\'t be listed.' };
+  const codes = [];
+  for (let i = 0; i < rows * cols; i++) {
+    codes.push(numeric ? String(i + 1) : BIN_LETTERS[Math.floor(i / cols)] + ((i % cols) + 1));
+  }
+  return { codes, note: '' };
+}
+// A tick list only catches what is missing. Without somewhere to record a jar
+// that is on the shelf but not in Grist, half the drift stays invisible.
+function writeInRows(nCols) {
+  if (!document.getElementById('writeIn').checked) return '';
+  const cell = '<td><span class="wl"></span></td>';
+  return `<tr class="wi">${cell.repeat(nCols)}</tr><tr class="wi">${cell.repeat(nCols)}</tr>` +
+         `<tr class="wi-cap"><td colspan="${nCols}">found here but not on the list</td></tr>`;
+}
 function countHead(label) {
   return document.getElementById('countCols').checked
     ? `<th class="num">${esc(label)}</th>` : '';
@@ -827,14 +866,21 @@ function renderDyes(stamp) {
     ]
   );
 
-  const codes = Object.keys(D.bins).sort(binSort);
+  const used = Object.keys(D.bins);
+  // An unused bin still has to be walked past — confirming it is empty is part
+  // of the audit, not a detail. Only shown on request so the sheet stays short.
+  const showEmpty = document.getElementById('showEmpty').checked;
+  const expected = showEmpty ? expectedDyeBins() : { codes: [], note: '' };
+  const codes = (showEmpty ? [...new Set([...used, ...expected.codes])] : used).sort(binSort);
+  const nCols = 4 + (document.getElementById('countCols').checked ? 1 : 0);
   const cards = codes.map(code => {
-    const list = D.bins[code];
+    const list = D.bins[code] || [];
     const ml = list.reduce((s, c) => s + c.qty, 0);
-    return `<div class="bin">
+    return `<div class="bin ${list.length ? '' : 'empty'}">
       <div class="bin-head">
         <span class="bin-code">${esc(code)}</span>
-        <span class="bin-what"><strong>${code === '(no bin)' ? 'No bin recorded' : 'Made dye'}</strong>${list.length} jar${list.length === 1 ? '' : 's'} on record</span>
+        <span class="bin-what"><strong>${code === '(no bin)' ? 'No bin recorded' : 'Made dye'}</strong>${
+          list.length ? `${list.length} jar${list.length === 1 ? '' : 's'} on record` : 'nothing on record — should be empty'}</span>
         <span class="bin-tally"><strong>${Math.round(ml)}</strong> mL</span>
       </div>
       <table class="rows">
@@ -854,6 +900,7 @@ function renderDyes(stamp) {
             <td><span class="tag ${state[0]}">${state[1]}</span></td>
           </tr>`;
         }).join('')}
+        ${writeInRows(nCols)}
       </table>
     </div>`;
   }).join('') || '<div class="empty-state">No dye containers on record.</div>';
@@ -863,11 +910,12 @@ function renderDyes(stamp) {
     <div class="sheet-head">
       <div class="sheet-title">Made dye audit</div>
       <div class="sheet-sub">${esc(stamp)} · every mixed jar the system thinks you have</div>
-      <div class="how">Walk the bins and count. The <strong>Should hold</strong> column is what Grist believes; write what you actually find beside it.</div>
+      <div class="how">Walk the bins and count. The <strong>Should hold</strong> column is what Grist believes; write what you actually find beside it. Anything sitting in a bin that isn't listed goes on the blank rows at the foot of that bin.${
+        expected.note ? `<div style="margin-top:5px;color:var(--accent)"><strong>Empty bins not shown \u2014</strong> ${esc(expected.note)}</div>` : ''}</div>
     </div>
     <div class="totals">
       <div class="chip">${D.containers.length}<span>jars</span></div>
-      <div class="chip">${codes.length}<span>bins</span></div>
+      <div class="chip">${used.filter(c => c !== '(no bin)').length}<span>bins in use</span></div>
       <div class="chip">${Math.round(D.totalMl)}<span>mL total</span></div>
       <div class="chip ${probCount ? 'bad' : ''}">${probCount}<span>to fix</span></div>
     </div>
