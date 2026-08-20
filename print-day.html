@@ -204,6 +204,14 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .pl-foot { border-top: 2px solid #000; margin-top: 14px; padding-top: 6px; font-size: 10px; color: #555;
         line-height: 1.5; }
 .pl-foot b { color: #000; }
+
+.pl-map { border: 1.5px solid #000; padding: 5px 7px 6px; margin: 0 0 12px; page-break-inside: avoid; }
+.pl-map .cap { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #555; margin-bottom: 4px; }
+.pl-map .g { display: grid; gap: 3px; }
+.pl-map .c { border: 1px solid #999; text-align: center; padding: 2px 0 1px; }
+.pl-map .c b { display: block; font-size: 12px; letter-spacing: .5px; }
+.pl-map .c span { display: block; font-size: 8.5px; color: #666; }
+
 </style></head><body>
 
 <div class="ctl noprint">
@@ -582,9 +590,10 @@ function longDate(sec) {
     { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-/* Grid codes: row letter + column number, like the back stock bins. Reading a
-   bin accepts "B3", "b-3", "M-B3" and — so this works before the shelf is
-   relabelled — a plain 1..N that fills the grid left to right. */
+/* Bin codes. "B3", "b-3" and "M-B3" all mean B3. A plain number is mapped across
+   the rows — 1-4 are row A, 5-8 row B — which matches how the shelf is numbered
+   now. The number is kept alongside as `legacy` and printed next to the code, so
+   a wrong mapping shows up immediately instead of quietly misdirecting someone. */
 function gridCode(index0, cols) {
   return LETTERS[Math.floor(index0 / cols)] + String((index0 % cols) + 1);
 }
@@ -599,7 +608,7 @@ function parseBin(raw, rows, cols) {
   m = /^(\d{1,3})$/.exec(s);
   if (m) {
     const n = Number(m[1]);
-    if (n >= 1 && n <= rows * cols) return { code: gridCode(n - 1, cols), order: n - 1, legacy: 'bin ' + n, offGrid: false };
+    if (n >= 1 && n <= rows * cols) return { code: gridCode(n - 1, cols), order: n - 1, legacy: String(n), offGrid: false };
     return { code: 'bin ' + n, order: 9000 + n, legacy: '', offGrid: true };
   }
   return { code: normalize(raw), order: 9500, legacy: '', offGrid: true };
@@ -873,6 +882,21 @@ function pl_remake(r) {
     ${pl_dest(r.batch)}</div>`;
 }
 
+
+/* The shelf is labelled with numbers and the sheet talks in grid codes, so the
+   two are printed together once. If the mapping is ever wrong this is where it
+   shows, rather than in someone walking to the wrong bin. */
+function shelfMap(usesNumbers) {
+  if (!usesNumbers) return '';
+  const rows = PULL_CFG.srcRows, cols = PULL_CFG.srcCols;
+  let cells = '';
+  for (let i = 0; i < rows * cols; i++) {
+    cells += `<div class="c"><b>${esc(gridCode(i, cols))}</b><span>${i + 1}</span></div>`;
+  }
+  return `<div class="pl-map"><div class="cap">Shelf map \u2014 grid code, and the number on the bin</div>
+    <div class="g" style="grid-template-columns:repeat(${cols},1fr)">${cells}</div></div>`;
+}
+
 function pl_group(title, sub, count, lines, alt) {
   return `<div class="pl-grp${alt ? ' alt' : ''}">
     <div class="gh"><div class="bin">${esc(title)}</div>
@@ -886,7 +910,9 @@ function pl_manifest(b) {
     const cl = m.claim;
     if (!cl.jar) return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 no premade, use powder</em></li>`;
     if (cl.owner !== b) return `<li class="fyi"><b>${esc(m.dye.name)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
-    const from = cl.jar.bin ? cl.jar.bin.code : 'no bin recorded';
+    const from = cl.jar.bin
+      ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
+      : 'no bin recorded';
     return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 jar from ${esc(from)}${
       cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
   }).join('');
@@ -902,6 +928,7 @@ function pl_manifest(b) {
 function renderPull(printable, leadBreak) {
   const B = buildPull(printable);
   if (!B) return { html: '', warn: [] };
+  const usesNumbers = Object.values(PULL.jarsByDye).some(a => a.some(j => j.bin && j.bin.legacy));
   const spoolTotal = B.active.reduce((t, b) => t + b.spools, 0);
   const head = title => `<div class="pl-hdr">
     <div><div class="t">${esc(title)}</div><div class="d">${esc(longDate(PULL.planDate))}</div></div>
@@ -911,7 +938,7 @@ function renderPull(printable, leadBreak) {
   let body = '';
   B.binGroups.forEach(g => {
     body += pl_group(g.unbinned ? 'No bin recorded' : 'Mixed bin ' + g.code,
-      g.legacy ? '(' + g.legacy + ' today)' : (g.offGrid && !g.unbinned ? 'off the grid' : ''),
+      g.legacy ? 'labelled ' + g.legacy : (g.offGrid && !g.unbinned ? 'off the grid' : ''),
       g.lines.length, g.lines.map(pl_jar).join(''));
   });
   if (B.noStock.length) body += pl_group('No premade jar', 'grab dry powder', B.noStock.length, B.noStock.map(pl_noStock).join(''), true);
@@ -921,6 +948,7 @@ function renderPull(printable, leadBreak) {
 
   const html = `<div class="pl-doc${leadBreak ? ' pl-brk' : ''}">
       ${head('Dye pull \u2014 mixed bins')}
+      ${shelfMap(usesNumbers)}
       <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its staging
         bin, and put that pot's tag and bag sheet in the same bin. A jar marked <b>shared jar</b> serves more
         than one pot \u2014 it still goes to the one bin named on the right.</div>

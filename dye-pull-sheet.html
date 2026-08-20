@@ -88,6 +88,33 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .pl-foot { border-top: 2px solid #000; margin-top: 14px; padding-top: 6px; font-size: 10px; color: #555;
         line-height: 1.5; }
 .pl-foot b { color: #000; }
+
+.pl-map { border: 1.5px solid #000; padding: 5px 7px 6px; margin: 0 0 12px; page-break-inside: avoid; }
+.pl-map .cap { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #555; margin-bottom: 4px; }
+.pl-map .g { display: grid; gap: 3px; }
+.pl-map .c { border: 1px solid #999; text-align: center; padding: 2px 0 1px; }
+.pl-map .c b { display: block; font-size: 12px; letter-spacing: .5px; }
+.pl-map .c span { display: block; font-size: 8.5px; color: #666; }
+
+
+/* ---------- put-away list ---------- */
+.away { column-count: 2; column-gap: 26px; }
+.away .alpha { font-size: 11px; font-weight: bold; letter-spacing: 2px; color: #555;
+               border-bottom: 1.5px solid #000; margin: 7px 0 2px; break-inside: avoid;
+               break-after: avoid; }
+.away .ar { display: flex; align-items: baseline; padding: 2px 0; border-bottom: 1px dotted #D5CDC6;
+            break-inside: avoid; }
+.away .ar .cb { flex: none; width: 12px; height: 12px; border: 1.5px solid #000; margin-right: 7px;
+                align-self: flex-start; margin-top: 2px; }
+.away .ar .n { flex: 1 1 auto; min-width: 0; font-size: 11px; line-height: 1.3; }
+.away .ar .n b { font-size: 11.5px; }
+.away .ar .n span { display: block; font-family: "Courier New", monospace; font-size: 9px; color: #555; }
+.away .ar .dst { flex: none; margin-left: 8px; text-align: right; }
+.away .ar .to { font-size: 13px; font-weight: bold; letter-spacing: .5px; }
+.away .ar .to.stay { border: 2px solid #000; padding: 0 5px; }
+.away .ar .to.none { font-size: 9.5px; font-weight: bold; text-transform: uppercase; letter-spacing: .5px; }
+.away .ar .why { font-size: 8.5px; color: #555; text-transform: uppercase; letter-spacing: .4px; }
+
 </style></head><body>
 
 <div class="ctl noprint">
@@ -105,6 +132,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
     <div class="checks">
       <span><input type="checkbox" id="wPull" checked> pull list</span>
       <span><input type="checkbox" id="wMan" checked> bin manifest</span>
+      <span><input type="checkbox" id="wAway"> put-away list</span>
       <span><input type="checkbox" id="wSkip" checked> skip batches needing no dye</span>
     </div>
     <div><button onclick="window.print()">Print</button></div>
@@ -196,9 +224,10 @@ function effectiveDue(orderDate, dueDate) {
 }
 const LETTERS = 'ABCDEFGHIJKL';
 
-/* Grid codes. Row letter + column number, like the back stock bins.
-   Reading a bin: accepts "B3", "b-3", "M-B3" and — so this works before the
-   shelf is relabelled — a plain 1..N that fills the grid left to right. */
+/* Bin codes. "B3", "b-3" and "M-B3" all mean B3. A plain number is mapped across
+   the rows — 1-4 are row A, 5-8 row B — which matches how the shelf is numbered
+   now. The number is kept alongside as `legacy` and printed next to the code, so
+   a wrong mapping shows up immediately instead of quietly misdirecting someone. */
 function gridCode(index0, cols) {
   return LETTERS[Math.floor(index0 / cols)] + String((index0 % cols) + 1);
 }
@@ -217,7 +246,7 @@ function parseBin(raw, rows, cols) {
   if (m) {
     const n = Number(m[1]);
     if (n >= 1 && n <= rows * cols) {
-      return { code: gridCode(n - 1, cols), order: n - 1, legacy: 'bin ' + n, offGrid: false };
+      return { code: gridCode(n - 1, cols), order: n - 1, legacy: String(n), offGrid: false };
     }
     return { code: 'bin ' + n, order: 9000 + n, legacy: '', offGrid: true };
   }
@@ -251,7 +280,7 @@ async function load() {
     const REC = resolveCols(recT, 'Recipes',          { name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']) }, missing);
     const WOL = resolveCols(wolT, 'Work_Order_Lines', { workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], recipe: opt(['Recipe']), status: opt(['Queue_Status']) }, missing);
     const WO  = resolveCols(woT,  'Work_Orders',      { status: ['Status'], orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']) }, missing);
-    const LOT = resolveCols(lotT, 'Production_Lots',  { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']) }, missing);
+    const LOT = resolveCols(lotT, 'Production_Lots',  { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']), dated: opt(['Date_Dyed']) }, missing);
     const ALC = resolveCols(allocT,'Lot_Allocations', { lot: ['Lot'], line: ['Work_Order_Line'], qty: ['Qty_Spools'] }, missing);
     const CMP = resolveCols(compT,'Recipe_Dye_Components', {
       recipe: ['Recipe'], dye: ['Dye_Name'], full: opt(['Dye_Full']),
@@ -372,7 +401,13 @@ async function load() {
       if (l) byLot[l] = (byLot[l] || 0) + q;
       if (w) byLine[w] = (byLine[w] || 0) + q;
     });
-    const inBins = {}, inStock = {};
+    // Two views of coverage. "Pre" ignores anything dyed on the plan date, so the
+    // batch list — and therefore every staging bin code — is the same at 4pm as it
+    // was at 7am. Without that, logging a lot mid-day renumbers the bins under the
+    // sheet already taped to them. "Now" includes today's lots and is what tells
+    // the put-away list which pots have actually finished.
+    const inBins = {}, inStock = {}, preBins = {}, preStock = {};
+    const planDateForLots = isoToEpochUTC(document.getElementById('pdate').value) || startOfTodayUTC();
     (lotT.id || []).forEach((id, i) => {
       const rid = getRefId(columnAsArray(lotT, LOT.recipe)[i]); if (!rid) return;
       const back = LOT.back ? num(columnAsArray(lotT, LOT.back)[i]) : 0;
@@ -380,8 +415,12 @@ async function load() {
       ['store', 'vendor', 'broken'].forEach(k => { if (LOT[k]) free -= num(columnAsArray(lotT, LOT[k])[i]); });
       inBins[rid] = (inBins[rid] || 0) + free;
       if (back > 0) inStock[rid] = (inStock[rid] || 0) + back;
+      const dyed = LOT.dated ? num(columnAsArray(lotT, LOT.dated)[i]) : 0;
+      if (dyed >= planDateForLots && dyed < planDateForLots + DAY) return;   // made today
+      preBins[rid] = (preBins[rid] || 0) + free;
+      if (back > 0) preStock[rid] = (preStock[rid] || 0) + back;
     });
-    Object.keys(inBins).forEach(k => { if (inBins[k] < 0) inBins[k] = 0; });
+    [inBins, preBins].forEach(m => Object.keys(m).forEach(k => { if (m[k] < 0) m[k] = 0; }));
 
     const demand = {};
     (wolT.id || []).forEach((id, i) => {
@@ -411,13 +450,23 @@ async function load() {
       return {
         rid: p.rid, name: r.name || '(unnamed recipe)', sku: r.sku || '',
         fiber: r.fiber || '', method: r.method || '',
-        spools: Math.max(0, owed - (inBins[p.rid] || 0) - (inStock[p.rid] || 0)),
+        // What the pot was planned to make, fixed for the whole day.
+        spools: Math.max(0, owed - (preBins[p.rid] || 0) - (preStock[p.rid] || 0)),
+        // What is still owed right now. Zero means the pot ran.
+        remaining: Math.max(0, owed - (inBins[p.rid] || 0) - (inStock[p.rid] || 0)),
         comps: compsByRecipe[p.rid] || [],
       };
     });
 
+    const allJars = [];
+    Object.values(jarsByDye).forEach(a => a.forEach(j => allJars.push(j)));
+    allJars.sort((a, b) => {
+      const da = dye[a.dyeId] || {}, db = dye[b.dyeId] || {};
+      return String(da.name || '').localeCompare(String(db.name || ''))
+          || String(da.brand || '').localeCompare(String(db.brand || ''));
+    });
     const dupeDyes = Object.values(jarsByDye).filter(a => a.length > 1).length;
-    STATE = { batches, dye, jarsByDye, binCount, planDate, srcRows, srcCols, ambiguousName, dupeDyes };
+    STATE = { batches, dye, jarsByDye, allJars, binCount, planDate, srcRows, srcCols, ambiguousName, dupeDyes };
     banner(batches.length ? '' :
       'Nothing in the Day Plan for that date yet. Plan the day in the batch planner, then reload.', 'info');
     render();
@@ -638,6 +687,21 @@ function remakeLine(r) {
     ${destBlock(r.batch)}</div>`;
 }
 
+
+/* The shelf is labelled with numbers and the sheet talks in grid codes, so the
+   two are printed together once. If the mapping is ever wrong this is where it
+   shows, rather than in someone walking to the wrong bin. */
+function shelfMap(usesNumbers) {
+  if (!usesNumbers) return '';
+  const rows = (STATE && STATE.srcRows) || 4, cols = (STATE && STATE.srcCols) || 4;
+  let cells = '';
+  for (let i = 0; i < rows * cols; i++) {
+    cells += `<div class="c"><b>${esc(gridCode(i, cols))}</b><span>${i + 1}</span></div>`;
+  }
+  return `<div class="pl-map"><div class="cap">Shelf map \u2014 grid code, and the number on the bin</div>
+    <div class="g" style="grid-template-columns:repeat(${cols},1fr)">${cells}</div></div>`;
+}
+
 function group(title, sub, count, linesHtml, alt) {
   return `<div class="pl-grp${alt ? ' alt' : ''}">
     <div class="gh"><div class="bin">${esc(title)}</div>
@@ -659,7 +723,9 @@ function manifestBlock(b) {
     if (cl.owner !== b)
       return `<li class="fyi"><b>${esc(m.dye.name)}</b> <em>\u2014 already sorted into ${
         esc(cl.owner.stage || '?')} (${esc(cl.owner.name)}) \u2014 fetch it from there</em></li>`;
-    const from = cl.jar.bin ? cl.jar.bin.code : 'no bin recorded';
+    const from = cl.jar.bin
+      ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
+      : 'no bin recorded';
     return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 jar from ${esc(from)}${
       cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
   }).join('');
@@ -671,6 +737,36 @@ function manifestBlock(b) {
   </div>`;
 }
 
+
+/* End of day. Every jar on record, alphabetically, and the one place it belongs
+   tonight — its own bin, or the staging bin it is still committed to because
+   that pot has not run yet. Deliberately says nothing about the day: this is a
+   lookup for a container found on a bench, not a report. */
+function awayRows(B) {
+  const stays = new Map();          // jar row id -> the batch still holding it
+  B.claims.forEach(cl => {
+    if (cl.jar && cl.owner && cl.owner.stage && cl.owner.remaining > 0) stays.set(cl.jar.id, cl.owner);
+  });
+  let letter = '', out = '';
+  (STATE.allJars || []).forEach(j => {
+    const d = STATE.dye[j.dyeId];
+    const name = d ? d.name : '(no dye record)';
+    const L = (name.charAt(0) || '?').toUpperCase();
+    if (L !== letter) { letter = L; out += `<div class="alpha">${esc(letter)}</div>`; }
+    const bits = [d && d.brand, d && d.serial].filter(Boolean).map(esc).join(' \u00b7 ');
+    const held = stays.get(j.id);
+    const dest = held
+      ? `<div class="to stay">${esc(held.stage)}</div><div class="why">stays out \u00b7 ${esc(held.name)}</div>`
+      : (j.bin
+          ? `<div class="to">${esc(j.bin.code)}</div>${j.bin.legacy ? `<div class="why">bin ${esc(j.bin.legacy)}</div>` : ''}`
+          : `<div class="to none">no bin</div>`);
+    out += `<div class="ar"><div class="cb"></div>
+      <div class="n"><b>${esc(name)}</b>${bits ? `<span>${bits}</span>` : ''}</div>
+      <div class="dst">${dest}</div></div>`;
+  });
+  return out;
+}
+
 /* ── render ───────────────────────────────────────────────────────────── */
 function render() {
   if (!STATE) return;
@@ -679,6 +775,7 @@ function render() {
   const wPull = document.getElementById('wPull').checked;
   const wMan = document.getElementById('wMan').checked;
 
+  const usesNumbers = (s.allJars || []).some(j => j.bin && j.bin.legacy);
   const jarCount = B.pulls.length;
   const spoolTotal = B.active.reduce((t, b) => t + b.spools, 0);
   const head = (title, sub) => `<div class="pl-hdr">
@@ -694,7 +791,7 @@ function render() {
     let body = '';
     B.binGroups.forEach(g => {
       const title = g.unbinned ? 'No bin recorded' : 'Mixed bin ' + g.code;
-      const sub = g.legacy ? '(' + g.legacy + ' today)' : (g.offGrid && !g.unbinned ? 'off the grid' : '');
+      const sub = g.legacy ? 'labelled ' + g.legacy : (g.offGrid && !g.unbinned ? 'off the grid' : '');
       body += group(title, sub, g.lines.length, g.lines.map(jarLine).join(''));
     });
     if (B.noStock.length)
@@ -712,6 +809,7 @@ function render() {
 
     html += `<div class="pl-doc">
       ${head('Dye pull \u2014 mixed bins')}
+      ${shelfMap(usesNumbers)}
       <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its staging bin.
         Put the pot's tag and bag sheet in the same bin. A jar with <b>shared jar</b> under it serves more than one
         pot \u2014 it still goes to the one bin named on the right.</div>
@@ -732,6 +830,24 @@ function render() {
       <div class="pl-mf">${B.active.map(manifestBlock).join('')}</div>
       <div class="pl-foot"><b>End of day:</b> read this list backwards \u2014 each jar goes back to the mixed bin
         shown on the pull page.</div>
+    </div>`;
+  }
+
+  if (document.getElementById('wAway').checked) {
+    const held = B.active.filter(b => b.stage && b.remaining > 0).length;
+    html += `<div class="pl-doc${html ? ' pl-brk' : ''}">
+      <div class="pl-hdr">
+        <div><div class="t">Put away</div>
+          <div class="d">${esc(longDate(s.planDate))}</div></div>
+        <div class="stats"><b>${(s.allJars || []).length}</b> jars<br>
+          <b>${held}</b> staging bin${held === 1 ? '' : 's'} stay set up</div></div>
+      ${shelfMap(usesNumbers)}
+      <div class="pl-lede">Found a container on a bench? Look it up here and put it where the
+        right-hand column says. <b>Stays out</b> means that pot hasn't run yet \u2014 leave the jar in its
+        staging bin, ready for tomorrow.</div>
+      <div class="away">${awayRows(B)}</div>
+      <div class="pl-foot"><b>No bin</b> means Grist has no location for that jar \u2014 give it one in
+        Dye Stock rather than guessing a shelf.</div>
     </div>`;
   }
 
@@ -765,7 +881,7 @@ function render() {
     : '<span class="muted">Nothing planned for this date.</span>';
 }
 
-['pdate', 'srcRows', 'srcCols', 'srcCap', 'stgRows', 'stgCols', 'wPull', 'wMan', 'wSkip']
+['pdate', 'srcRows', 'srcCols', 'srcCap', 'stgRows', 'stgCols', 'wPull', 'wMan', 'wAway', 'wSkip']
   .forEach(id => document.getElementById(id).addEventListener('input', () => {
     if (id === 'pdate' || id === 'srcRows' || id === 'srcCols') load(); else render();
   }));
