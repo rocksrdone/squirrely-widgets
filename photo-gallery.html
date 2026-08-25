@@ -180,6 +180,19 @@ function getRefId(ref) {
 function normalize(s) {
   return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+// normalize() strips separators entirely, which destroys word boundaries and makes
+// raw substring tests dangerously loose: "ukraineflag".includes("rain") is true, so
+// Ukraine Flag photos were matching every FFN_RAIN_* line. Keep words separated so
+// containment can be tested at whole-word granularity instead.
+function normWords(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+// True only when `needle`'s words appear as a complete whole-word run inside `hay`.
+// "sunset" matches "sunset glow"; "rain" does NOT match "ukraine flag".
+function wordContains(hay, needle) {
+  if (!hay || !needle) return false;
+  return (' ' + hay + ' ').includes(' ' + needle + ' ');
+}
 function parseColorwayFromSKU(sku) {
   if (!sku) return '';
   const parts = sku.split('_');
@@ -290,25 +303,39 @@ async function loadData(record) {
   renderLines();
 }
 
+function photoSort(a, b) {
+  if (!!b.Is_Favorite !== !!a.Is_Favorite) return (b.Is_Favorite ? 1 : 0) - (a.Is_Favorite ? 1 : 0);
+  return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
+}
+
+// Two tiers, because sharing the wrong colorway to a vendor is a real cost:
+//   exact — normalized names are identical. Shown by default.
+//   close — one name's words fully contain the other's ("Sunset" vs "Sunset Glow").
+//           Shown only when there is no exact match, and labelled as approximate.
 function matchPhotos(colorwayGuess) {
-  const g = normalize(colorwayGuess);
-  if (!g) return [];
-  return allPhotos
-    .filter(p => {
-      const n = normalize(p.Colorway_Name);
-      return n && (n.includes(g) || g.includes(n));
-    })
-    .sort((a, b) => {
-      if (!!b.Is_Favorite !== !!a.Is_Favorite) return (b.Is_Favorite ? 1 : 0) - (a.Is_Favorite ? 1 : 0);
-      return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
-    });
+  const gTight = normalize(colorwayGuess);
+  const gWords = normWords(colorwayGuess);
+  if (!gTight) return { exact: [], close: [] };
+
+  const exact = [];
+  const close = [];
+  allPhotos.forEach(p => {
+    const nTight = normalize(p.Colorway_Name);
+    if (!nTight) return;
+    if (nTight === gTight) { exact.push(p); return; }
+    const nWords = normWords(p.Colorway_Name);
+    if (wordContains(nWords, gWords) || wordContains(gWords, nWords)) close.push(p);
+  });
+
+  return { exact: exact.sort(photoSort), close: close.sort(photoSort) };
 }
 
 // Every colorway guess derived from this order's own line items — used to
 // keep manual search scoped to what's actually relevant to this order,
 // instead of searching the entire photo library.
 function orderColorwayGuesses() {
-  return orderLines.map(l => normalize(parseColorwayFromSKU(l.SKU))).filter(Boolean);
+  // Raw (not normalize()d) so callers can still see word boundaries.
+  return orderLines.map(l => parseColorwayFromSKU(l.SKU)).filter(Boolean);
 }
 
 function photoCardHTML(p) {
@@ -344,7 +371,17 @@ function renderLines() {
   }
   container.innerHTML = orderLines.map(line => {
     const guess = parseColorwayFromSKU(line.SKU);
-    const matches = matchPhotos(guess);
+    const { exact, close } = matchPhotos(guess);
+    let body;
+    if (exact.length) {
+      body = `<div class="photo-grid">${exact.map(photoCardHTML).join('')}</div>`;
+    } else if (close.length) {
+      body = `
+        <div class="no-match">No exact match for "${guess}" — close names only, check before sharing.</div>
+        <div class="photo-grid">${close.map(photoCardHTML).join('')}</div>`;
+    } else {
+      body = `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`;
+    }
     return `
       <div class="line-block">
         <div class="line-head">
@@ -352,9 +389,7 @@ function renderLines() {
           <span class="line-qty">qty ${line.Qty_Needed ?? '—'}</span>
           <span class="line-guess">matching "${guess}"</span>
         </div>
-        <div class="photo-grid">
-          ${matches.length ? matches.map(photoCardHTML).join('') : `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`}
-        </div>
+        ${body}
       </div>`;
   }).join('');
   loadImagesInBatches();
@@ -403,8 +438,11 @@ function renderSearch(query) {
     .filter(p => {
       const n = normalize(p.Colorway_Name);
       if (!n) return false;
-      // Must belong to a colorway that's actually on this order...
-      const belongsToOrder = orderGuesses.some(g => g && (n.includes(g) || g.includes(n)));
+      // Must belong to a colorway that's actually on this order — whole-word
+      // containment only, same rule as matchPhotos().
+      const nWords = normWords(p.Colorway_Name);
+      const belongsToOrder = orderGuesses.some(g =>
+        g && (normalize(g) === n || wordContains(nWords, normWords(g)) || wordContains(normWords(g), nWords)));
       if (!belongsToOrder) return false;
       // ...and match what was typed.
       return n.includes(q);
