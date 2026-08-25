@@ -172,6 +172,14 @@
   .photo-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
   .photo-thumb.empty { color: #8B7D72; font-size: 11px; font-style: italic; }
   .photo-hint { font-size: 10px; color: #8B7D72; margin-top: 8px; font-style: italic; }
+  .rot-row { display: flex; gap: 4px; margin-bottom: 6px; }
+  .rot-btn {
+    background: none; border: 1px solid var(--rule); border-radius: 3px; cursor: pointer;
+    font-size: 12px; line-height: 1; padding: 3px 7px; color: #6B5E52;
+    font-family: 'Inter', sans-serif;
+  }
+  .rot-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .rot-btn:disabled { opacity: .4; cursor: default; }
 
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -301,24 +309,40 @@
         <div class="photo-slot-label">Step 1</div>
         <div class="photo-thumb" id="thumbP1"><span>No photo</span></div>
         <input class="field-input" id="photoP1" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <div class="rot-row">
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoP1','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoP1','cw',this)" title="Rotate 90° clockwise">↻</button>
+        </div>
         <input class="field-input" id="noteP1" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
         <div class="photo-slot-label">Step 2</div>
         <div class="photo-thumb" id="thumbP2"><span>No photo</span></div>
         <input class="field-input" id="photoP2" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <div class="rot-row">
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoP2','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoP2','cw',this)" title="Rotate 90° clockwise">↻</button>
+        </div>
         <input class="field-input" id="noteP2" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
         <div class="photo-slot-label">Finished</div>
         <div class="photo-thumb" id="thumbPF"><span>No photo</span></div>
         <input class="field-input" id="photoPF" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <div class="rot-row">
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoPF','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoPF','cw',this)" title="Rotate 90° clockwise">↻</button>
+        </div>
         <input class="field-input" id="notePF" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
         <div class="photo-slot-label">Inspiration</div>
         <div class="photo-thumb" id="thumbInsp"><span>No photo</span></div>
         <input class="field-input" id="photoInsp" placeholder="Photo URL..." oninput="markUnsaved(); updatePhotoThumbs();" style="width:100%; margin-bottom:6px;">
+        <div class="rot-row">
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoInsp','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" onclick="rotateSlotPhoto('photoInsp','cw',this)" title="Rotate 90° clockwise">↻</button>
+        </div>
         <input class="field-input" id="noteInsp" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
     </div>
@@ -560,6 +584,52 @@ let allDyes = [];        // for autocomplete: {name, brand, powder, water}
 let unsavedChanges = false;
 let isSaving = false;
 let nextClientKey = 1;
+
+const ROTATE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/rotate-photo';
+
+// Rotates the file behind one photo slot. The slot only holds a photo2 proxy
+// URL, not a Nextcloud path — the workflow parses ?path= back out of it, so
+// nothing here needs to know the storage layout.
+//
+// The rotation itself is immediate and permanent. The refreshed URL is written
+// into the field and flagged unsaved: without saving, the file is still rotated
+// but the stale cache-buster stays in Grist and other widgets keep showing the
+// old orientation until their cache expires.
+async function rotateSlotPhoto(inputId, direction, btnEl) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const url = input.value.trim();
+  if (!url) { showToast('No photo in this slot'); return; }
+
+  const row = btnEl.parentElement;
+  const btns = row ? row.querySelectorAll('.rot-btn') : [btnEl];
+  btns.forEach(b => { b.disabled = true; });
+
+  try {
+    const res = await fetch(ROTATE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo_url: url, direction: direction }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    const out = await res.json();
+    if (!out || !out.success) throw new Error('Workflow reported failure');
+
+    if (out.new_url) {
+      input.value = out.new_url;
+      updatePhotoThumbs();
+      markUnsaved();
+      showToast('Rotated — save to keep the refreshed link');
+    } else {
+      showToast('Rotated');
+    }
+  } catch (e) {
+    console.error('Rotate failed:', e);
+    showToast('Rotate failed — is the n8n webhook live?');
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+  }
+}
 
 function markUnsaved() {
   unsavedChanges = true;

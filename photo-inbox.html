@@ -62,6 +62,17 @@ body {
   cursor: pointer;
 }
 .delete-btn:hover { background: var(--accent); }
+.rot-btns {
+  position: absolute; top: 6px; left: 6px; z-index: 5; display: flex; gap: 4px;
+}
+.rot-btn {
+  font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.4);
+  background: rgba(26,22,20,.6); color: white; cursor: pointer;
+  font-family: 'Inter', sans-serif;
+}
+.rot-btn:hover { background: rgba(26,22,20,.85); }
+.rot-btn:disabled { opacity: .4; cursor: default; }
 .photo-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
 .photo-card img.lazy-photo:not(.loaded) { opacity: 0.3; }
 .photo-card img.lazy-photo { transition: opacity 0.2s; }
@@ -375,6 +386,10 @@ function photoCardHTML(p) {
   return `
     <div class="photo-card" id="card-${key}">
       <button class="delete-btn" onclick="deleteInboxPhoto('${key}')" title="Delete this photo permanently">🗑</button>
+      <div class="rot-btns">
+        <button class="rot-btn" onclick="rotateInboxPhoto('${key}','ccw')" title="Rotate 90° counter-clockwise">↺</button>
+        <button class="rot-btn" onclick="rotateInboxPhoto('${key}','cw')" title="Rotate 90° clockwise">↻</button>
+      </div>
       <img class="lazy-photo" data-src="${p.preview_url}" alt="${p.filename}">
       <div class="photo-card-body">
         <div class="photo-folder">${folderOf(p.path)}</div>
@@ -460,6 +475,45 @@ function refreshCard(key) {
   if (!p) return;
   const cardEl = document.getElementById(`card-${key}`);
   if (cardEl) cardEl.outerHTML = photoCardHTML(p);
+}
+
+const ROTATE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/rotate-photo';
+
+// Rotates the file in place, before it is filed. Nothing in Grist yet, so the
+// only state to fix is this card's preview_url — which needs a fresh &r= or the
+// browser keeps showing the pre-rotation image (photo2 serves `immutable`).
+// Whatever the file looks like at File time is what gets filed.
+async function rotateInboxPhoto(key, direction) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+
+  const cardEl = document.getElementById(`card-${key}`);
+  const btns = cardEl ? cardEl.querySelectorAll('.rot-btn') : [];
+  btns.forEach(b => { b.disabled = true; });
+  if (cardEl) cardEl.style.opacity = '0.5';
+
+  try {
+    const res = await fetch(ROTATE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p.path, photo_url: p.preview_url, direction: direction }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    const out = await res.json();
+    if (!out || !out.success) throw new Error('Workflow reported failure');
+
+    if (out.new_url) p.preview_url = out.new_url;
+    if (cardEl) cardEl.style.opacity = '1';
+    refreshCard(key);
+    loadImagesInBatches();
+    showToast('Rotated');
+  } catch (e) {
+    console.error('Rotate failed:', e);
+    if (cardEl) cardEl.style.opacity = '1';
+    btns.forEach(b => { b.disabled = false; });
+    showToast('Rotate failed — is the n8n webhook live?');
+  }
 }
 
 async function deleteInboxPhoto(key) {
