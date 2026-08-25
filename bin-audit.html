@@ -237,6 +237,63 @@
 <div id="toast" class="toast"></div>
 
 <script>
+/* ── Mixed-dye bin codes — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   The made-dye shelf is M-A1 .. M-D4: letters are columns, numbers are rows,
+   matching back stock. Every widget that reads Dye_Stock.Bin_Location must
+   normalise before displaying OR grouping. Skipping it is what let one drawer
+   show up as several bins: "5", "b3", "B-3" and "M-B3" are all one place, and
+   an un-normalised group key splits them into four.
+
+   Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
+   different rack, are not being renamed, and must NOT be passed to normBin. */
+const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+const BIN_LETTERS = 'ABCDEFGHIJKL';
+const NO_BIN = '(no bin)';
+
+// Fills down a column before moving to the next. Keyed on ROWS, not COLS, so
+// widening the shelf later appends new letters instead of remapping every code.
+function dyeBinCode(index0) {
+  const col = Math.floor(index0 / DYE_BIN_ROWS);
+  const row = index0 % DYE_BIN_ROWS;
+  return 'M-' + BIN_LETTERS[col] + (row + 1);
+}
+function normBin(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
+  if (!s) return '';
+  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
+  if (m) return 'M-' + m[1] + Number(m[2]);
+  m = /^(\d{1,3})$/.exec(s);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= DYE_BIN_ROWS * DYE_BIN_COLS) return dyeBinCode(n - 1);
+  }
+  return String(raw).trim();   // off-grid / unrecognised — left alone, never invented
+}
+// Shelf position, for sorting. Off-grid codes sort last instead of colliding at 0.
+function binOrder(code) {
+  const m = /^M-([A-L])(\d{1,2})$/.exec(String(code || ''));
+  if (!m) return 9000;
+  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_ROWS + (Number(m[2]) - 1);
+}
+function binSortFn(a, b) {
+  const d = binOrder(a) - binOrder(b);
+  return d !== 0 ? d : String(a).localeCompare(String(b));
+}
+// Display form. One empty-bin string everywhere, so the label a worker reads is
+// the same label the grouping used.
+function binLabel(raw) {
+  return normBin(raw) || NO_BIN;
+}
+// First grid position with nothing in it. Returns '' when the shelf is full, so
+// the caller can say so instead of inventing an M-E1 that does not exist.
+function nextFreeBin(binGroups) {
+  for (let i = 0; i < DYE_BIN_ROWS * DYE_BIN_COLS; i++) {
+    const code = dyeBinCode(i);
+    if (!binGroups[code] || !binGroups[code].length) return code;
+  }
+  return '';
+}
+
 // ── Shared helpers (keep in sync with the rest of the widget suite) ──
 function esc(s) {
   return (s == null ? '' : String(s)).replace(/[&<>"']/g,
@@ -463,7 +520,7 @@ function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
 
   const bins = {};
   containers.forEach(c => {
-    const key = c.bin || '(no bin)';
+    const key = binLabel(c.bin);
     (bins[key] = bins[key] || []).push(c);
   });
   Object.values(bins).forEach(l => l.sort((a, b) => a.label.localeCompare(b.label)));
@@ -805,7 +862,6 @@ function countCell() {
   return document.getElementById('countCols').checked
     ? '<td class="num"><span class="count-box"></span></td>' : '';
 }
-const BIN_LETTERS = 'ABCDEFGHIJKL';
 // Dye bins are free text with no Storage_Locations to list them, so the shelf
 // size is configured rather than derived. The naming scheme is read from the
 // bins already in use — plain numbers before the relabel, row-letter plus
@@ -813,20 +869,20 @@ const BIN_LETTERS = 'ABCDEFGHIJKL';
 function expectedDyeBins() {
   const rows = Math.max(1, Number(document.getElementById('binRows').value) || 4);
   const cols = Math.max(1, Number(document.getElementById('binCols').value) || 4);
-  const inUse = Object.keys(D.bins).filter(c => c !== '(no bin)');
+  const inUse = Object.keys(D.bins).filter(c => c !== NO_BIN);
   const numeric = inUse.filter(c => /^\d+$/.test(c)).length;
   const grid = inUse.filter(c => /^[A-La-l]\d{1,2}$/.test(c)).length;
   // Half-relabelled shelf: both schemes are live, so either guess would print a
   // column of bins that do not exist. Listing nothing is the honest answer.
   if (numeric && grid) return { codes: [], note: `${numeric} bin${numeric === 1 ? ' is' : 's are'} numbered and ${grid} use row letters, so the empty ones can't be worked out. Finish the relabel, or fix the odd ones out, and they'll appear.` };
   if (!numeric && !grid && inUse.length) return { codes: [], note: 'Bin codes don\'t follow a pattern this can extend, so empty ones can\'t be listed.' };
-  // Letters are columns, numbers are rows — same as back stock. Emitted in
-  // reading order (A1 B1 C1 D1 / A2 B2 ...) so the printed grid matches the
-  // shelf you are standing in front of rather than its transpose.
+  // Letters are columns, numbers are rows. Emitted in reading order
+  // (A1 B1 C1 D1 / A2 B2 ...) so the printed grid matches the shelf you are
+  // standing in front of rather than its transpose.
   const codes = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      codes.push(numeric ? String(r * cols + c + 1) : BIN_LETTERS[c] + (r + 1));
+      codes.push(numeric ? String(c * rows + r + 1) : BIN_LETTERS[c] + (r + 1));
     }
   }
   return { codes, note: '' };

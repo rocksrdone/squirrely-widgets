@@ -123,6 +123,63 @@ table.stock-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); 
 <div class="toast" id="toast"></div>
 
 <script>
+/* ── Mixed-dye bin codes — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   The made-dye shelf is M-A1 .. M-D4: letters are columns, numbers are rows,
+   matching back stock. Every widget that reads Dye_Stock.Bin_Location must
+   normalise before displaying OR grouping. Skipping it is what let one drawer
+   show up as several bins: "5", "b3", "B-3" and "M-B3" are all one place, and
+   an un-normalised group key splits them into four.
+
+   Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
+   different rack, are not being renamed, and must NOT be passed to normBin. */
+const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+const BIN_LETTERS = 'ABCDEFGHIJKL';
+const NO_BIN = '(no bin)';
+
+// Fills down a column before moving to the next. Keyed on ROWS, not COLS, so
+// widening the shelf later appends new letters instead of remapping every code.
+function dyeBinCode(index0) {
+  const col = Math.floor(index0 / DYE_BIN_ROWS);
+  const row = index0 % DYE_BIN_ROWS;
+  return 'M-' + BIN_LETTERS[col] + (row + 1);
+}
+function normBin(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
+  if (!s) return '';
+  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
+  if (m) return 'M-' + m[1] + Number(m[2]);
+  m = /^(\d{1,3})$/.exec(s);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= DYE_BIN_ROWS * DYE_BIN_COLS) return dyeBinCode(n - 1);
+  }
+  return String(raw).trim();   // off-grid / unrecognised — left alone, never invented
+}
+// Shelf position, for sorting. Off-grid codes sort last instead of colliding at 0.
+function binOrder(code) {
+  const m = /^M-([A-L])(\d{1,2})$/.exec(String(code || ''));
+  if (!m) return 9000;
+  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_ROWS + (Number(m[2]) - 1);
+}
+function binSortFn(a, b) {
+  const d = binOrder(a) - binOrder(b);
+  return d !== 0 ? d : String(a).localeCompare(String(b));
+}
+// Display form. One empty-bin string everywhere, so the label a worker reads is
+// the same label the grouping used.
+function binLabel(raw) {
+  return normBin(raw) || NO_BIN;
+}
+// First grid position with nothing in it. Returns '' when the shelf is full, so
+// the caller can say so instead of inventing an M-E1 that does not exist.
+function nextFreeBin(binGroups) {
+  for (let i = 0; i < DYE_BIN_ROWS * DYE_BIN_COLS; i++) {
+    const code = dyeBinCode(i);
+    if (!binGroups[code] || !binGroups[code].length) return code;
+  }
+  return '';
+}
+
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -194,58 +251,6 @@ let coUsedDyes = {};  // dyeId -> Set of dyeIds used together with it in some re
 const BIN_CAPACITY = 12; // premade dye containers per bin
 const GENERIC_FILL_CAP = 6; // don't let unrelated fills use more than half a bin — leaves room for a related dye to join later
 
-// ── Mixed-dye bin codes ──
-// M-A1 .. M-D4 on a 4x4 shelf. Letters are columns, numbers are rows — same
-// convention as back stock. Kept byte-identical with batch-assignment.html:
-// when these two drifted apart, one widget suggested "3" while the other
-// suggested "M-A3" and the same drawer ended up recorded as two bins.
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
-const BIN_LETTERS = 'ABCDEFGHIJKL';
-
-// Fills down a column before moving to the next, so a letter's worth of
-// related dyes stays together on one vertical run of the shelf.
-function dyeBinCode(index0) {
-  const col = Math.floor(index0 / DYE_BIN_ROWS);
-  const row = index0 % DYE_BIN_ROWS;
-  return 'M-' + BIN_LETTERS[col] + (row + 1);
-}
-
-// "b3", "B-3", "M-B3" and the pre-relabel "7" all have to resolve to one bin.
-// Without this a single drawer shows up as several distinct bins and the fill
-// logic happily suggests one that is already full. Legacy numbers map through
-// the same reading order dye-pull-sheet.html uses, so a jar logged before the
-// relabel still points at the drawer it is actually in.
-function normBin(raw) {
-  const s = String(raw || '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
-  if (!s) return '';
-  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
-  if (m) return 'M-' + m[1] + Number(m[2]);
-  m = /^(\d{1,3})$/.exec(s);
-  if (m) {
-    const n = Number(m[1]);
-    if (n >= 1 && n <= DYE_BIN_ROWS * DYE_BIN_COLS) return dyeBinCode(n - 1);
-  }
-  return String(raw).trim();   // off-grid / unrecognised — left alone, never invented
-}
-
-// Position on the shelf, for "which bin comes next". Off-grid codes sort last
-// rather than colliding at 0 and being picked as the next bin.
-function binOrder(code) {
-  const m = /^M-([A-L])(\d{1,2})$/.exec(String(code || ''));
-  if (!m) return 9000;
-  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_ROWS + (Number(m[2]) - 1);
-}
-
-// First grid position with nothing in it. Returns '' when the shelf is full, so
-// the caller can say so instead of inventing an M-E1 that does not exist.
-function nextFreeBin(binGroups) {
-  for (let i = 0; i < DYE_BIN_ROWS * DYE_BIN_COLS; i++) {
-    const code = dyeBinCode(i);
-    if (!binGroups[code] || !binGroups[code].length) return code;
-  }
-  return '';
-}
-
 function isTrueOneOff(dyeId) {
   const coUsed = coUsedDyes[dyeId];
   return !coUsed || coUsed.size === 0;
@@ -276,7 +281,7 @@ function suggestBinForDye(dyeId) {
       const allOneOff = entries.every(e => isTrueOneOff(e.dyeId));
       if (allOneOff && entries.length < BIN_CAPACITY) {
         // Furthest along the shelf, so one-offs collect at the far end.
-        if (catchAllBin === null || binOrder(bin) > binOrder(catchAllBin)) catchAllBin = bin;
+      if (catchAllBin === null || binOrder(bin) > binOrder(catchAllBin)) catchAllBin = bin;
       }
     }
     if (catchAllBin) return { bin: catchAllBin, note: 'one-off — catch-all bin, out of the way' };
@@ -311,9 +316,7 @@ function suggestBinForDye(dyeId) {
 
   // 4. Nothing eligible — start a new bin.
   const next = nextFreeBin(binGroups);
-  return next
-    ? { bin: next, note: 'new bin' }
-    : { bin: '', note: 'shelf is full — no empty bin to start' };
+  return next ? { bin: next, note: 'new bin' } : { bin: '', note: 'shelf is full — no empty bin to start' };
 }
 
 let newStockDyeId = null;
@@ -355,7 +358,7 @@ async function loadAll() {
       dyeId: getRefId(columnAsArray(stockTable, dyeRefCol)[i]),
       Quantity_mL: columnAsArray(stockTable, qtyCol)[i] ?? '',
       Mixed_Date: columnAsArray(stockTable, mixedCol)[i] ?? '',
-      Bin_Location: columnAsArray(stockTable, binCol)[i] || '',
+      Bin_Location: normBin(columnAsArray(stockTable, binCol)[i]),
     }));
 
     // Which dyes get used together in the same recipe — used to group bins sensibly.
@@ -524,8 +527,7 @@ async function addStock() {
   const qty = Number(document.getElementById('newStockQty').value) || 0;
   const date = document.getElementById('newStockDate').value;
   // Normalised on the way in, not just on the way out. Otherwise someone typing
-  // "b3" writes a third spelling of M-B3 straight back into Grist and the
-  // grouping this widget just fixed drifts apart again.
+  // "b3" writes a third spelling of M-B3 straight back into Grist.
   const bin = normBin(document.getElementById('newStockBin').value);
   const existing = stockRows.filter(r => r.dyeId === newStockDyeId)
     .sort((a, b) => (dateSort(b.Mixed_Date)) - (dateSort(a.Mixed_Date)));
@@ -566,7 +568,10 @@ async function useSuggestedBin(stockId) {
 
 async function updateStockField(id, field, value) {
   const fields = {};
-  fields[field] = field === 'Quantity_mL' ? Number(value) : value;
+  // The inline table edit is the other door into Bin_Location — normalise here too.
+  fields[field] = field === 'Quantity_mL' ? Number(value)
+    : field === 'Bin_Location' ? normBin(value)
+    : value;
   try {
     await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', id, fields]]);
     const row = stockRows.find(s => s.id === id);
