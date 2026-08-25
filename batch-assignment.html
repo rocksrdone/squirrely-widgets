@@ -35,13 +35,6 @@ body {
   color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
 }
 .section-title:first-of-type { margin-top: 4px; }
-.order-card {
-  background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; margin-bottom: 5px;
-}
-.order-top { display: flex; justify-content: space-between; align-items: center; }
-.order-customer { font-weight: 600; font-size: 12px; }
-.order-progress { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
-.order-progress.complete { color: var(--done-text); font-weight: 700; }
 .order-log-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
 .order-log-row input {
   flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
@@ -62,6 +55,75 @@ body {
 .cleanup-stage { background: #1A1614; color: #F7F3EE; }
 .cleanup-stage .slot-tag { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
 .dye-action-row { margin-bottom: 8px; }
+
+/* Put-away board. Sized to be read from where the bins are, not from the chair —
+   that walk-and-squint loop was the whole problem. */
+.putaway {
+  border: 2px solid var(--done-border); border-radius: 8px;
+  background: var(--done-bg); padding: 8px 10px; margin: 6px 0 10px;
+}
+.putaway-cap {
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--done-text); font-weight: 700; margin-bottom: 6px;
+}
+.putaway-line {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 5px 0; border-top: 1px solid rgba(0,0,0,.09);
+}
+.putaway-line:first-of-type { border-top: none; }
+.putaway-dye { font-size: 17px; font-weight: 700; line-height: 1.15; }
+.putaway-bin {
+  font-family: 'DM Mono', monospace; font-size: 22px; font-weight: 700;
+  color: var(--done-text); white-space: nowrap;
+}
+.putaway-bin.muted { color: #8B7D72; font-size: 15px; }
+
+/* One dye = one bordered block, so a row of buttons can never look like it
+   belongs to the dye above it. */
+.dye-block { border: 1px solid var(--rule); border-left: 3px solid var(--rule); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+.dye-block.stage { border-left-color: var(--gold); }
+.dye-block.keep  { border-left-color: var(--teal); }
+.dye-block.oneoff{ border-left-color: var(--rule); }
+.dye-block.done  { border-left-color: var(--done-border); background: var(--done-bg); }
+.dye-block-name { font-size: 13px; font-weight: 700; margin-bottom: 1px; }
+.dye-block-why { font-size: 10px; color: #8B7D72; margin-bottom: 5px; }
+.btn-row { display: flex; gap: 5px; flex-wrap: wrap; }
+/* Glove-sized: 40px min height is the smallest reliable target with nitrile on. */
+.act-btn {
+  flex: 1 1 auto; min-height: 40px; min-width: 62px; padding: 6px 10px;
+  border: 1px solid var(--rule); border-radius: 6px; background: white;
+  font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
+  color: var(--ink); cursor: pointer;
+}
+.act-btn:active { transform: translateY(1px); }
+.act-btn.bin {
+  flex: 2 1 auto; font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 700;
+  background: var(--done-bg); border-color: var(--done-border); color: var(--done-text);
+}
+.act-btn.stage-btn { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
+.act-btn.dump { color: var(--accent); }
+.ml-input {
+  width: 74px; min-height: 40px; padding: 4px 8px; border: 1px solid var(--rule);
+  border-radius: 6px; font-size: 14px; font-family: 'DM Mono', monospace; text-align: center;
+}
+.dye-done-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+
+/* Orders: one line each, name small. The customer is context, not the subject. */
+.ord-strip { border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+.ord-line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; font-size: 11px; border-top: 1px solid var(--rule); }
+.ord-line:first-child { border-top: none; }
+.ord-line.total { background: var(--warm); font-weight: 700; font-size: 11.5px; }
+.ord-who { color: #6B5E52; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ord-n { font-family: 'DM Mono', monospace; white-space: nowrap; }
+.ord-n.complete { color: var(--done-text); font-weight: 700; }
+
+/* Draft button parked in the header — rarely wanted, previously easy to hit. */
+.header-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.draft-mini {
+  flex: none; font-size: 10px; padding: 4px 7px; border-radius: 5px;
+  border: 1px dashed var(--rule); background: white; color: #8B7D72; cursor: pointer;
+}
+.draft-mini:hover { border-color: var(--accent); color: var(--accent); }
 .action-done-banner {
   display: flex; justify-content: space-between; align-items: center;
   background: var(--done-bg); border: 1px solid var(--done-text); border-radius: 5px;
@@ -69,13 +131,6 @@ body {
 }
 .undo-link { color: var(--accent); cursor: pointer; text-decoration: underline; font-weight: 600; }
 .undo-link:hover { opacity: .8; }
-.dye-action-row select {
-  width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
-  background: white; color: var(--ink); color-scheme: light;
-}
-.dye-action-row select option {
-  background: white; color: var(--ink);
-}
 .action-fields { display: flex; gap: 5px; margin-top: 4px; }
 .action-fields input {
   flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px;
@@ -97,7 +152,6 @@ body {
 .coverage .make-more { color:#8B5A2A; font-weight:700; }
 .coverage .make-none { color:var(--done-text); font-weight:700; }
 .pot-panel { background: white; border: 1px solid var(--rule); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
-.pot-method { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .method-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 10px; }
 .method-hand { background: #F0E4D4; color: #8B3A2A; }
 .method-kettle { background: var(--teal-light); color: var(--teal); }
@@ -105,10 +159,6 @@ body {
 .method-note { font-size: 10px; color: #8B7D72; font-style: italic; }
 .pot-row { display: flex; gap: 5px; align-items: center; }
 .pot-row input { flex: 1; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 4px; font-size: 13px; }
-.pot-dest { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 11px; color: var(--ink); }
-.pot-dest label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.pot-store { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #8B7D72; }
-.pot-store select { padding: 3px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; background: white; color: var(--ink); }
 .running-total { font-size: 11px; color: var(--done-text); background: var(--done-bg); border: 1px solid var(--done-text); border-radius: 5px; padding: 5px 8px; margin-bottom: 4px; }
 .pot-done { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink); background: #F7F3EE; border: 1px solid var(--rule); border-radius: 5px; padding: 4px 8px; margin-bottom: 3px; }
 </style>
@@ -734,14 +784,6 @@ function render() {
   }
   const e = currentEntry;
 
-  const isHandDye = /hand/i.test(e.method);
-  const isKettle = /kettle/i.test(e.method);
-  const methodLabel = e.method || 'Method not set';
-  const methodClass = isHandDye ? 'method-hand' : (isKettle ? 'method-kettle' : 'method-unknown');
-  const methodNote = isHandDye
-    ? 'each pot = its own dye lot · photograph separately'
-    : (isKettle ? 'pots are interchangeable' : 'set Dye_Method on the recipe — treated as hand-dye for now');
-
   const canPull = e.inStock > 0 && e.outstanding > 0;
   const pullHtml = canPull
     ? `<div class="pull-row">
@@ -761,18 +803,23 @@ function render() {
     </div>
     ${pullHtml}`;
 
+  // One line per order, customer small. Seeing the names is enough to know what
+  // is going on, so the heading and the large type both came out.
   const ordersHtml = e.orders.length
-    ? e.orders.map(o => {
-        const complete = o.allocated >= o.qtyNeeded;
-        return `
-          <div class="order-card">
-            <div class="order-top">
-              <span class="order-customer">${esc(o.customerName || '—')}</span>
-              <span class="order-progress ${complete ? 'complete' : ''}">${o.allocated}/${o.qtyNeeded} boxed</span>
-            </div>
-          </div>`;
-      }).join('')
-    : `<div class="empty-state">No open orders for this colorway — anything you make goes to back stock.</div>`;
+    ? `<div class="ord-strip">
+         ${e.orders.map(o => {
+           const complete = o.allocated >= o.qtyNeeded;
+           return `<div class="ord-line">
+             <span class="ord-who">${esc(o.customerName || '—')}</span>
+             <span class="ord-n ${complete ? 'complete' : ''}">${o.allocated}/${o.qtyNeeded}</span>
+           </div>`;
+         }).join('')}
+         <div class="ord-line total">
+           <span class="ord-who">${e.orders.length} order${e.orders.length === 1 ? '' : 's'}</span>
+           <span class="ord-n">${e.orders.reduce((t, o) => t + o.allocated, 0)}/${e.orders.reduce((t, o) => t + o.qtyNeeded, 0)}</span>
+         </div>
+       </div>`
+    : `<div class="empty-state">No open orders — anything you make goes to back stock.</div>`;
 
   const sessionSpools = sessionPots.reduce((s, p) => s + p.spools, 0);
   const runningHtml = sessionPots.length
@@ -784,78 +831,101 @@ function render() {
         </div>`).join('')
     : '';
 
+  // Just the count and the button. The destination radios and stock-bucket select
+  // are gone: every pot stays free for orders, and where spools end up is decided
+  // at winding when the real yield is known. logPot() defaults accordingly.
   const potPanelHtml = `
     <div class="pot-panel">
-      <div class="pot-method"><span class="method-badge ${methodClass}">${esc(methodLabel)}</span><span class="method-note">${esc(methodNote)}</span></div>
       <div class="pot-row">
         <input type="number" id="pot-spools" placeholder="Spools this pot" min="1">
         <button class="log-btn" onclick="logPot()">✓ Log pot</button>
       </div>
-      <div class="pot-dest">
-        <label><input type="radio" name="pot-dest" value="cover" checked> Keep for orders — decide who gets what when you wind</label>
-        <label><input type="radio" name="pot-dest" value="stock"> All to back stock</label>
-      </div>
-      <div class="pot-store">
-        <span>Leftover / stock bucket:</span>
-        <select id="pot-store">
-          <option value="store">Store stock</option>
-          <option value="vendor">Vendor stock</option>
-        </select>
-      </div>
     </div>`;
 
+  // One bordered block per dye. Previously the description and the control were
+  // separate siblings, so with several dyes on screen it was guesswork which
+  // dropdown belonged to which name.
   const cleanupHtml = e.cleanupInfo.map((c, idx) => {
-    let flagHtml;
-    if (c.staging && c.staging.inReach) {
-      // Used again soon enough today that a prep zone will still be free for it.
-      flagHtml = `<div class="cleanup-row cleanup-stage"><strong>${esc(c.dyeDetail)}</strong> — Keep out. Stage at <span class="slot-tag">${esc(c.staging.slot)}</span> (used next in ${esc(c.staging.recipeName)}). Don't put it away.</div>`;
-    } else if (c.staging) {
-      // Needed later today, but too many groups out — the zone rotates before then.
-      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${esc(c.dyeDetail)}</strong> — needed again today in ${esc(c.staging.recipeName)} (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up before then. <span style="font-weight:600;">Store in bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
-    } else if (c.isOneOff) {
-      flagHtml = `<div class="cleanup-row cleanup-oneoff"><strong>${esc(c.dyeDetail)}</strong> — one-off, nothing else pending needs it. <span style="font-weight:600;">If keeping leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
-    } else {
-      flagHtml = `<div class="cleanup-row cleanup-keep"><strong>${esc(c.dyeDetail)}</strong> — keep out, also needed by: ${c.others.join(', ')}. <span style="font-weight:600;">If storing leftover: bin ${c.suggestedBin}</span> <span style="font-style:italic;">(${esc(c.suggestedBinNote)})</span>.</div>`;
+    const done = completedActions[idx];
+    if (done) {
+      return `<div class="dye-block done">
+        <div class="dye-done-line">
+          <span>✓ <strong>${esc(c.dyeDetail)}</strong> — ${esc(done.label)}</span>
+          <span class="undo-link" onclick="undoAction(${idx})">Undo</span>
+        </div>
+      </div>`;
     }
 
-    const done = completedActions[idx];
-    const actionBlock = done
-      ? `<div class="action-done-banner">
-           <span>✓ ${esc(done.label)}</span>
-           <span class="undo-link" onclick="undoAction(${idx})">Undo</span>
-         </div>`
-      : `<select id="action-${idx}" onchange="onDyeActionChange(${idx})">
-           <option value="">What did you do with the leftover?</option>
-           ${c.staging && c.staging.inReach ? `<option value="stage">Left it out — staged at ${esc(c.staging.slot)}</option>` : ''}
-           <option value="put_away">Put away in a bin</option>
-           <option value="hold">Hold for later (no bin yet)</option>
-           <option value="dump">Dump it</option>
-         </select>
-         <div id="action-fields-${idx}"></div>`;
+    // Why-line trimmed to the shortest thing that still changes what you do.
+    let cls = 'oneoff', why;
+    if (c.staging && c.staging.inReach) {
+      cls = 'stage';
+      why = `keep out — used next in ${esc(c.staging.recipeName)}`;
+    } else if (c.staging) {
+      cls = 'keep';
+      why = `needed again today (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up first`;
+    } else if (c.isOneOff) {
+      why = 'one-off';
+    } else {
+      cls = 'keep';
+      why = `also needed by: ${c.others.join(', ')}`;
+    }
+
+    // Buttons, not a select — a dropdown needs two accurate taps in gloves and
+    // this needs one. The bin is baked into its own button so the suggestion
+    // never has to be retyped. Any misclick is one Undo away.
+    const stageBtn = (c.staging && c.staging.inReach)
+      ? `<button class="act-btn stage-btn" onclick="stageDye(${idx})">Leave out · ${esc(c.staging.slot)}</button>`
+      : '';
+    const binBtn = c.suggestedBin
+      ? `<button class="act-btn bin" onclick="putAwayDye(${idx})">→ ${esc(c.suggestedBin)}</button>`
+      : `<button class="act-btn" onclick="holdDye(${idx})">Hold — shelf full</button>`;
 
     return `
-      ${flagHtml}
-      <div class="dye-action-row">
-        ${actionBlock}
-      </div>
-    `;
+      <div class="dye-block ${cls}">
+        <div class="dye-block-name">${esc(c.dyeDetail)}</div>
+        <div class="dye-block-why">${why}</div>
+        <div class="btn-row">
+          <input type="number" class="ml-input" id="qty-${idx}" placeholder="mL" min="0">
+          ${stageBtn}
+          ${binBtn}
+          <button class="act-btn dump" onclick="dumpDye(${idx})">Dump</button>
+        </div>
+      </div>`;
   }).join('');
 
-  const draftActionHtml = `
-    <div class="section-title">Combined leftovers into something new?</div>
-    <button class="log-btn" id="draftBtn" style="width:100%;" onclick="createColorDraft()">🎨 New colour draft — get a code</button>
-  `;
+  // Everything confirmed for put-away, collected in one place in large type so the
+  // list can be read from where the bins are instead of walking back to re-read.
+  const putAway = e.cleanupInfo
+    .map((c, idx) => ({ c, done: completedActions[idx] }))
+    .filter(x => x.done && x.done.board);
+  const putAwayHtml = putAway.length
+    ? `<div class="putaway">
+         <div class="putaway-cap">Put away — ${putAway.length} of ${e.cleanupInfo.length}</div>
+         ${putAway.map(x => `
+           <div class="putaway-line">
+             <span class="putaway-dye">${esc(x.c.dyeDetail)}</span>
+             <span class="putaway-bin ${x.done.board.muted ? 'muted' : ''}">${esc(x.done.board.where)}</span>
+           </div>`).join('')}
+       </div>`
+    : '';
+
+
 
   document.getElementById('content').innerHTML = `
-    <div class="header-title">${esc(e.recipeName)}</div>
-    <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
+    <div class="header-bar">
+      <div>
+        <div class="header-title">${esc(e.recipeName)}</div>
+        <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
+      </div>
+      <button class="draft-mini" id="draftBtn" onclick="createColorDraft()" title="Combined leftovers into something new?">🎨 draft</button>
+    </div>
     ${coverageHtml}
     <div class="section-title">Log a pot</div>
     ${potPanelHtml}
     ${runningHtml}
-    <div class="section-title">Orders for this colorway</div>
     ${ordersHtml}
-    ${cleanupHtml ? `<div class="section-title">After you finish — dye cleanup</div>${cleanupHtml}${draftActionHtml}` : ''}
+    ${cleanupHtml ? `${putAwayHtml}<div class="section-title">Dye Cleanup</div>${cleanupHtml}` : ''}
   `;
 }
 
@@ -949,10 +1019,10 @@ async function logPot() {
   if (spools <= 0) { showToast('Enter how many spools this pot made'); return; }
 
   const e = currentEntry;
-  const modeEl = document.querySelector('input[name="pot-dest"]:checked');
-  const mode = modeEl ? modeEl.value : 'cover';
-  const bucketEl = document.getElementById('pot-store');
-  const bucket = bucketEl ? bucketEl.value : 'store';
+  // Every pot stays free for orders. Sending spools to a stock bucket is a
+  // sit-down inventory decision, not a wet-gloves-at-the-kettle one.
+  const mode = 'cover';
+  const bucket = 'store';
   const yds = yardsPerSpool(e.fiberType);
 
   // Nothing is assigned to a customer here. Who gets which spools is decided at
@@ -1017,84 +1087,6 @@ async function undoPot(idx) {
   }
 }
 
-async function onDyeActionChange(idx) {
-  const action = document.getElementById(`action-${idx}`).value;
-  const wrap = document.getElementById(`action-fields-${idx}`);
-
-  if (action === 'put_away' || action === 'hold') {
-    wrap.innerHTML = `<div class="action-fields">Checking existing stock...</div>`;
-    const c = currentEntry.cleanupInfo[idx];
-    let existing = [];
-    if (c.dyeId) {
-      try {
-        const stockTable = await grist.docApi.fetchTable('Dye_Stock');
-        const sIds = stockTable.id || [];
-        sIds.forEach((id, i) => {
-          const dyeRef = getRefId(columnAsArray(stockTable, stockCol('dye','Dye'))[i]);
-          if (dyeRef !== c.dyeId) return;
-          existing.push({
-            id,
-            qty: Number(columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[i]) || 0,
-            bin: binLabel(columnAsArray(stockTable, stockCol('bin','Bin_Location'))[i]),
-            mixedDate: columnAsArray(stockTable, stockCol('mixedDate','Mixed_Date'))[i],
-          });
-        });
-      } catch (e) {
-        console.error('Could not check existing stock:', e);
-      }
-    }
-
-    // Bin suggestion was already computed when this recipe loaded (see cleanupInfo) —
-    // reuse it here so the pre-filled field matches what's shown in the row above.
-    const suggestedBin = c.suggestedBin;
-
-    const binField = action === 'put_away'
-      ? `<input type="text" id="bin-${idx}" placeholder="Bin location" value="${suggestedBin}">`
-      : '';
-    const binHint = action === 'put_away'
-      ? `<div style="font-size:10px; color:#8B7D72; margin-top:3px;">Suggested bin ${suggestedBin} — keeps this dye's containers together for next time.</div>`
-      : '';
-
-    if (existing.length) {
-      const existingOptions = existing.map(s => {
-        const dateStr = s.mixedDate ? new Date(Number(s.mixedDate) * 1000).toLocaleDateString() : 'unknown date';
-        return `<option value="${s.id}">${s.qty}mL in ${s.bin} (mixed ${dateStr})</option>`;
-      }).join('');
-      wrap.innerHTML = `
-        <div style="font-size:10px; color:#8B7D72; margin-top:3px;">This dye already has stock on record — is this the same batch, or freshly mixed?</div>
-        <select id="which-${idx}" style="width:100%; margin-top:3px;">
-          <option value="new">This is freshly mixed — log as new</option>
-          ${existingOptions}
-        </select>
-        ${binHint}
-        <div class="action-fields" style="margin-top:3px;">
-          <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
-          ${binField}
-          <button class="action-confirm-btn" onclick="${action === 'put_away' ? 'putAwayDye' : 'holdDye'}(${idx})">✓</button>
-        </div>
-      `;
-    } else {
-      wrap.innerHTML = `${binHint}<div class="action-fields">
-        <input type="number" id="qty-${idx}" placeholder="mL left" min="0">
-        ${binField}
-        <button class="action-confirm-btn" onclick="${action === 'put_away' ? 'putAwayDye' : 'holdDye'}(${idx})">✓</button>
-      </div>`;
-    }
-  } else if (action === 'stage') {
-    const c = currentEntry.cleanupInfo[idx];
-    const slot = c.staging ? c.staging.slot : 'the prep table';
-    wrap.innerHTML = `<div class="action-fields">
-      <button class="action-confirm-btn" onclick="stageDye(${idx})" style="flex:1;">Confirm — left out at ${esc(slot)}</button>
-    </div>`;
-  } else if (action === 'dump') {
-    wrap.innerHTML = `<div class="action-fields">
-      <button class="action-confirm-btn" onclick="dumpDye(${idx})" style="flex:1;">Confirm dumped</button>
-    </div>`;
-  } else {
-    wrap.innerHTML = '';
-  }
-}
-
 // Staging writes nothing to Dye_Stock on purpose — the dye never left the bench,
 // so there's no stock location to record. It just closes out the row for the day.
 async function stageDye(idx) {
@@ -1102,7 +1094,8 @@ async function stageDye(idx) {
   const slot = c.staging ? c.staging.slot : 'prep table';
   const next = c.staging ? ` for ${esc(c.staging.recipeName)}` : '';
   completedActions[idx] = {
-    label: `Staged at ${esc(slot)}${next} — not put away`,
+    label: `left out at ${esc(slot)}`,
+    board: { where: `stay out · ${slot}`, muted: true },
     undo: async () => {},
   };
   render();
@@ -1112,41 +1105,50 @@ async function putAwayDye(idx) {
   const c = currentEntry.cleanupInfo[idx];
   if (!c.dyeId) { showToast(`${c.dyeName} isn't linked to a Dyes row — can't log stock`); return; }
   const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
-  // Normalised at the point of entry. This field is free text at the kettle,
-  // which is exactly where a hurried "b3" gets typed — and an un-normalised
-  // write undoes the collapsing every reader now does.
-  const bin = normBin(document.getElementById(`bin-${idx}`).value);
   if (qty <= 0) { showToast('Enter how many mL are left'); return; }
-  if (!bin) { showToast('Enter a bin location'); return; }
 
-  const whichSelect = document.getElementById(`which-${idx}`);
-  const which = whichSelect ? whichSelect.value : 'new';
+  // Bin comes from the button, already normalised when suggestBinFor computed it.
+  // There is no bin field to read any more: the suggestion was never overridden
+  // in practice, and a free-text box in gloves is how bad codes got in.
+  const bin = normBin(c.suggestedBin);
+  if (!bin) { showToast('No bin available — shelf may be full'); return; }
 
   try {
-    if (which === 'new') {
+    // One dye, one jar. Rather than asking "same batch or freshly mixed?" on every
+    // put-away, an existing row for this dye is updated in place — a new mix always
+    // replaces the old one, so a second row would be a data error either way.
+    const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+    const sIds = stockTable.id || [];
+    let existingId = null;
+    for (let i = 0; i < sIds.length; i++) {
+      if (getRefId(columnAsArray(stockTable, stockCol('dye','Dye'))[i]) === c.dyeId) { existingId = sIds[i]; break; }
+    }
+
+    if (existingId === null) {
       const result = await grist.docApi.applyUserActions([
         ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: c.dyeId, [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
       ]);
       const newRowId = result.retValues[0];
       completedActions[idx] = {
-        label: `Put away — ${qty}mL logged as new stock in bin ${bin}`,
+        label: `${qty}mL → ${bin}`,
+        board: { where: bin, muted: false },
         undo: async () => {
           await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', newRowId]]);
         },
       };
     } else {
-      const stockTable = await grist.docApi.fetchTable('Dye_Stock');
-      const rowIdx = (stockTable.id || []).indexOf(Number(which));
-      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx] : null;
-      const originalBin = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('bin','Bin_Location'))[rowIdx] : null;
-
+      const rowIdx = sIds.indexOf(existingId);
+      const originalQty = columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx];
+      const originalBin = columnAsArray(stockTable, stockCol('bin','Bin_Location'))[rowIdx];
+      const originalDate = columnAsArray(stockTable, stockCol('mixedDate','Mixed_Date'))[rowIdx];
       await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin }]
+        ['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
       ]);
       completedActions[idx] = {
-        label: `Put away — existing stock updated to ${qty}mL in bin ${bin}`,
+        label: `${qty}mL → ${bin}`,
+        board: { where: bin, muted: false },
         undo: async () => {
-          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: originalQty, [stockCol('bin','Bin_Location')]: originalBin }]]);
+          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: originalQty, [stockCol('bin','Bin_Location')]: originalBin, [stockCol('mixedDate','Mixed_Date')]: originalDate }]]);
         },
       };
     }
@@ -1163,34 +1165,35 @@ async function holdDye(idx) {
   const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
   if (qty <= 0) { showToast('Enter how many mL are left'); return; }
 
-  const whichSelect = document.getElementById(`which-${idx}`);
-  const which = whichSelect ? whichSelect.value : 'new';
-
   try {
-    if (which === 'new') {
+    // Same one-jar-per-dye upsert as putAwayDye, minus the bin.
+    const stockTable = await grist.docApi.fetchTable('Dye_Stock');
+    const sIds = stockTable.id || [];
+    let existingId = null;
+    for (let i = 0; i < sIds.length; i++) {
+      if (getRefId(columnAsArray(stockTable, stockCol('dye','Dye'))[i]) === c.dyeId) { existingId = sIds[i]; break; }
+    }
+
+    if (existingId === null) {
       const result = await grist.docApi.applyUserActions([
         ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: c.dyeId, [stockCol('quantity','Quantity_mL')]: qty, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
       ]);
       const newRowId = result.retValues[0];
       completedActions[idx] = {
-        label: `Held — ${qty}mL logged as new stock, no bin yet`,
-        undo: async () => {
-          await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', newRowId]]);
-        },
+        label: `held — ${qty}mL, no bin`,
+        board: { where: 'no bin yet', muted: true },
+        undo: async () => { await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Stock', newRowId]]); },
       };
     } else {
-      const stockTable = await grist.docApi.fetchTable('Dye_Stock');
-      const rowIdx = (stockTable.id || []).indexOf(Number(which));
-      const originalQty = rowIdx >= 0 ? columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx] : null;
-
+      const rowIdx = sIds.indexOf(existingId);
+      const originalQty = columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx];
       await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: qty }]
+        ['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: qty }]
       ]);
       completedActions[idx] = {
-        label: `Held — existing stock updated to ${qty}mL`,
-        undo: async () => {
-          await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', Number(which), { [stockCol('quantity','Quantity_mL')]: originalQty }]]);
-        },
+        label: `held — ${qty}mL, no bin`,
+        board: { where: 'no bin yet', muted: true },
+        undo: async () => { await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: originalQty }]]); },
       };
     }
     render();
@@ -1203,7 +1206,7 @@ async function holdDye(idx) {
 async function dumpDye(idx) {
   const c = currentEntry.cleanupInfo[idx];
   if (!c.dyeId) {
-    completedActions[idx] = { label: 'Dumped', undo: async () => {} };
+    completedActions[idx] = { label: 'dumped', undo: async () => {} };
     render();
     return;
   }
@@ -1239,7 +1242,7 @@ async function dumpDye(idx) {
   try {
     await grist.docApi.applyUserActions(existing.map(e => ['RemoveRecord', 'Dye_Stock', e.id]));
     completedActions[idx] = {
-      label: `Dumped — removed ${totalQty}mL from stock`,
+      label: `dumped — ${totalQty}mL removed from stock`,
       undo: async () => {
         await grist.docApi.applyUserActions(existing.map(e => ['AddRecord', 'Dye_Stock', null, { [stockCol('dye','Dye')]: e.dye, [stockCol('quantity','Quantity_mL')]: e.qty, [stockCol('bin','Bin_Location')]: e.bin, [stockCol('mixedDate','Mixed_Date')]: e.mixedDate }]));
       },
