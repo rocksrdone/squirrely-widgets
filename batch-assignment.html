@@ -49,7 +49,6 @@ body {
 .cleanup-oneoff { background: #F5E0E4; color: #A01830; }
 .cleanup-keep { background: var(--teal-light); color: var(--teal); }
 .cleanup-stage { background: #1A1614; color: #F7F3EE; }
-.cleanup-stage .slot-tag { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
 .dye-action-row { margin-bottom: 8px; }
 
 /* Put-away board. Sized to be read from where the bins are, not from the chair —
@@ -295,11 +294,17 @@ let RC_ALLOC = null, RC_WOL = null;
 let S_COLS = { ALLOC: {} };  // resolved Lot_Allocations column ids for stock fulfillment
 let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status string
 
-// ── PREP TABLE CONFIG ──────────────────────────────────────────────
-// Must match PREP_ZONES in batch-planner.html. Staging advice is only given
-// when the next use of a dye is fewer than this many groups ahead — past that,
-// the slot has already rotated round to something else.
-const PREP_ZONES = 3;
+// ── STAGING SHELF ──────────────────────────────────────────────────
+// Must match stgCols in dye-pull-sheet.html and PULL_CFG.stgCols in
+// print-day.html. If those change and this doesn't, this widget will name a
+// staging bin the printed sheet never assigned.
+const STG_COLS = 5;
+
+// Byte-identical to stageCode() in both print widgets — keep them in sync.
+// Fills across a shelf before dropping down: A1 B1 C1 D1 E1, then A2.
+function stageCode(index0, cols) {
+  return 'S-' + BIN_LETTERS[index0 % cols] + String(Math.floor(index0 / cols) + 1);
+}
 // ───────────────────────────────────────────────────────────────────
 
 // Grist Date columns store epoch seconds at UTC midnight of the calendar day.
@@ -307,46 +312,6 @@ function todayEpochSeconds() {
   const n = new Date();
   return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 1000;
 }
-
-// ── PREP ZONE ALLOCATION ───────────────────────────────────────────
-// Byte-identical copy of the function in batch-planner.html — keep them in sync.
-// See that file for the full explanation.
-function allocatePrepZones(recipeIds, dyesForRecipe, zoneCount) {
-  const zones = new Array(zoneCount).fill(null); // zone index -> dyeId
-  const steps = [];
-
-  function nextUseAtOrAfter(dyeId, fromIdx) {
-    for (let i = fromIdx; i < recipeIds.length; i++) {
-      if ((dyesForRecipe(recipeIds[i]) || []).includes(dyeId)) return i;
-    }
-    return Infinity;
-  }
-
-  recipeIds.forEach((rid, idx) => {
-    const needed = (dyesForRecipe(rid) || []).slice();
-    const overflow = [];
-    needed.forEach(dyeId => {
-      if (zones.indexOf(dyeId) >= 0) return; // already on the bench
-      let slotIdx = zones.indexOf(null);
-      if (slotIdx < 0) {
-        let worstZone = -1, worstNext = -1;
-        zones.forEach((resident, zi) => {
-          if (needed.indexOf(resident) >= 0) return; // still needed right now
-          const nu = nextUseAtOrAfter(resident, idx + 1);
-          if (nu > worstNext) { worstNext = nu; worstZone = zi; }
-        });
-        // More dyes in one recipe than there are zones — the extras just
-        // don't get a spot, and fall through to normal bin handling.
-        if (worstZone < 0) { overflow.push(dyeId); return; }
-        slotIdx = worstZone;
-      }
-      zones[slotIdx] = dyeId;
-    });
-    steps.push({ recipeId: rid, zones: zones.slice(), overflow });
-  });
-  return steps;
-}
-// ───────────────────────────────────────────────────────────────────
 
 let currentEntry = null;
 let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
@@ -529,8 +494,8 @@ async function loadForRecipe(record) {
 
     // recipeId -> [dyeId, dyeId, ...] — dyeId is the real Dyes row id, resolved via getRefId
     // Is_Powder = sprinkled dry. Powder dyes come off an alphabetical rack, not the
-    // prep bench: no zone, no reuse grouping, no bin. Skip them here so this map
-    // stays identical to batch-planner's, and allocatePrepZones agrees across both.
+    // prep bench: no staging slot, no reuse grouping, no bin. Skipped here so this
+    // map stays identical to batch-planner's.
     const cIds = compTable.id || [];
     const dyesByRecipeId = {};
     cIds.forEach((id, i) => {
@@ -702,12 +667,17 @@ async function loadForRecipe(record) {
       planRecipes.push(r.recipeId);
     });
 
-    const zoneSteps = planRecipes.length
-      ? allocatePrepZones(planRecipes, rid => dyesByRecipeId[rid] || [], PREP_ZONES)
-      : [];
-
+    // Where a dye goes when it is not going back to a bin: onto the staging shelf
+    // with the sheet of the next recipe that needs it. Staging bins follow the
+    // day-plan order, so the code here is the same one the pull sheet printed on
+    // that recipe's sheet — S-B2 means the bin already holding that sheet and the
+    // rest of its dyes.
+    //
+    // The old prep-zone allocation is gone: it answered "will a zone still be
+    // free by then", which mattered when dyes sat on a shared prep table. They
+    // now travel to the shelf with the sheet, so the only question is whether
+    // anything later today needs this dye at all.
     function stagingFor(dyeId) {
-      if (!zoneSteps.length) return null;
       const meIdx = planRecipes.indexOf(record.id);
       if (meIdx < 0) return null;
 
@@ -715,19 +685,13 @@ async function loadForRecipe(record) {
       for (let i = meIdx + 1; i < planRecipes.length; i++) {
         if ((dyesByRecipeId[planRecipes[i]] || []).includes(dyeId)) { nextIdx = i; break; }
       }
-      if (nextIdx < 0) return null; // not needed again today
-
-      let stayed = true;
-      for (let k = meIdx; k <= nextIdx; k++) {
-        if (zoneSteps[k].zones.indexOf(dyeId) < 0) { stayed = false; break; }
-      }
-      const zoneIdx = zoneSteps[nextIdx].zones.indexOf(dyeId);
+      if (nextIdx < 0) return null; // not needed again today — it goes in a bin
 
       return {
-        slot: stayed && zoneIdx >= 0 ? 'P' + (zoneIdx + 1) : null,
+        slot: stageCode(nextIdx, STG_COLS),
         recipeName: recipeNameById[planRecipes[nextIdx]] || `Recipe #${planRecipes[nextIdx]}`,
         gap: nextIdx - meIdx,
-        inReach: stayed && zoneIdx >= 0,
+        inReach: true,
       };
     }
 
@@ -855,12 +819,11 @@ function render() {
 
     // Why-line trimmed to the shortest thing that still changes what you do.
     let cls = 'oneoff', why;
-    if (c.staging && c.staging.inReach) {
+    if (c.staging) {
       cls = 'stage';
-      why = `keep out — used next in ${esc(c.staging.recipeName)}`;
-    } else if (c.staging) {
-      cls = 'keep';
-      why = `needed again today (${c.staging.gap} recipe${c.staging.gap === 1 ? '' : 's'} away), but the prep table fills up first`;
+      // Recipe name alongside the number: if the plan shifts under you, the name
+      // is what you match against the sheet on the shelf.
+      why = `needed next by ${esc(c.staging.recipeName)}`;
     } else if (c.isOneOff) {
       why = 'one-off';
     } else {
@@ -871,8 +834,8 @@ function render() {
     // Buttons, not a select — a dropdown needs two accurate taps in gloves and
     // this needs one. The bin is baked into its own button so the suggestion
     // never has to be retyped. Any misclick is one Undo away.
-    const stageBtn = (c.staging && c.staging.inReach)
-      ? `<button class="act-btn stage-btn" onclick="stageDye(${idx})">Leave out · ${esc(c.staging.slot)}</button>`
+    const stageBtn = c.staging
+      ? `<button class="act-btn stage-btn" onclick="stageDye(${idx})">→ ${esc(c.staging.slot)}</button>`
       : '';
     const binBtn = c.suggestedBin
       ? `<button class="act-btn bin" onclick="putAwayDye(${idx})">→ ${esc(c.suggestedBin)}</button>`
@@ -1087,11 +1050,11 @@ async function undoPot(idx) {
 // so there's no stock location to record. It just closes out the row for the day.
 async function stageDye(idx) {
   const c = currentEntry.cleanupInfo[idx];
-  const slot = c.staging ? c.staging.slot : 'prep table';
-  const next = c.staging ? ` for ${esc(c.staging.recipeName)}` : '';
+  const slot = c.staging ? c.staging.slot : '?';
+  const next = c.staging ? ` (${esc(c.staging.recipeName)})` : '';
   completedActions[idx] = {
-    label: `left out at ${esc(slot)}`,
-    board: { where: `stay out · ${slot}`, muted: true },
+    label: `→ ${esc(slot)}${next}`,
+    board: { where: slot, muted: false },
     undo: async () => {},
   };
   render();

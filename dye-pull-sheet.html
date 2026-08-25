@@ -235,6 +235,17 @@ const LETTERS = 'ABCDEFGHIJKL';
    is getting narrower bins later, so the column count will grow. Dividing by
    rows means widening the shelf appends new letters and leaves every existing
    code pointing at the same drawer. */
+/* Staging codes. A straight run of shelf positions, numbered in pot order, so
+   staging S-A1 holds the first pot of the day. Filled ACROSS a shelf before
+   dropping to the next — A1 B1 C1 D1 E1, then A2 — because the sheets and their
+   dyes get lined up left to right along a shelf as the day goes.
+
+   Deliberately NOT gridCode(): that one fills down a column, which is right for
+   the made-dye shelf and wrong here. Same letters-as-columns convention, opposite
+   fill order, so they must stay separate functions. */
+function stageCode(index0, cols) {
+  return 'S-' + LETTERS[index0 % cols] + String(Math.floor(index0 / cols) + 1);
+}
 function gridCode(index0, rows) {
   return LETTERS[Math.floor(index0 / rows)] + String((index0 % rows) + 1);
 }
@@ -493,7 +504,7 @@ function build() {
 
   const active = skip ? s.batches.filter(b => b.spools > 0) : s.batches.slice();
   active.forEach((b, i) => {
-    b.stage = i < stgRows * stgCols ? 'S-' + gridCode(i, stgCols) : null;
+    b.stage = i < stgRows * stgCols ? stageCode(i, stgCols) : null;
     b.yards = b.spools * yardsPerSpool(b.fiber);
     b.manifest = [];
   });
