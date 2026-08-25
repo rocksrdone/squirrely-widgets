@@ -590,25 +590,37 @@ function longDate(sec) {
     { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-/* Bin codes. "B3", "b-3" and "M-B3" all mean B3. A plain number is mapped across
-   the rows — 1-4 are row A, 5-8 row B — which matches how the shelf is numbered
-   now. The number is kept alongside as `legacy` and printed next to the code, so
-   a wrong mapping shows up immediately instead of quietly misdirecting someone. */
-function gridCode(index0, cols) {
-  return LETTERS[Math.floor(index0 / cols)] + String((index0 % cols) + 1);
+/* Bin codes. "B3", "b-3" and "M-B3" all mean B3. Letters are columns and numbers
+   are rows, matching back stock and dye-stock.html — so B3 is column B, third
+   shelf down. A plain legacy number is mapped down the columns (1-4 are column
+   A, 5-8 column B), and kept alongside as `legacy` so it prints next to the code
+   and a wrong mapping shows up immediately instead of quietly misdirecting
+   someone.
+
+   Keying the legacy mapping on ROWS rather than COLS matters: the made-dye shelf
+   is getting narrower bins later, so the column count will grow. Dividing by
+   rows means widening the shelf appends new letters and leaves every existing
+   code pointing at the same drawer. */
+function gridCode(index0, rows) {
+  return LETTERS[Math.floor(index0 / rows)] + String((index0 % rows) + 1);
 }
 function parseBin(raw, rows, cols) {
   const s = normalize(raw).replace(/[\s\-_.]/g, '');
   if (!s) return null;
   let m = /^M?([A-L])(\d{1,2})$/.exec(s);
   if (m) {
-    const r = LETTERS.indexOf(m[1]), c = Number(m[2]) - 1;
-    if (r >= 0 && c >= 0) return { code: m[1] + (c + 1), order: r * cols + c, legacy: '', offGrid: !(r < rows && c < cols) };
+    const col = LETTERS.indexOf(m[1]), row = Number(m[2]) - 1;
+    if (col >= 0 && row >= 0) {
+      const inGrid = col < cols && row < rows;
+      return { code: m[1] + (row + 1), order: col * rows + row, legacy: '', offGrid: !inGrid };
+    }
   }
   m = /^(\d{1,3})$/.exec(s);
   if (m) {
     const n = Number(m[1]);
-    if (n >= 1 && n <= rows * cols) return { code: gridCode(n - 1, cols), order: n - 1, legacy: String(n), offGrid: false };
+    if (n >= 1 && n <= rows * cols) {
+      return { code: gridCode(n - 1, rows), order: n - 1, legacy: String(n), offGrid: false };
+    }
     return { code: 'bin ' + n, order: 9000 + n, legacy: '', offGrid: true };
   }
   return { code: normalize(raw), order: 9500, legacy: '', offGrid: true };
@@ -889,9 +901,17 @@ function pl_remake(r) {
 function shelfMap(usesNumbers) {
   if (!usesNumbers) return '';
   const rows = PULL_CFG.srcRows, cols = PULL_CFG.srcCols;
+  // Drawn in reading order — A1 B1 C1 D1 across the top, A2 B2 ... beneath — so
+  // the printed map matches the shelf you are standing in front of instead of
+  // its transpose. The legacy number under each code is the one that maps to it,
+  // not the cell's position, or the two would disagree on a non-square shelf.
   let cells = '';
-  for (let i = 0; i < rows * cols; i++) {
-    cells += `<div class="c"><b>${esc(gridCode(i, cols))}</b><span>${i + 1}</span></div>`;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const code = LETTERS[c] + (r + 1);
+      const legacyNum = c * rows + r + 1;
+      cells += `<div class="c"><b>${esc(code)}</b><span>${legacyNum}</span></div>`;
+    }
   }
   return `<div class="pl-map"><div class="cap">Shelf map \u2014 grid code, and the number on the bin</div>
     <div class="g" style="grid-template-columns:repeat(${cols},1fr)">${cells}</div></div>`;
