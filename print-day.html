@@ -186,6 +186,13 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
         text-transform: uppercase; letter-spacing: .6px; padding: 0 4px; margin-right: 4px;
         vertical-align: 1px; }
 .pl-flag.hot { background: #000; color: #fff; }
+.pl-need { display: inline-flex; align-items: center; gap: 3px; border: 1.5px solid #000;
+  font-size: 9px; font-weight: bold; padding: 1px 5px 1px 4px; border-radius: 3px;
+  margin-left: 5px; white-space: nowrap; vertical-align: middle; }
+.pl-need.hot { background: #000; color: #fff; }
+.pl-ico { width: 10px; height: 10px; fill: currentColor; flex: none; }
+.pl-ico-hole { fill: #fff; }
+.pl-need.hot .pl-ico-hole { fill: #000; }
 
 /* ---------- manifest ---------- */
 .pl-mf { display: flex; flex-wrap: wrap; gap: 0; }
@@ -835,17 +842,32 @@ function pl_also(cl) {
     out.map(b => `${esc(b.stage || '?')} ${esc(b.colorway)}`).join(', ')
   }. It lives in ${esc(cl.owner.stage || '?')}; those pots come and get it.</div>`;
 }
+/* What to carry to the pot, as one tag instead of a sentence. Three states only:
+   Dye only / Powder only / Dye & Powder. The reason a jar needs powder alongside
+   it — past shelf life, or the jar looking short against what the pot wants — is
+   a control problem, not something the person pulling has to read and weigh. The
+   tag tells them what to pick up; that is the whole job at this station.
+
+   Inline SVG rather than emoji: these print on a mono laser, where emoji render
+   as hollow boxes or drop out entirely depending on the font stack. */
+const ICON_DYE = '<svg class="pl-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 .8C6 .8 2.2 5 2.2 7.5a3.8 3.8 0 0 0 7.6 0C9.8 5 6 .8 6 .8z"/></svg>';
+const ICON_POW = '<svg class="pl-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.4 4.3h5.2l.7 6.4a.6.6 0 0 1-.6.7H3.3a.6.6 0 0 1-.6-.7z"/><path d="M4.2 1.2h3.6a.5.5 0 0 1 .5.5v1.1H3.7V1.7a.5.5 0 0 1 .5-.5z"/><circle cx="5.1" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6.9" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6" cy="1.6" r=".38" class="pl-ico-hole"/></svg>';
+function needTag(kind) {
+  if (kind === 'powder') return `<span class="pl-need">${ICON_POW} Powder only</span>`;
+  if (kind === 'both')   return `<span class="pl-need hot">${ICON_DYE}${ICON_POW} Dye &amp; Powder</span>`;
+  return `<span class="pl-need">${ICON_DYE} Dye only</span>`;
+}
 function pl_jar(p) {
   const cl = p.claim, jar = p.jar, d = cl.dye, flags = [];
-  if (jar.expired) flags.push('<span class="pl-flag hot">past shelf life \u2014 bring the powder too</span>');
+
   if (cl.dupes) flags.push(`<span class="pl-flag hot">${cl.dupes} jars logged \u2014 take the newest, merge the rest</span>`);
   if (jar.qty > 0 && jar.qty <= 5) flags.push('<span class="pl-flag">nearly empty</span>');
-  if (cl.short) flags.push('<span class="pl-flag hot">may be short \u2014 bring powder</span>');
+
   if (cl.comp && cl.comp.byName) flags.push('<span class="pl-flag">name-matched \u2014 check brand</span>');
   const need = cl.need > 0 ? `need ~${Math.round(cl.need)} mL` : 'no rate set';
   return `<div class="pl-ln"><div class="cb"></div>
     <div class="body">
-      <div class="nm">${esc(d.name)}${flags.length ? ' ' + flags.join('') : ''}</div>
+      <div class="nm">${esc(d.name)}${needTag(jar.expired || cl.short ? 'both' : 'dye')}${flags.length ? ' ' + flags.join('') : ''}</div>
       ${pl_idLine(d, cl.comp)}
       ${d.blend ? `<div class="sub2">${esc(d.blend)}</div>` : ''}
       ${pl_also(cl)}
@@ -860,7 +882,7 @@ function pl_powder(p) {
   if (d.water !== '' && d.water != null) spec.push(`per ${esc(d.water)} mL`);
   if (d.dryWt) spec.push(`${esc(d.dryWt)} g std`);
   return `<div class="pl-ln"><div class="cb"></div>
-    <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag">dry powder</span></div>
+    <div class="body"><div class="nm">${esc(d.name)}${needTag('powder')}</div>
       ${pl_idLine(d, c)}
       ${spec.length ? `<div class="sub2">${spec.join(' \u00b7 ')}</div>` : ''}
       ${c.notes ? `<div class="sub2">${esc(c.notes)}</div>` : ''}</div>
@@ -973,7 +995,7 @@ function renderPull(printable, leadBreak) {
       g.lines.length, g.lines.map(pl_jar).join(''));
   });
   if (B.noStock.length) body += pl_group('No premade jar', 'grab dry powder', B.noStock.length, B.noStock.map(pl_noStock).join(''), true);
-  if (B.remakes.length) body += pl_group('Past shelf life \u2014 bring the powder too', 'jar comes out, powder comes with it', B.remakes.length, B.remakes.map(pl_remake).join(''), true);
+  if (B.remakes.length) body += pl_group('Past shelf life', 'jar comes out, powder comes with it', B.remakes.length, B.remakes.map(pl_remake).join(''), true);
   if (B.powders.length) body += pl_group('Dry powder shelf', 'recipe calls for powder', B.powders.length, B.powders.map(pl_powder).join(''), true);
   if (B.orphans.length) body += pl_group('Nothing to pull', 'flag these to control', B.orphans.length, B.orphans.map(pl_orphan).join(''), true);
 
@@ -985,7 +1007,7 @@ function renderPull(printable, leadBreak) {
         than one pot \u2014 it still goes to the one bin named on the right.</div>
       ${body || '<div class="pl-lede">Nothing to pull for this day.</div>'}
       <div class="pl-foot"><b>Spool check:</b> ${spoolTotal} spools across ${B.active.length} pots.
-        If a jar looks thin against what the pot needs, pull the dry powder too and leave it in the bin.<br>
+        Pull exactly what each line's tag says \u2014 dye, powder, or both.<br>
         <b>Put-back:</b> every jar goes home to the bin printed above it.</div>
     </div>
     <div class="pl-doc pl-brk">

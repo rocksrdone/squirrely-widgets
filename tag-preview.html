@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8">
+<style>
+body{font-family:Georgia,serif;background:#fff;padding:24px;color:#000}
+.nm{font-size:13px;font-weight:700;margin:14px 0}
+.pl-flag { display:inline-block; border:1.5px solid #000; font-size:9px; font-weight:bold;
+  padding:1px 4px; margin-left:5px; vertical-align:middle;}
+.pl-flag.hot { background:#000; color:#fff; }
+.pl-need { display:inline-flex; align-items:center; gap:3px; border:1.5px solid #000;
+  font-size:9px; font-weight:bold; padding:1px 5px 1px 4px; border-radius:3px;
+  margin-left:5px; white-space:nowrap; vertical-align:middle; }
+.pl-need.hot { background:#000; color:#fff; }
+.pl-ico { width:10px; height:10px; fill:currentColor; flex:none; }
+.pl-ico-hole { fill:#fff; }
+.pl-need.hot .pl-ico-hole { fill:#000; }
+.big .pl-need{font-size:18px;padding:3px 10px 3px 8px;gap:6px}
+.big .pl-ico{width:20px;height:20px}
+</style>
+<div id=out></div>
+<script>
+const ICON_DYE='<svg class="pl-ico" viewBox="0 0 12 12"><path d="M6 .8C6 .8 2.2 5 2.2 7.5a3.8 3.8 0 0 0 7.6 0C9.8 5 6 .8 6 .8z"/></svg>';
+const ICON_POW='<svg class="pl-ico" viewBox="0 0 12 12"><path d="M3.4 4.3h5.2l.7 6.4a.6.6 0 0 1-.6.7H3.3a.6.6 0 0 1-.6-.7z"/><path d="M4.2 1.2h3.6a.5.5 0 0 1 .5.5v1.1H3.7V1.7a.5.5 0 0 1 .5-.5z"/><circle cx="5.1" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6.9" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6" cy="1.6" r=".38" class="pl-ico-hole"/></svg>';
+function needTag(k){if(k==='powder')return `<span class="pl-need">${ICON_POW} Powder only</span>`;
+ if(k==='both')return `<span class="pl-need hot">${ICON_DYE}${ICON_POW} Dye &amp; Powder</span>`;
+ return `<span class="pl-need">${ICON_DYE} Dye only</span>`;}
+document.getElementById('out').innerHTML=`
+ <div class="nm">Turquoise (CC)${needTag('dye')}</div>
+ <div class="nm">Sunset Gold (J)${needTag('both')}<span class="pl-flag">nearly empty</span></div>
+ <div class="nm">Ukraine Flag (PF)${needTag('powder')}</div>
+ <div class="big"><div class="nm">Turquoise (CC)${needTag('dye')}</div>
+ <div class="nm">Sunset Gold (J)${needTag('both')}</div>
+ <div class="nm">Ukraine Flag (PF)${needTag('powder')}</div></div>`;
+</script>
