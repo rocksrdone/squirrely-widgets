@@ -28,13 +28,9 @@ body {
   padding: 8px;
 }
 .header-title { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
-.header-sub { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
+.header-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 5px; }
+.header-sub { font-size: 10px; color: #8B7D72; }
 .empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; }
-.section-title {
-  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-  color: #8B7D72; margin: 8px 0 4px; padding-top: 6px; border-top: 1px dashed var(--rule);
-}
-.section-title:first-of-type { margin-top: 4px; }
 .order-log-row { display: flex; gap: 5px; align-items: center; margin-top: 4px; }
 .order-log-row input {
   flex: 1; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
@@ -81,6 +77,7 @@ body {
 /* One dye = one bordered block, so a row of buttons can never look like it
    belongs to the dye above it. */
 .dye-block { border: 1px solid var(--rule); border-left: 3px solid var(--rule); border-radius: 6px; padding: 5px 7px; margin-bottom: 4px; }
+.dye-block:first-of-type { margin-top: 6px; }
 .dye-block.stage { border-left-color: var(--gold); }
 .dye-block.keep  { border-left-color: var(--teal); }
 .dye-block.oneoff{ border-left-color: var(--rule); }
@@ -103,7 +100,7 @@ body {
 .act-btn.stage-btn { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
 .act-btn.dump { color: var(--accent); }
 .ml-input {
-  width: 58px; min-height: 30px; padding: 3px 6px; border: 1px solid var(--rule);
+  width: 46px; min-height: 30px; padding: 3px 5px; border: 1px solid var(--rule);
   border-radius: 5px; font-size: 13px; font-family: 'DM Mono', monospace; text-align: center;
 }
 .dye-done-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
@@ -886,7 +883,7 @@ function render() {
         <div class="dye-block-name">${esc(c.dyeDetail)}</div>
         <div class="dye-block-why">${why}</div>
         <div class="btn-row">
-          <input type="number" class="ml-input" id="qty-${idx}" placeholder="mL" min="0">
+          <input type="number" class="ml-input" id="qty-${idx}" placeholder="mL" min="0" max="999" maxlength="3">
           ${stageBtn}
           ${binBtn}
           <button class="act-btn dump" onclick="dumpDye(${idx})">Dump</button>
@@ -914,18 +911,17 @@ function render() {
 
   document.getElementById('content').innerHTML = `
     <div class="header-bar">
-      <div>
-        <div class="header-title">${esc(e.recipeName)}</div>
-        <div class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</div>
+      <div class="header-line">
+        <span class="header-title">${esc(e.recipeName)}</span>
+        <span class="header-sub">${e.dyeCount} color${e.dyeCount === 1 ? '' : 's'}${e.fiberType ? ` · ${e.fiberType}` : ''}</span>
       </div>
       <button class="draft-mini" id="draftBtn" onclick="createColorDraft()" title="Combined leftovers into something new?">🎨 draft</button>
     </div>
     ${coverageHtml}
-    <div class="section-title">Log a pot</div>
     ${potPanelHtml}
     ${runningHtml}
     ${ordersHtml}
-    ${cleanupHtml ? `${putAwayHtml}<div class="section-title">Dye Cleanup</div>${cleanupHtml}` : ''}
+    ${cleanupHtml ? `${putAwayHtml}${cleanupHtml}` : ''}
   `;
 }
 
