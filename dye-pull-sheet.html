@@ -75,8 +75,6 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
   margin-left: 5px; white-space: nowrap; vertical-align: middle; }
 .pl-need.hot { background: #000; color: #fff; }
 .pl-ico { width: 10px; height: 10px; fill: currentColor; flex: none; }
-.pl-ico-hole { fill: #fff; }
-.pl-need.hot .pl-ico-hole { fill: #000; }
 
 /* ---------- manifest ---------- */
 .pl-mf { display: flex; flex-wrap: wrap; gap: 0; }
@@ -632,7 +630,7 @@ function alsoLine(cl) {
    Inline SVG rather than emoji: these print on a mono laser, where emoji render
    as hollow boxes or drop out entirely depending on the font stack. */
 const ICON_DYE = '<svg class="pl-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 .8C6 .8 2.2 5 2.2 7.5a3.8 3.8 0 0 0 7.6 0C9.8 5 6 .8 6 .8z"/></svg>';
-const ICON_POW = '<svg class="pl-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.4 4.3h5.2l.7 6.4a.6.6 0 0 1-.6.7H3.3a.6.6 0 0 1-.6-.7z"/><path d="M4.2 1.2h3.6a.5.5 0 0 1 .5.5v1.1H3.7V1.7a.5.5 0 0 1 .5-.5z"/><circle cx="5.1" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6.9" cy="2.2" r=".38" class="pl-ico-hole"/><circle cx="6" cy="1.6" r=".38" class="pl-ico-hole"/></svg>';
+const ICON_POW = '<svg class="pl-ico" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="4.3" cy="4.5" r=".85"/><circle cx="7.6" cy="4.3" r=".85"/><circle cx="5.9" cy="6.5" r=".85"/><circle cx="8.0" cy="7.5" r=".85"/><circle cx="4.1" cy="7.7" r=".85"/></svg>';
 function needTag(kind) {
   if (kind === 'powder') return `<span class="pl-need">${ICON_POW} Powder only</span>`;
   if (kind === 'both')   return `<span class="pl-need hot">${ICON_DYE}${ICON_POW} Dye &amp; Powder</span>`;
