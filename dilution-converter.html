@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dye Dilution Converter</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root{
+    --bg:#ffffff;
+    --surface:#f6f7f9;
+    --surface-2:#eef0f3;
+    --ink:#16181d;
+    --muted:#697080;
+    --line:#dde0e6;
+    --line-soft:#e9ebef;
+    --accent:#b3005e;
+    --accent-soft:#fbe9f2;
+    --warn-bg:#fff8e8;
+    --warn-line:#e8d4a0;
+    --warn-ink:#7a5a12;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", "DejaVu Sans Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius:6px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#22252a; --surface:#2a2e35; --surface-2:#32363e; --ink:#e9ebef;
+      --muted:#98a0ae; --line:#3d424b; --line-soft:#343941;
+      --accent:#ff5fa2; --accent-soft:#3a1f2e;
+      --warn-bg:#3a3222; --warn-line:#5c4d2b; --warn-ink:#e5c98a;
+    }
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0; padding:10px;
+    background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  h2{font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--muted); font-weight:700; margin:0 0 7px;}
+
+  /* ---------- tabs ---------- */
+  .tabs{display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:12px;}
+  .tab{
+    appearance:none; border:0; background:none; font:inherit; font-weight:600; font-size:12px;
+    color:var(--muted); padding:7px 12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
+  }
+  .tab[aria-selected="true"]{color:var(--ink); border-bottom-color:var(--accent);}
+  .tab:focus-visible{outline:2px solid var(--accent); outline-offset:-2px;}
+  .panel[hidden]{display:none;}
+
+  /* ---------- converter ---------- */
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;}
+  .field{flex:1 1 110px; min-width:96px;}
+  label{display:block; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700; margin-bottom:3px;}
+  input[type=number], input[type=text], select{
+    width:100%; font:inherit; font-family:var(--mono); font-size:14px;
+    padding:7px 8px; border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--bg); color:var(--ink);
+  }
+  input:focus, select:focus{outline:2px solid var(--accent); outline-offset:-1px; border-color:var(--accent);}
+  .arrow{flex:0 0 auto; color:var(--muted); font-size:16px; padding-bottom:8px;}
+  .swap{
+    flex:0 0 auto; appearance:none; border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    border-radius:var(--radius); padding:7px 9px; cursor:pointer; font-size:14px; line-height:1;
+  }
+  .swap:hover{color:var(--ink); border-color:var(--accent);}
+
+  /* ---------- result ---------- */
+  .result{
+    margin-top:12px; border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--surface); overflow:hidden;
+  }
+  .result-head{
+    padding:10px 12px; border-bottom:1px solid var(--line-soft);
+    display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+  }
+  .ratio{font-family:var(--mono); font-size:26px; font-weight:700; letter-spacing:-.01em; color:var(--accent);}
+  .ratio-note{font-size:11px; color:var(--muted);}
+  .measures{display:flex; gap:0; flex-wrap:wrap;}
+  .measure{
+    flex:1 1 120px; padding:9px 12px; border-right:1px solid var(--line-soft);
+  }
+  .measure:last-child{border-right:0;}
+  .measure .k{font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700;}
+  .measure .v{font-family:var(--mono); font-size:17px; font-weight:700; margin-top:1px;}
+  .result.warn{border-color:var(--warn-line); background:var(--warn-bg); color:var(--warn-ink);}
+  .result.warn .ratio{color:var(--warn-ink); font-size:20px;}
+  .result.warn .measure .k, .result.warn .ratio-note{color:var(--warn-ink); opacity:.8;}
+  .result.warn .measure{border-right-color:var(--warn-line);}
+  .result.warn .result-head{border-bottom-color:var(--warn-line);}
+
+  .hint{font-size:11px; color:var(--muted); margin-top:8px; line-height:1.5;}
+
+  /* ---------- matrix ---------- */
+  table{border-collapse:collapse; width:100%; font-family:var(--mono);}
+  th,td{border:1px solid var(--line-soft); padding:5px 4px; text-align:center; font-size:11px;}
+  thead th{background:var(--surface-2); font-size:10px; font-weight:700; white-space:nowrap;}
+  tbody th{background:var(--surface-2); font-size:11px; font-weight:700; text-align:left; padding-left:7px; white-space:nowrap;}
+  th.corner{background:var(--bg); border-color:transparent;}
+  td.cell{cursor:pointer;}
+  td.cell:hover{background:var(--accent-soft); outline:1px solid var(--accent);}
+  td .r{font-size:13px; font-weight:700;}
+  td .sub{font-size:9px; color:var(--muted); display:block;}
+  td.same{background:var(--accent-soft); color:var(--accent); font-weight:700;}
+  td.powder{color:var(--muted);}
+  td.powder .r{font-size:11px; font-weight:700; color:var(--ink);}
+  th.std, td.std-col{box-shadow:inset 0 0 0 1px var(--accent);}
+  .axis{font-size:9px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:700;}
+
+  /* ---------- settings ---------- */
+  .setting{margin-bottom:12px;}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+  .seg button{
+    appearance:none; border:0; background:var(--bg); color:var(--muted); font:inherit; font-weight:600;
+    padding:6px 12px; cursor:pointer; border-right:1px solid var(--line);
+  }
+  .seg button:last-child{border-right:0;}
+  .seg button[aria-pressed="true"]{background:var(--accent); color:#fff;}
+  .status{font-size:11px; color:var(--muted); margin-top:10px; padding-top:9px; border-top:1px solid var(--line-soft);}
+  code{font-family:var(--mono); background:var(--surface-2); padding:1px 4px; border-radius:3px; font-size:11px;}
+</style>
+</head>
+<body>
+
+<div class="tabs" role="tablist">
+  <button class="tab" id="tab-convert" role="tab" aria-selected="true" aria-controls="panel-convert">Convert</button>
+  <button class="tab" id="tab-matrix"  role="tab" aria-selected="false" aria-controls="panel-matrix">Grid</button>
+  <button class="tab" id="tab-setup"   role="tab" aria-selected="false" aria-controls="panel-setup">Setup</button>
+</div>
+
+<!-- ============================= CONVERT ============================= -->
+<div class="panel" id="panel-convert" role="tabpanel" aria-labelledby="tab-convert">
+  <div class="row">
+    <div class="field">
+      <label for="from">Stock you have</label>
+      <input type="number" id="from" min="1" step="1" value="160" inputmode="numeric">
+    </div>
+    <button class="swap" id="swap" title="Swap">⇄</button>
+    <div class="field">
+      <label for="to">Strength you want</label>
+      <input type="number" id="to" min="1" step="1" value="80" inputmode="numeric">
+    </div>
+    <div class="field" style="flex:0 1 110px;">
+      <label for="batch">Batch (mL)</label>
+      <input type="number" id="batch" min="1" step="10" value="250" inputmode="numeric">
+    </div>
+  </div>
+  <div class="hint" id="units-line"></div>
+
+  <div class="result" id="result"></div>
+
+  <div class="hint" id="reach"></div>
+</div>
+
+<!-- ============================= MATRIX ============================= -->
+<div class="panel" id="panel-matrix" role="tabpanel" aria-labelledby="tab-matrix" hidden>
+  <h2>Have <span class="axis">↓</span> &nbsp;·&nbsp; Want <span class="axis">→</span></h2>
+  <div id="matrix"></div>
+  <div class="hint">Cells show <b>parts stock : parts water</b>. Click any cell to load it into the converter. Below the diagonal you are asking for a stronger solution than you have, so the cell shows powder to add instead.</div>
+</div>
+
+<!-- ============================= SETUP ============================= -->
+<div class="panel" id="panel-setup" role="tabpanel" aria-labelledby="tab-setup" hidden>
+  <div class="setting">
+    <label for="list">Dilutions in the grid (mL per unit)</label>
+    <input type="text" id="list" value="80, 120, 160, 240, 320">
+  </div>
+  <div class="setting">
+    <label for="std">House standard</label>
+    <select id="std"></select>
+  </div>
+  <div class="setting">
+    <label>Powder unit</label>
+    <div class="seg" id="unit-seg">
+      <button data-unit="tsp" aria-pressed="true">tsp</button>
+      <button data-unit="g" aria-pressed="false">grams</button>
+    </div>
+  </div>
+  <div class="status" id="status">Running outside Grist — settings are not saved.</div>
+  <div class="hint" style="margin-top:8px;">
+    Optional: map a numeric column holding a dilution figure (mL per unit) on the widget's right-hand panel, and selecting a row will load it as <b>Stock you have</b>.
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------------- state ---------------- */
+  var state = {
+    list: [80,120,160,240,320],
+    std: 80,
+    unit: "tsp",
+    from: 160,
+    to: 80,
+    batch: 250
+  };
+  var inGrist = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+
+  /* ---------------- math ---------------- */
+  function gcd(a,b){ a=Math.round(a); b=Math.round(b); while(b){ var t=b; b=a%b; a=t; } return a||1; }
+
+  function fmt(n, dp){
+    if (!isFinite(n)) return "–";
+    dp = dp === undefined ? 1 : dp;
+    var s = n.toFixed(dp);
+    if (s.indexOf(".") > -1) s = s.replace(/\.?0+$/, "");
+    return s;
+  }
+
+  // Returns a description of how to get from stock D_s to target D_t.
+  function convert(ds, dt, batch){
+    if (!(ds > 0) || !(dt > 0)) return { kind:"invalid" };
+    if (ds === dt) return { kind:"same" };
+
+    if (dt > ds){                       // target is weaker -> dilute
+      var factor = dt / ds;             // finished volume per volume of stock
+      var g = gcd(ds, dt - ds);
+      var stockVol = batch / factor;
+      return {
+        kind: "dilute",
+        factor: factor,
+        partsStock: (ds / g),
+        partsWater: ((dt - ds) / g),
+        stockVol: stockVol,
+        waterVol: batch - stockVol
+      };
+    }
+
+    // target is stronger -> needs powder
+    var perML = (1/dt) - (1/ds);
+    return {
+      kind: "strengthen",
+      per100: perML * 100,
+      forBatch: perML * batch,
+      fromScratch: batch / dt
+    };
+  }
+
+  /* ---------------- render: converter ---------------- */
+  function renderResult(){
+    var u = state.unit;
+    $("units-line").textContent =
+      "Reading as 1 " + u + " of powder per X mL. Lower number = stronger.";
+
+    var r = convert(state.from, state.to, state.batch);
+    var el = $("result");
+    el.className = "result";
+
+    if (r.kind === "invalid"){
+      el.innerHTML = '<div class="result-head"><span class="ratio-note">Enter both dilutions.</span></div>';
+      $("reach").textContent = "";
+      return;
+    }
+
+    if (r.kind === "same"){
+      el.innerHTML =
+        '<div class="result-head"><span class="ratio">Use as is</span>' +
+        '<span class="ratio-note">Already at 1 ' + u + ' : ' + state.to + ' mL.</span></div>';
+      $("reach").textContent = "";
+      return;
+    }
+
+    if (r.kind === "dilute"){
+      el.innerHTML =
+        '<div class="result-head">' +
+          '<span class="ratio">' + r.partsStock + ' : ' + r.partsWater + '</span>' +
+          '<span class="ratio-note">parts stock : parts water &nbsp;·&nbsp; 1 ' + u + ' : ' +
+            state.from + ' mL → 1 ' + u + ' : ' + state.to + ' mL</span>' +
+        '</div>' +
+        '<div class="measures">' +
+          '<div class="measure"><div class="k">Stock</div><div class="v">' + fmt(r.stockVol) + ' mL</div></div>' +
+          '<div class="measure"><div class="k">Water</div><div class="v">' + fmt(r.waterVol) + ' mL</div></div>' +
+          '<div class="measure"><div class="k">Finished</div><div class="v">' + fmt(state.batch) + ' mL</div></div>' +
+        '</div>';
+      $("reach").textContent =
+        "Every 100 mL of this stock makes " + fmt(100 * r.factor) + " mL at the target strength.";
+      return;
+    }
+
+    // strengthen
+    el.className = "result warn";
+    el.innerHTML =
+      '<div class="result-head">' +
+        '<span class="ratio">Water will not get you there</span>' +
+        '<span class="ratio-note">1 ' + u + ' : ' + state.to +
+          ' mL is stronger than what you have. Add powder, or mix fresh.</span>' +
+      '</div>' +
+      '<div class="measures">' +
+        '<div class="measure"><div class="k">Add to stock</div><div class="v">+' + fmt(r.per100, 2) + ' ' + u + ' / 100 mL</div></div>' +
+        '<div class="measure"><div class="k">For this batch</div><div class="v">+' + fmt(r.forBatch, 2) + ' ' + u + '</div></div>' +
+        '<div class="measure"><div class="k">Or mix fresh</div><div class="v">' + fmt(r.fromScratch, 2) + ' ' + u + ' / ' + fmt(state.batch) + ' mL</div></div>' +
+      '</div>';
+    $("reach").textContent =
+      "Dissolve powder in a splash of near-boiling water before stirring it in, or it will leave specks.";
+  }
+
+  /* ---------------- render: matrix ---------------- */
+  function renderMatrix(){
+    var L = state.list, u = state.unit;
+    var h = '<table><thead><tr><th class="corner"></th>';
+    L.forEach(function(d){
+      h += '<th' + (d === state.std ? ' class="std"' : '') + '>1:' + d + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+
+    L.forEach(function(ds){
+      h += '<tr><th>1:' + ds + '</th>';
+      L.forEach(function(dt){
+        var r = convert(ds, dt, state.batch);
+        var stdCls = (dt === state.std ? ' std-col' : '');
+        if (r.kind === "same"){
+          h += '<td class="same cell' + stdCls + '" data-f="' + ds + '" data-t="' + dt + '">as is</td>';
+        } else if (r.kind === "dilute"){
+          h += '<td class="cell' + stdCls + '" data-f="' + ds + '" data-t="' + dt + '">' +
+                 '<span class="r">' + r.partsStock + ' : ' + r.partsWater + '</span>' +
+                 '<span class="sub">' + fmt(r.stockVol) + ' + ' + fmt(r.waterVol) + ' mL</span></td>';
+        } else {
+          h += '<td class="powder cell' + stdCls + '" data-f="' + ds + '" data-t="' + dt + '">' +
+                 '<span class="r">+' + fmt(r.per100, 2) + '</span>' +
+                 '<span class="sub">' + u + ' / 100 mL</span></td>';
+        }
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    $("matrix").innerHTML = h;
+
+    Array.prototype.forEach.call($("matrix").querySelectorAll("td.cell"), function(td){
+      td.addEventListener("click", function(){
+        state.from = Number(td.getAttribute("data-f"));
+        state.to   = Number(td.getAttribute("data-t"));
+        $("from").value = state.from;
+        $("to").value = state.to;
+        renderResult();
+        showTab("convert");
+      });
+    });
+  }
+
+  function renderStdOptions(){
+    var sel = $("std");
+    sel.innerHTML = state.list.map(function(d){
+      return '<option value="' + d + '"' + (d === state.std ? ' selected' : '') + '>1 ' + state.unit + ' : ' + d + ' mL</option>';
+    }).join("");
+  }
+
+  function renderAll(){ renderResult(); renderMatrix(); renderStdOptions(); }
+
+  /* ---------------- tabs ---------------- */
+  function showTab(name){
+    ["convert","matrix","setup"].forEach(function(n){
+      $("tab-" + n).setAttribute("aria-selected", String(n === name));
+      $("panel-" + n).hidden = (n !== name);
+    });
+  }
+  ["convert","matrix","setup"].forEach(function(n){
+    $("tab-" + n).addEventListener("click", function(){ showTab(n); });
+  });
+
+  /* ---------------- inputs ---------------- */
+  function bindNum(id, key){
+    $(id).addEventListener("input", function(){
+      var v = Number($(id).value);
+      state[key] = v > 0 ? v : 0;
+      renderResult();
+      if (key === "batch") renderMatrix();
+      save();
+    });
+  }
+  bindNum("from","from"); bindNum("to","to"); bindNum("batch","batch");
+
+  $("swap").addEventListener("click", function(){
+    var f = state.from; state.from = state.to; state.to = f;
+    $("from").value = state.from; $("to").value = state.to;
+    renderResult(); save();
+  });
+
+  $("list").addEventListener("change", function(){
+    var vals = $("list").value.split(/[,\s]+/)
+      .map(Number).filter(function(n){ return n > 0 && isFinite(n); });
+    vals = vals.filter(function(n,i){ return vals.indexOf(n) === i; })
+               .sort(function(a,b){ return a - b; });
+    if (!vals.length) return;
+    state.list = vals;
+    if (vals.indexOf(state.std) === -1) state.std = vals[0];
+    $("list").value = vals.join(", ");
+    renderAll(); save();
+  });
+
+  $("std").addEventListener("change", function(){
+    state.std = Number($("std").value);
+    state.to = state.std; $("to").value = state.to;
+    renderAll(); save();
+  });
+
+  Array.prototype.forEach.call($("unit-seg").querySelectorAll("button"), function(b){
+    b.addEventListener("click", function(){
+      state.unit = b.getAttribute("data-unit");
+      Array.prototype.forEach.call($("unit-seg").querySelectorAll("button"), function(x){
+        x.setAttribute("aria-pressed", String(x === b));
+      });
+      renderAll(); save();
+    });
+  });
+
+  /* ---------------- Grist ---------------- */
+  var saveTimer = null;
+  function save(){
+    if (!inGrist) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function(){
+      try {
+        grist.widgetApi.setOption("dilution", {
+          list: state.list, std: state.std, unit: state.unit, batch: state.batch
+        });
+      } catch(e){ /* options unavailable — keep running */ }
+    }, 400);
+  }
+
+  function applySaved(o){
+    if (!o) return;
+    if (Array.isArray(o.list) && o.list.length) state.list = o.list.slice().sort(function(a,b){return a-b;});
+    if (o.std > 0) state.std = o.std;
+    if (o.unit === "g" || o.unit === "tsp") state.unit = o.unit;
+    if (o.batch > 0) state.batch = o.batch;
+
+    state.to = state.std;
+    $("list").value = state.list.join(", ");
+    $("batch").value = state.batch;
+    $("to").value = state.to;
+    Array.prototype.forEach.call($("unit-seg").querySelectorAll("button"), function(x){
+      x.setAttribute("aria-pressed", String(x.getAttribute("data-unit") === state.unit));
+    });
+  }
+
+  try {
+    if (typeof grist !== "undefined"){
+      inGrist = true;
+      grist.ready({
+        requiredAccess: "read table",
+        columns: [
+          { name: "Dilution", title: "Stock dilution (mL per unit)", type: "Numeric,Int", optional: true }
+        ]
+      });
+
+      $("status").textContent = "Connected to Grist. Settings save with this widget.";
+
+      grist.widgetApi.getOption("dilution").then(function(o){
+        applySaved(o);
+        renderAll();
+      }).catch(function(){ renderAll(); });
+
+      grist.onRecord(function(record, mappings){
+        try {
+          var m = grist.mapColumnNames(record, mappings);
+          var v = m && Number(m.Dilution);
+          if (v > 0){
+            state.from = v;
+            $("from").value = v;
+            renderResult();
+          }
+        } catch(e){ /* no mapping set — converter still works by hand */ }
+      });
+    } else {
+      renderAll();
+    }
+  } catch(e){
+    inGrist = false;
+    renderAll();
+  }
+})();
+</script>
+</body>
+</html>
