@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8">
+<style>
+body{font-family:system-ui;padding:24px;background:#F7F3EE;color:#1A1614}
+.row{display:flex;align-items:center;gap:8px;margin:10px 0}
+.dye-step-num{width:22px;height:22px;border-radius:50%;background:#E8DFD4;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
+.dye-swatch{width:14px;height:14px;border-radius:3px;flex-shrink:0;cursor:pointer}
+.dye-swatch.diluted{border:1px dashed rgba(0,0,0,.45)}
+.dil-tag{font-family:ui-monospace,monospace;font-size:9px;font-weight:700;color:#6B5E52;background:#E8DFD4;border-radius:3px;padding:1px 4px}
+.nm{font-size:13px}
+h3{font-size:12px;color:#6B5E52;margin:22px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+.big .dye-swatch{width:34px;height:34px;border-radius:6px}
+</style>
+<h3>Same dye, three dilutions — auto-labelled because the name repeats</h3><div id=a></div>
+<h3>Enlarged</h3><div id=b class=big></div>
+<script>
+function dilutionStrength(raw){const s=String(raw||'').trim().toLowerCase();if(!s)return null;
+ if(/^(full|stock|neat|undiluted|straight)$/.test(s))return 1;if(/^half$/.test(s))return .5;
+ let m=/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(s);if(m){const a=+m[1],b=+m[2];return (a+b)>0?a/(a+b):null;}
+ m=/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/.exec(s);if(m)return +m[2]?Math.min(1,+m[1]/+m[2]):null;
+ m=/^(\d+(?:\.\d+)?)\s*%$/.exec(s);if(m)return Math.min(1,+m[1]/100);return null;}
+function tint(hex,st){if(st===null||st>=1)return hex;const h=hex.replace('#','');const f=Math.min(.72,(1-st)*.8);
+ const mix=i=>{const c=parseInt(h.slice(i,i+2),16);return Math.round(c+(255-c)*f).toString(16).padStart(2,'0');};
+ return '#'+mix(0)+mix(2)+mix(4);}
+const rows=[['Turquoise (CC)','full'],['Turquoise (CC)','1:4'],['Turquoise (CC)','1:10'],['Sunset Gold (J)','']];
+const html=rows.map((r,i)=>{const st=dilutionStrength(r[1]);
+ return `<div class="row"><div class="dye-step-num">${i+1}</div>
+ <div class="dye-swatch ${st!==null&&st<1?'diluted':''}" style="background:${tint('#1E6F8C',r[0].startsWith('Turq')?st:null)}"></div>
+ ${r[1]&&r[0].startsWith('Turq')?`<span class="dil-tag">${r[1]}</span>`:''}
+ <span class="nm">${r[0]}</span></div>`;}).join('');
+a.innerHTML=html; b.innerHTML=html;
+</script>
