@@ -63,6 +63,36 @@ body {
 .dye-row-name { font-size: 12.5px; flex: 1; }
 .dye-row-brand { font-size: 10px; color: #8B7D72; }
 .list-empty { font-size: 11px; color: #8B7D72; font-style: italic; padding: 10px; text-align: center; }
+.use-badge {
+  font-family: 'DM Mono', monospace; font-size: 9.5px; min-width: 17px; text-align: center;
+  padding: 1px 4px; border-radius: 8px; background: var(--warm); color: #6B5E52; flex-shrink: 0;
+}
+.use-badge.zero { background: transparent; color: #C0B6A8; }
+
+/* Recipe usage panel */
+.usage-head { display: flex; align-items: baseline; gap: 8px; }
+.usage-summary { font-size: 11px; color: #8B7D72; }
+.usage-box { max-height: 230px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 6px; }
+.usage-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px;
+  border-bottom: 1px solid var(--warm);
+}
+.usage-row:last-child { border-bottom: none; }
+.usage-row:nth-child(even) { background: #FCFAF7; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; background: #C0B6A8; }
+.status-dot.active { background: var(--teal); }
+.status-dot.retired { background: #C9BFB2; }
+.usage-main { flex: 1; min-width: 0; }
+.usage-recipe { font-size: 12.5px; }
+.usage-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; margin-left: 6px; }
+.usage-detail { font-size: 10.5px; color: #8B7D72; font-family: 'DM Mono', monospace; margin-top: 1px; }
+.usage-tag {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px;
+  border-radius: 3px; background: var(--gold-light); color: var(--gold); margin-left: 6px;
+}
+.usage-empty { font-size: 11.5px; color: #8B7D72; font-style: italic; padding: 12px; text-align: center; }
+.usage-warn { font-size: 11px; color: var(--accent); padding: 8px 9px; }
+.link-btn { font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; }
 
 .edit-panel, .mix-panel {
   background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 20px;
@@ -145,6 +175,7 @@ textarea.field-input { resize: vertical; min-height: 44px; }
       <button class="filter-chip" id="filterAll" onclick="setFilter('all')">All</button>
       <button class="filter-chip" id="filterMissing" onclick="setFilter('missing')">Missing Color</button>
       <button class="filter-chip" id="filterCustom" onclick="setFilter('custom')">Custom Mixes</button>
+      <button class="filter-chip" id="filterUnused" onclick="setFilter('unused')">Unused</button>
     </div>
     <div class="dye-list" id="dyeList"></div>
   </div>
@@ -306,6 +337,13 @@ let hasSwatchColumn = true;
 let colMap = {};   // logical field -> actual Grist column id, resolved at load
 let swatchColId = null;
 
+// Recipe usage: dye row id -> array of the recipe components that use it.
+// Built once from Recipe_Dye_Components + Recipes and keyed on row id, never on
+// dye name -- names repeat across brands (Turquoise exists as CC, J and PF).
+let usageByDye = {};
+let usageError = '';
+let usageLoaded = false;
+
 // Mix Lab state
 let mixDyeA = null;
 let mixDyeB = null;
@@ -362,6 +400,152 @@ function brandSource() {
   if (brandTableId) return `from ${brandTableId}`;
   if (BRAND_CHOICES.length) return 'from the Brand choice list';
   return 'from existing dyes';
+}
+
+// Pull every Recipe_Dye_Components row and group it under the dye it points at.
+// Mixes created in the Mix Lab record their parents only as Blend_Description
+// text, so a recipe using a mix shows under the mix, not under its ingredients.
+async function loadRecipeUsage() {
+  usageByDye = {};
+  usageError = '';
+  usageLoaded = false;
+  try {
+    const recipes = await grist.docApi.fetchTable('Recipes');
+    const rc = (cands) => findColumn(recipes, cands);
+    const rName = rc(['Recipe_Name']);
+    const rStatus = rc(['Status']);
+    const rSku = rc(['SKU_Base']);
+    const rScope = rc(['Recipe_Scope']);
+    const recipeById = {};
+    (recipes.id || []).forEach((id, i) => {
+      recipeById[id] = {
+        id,
+        name: (columnAsArray(recipes, rName)[i] || '').toString(),
+        status: (rStatus ? columnAsArray(recipes, rStatus)[i] : '') || '',
+        sku: (rSku ? columnAsArray(recipes, rSku)[i] : '') || '',
+        scope: (rScope ? columnAsArray(recipes, rScope)[i] : '') || '',
+      };
+    });
+
+    const rdc = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    const cc = (cands) => findColumn(rdc, cands);
+    const cRecipe = cc(['Recipe']);
+    const cDye = cc(['Dye_Name']);
+    if (!cRecipe || !cDye) {
+      usageError = 'Recipe_Dye_Components has no Recipe or Dye_Name column.';
+      return;
+    }
+    const cStep = cc(['Step_Number']);
+    const cPowder = cc(['Std_Powder_tsp_', 'Std_Powder_tsp']);
+    const cWater = cc(['Std_Water_mL_', 'Std_Water_mL']);
+    const cDilution = cc(['Dilution']);
+    const cIsPowder = cc(['Is_Powder']);
+    const cTechnique = cc(['Technique']);
+
+    (rdc.id || []).forEach((rowId, i) => {
+      const dyeId = getRefId(columnAsArray(rdc, cDye)[i]);
+      const recipeId = getRefId(columnAsArray(rdc, cRecipe)[i]);
+      if (!dyeId || !recipeId) return;
+      const r = recipeById[recipeId];
+      if (!r) return;
+      const val = (col) => (col ? columnAsArray(rdc, col)[i] : '');
+      if (!usageByDye[dyeId]) usageByDye[dyeId] = [];
+      usageByDye[dyeId].push({
+        recipeId,
+        recipeName: r.name || '(unnamed recipe)',
+        status: r.status,
+        sku: r.sku,
+        scope: r.scope,
+        step: val(cStep),
+        powder: val(cPowder),
+        water: val(cWater),
+        dilution: val(cDilution),
+        isPowder: val(cIsPowder) === true || val(cIsPowder) === 'True',
+        technique: val(cTechnique),
+      });
+    });
+
+    Object.values(usageByDye).forEach(list => list.sort((a, b) => {
+      // Active recipes first — those are the ones that break if the dye goes away.
+      const aAct = a.status === 'Active' ? 0 : 1;
+      const bAct = b.status === 'Active' ? 0 : 1;
+      if (aAct !== bAct) return aAct - bAct;
+      const n = a.recipeName.localeCompare(b.recipeName);
+      return n !== 0 ? n : (Number(a.step) || 99) - (Number(b.step) || 99);
+    }));
+    usageLoaded = true;
+  } catch (e) {
+    console.error('Failed to load recipe usage:', e);
+    usageError = 'Could not read Recipes / Recipe_Dye_Components.';
+  }
+}
+
+function usageFor(dyeId) { return usageByDye[dyeId] || []; }
+
+function usageRecipeCount(dyeId) {
+  return new Set(usageFor(dyeId).map(u => u.recipeId)).size;
+}
+
+async function refreshUsage() {
+  await loadRecipeUsage();
+  renderDyeList();
+  if (viewMode === 'edit') renderEditPanel();
+  showToast('Recipe usage refreshed.');
+}
+
+// One-line dose summary for a component row, skipping anything blank so an
+// under-filled recipe doesn't render as a row of stray separators.
+function usageDoseLine(u) {
+  const bits = [];
+  if (u.step !== '' && u.step !== null && u.step !== undefined) bits.push('Step ' + u.step);
+  if (u.powder !== '' && u.powder !== null && u.powder !== undefined) bits.push(u.powder + ' tsp');
+  if (u.water !== '' && u.water !== null && u.water !== undefined) bits.push(u.water + ' mL');
+  if (u.dilution) bits.push(String(u.dilution));
+  if (u.technique) bits.push(String(u.technique));
+  return bits.join('  \u00b7  ');
+}
+
+function renderUsageSection() {
+  if (!editingDye) return '';
+  const rows = usageFor(editingDye.id);
+  const recipeCount = usageRecipeCount(editingDye.id);
+  const activeCount = new Set(rows.filter(u => u.status === 'Active').map(u => u.recipeId)).size;
+
+  let body;
+  if (usageError) {
+    body = `<div class="usage-warn">${esc(usageError)}</div>`;
+  } else if (!usageLoaded) {
+    body = `<div class="usage-empty">Loading recipes...</div>`;
+  } else if (!rows.length) {
+    body = `<div class="usage-empty">Not used in any recipe.</div>`;
+  } else {
+    body = rows.map(u => {
+      const dose = usageDoseLine(u);
+      const statusClass = u.status === 'Active' ? 'active' : (u.status ? 'retired' : '');
+      return `
+        <div class="usage-row">
+          <span class="status-dot ${statusClass}" title="${esc(u.status || 'No status')}"></span>
+          <div class="usage-main">
+            <div class="usage-recipe">${esc(u.recipeName)}${u.sku ? `<span class="usage-sku">${esc(u.sku)}</span>` : ''}${u.isPowder ? '<span class="usage-tag">powder</span>' : ''}</div>
+            ${dose ? `<div class="usage-detail">${esc(dose)}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  const summary = usageError ? ''
+    : !usageLoaded ? ''
+    : recipeCount === 0 ? 'no recipes'
+    : `${recipeCount} recipe${recipeCount === 1 ? '' : 's'}${activeCount ? `, ${activeCount} active` : ''}`;
+
+  return `
+    <div class="section-title usage-head">
+      <span>Recipe Usage</span>
+      <span class="usage-summary">${esc(summary)}</span>
+      <span style="margin-left:auto"><button class="link-btn" onclick="refreshUsage()">refresh</button></span>
+    </div>
+    <div class="usage-box">${body}</div>
+  `;
 }
 
 function resolvedColor(dye) {
@@ -475,11 +659,13 @@ function renderDyeList() {
   document.getElementById('filterAll').classList.toggle('active', listFilter === 'all');
   document.getElementById('filterMissing').classList.toggle('active', listFilter === 'missing');
   document.getElementById('filterCustom').classList.toggle('active', listFilter === 'custom');
+  document.getElementById('filterUnused').classList.toggle('active', listFilter === 'unused');
 
   const q = normalize(document.getElementById('dyeSearch').value);
   let list = allDyes;
   if (listFilter === 'missing') list = list.filter(d => !d.Swatch_Hex);
   if (listFilter === 'custom') list = list.filter(d => d.Dye_Source_Type === 'Custom Color');
+  if (listFilter === 'unused') list = list.filter(d => usageRecipeCount(d.id) === 0);
   if (q) list = list.filter(d => normalize(d.Dye_Name).includes(q) || normalize(brandLabel(d)).includes(q));
 
   if (!list.length) {
@@ -487,13 +673,16 @@ function renderDyeList() {
     return;
   }
 
-  box.innerHTML = list.map(d => `
+  box.innerHTML = list.map(d => {
+    const n = usageRecipeCount(d.id);
+    return `
     <div class="dye-row ${d.id === currentDyeId ? 'selected' : ''}" onclick="selectDye(${d.id})">
       <span class="swatch-dot ${d.Swatch_Hex ? '' : 'no-manual'}" style="background:${resolvedColor(d)}"></span>
-      <span class="dye-row-name">${d.Dye_Name}</span>
+      <span class="dye-row-name">${esc(d.Dye_Name)}</span>
       <span class="dye-row-brand">${esc(brandLabel(d))}</span>
-    </div>
-  `).join('');
+      <span class="use-badge ${n ? '' : 'zero'}" title="${n} recipe${n === 1 ? '' : 's'} use this dye">${n || '\u2013'}</span>
+    </div>`;
+  }).join('');
 }
 
 function markUnsaved() {
@@ -639,6 +828,8 @@ function renderEditPanel() {
       <div style="font-family:'Libre Baskerville',serif; font-size:18px;">${d.Dye_Name || '(unnamed)'}</div>
       <button class="btn btn-primary" id="saveBtn" onclick="saveDye()">💾 Save</button>
     </div>
+
+    ${renderUsageSection()}
 
     <div class="section-title">Identity</div>
     <div class="field-grid-2">
@@ -1009,6 +1200,7 @@ grist.ready({ requiredAccess: 'full' });
 (async () => {
   await loadColumnChoices();  // must run first: it discovers whether Brand is a Ref
   await loadBrands();
+  await loadRecipeUsage();   // before the list renders so the count badges are populated
   await loadAllDyes();
 })();
 </script>
