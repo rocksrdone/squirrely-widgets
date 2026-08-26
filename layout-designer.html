@@ -361,6 +361,7 @@ let unsavedChanges = false;
 let nextClientKey = 1;
 let draggingBoundaryIndex = null;
 let draggingOverlayKey = null;
+let loadGeneration = 0;   // guards against overlapping loadLayout() calls
 
 function markUnsaved() {
   unsavedChanges = true;
@@ -372,27 +373,34 @@ function clearUnsaved() {
 }
 
 async function loadLayout(record) {
-  currentRecipeId = record.id;
+  const gen = ++loadGeneration;      // anything newer than this wins
+  const recipeId = record.id;
+
+  currentRecipeId = recipeId;
   currentRecipeRecord = record;
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('content').style.display = 'block';
   document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
 
-  baseSegments = [];
-  overlayMarks = [];
-  deletedIds = [];
   selectedSegmentKey = null;
   selectedOverlayKey = null;
 
   await loadDyesList();
+  if (gen !== loadGeneration) return;
 
+  // Build into locals. If a second load starts while this one is waiting on
+  // Grist, it gets its own arrays — two overlapping loads can no longer push
+  // into the same list and double every segment. This happens whenever a
+  // neighbouring widget (recipe builder) saves, since that fires several
+  // separate applyUserActions() calls and each one re-triggers onRecord.
+  let comps = [];
   try {
     const compTable = await grist.docApi.fetchTable('Recipe_Dye_Components');
+    if (gen !== loadGeneration) return;
     const cIds = compTable.id || [];
     const cRefs = compTable.Recipe || [];
-    const comps = [];
     for (let i = 0; i < cIds.length; i++) {
-      if (getRefId(cRefs[i]) !== currentRecipeId) continue;
+      if (getRefId(cRefs[i]) !== recipeId) continue;
       const get = (col) => Array.isArray(compTable[col]) ? compTable[col][i] : undefined;
       // Dye_Name here is a Ref:Dyes link — resolve through allDyes (loaded just above).
       const rawDye = get('Dye_Name');
@@ -409,18 +417,20 @@ async function loadLayout(record) {
       });
     }
     comps.sort((a, b) => (Number(a.stepNumber) || 99) - (Number(b.stepNumber) || 99));
-    currentDyeComponents = comps;
   } catch (e) {
     console.error('Failed to fetch dye components:', e);
-    currentDyeComponents = [];
+    comps = [];
   }
 
+  const bases = [];
+  const overlays = [];
   try {
     const table = await grist.docApi.fetchTable('Recipe_Layout_Segments');
+    if (gen !== loadGeneration) return;
     const ids = table.id || [];
     const refs = table.Recipe || [];
     for (let i = 0; i < ids.length; i++) {
-      if (getRefId(refs[i]) !== currentRecipeId) continue;
+      if (getRefId(refs[i]) !== recipeId) continue;
       const layer = columnAsArray(table, 'Layer')[i];
       const row = {
         rowId: ids[i],
@@ -434,19 +444,28 @@ async function loadLayout(record) {
         blendRatio: Number(columnAsArray(table, 'Blend_Ratio')[i]) || 50,
         applicationType: columnAsArray(table, 'Application_Type')[i] || 'Dye',
       };
-      if (layer === 'Overlay') overlayMarks.push(row);
-      else baseSegments.push(row);
+      if (layer === 'Overlay') overlays.push(row);
+      else bases.push(row);
     }
-    baseSegments.sort((a, b) => a.startPct - b.startPct);
+    bases.sort((a, b) => a.startPct - b.startPct);
   } catch (e) {
     console.error('Failed to load layout:', e);
   }
 
+  if (gen !== loadGeneration) return;
+
+  // This load has won — only now do the shared arrays get touched.
+  currentDyeComponents = comps;
+  baseSegments = bases;
+  overlayMarks = overlays;
+  deletedIds = [];
+
+  let autoFilledLayout = false;
   if (!baseSegments.length) {
     const autoFilled = buildSegmentsFromDyeComponents();
     if (autoFilled) {
       baseSegments = autoFilled;
-      markUnsaved();
+      autoFilledLayout = true;
     } else {
       baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '' }];
     }
@@ -457,6 +476,9 @@ async function loadLayout(record) {
   renderSegmentEditor();
   renderSummary();
   clearUnsaved();
+  // An auto-filled ring is genuinely unsaved — flag it after clearUnsaved(),
+  // not before, or the flag gets wiped straight away.
+  if (autoFilledLayout) markUnsaved();
 }
 
 function renderStepPhotos(photoItems) {
@@ -1015,6 +1037,7 @@ async function saveLayout() {
 
   try {
     const actions = [];
+    const pending = [];   // new rows whose rowId must be written back
 
     baseSegments.forEach((seg, i) => {
       const fields = {
@@ -1028,9 +1051,12 @@ async function saveLayout() {
         Notes: seg.notes || '',
         Blend_Ratio: Number(seg.blendRatio) || 50,
       };
-      actions.push(seg.rowId
-        ? ['UpdateRecord', 'Recipe_Layout_Segments', seg.rowId, fields]
-        : ['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+      if (seg.rowId) {
+        actions.push(['UpdateRecord', 'Recipe_Layout_Segments', seg.rowId, fields]);
+      } else {
+        pending.push({ target: seg, actionIndex: actions.length });
+        actions.push(['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+      }
     });
 
     overlayMarks.forEach((mark, i) => {
@@ -1045,14 +1071,26 @@ async function saveLayout() {
         Notes: mark.notes || '',
         Application_Type: mark.applicationType || 'Dye',
       };
-      actions.push(mark.rowId
-        ? ['UpdateRecord', 'Recipe_Layout_Segments', mark.rowId, fields]
-        : ['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+      if (mark.rowId) {
+        actions.push(['UpdateRecord', 'Recipe_Layout_Segments', mark.rowId, fields]);
+      } else {
+        pending.push({ target: mark, actionIndex: actions.length });
+        actions.push(['AddRecord', 'Recipe_Layout_Segments', null, fields]);
+      }
     });
 
     deletedIds.forEach(id => actions.push(['RemoveRecord', 'Recipe_Layout_Segments', id]));
 
-    if (actions.length) await grist.docApi.applyUserActions(actions);
+    // Write the new row IDs back, or a second save re-adds every new segment.
+    // applyUserActions() returns {actionNum, retValues, ...}, not a bare array.
+    if (actions.length) {
+      const result = await grist.docApi.applyUserActions(actions);
+      const ret = (result && result.retValues) || (Array.isArray(result) ? result : []);
+      pending.forEach(p => {
+        const id = ret[p.actionIndex];
+        if (typeof id === 'number') p.target.rowId = id;
+      });
+    }
 
     deletedIds = [];
     clearUnsaved();
@@ -1077,6 +1115,17 @@ grist.onRecord(async (record) => {
     document.getElementById('content').style.display = 'none';
     return;
   }
+
+  // A save in another widget on this page (recipe builder) re-fires this for
+  // the same recipe. Don't throw away ring edits that aren't saved yet —
+  // just refresh the header and summary.
+  if (unsavedChanges && record.id === currentRecipeId) {
+    currentRecipeRecord = record;
+    document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
+    renderSummary();
+    return;
+  }
+
   await loadLayout(record);
 });
 </script>

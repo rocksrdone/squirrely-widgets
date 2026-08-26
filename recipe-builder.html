@@ -1348,6 +1348,7 @@ async function saveRecipe() {
     ]);
 
     const dyeActions = [];
+    const pendingDyeRows = [];   // new rows whose rowId must be written back
     for (let i = 0; i < dyeRows.length; i++) {
       const row = dyeRows[i];
       let resolvedDyeId = row.dyeId || null;
@@ -1394,6 +1395,7 @@ async function saveRecipe() {
       if (row.rowId) {
         dyeActions.push(['UpdateRecord', 'Recipe_Dye_Components', row.rowId, fields]);
       } else {
+        pendingDyeRows.push({ row, actionIndex: dyeActions.length });
         dyeActions.push(['AddRecord', 'Recipe_Dye_Components', null, fields]);
       }
     }
@@ -1403,7 +1405,15 @@ async function saveRecipe() {
     });
 
     if (dyeActions.length) {
-      await grist.docApi.applyUserActions(dyeActions);
+      // Write the new row IDs back, or saving twice without a reload in
+      // between inserts every new dye component a second time.
+      // applyUserActions() returns {actionNum, retValues, ...}, not an array.
+      const result = await grist.docApi.applyUserActions(dyeActions);
+      const ret = (result && result.retValues) || (Array.isArray(result) ? result : []);
+      pendingDyeRows.forEach(p => {
+        const id = ret[p.actionIndex];
+        if (typeof id === 'number') p.row.rowId = id;
+      });
     }
 
     deletedDyeIds = [];
