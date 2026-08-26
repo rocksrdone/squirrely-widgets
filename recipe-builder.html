@@ -410,10 +410,11 @@ const DYE_COLORS = {
 // Two dye steps that are the same colour at different strengths used to draw
 // identical squares, which is exactly the case worth telling apart at a glance.
 
-// Rows whose dilution label the user has switched on by clicking the swatch.
-// View state only — not persisted, because duplicates turn it on automatically
-// and that covers the case this exists for.
-let dilutionLabelOn = new Set();
+// Per-row override of the automatic label. Three states, not two: a plain
+// on-set could never switch a label OFF on a duplicate row, because the
+// auto-rule had already forced it on — which made the click a no-op on exactly
+// the rows the feature exists for. Absent = follow the auto-rule.
+let dilutionLabelOverride = new Map();   // clientKey -> true | false
 
 // Reads the common ways a ratio gets written. "1:4" is taken as one part stock
 // to four parts water (= 1/5 strength), which is the dye-house reading, NOT one
@@ -459,9 +460,14 @@ function duplicateDyeNames() {
   return dupes;
 }
 
-function toggleDilutionLabel(clientKey) {
-  if (dilutionLabelOn.has(clientKey)) dilutionLabelOn.delete(clientKey);
-  else dilutionLabelOn.add(clientKey);
+function toggleDilutionLabel(clientKey, autoShown) {
+  const cur = dilutionLabelOverride.has(clientKey)
+    ? dilutionLabelOverride.get(clientKey)
+    : autoShown;
+  // Setting it back to the auto value clears the override instead of pinning it,
+  // so a row that stops being a duplicate goes back to behaving normally.
+  if (cur === autoShown) dilutionLabelOverride.set(clientKey, !autoShown);
+  else dilutionLabelOverride.delete(clientKey);
   renderDyeRows();
 }
 
@@ -1233,17 +1239,24 @@ function renderDyeRows() {
     const strength = dilutionStrength(row.dilution);
     const isDupe = dupes.has((row.Dye_Name || '').trim().toLowerCase());
     // Auto-labelled when the name repeats; otherwise only if the swatch was clicked.
-    const showLabel = row.dilution && (isDupe || dilutionLabelOn.has(row.clientKey));
+    // Auto-rule: label duplicates, and label anything whose ratio could not be
+    // parsed — if there is no tint to show, the text is the only signal there is.
+    const autoShown = !!row.dilution && (isDupe || strength === null);
+    const showLabel = dilutionLabelOverride.has(row.clientKey)
+      ? dilutionLabelOverride.get(row.clientKey)
+      : autoShown;
     const swatchTitle = row.dilution
-      ? `${row.dilution}${strength !== null ? ` (~${Math.round(strength * 100)}% strength)` : ''} — click to ${showLabel ? 'hide' : 'show'} label`
-      : 'No dilution set';
+      ? `${row.dilution}${strength !== null
+          ? ` (~${Math.round(strength * 100)}% strength)`
+          : ' — ratio not recognised, swatch left at full strength'}`
+      : 'No dilution set — click to toggle label';
     return `
     <div class="dye-row">
       <div class="dye-row-head" style="position:relative;">
         <div class="dye-step-num">${i + 1}</div>
         <div class="dye-swatch ${strength !== null && strength < 1 ? 'diluted' : ''}"
              style="background:${tintForStrength(guessColor(row.Dye_Name), strength)}"
-             onclick="toggleDilutionLabel(${row.clientKey})" title="${esc(swatchTitle)}"></div>
+             onclick="toggleDilutionLabel(${row.clientKey}, ${autoShown})" title="${esc(swatchTitle)}"></div>
         ${showLabel ? `<span class="dil-tag">${esc(row.dilution)}</span>` : ''}
         <input class="field-input dye-name-input" placeholder="Dye name..." value="${(row.Dye_Name || '').replace(/"/g, '&quot;')}"
           oninput="updateDyeField(${row.clientKey}, 'Dye_Name', this.value); searchDyeSuggestions(${row.clientKey}, this.value)"
