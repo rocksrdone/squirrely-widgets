@@ -128,6 +128,7 @@
 
 <div class="tabs" role="tablist">
   <button class="tab" id="tab-convert" role="tab" aria-selected="true" aria-controls="panel-convert">Convert</button>
+  <button class="tab" id="tab-working" role="tab" aria-selected="false" aria-controls="panel-working">Working ratio</button>
   <button class="tab" id="tab-matrix"  role="tab" aria-selected="false" aria-controls="panel-matrix">Grid</button>
   <button class="tab" id="tab-setup"   role="tab" aria-selected="false" aria-controls="panel-setup">Setup</button>
 </div>
@@ -156,6 +157,33 @@
   <div class="hint" id="reach"></div>
 </div>
 
+<!-- ============================= WORKING RATIO ============================= -->
+<div class="panel" id="panel-working" role="tabpanel" aria-labelledby="tab-working" hidden>
+  <h2>Re-base an old recipe onto a new stock</h2>
+  <div class="row">
+    <div class="field">
+      <label for="wr-old">Old stock (mL)</label>
+      <input type="number" id="wr-old" min="1" step="1" value="160" inputmode="numeric">
+    </div>
+    <div class="field" style="flex:0 1 100px;">
+      <label for="wr-ratio">Used at 1 :</label>
+      <input type="number" id="wr-ratio" min="0" step="0.5" value="6" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="wr-new">New stock (mL)</label>
+      <input type="number" id="wr-new" min="1" step="1" value="80" inputmode="numeric">
+    </div>
+    <div class="field" style="flex:0 1 110px;">
+      <label for="wr-batch">Batch (mL)</label>
+      <input type="number" id="wr-batch" min="1" step="10" value="250" inputmode="numeric">
+    </div>
+  </div>
+
+  <div class="result" id="wr-result"></div>
+
+  <div class="hint" id="wr-anchor"></div>
+</div>
+
 <!-- ============================= MATRIX ============================= -->
 <div class="panel" id="panel-matrix" role="tabpanel" aria-labelledby="tab-matrix" hidden>
   <h2>Have <span class="axis">↓</span> &nbsp;·&nbsp; Want <span class="axis">→</span></h2>
@@ -180,6 +208,14 @@
       <button data-unit="g" aria-pressed="false">grams</button>
     </div>
   </div>
+  <div class="setting">
+    <label>What "1 : 6" means in your notes</label>
+    <div class="seg" id="mode-seg">
+      <button data-mode="water" aria-pressed="true">1 stock + 6 water</button>
+      <button data-mode="total" aria-pressed="false">1 stock in 6 total</button>
+    </div>
+    <div class="hint" style="margin-top:5px;">Only affects the <b>Working ratio</b> tab. The first reading gives 7 parts of liquid, the second gives 6.</div>
+  </div>
   <div class="status" id="status">Running outside Grist — settings are not saved.</div>
   <div class="hint" style="margin-top:8px;">
     Optional: map a numeric column holding a dilution figure (mL per unit) on the widget's right-hand panel, and selecting a row will load it as <b>Stock you have</b>.
@@ -197,7 +233,12 @@
     unit: "tsp",
     from: 160,
     to: 80,
-    batch: 250
+    batch: 250,
+    ratioMode: "water",
+    wrOld: 160,
+    wrRatio: 6,
+    wrNew: 80,
+    wrBatch: 250
   };
   var inGrist = false;
 
@@ -301,6 +342,81 @@
       "Dissolve powder in a splash of near-boiling water before stirring it in, or it will leave specks.";
   }
 
+  /* ---------------- render: working ratio ---------------- */
+
+  // Fraction of the working solution that is stock, for a "1 : n" note.
+  function stockFraction(n){
+    return state.ratioMode === "total" ? (1 / n) : (1 / (1 + n));
+  }
+  // Inverse: the "1 : n" figure that produces a given stock fraction.
+  function ratioFromFraction(f){
+    return state.ratioMode === "total" ? (1 / f) : (1 / f) - 1;
+  }
+  function ratioLabel(n){
+    return "1 : " + fmt(n, 2);
+  }
+
+  function renderWorking(){
+    var dOld = state.wrOld, dNew = state.wrNew, n = state.wrRatio, batch = state.wrBatch;
+    var el = $("wr-result");
+    el.className = "result";
+
+    if (!(dOld > 0) || !(dNew > 0) || !(n >= 0)){
+      el.innerHTML = '<div class="result-head"><span class="ratio-note">Fill in both stocks and the old ratio.</span></div>';
+      $("wr-anchor").textContent = "";
+      return;
+    }
+    if (state.ratioMode === "total" && n < 1){
+      el.className = "result warn";
+      el.innerHTML = '<div class="result-head"><span class="ratio">Ratio must be at least 1</span>' +
+        '<span class="ratio-note">In "1 in N total" notation, N counts the finished volume.</span></div>';
+      $("wr-anchor").textContent = "";
+      return;
+    }
+
+    // The invariant: powder per mL of finished dyebath, expressed as 1 unit : Z mL.
+    var fOld = stockFraction(n);
+    var anchor = dOld / fOld;           // mL of working solution per unit of powder
+    var fNew = dNew / anchor;           // stock fraction needed from the new stock
+
+    if (fNew > 1){
+      el.className = "result warn";
+      el.innerHTML =
+        '<div class="result-head">' +
+          '<span class="ratio">New stock is too weak</span>' +
+          '<span class="ratio-note">Even undiluted, 1 ' + state.unit + ' : ' + fmt(dNew) +
+            ' mL cannot reach 1 ' + state.unit + ' : ' + fmt(anchor) + ' mL. Use a stock of ' +
+            fmt(anchor) + ' mL or stronger.</span>' +
+        '</div>';
+      $("wr-anchor").textContent = "";
+      return;
+    }
+
+    var nNew = ratioFromFraction(fNew);
+    var stockVol = batch * fNew;
+    var waterVol = batch - stockVol;
+    var whole = Math.abs(nNew - Math.round(nNew)) < 0.005;
+
+    el.innerHTML =
+      '<div class="result-head">' +
+        '<span class="ratio">' + (whole ? "1 : " + Math.round(nNew) : ratioLabel(nNew)) + '</span>' +
+        '<span class="ratio-note">' +
+          (state.ratioMode === "total" ? "parts stock in total volume" : "parts stock : parts water") +
+          ' &nbsp;·&nbsp; was 1 : ' + fmt(n, 2) + ' on 1 ' + state.unit + ' : ' + fmt(dOld) + ' mL' +
+        '</span>' +
+      '</div>' +
+      '<div class="measures">' +
+        '<div class="measure"><div class="k">Stock</div><div class="v">' + fmt(stockVol) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Water</div><div class="v">' + fmt(waterVol) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Finished</div><div class="v">' + fmt(batch) + ' mL</div></div>' +
+      '</div>';
+
+    $("wr-anchor").innerHTML =
+      "Both versions land at <b>1 " + state.unit + " : " + fmt(anchor) + " mL</b> of finished dyebath. " +
+      "That figure is stock-independent — worth recording alongside the ratio so a recipe survives the next standard change." +
+      (whole ? "" : " The ratio does not land on a whole number, so measure by the mL above.");
+  }
+
   /* ---------------- render: matrix ---------------- */
   function renderMatrix(){
     var L = state.list, u = state.unit;
@@ -351,16 +467,17 @@
     }).join("");
   }
 
-  function renderAll(){ renderResult(); renderMatrix(); renderStdOptions(); }
+  function renderAll(){ renderResult(); renderWorking(); renderMatrix(); renderStdOptions(); }
 
   /* ---------------- tabs ---------------- */
+  var TABS = ["convert","working","matrix","setup"];
   function showTab(name){
-    ["convert","matrix","setup"].forEach(function(n){
+    TABS.forEach(function(n){
       $("tab-" + n).setAttribute("aria-selected", String(n === name));
       $("panel-" + n).hidden = (n !== name);
     });
   }
-  ["convert","matrix","setup"].forEach(function(n){
+  TABS.forEach(function(n){
     $("tab-" + n).addEventListener("click", function(){ showTab(n); });
   });
 
@@ -375,6 +492,26 @@
     });
   }
   bindNum("from","from"); bindNum("to","to"); bindNum("batch","batch");
+
+  function bindWr(id, key){
+    $(id).addEventListener("input", function(){
+      var v = Number($(id).value);
+      state[key] = (v >= 0 && isFinite(v)) ? v : 0;
+      renderWorking(); save();
+    });
+  }
+  bindWr("wr-old","wrOld"); bindWr("wr-ratio","wrRatio");
+  bindWr("wr-new","wrNew"); bindWr("wr-batch","wrBatch");
+
+  Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(b){
+    b.addEventListener("click", function(){
+      state.ratioMode = b.getAttribute("data-mode");
+      Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(x){
+        x.setAttribute("aria-pressed", String(x === b));
+      });
+      renderWorking(); save();
+    });
+  });
 
   $("swap").addEventListener("click", function(){
     var f = state.from; state.from = state.to; state.to = f;
@@ -397,6 +534,7 @@
   $("std").addEventListener("change", function(){
     state.std = Number($("std").value);
     state.to = state.std; $("to").value = state.to;
+    state.wrNew = state.std; $("wr-new").value = state.wrNew;
     renderAll(); save();
   });
 
@@ -418,7 +556,9 @@
     saveTimer = setTimeout(function(){
       try {
         grist.widgetApi.setOption("dilution", {
-          list: state.list, std: state.std, unit: state.unit, batch: state.batch
+          list: state.list, std: state.std, unit: state.unit, batch: state.batch,
+          ratioMode: state.ratioMode, wrOld: state.wrOld, wrRatio: state.wrRatio,
+          wrNew: state.wrNew, wrBatch: state.wrBatch
         });
       } catch(e){ /* options unavailable — keep running */ }
     }, 400);
@@ -430,11 +570,23 @@
     if (o.std > 0) state.std = o.std;
     if (o.unit === "g" || o.unit === "tsp") state.unit = o.unit;
     if (o.batch > 0) state.batch = o.batch;
+    if (o.ratioMode === "water" || o.ratioMode === "total") state.ratioMode = o.ratioMode;
+    if (o.wrOld > 0) state.wrOld = o.wrOld;
+    if (o.wrRatio >= 0) state.wrRatio = o.wrRatio;
+    if (o.wrBatch > 0) state.wrBatch = o.wrBatch;
+    state.wrNew = (o.wrNew > 0) ? o.wrNew : state.std;
 
     state.to = state.std;
     $("list").value = state.list.join(", ");
     $("batch").value = state.batch;
     $("to").value = state.to;
+    $("wr-old").value = state.wrOld;
+    $("wr-ratio").value = state.wrRatio;
+    $("wr-new").value = state.wrNew;
+    $("wr-batch").value = state.wrBatch;
+    Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(x){
+      x.setAttribute("aria-pressed", String(x.getAttribute("data-mode") === state.ratioMode));
+    });
     Array.prototype.forEach.call($("unit-seg").querySelectorAll("button"), function(x){
       x.setAttribute("aria-pressed", String(x.getAttribute("data-unit") === state.unit));
     });
@@ -464,7 +616,10 @@
           if (v > 0){
             state.from = v;
             $("from").value = v;
+            state.wrOld = v;
+            $("wr-old").value = v;
             renderResult();
+            renderWorking();
           }
         } catch(e){ /* no mapping set — converter still works by hand */ }
       });
