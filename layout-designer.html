@@ -274,6 +274,21 @@ async function loadDyesList() {
 
 // dye name (normalised) -> [distinct dilution strings used in this recipe]
 let dilutionsByDye = {};
+// Set once the components table is read, so the UI can say WHY nothing showed up
+// rather than silently rendering two identical arcs.
+let dilutionColName = null;
+
+// Fuzzy column find: strips non-alphanumerics and compares lowercase, so
+// Dilution, Dilution_Ratio, dilution ratio and Dye_Dilution all resolve.
+function findDilutionColumn(tableData) {
+  const keys = Object.keys(tableData || {});
+  const norm = k => k.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const exact = keys.find(k => norm(k) === 'dilution');
+  if (exact) return exact;
+  return keys.find(k => norm(k).includes('dilution'))
+      || keys.find(k => norm(k).includes('ratio'))
+      || null;
+}
 
 function buildDilutionIndex(comps) {
   const idx = {};
@@ -464,6 +479,7 @@ async function loadLayout(record) {
     if (gen !== loadGeneration) return;
     const cIds = compTable.id || [];
     const cRefs = compTable.Recipe || [];
+    dilutionColName = findDilutionColumn(compTable);
     for (let i = 0; i < cIds.length; i++) {
       if (getRefId(cRefs[i]) !== recipeId) continue;
       const get = (col) => Array.isArray(compTable[col]) ? compTable[col][i] : undefined;
@@ -475,7 +491,7 @@ async function loadLayout(record) {
         : (typeof rawDye === 'string' ? rawDye : '');
       comps.push({
         dyeName: resolvedName,
-        dilution: get('Dilution') || get('Dilution_Ratio') || '',
+        dilution: (dilutionColName ? get(dilutionColName) : '') || '',
         dyeFull: get('Dye_Full') || '',
         stepNumber: get('Step_Number') || 0,
         applicationNotes: get('Application_Notes') || '',
@@ -777,6 +793,24 @@ function renderSegmentEditor() {
       </div>
       ${(() => {
         const choices = dilutionChoicesFor(seg.dyeName);
+
+        // Diagnose the silent cases: same dye on two segments, but no ratios to
+        // tell them apart. Which of the three reasons it is decides the fix.
+        if (!choices.length && seg.dyeName) {
+          const twice = baseSegments.filter(x =>
+            normalize(x.dyeName || '') === normalize(seg.dyeName)).length > 1;
+          if (twice) {
+            const why = !dilutionColName
+              ? `No dilution column found in Recipe_Dye_Components — checked for anything containing "dilution" or "ratio".`
+              : `Recipe_Dye_Components has "${esc(dilutionColName)}", but this recipe's ${esc(seg.dyeName)} rows are blank or all the same.`;
+            return `
+      <div class="field-row">
+        <span class="field-label">Which dilution</span>
+        <div style="font-size:11px;color:#8B3A2A;">${esc(seg.dyeName)} is on ${'' + baseSegments.filter(x => normalize(x.dyeName || '') === normalize(seg.dyeName)).length} segments but they can't be told apart.<br>${why}</div>
+      </div>`;
+          }
+          return '';
+        }
         if (!choices.length) return '';   // one strength (or none) — nothing to disambiguate
         return `
       <div class="field-row">
