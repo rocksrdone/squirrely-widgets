@@ -56,6 +56,21 @@
   .ring-wrap svg { width: 100%; height: auto; display: block; touch-action: none; }
 
   .legend { display: flex; gap: 10px; margin-top: 6px; font-size: 11px; color: #6B5E52; }
+  /* Linear read of the ring. The wedges have to abbreviate to fit; this does not,
+     so it carries the full names and the dilutions the arcs may have dropped. */
+  .seq-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 3px; margin-top: 10px; }
+  .seq-cap { width: 100%; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: #8B7D72; font-weight: 700; margin-bottom: 2px; }
+  .seq-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--rule, #D4C9BC);
+    border-radius: 4px; padding: 2px 7px 2px 5px; background: white; font-size: 11px;
+    cursor: pointer; max-width: 100%; }
+  .seq-chip:hover { border-color: #8B3A2A; }
+  .seq-chip.sel { border-color: #1A1614; box-shadow: 0 0 0 1.5px rgba(26,22,20,.25); }
+  .seq-sw { width: 11px; height: 11px; border-radius: 2px; flex: none; border: 1px solid rgba(0,0,0,.22); }
+  .seq-dil { font-family: 'DM Mono', monospace; font-size: 9.5px; font-weight: 700; color: #6B5E52;
+    background: var(--warm, #E8DFD4); border-radius: 3px; padding: 0 3px; }
+  .seq-arrow { color: #B5A99A; font-size: 11px; flex: none; }
+  .seq-blend { font-style: italic; color: #6B5E52; }
   .legend-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 4px; vertical-align: middle; }
 
   .step-photos-row { display: flex; gap: 6px; margin-top: 7px; width: 100%; }
@@ -134,6 +149,7 @@
         <span><span class="legend-dot" style="background:#C8A020"></span>Overlay layer (outer ring)</span>
         <span><span class="legend-dot" style="background:#888780"></span>Base layer</span>
       </div>
+      <div id="sequenceStrip"></div>
       <div id="stepPhotosWrap"></div>
     </div>
 
@@ -386,11 +402,44 @@ function getMidPct(startPct, endPct) {
   return ((startPct + end) / 2) % 100;
 }
 
+// Shortens every word a little instead of cutting the whole name at a fixed
+// point. A hard slice turns "Spearmint Frost" and "Spearmint Haze" into the same
+// "Spearmint…", which is precisely the case where the label had to do its job.
+// Trimming per word keeps the tail visible: "Spea Frost" vs "Spea Haze".
 function abbreviateLabel(name, widthDeg) {
   if (!name) return '';
-  const maxChars = widthDeg < 18 ? 3 : widthDeg < 32 ? 6 : widthDeg < 55 ? 10 : 16;
-  if (name.length <= maxChars) return name;
-  return name.slice(0, Math.max(1, maxChars - 1)) + '…';
+  const maxChars = widthDeg < 18 ? 3 : widthDeg < 32 ? 8 : widthDeg < 55 ? 13 : 20;
+  let s = String(name).trim();
+  if (s.length <= maxChars) return s;
+
+  // A trailing brand in parens is the least useful thing on a crowded ring, and
+  // it is what pushes most names over the limit. Drop it before touching words.
+  const noBrand = s.replace(/\s*\([^)]*\)\s*$/, '').trim();
+  if (noBrand && noBrand.length <= maxChars) return noBrand;
+  if (noBrand) s = noBrand;
+
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length === 1) return s.slice(0, Math.max(1, maxChars - 1)) + '…';
+
+  // Share the budget across words, minimum 2 letters each so no word vanishes.
+  // Later words keep any remainder, since the distinguishing part of a colourway
+  // name is usually the last word.
+  const gaps = words.length - 1;
+  let budget = maxChars - gaps;
+  if (budget < words.length * 2) {
+    // Too tight for whole words — initial everything but the last word.
+    const last = words[words.length - 1];
+    const lead = words.slice(0, -1).map(w => w[0]).join('');
+    const room = Math.max(2, maxChars - lead.length - 1);
+    return lead + ' ' + (last.length <= room ? last : last.slice(0, room));
+  }
+  const per = Math.floor(budget / words.length);
+  let extra = budget - per * words.length;
+  return words.map((w, i) => {
+    let take = per;
+    if (i >= words.length - extra) take += 1;   // remainder to the tail words
+    return w.length <= take ? w : w.slice(0, take);
+  }).join(' ');
 }
 
 function polarToCartesian(r, angleDeg) {
@@ -674,6 +723,42 @@ function renderRing() {
   html += `<circle cx="${CX}" cy="${CY}" r="${BASE_R_IN - 10}" fill="var(--paper, #F7F3EE)"></circle>`;
 
   svg.innerHTML = html;
+  renderSequenceStrip();
+}
+
+// The ring reads as a picture; this reads as a sentence. Same segments, same
+// order, same colours — but no wedge to fit inside, so nothing is abbreviated
+// and the dilution always shows. Clicking a chip selects the segment, so it
+// doubles as a way to reach a wedge too narrow to click.
+function renderSequenceStrip() {
+  const wrap = document.getElementById('sequenceStrip');
+  if (!wrap) return;
+
+  const segs = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
+  if (!segs.length || !segs.some(x => x.dyeName)) { wrap.innerHTML = ''; return; }
+
+  const parts = segs.map(seg => {
+    if (seg.type === 'Blend') {
+      return `<span class="seq-chip seq-blend ${seg.clientKey === selectedSegmentKey ? 'sel' : ''}"
+                onclick="selectSegment(${seg.clientKey})">blend ${Math.round(seg.blendRatio ?? 50)}%</span>`;
+    }
+    // Ratio shown whenever the segment has one — the ring only shows it on wide
+    // enough wedges, and this is where that information should never be lost.
+    const dil = seg.dilution
+      ? `<span class="seq-dil">${esc(seg.dilution)}</span>` : '';
+    return `<span class="seq-chip ${seg.clientKey === selectedSegmentKey ? 'sel' : ''}"
+              onclick="selectSegment(${seg.clientKey})" title="${esc(seg.dyeName || 'unnamed')}">
+              <span class="seq-sw" style="background:${segFill(seg)}"></span>
+              <span>${esc(seg.dyeName || '—')}</span>${dil}
+            </span>`;
+  });
+
+  // Trailing arrow closes the loop, because the last segment meets the first.
+  wrap.innerHTML = `<div class="seq-strip">
+      <span class="seq-cap">Around the spool &mdash; in order</span>
+      ${parts.join('<span class="seq-arrow">&rarr;</span>')}
+      <span class="seq-arrow" title="wraps back to the start">&#8631;</span>
+    </div>`;
 }
 
 function startDrag(evt, boundaryIndex) {
