@@ -266,6 +266,71 @@ async function loadDyesList() {
   }
 }
 
+// ── Same dye, different strengths ──────────────────────────────────
+// A recipe can use one dye at two dilutions. Both segments resolve to the same
+// name, so guessColor() gives them the same fill and the ring shows two
+// identical arcs. The dilution lives on Recipe_Dye_Components, so it is looked
+// up from there rather than stored again on the segment.
+
+// dye name (normalised) -> [distinct dilution strings used in this recipe]
+let dilutionsByDye = {};
+
+function buildDilutionIndex(comps) {
+  const idx = {};
+  (comps || []).forEach(c => {
+    const k = normalize(c.dyeName || '');
+    if (!k || !c.dilution) return;
+    if (!idx[k]) idx[k] = [];
+    if (!idx[k].includes(c.dilution)) idx[k].push(c.dilution);
+  });
+  return idx;
+}
+
+// Only interesting when the recipe uses the dye at more than one strength —
+// otherwise the ratio is noise on an already-crowded ring.
+function dilutionChoicesFor(dyeName) {
+  const list = dilutionsByDye[normalize(dyeName || '')] || [];
+  return list.length > 1 ? list : [];
+}
+
+// "1:4" read as one part stock to four parts water (1/5 strength), the dye-house
+// reading. Unparseable values return null and are left at full strength rather
+// than guessed at.
+function dilutionStrength(raw) {
+  const t = String(raw || '').trim().toLowerCase();
+  if (!t) return null;
+  if (/^(full|stock|neat|undiluted|straight)$/.test(t)) return 1;
+  if (/^half$/.test(t)) return 0.5;
+  let m = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(t);
+  if (m) { const a = +m[1], b = +m[2]; return (a + b) > 0 ? a / (a + b) : null; }
+  m = /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/.exec(t);
+  if (m) return +m[2] ? Math.min(1, +m[1] / +m[2]) : null;
+  m = /^(\d+(?:\.\d+)?)\s*%$/.exec(t);
+  if (m) return Math.min(1, +m[1] / 100);
+  return null;
+}
+
+// Mixes toward white, capped so a weak dilution still reads as the same colour.
+function tintForStrength(hex, strength) {
+  if (strength === null || strength >= 1) return hex;
+  const h = String(hex || '').replace('#', '');
+  if (h.length !== 6) return hex;
+  const f = Math.min(0.68, (1 - strength) * 0.78);
+  const mix = i => {
+    const c = parseInt(h.slice(i, i + 2), 16);
+    return Math.round(c + (255 - c) * f).toString(16).padStart(2, '0');
+  };
+  return '#' + mix(0) + mix(2) + mix(4);
+}
+
+// Fill for one segment: base dye colour, lightened if that segment carries a
+// dilution AND the recipe uses this dye at more than one strength.
+function segFill(seg) {
+  const base = guessColor(seg.dyeName);
+  if (!seg.dilution || !dilutionChoicesFor(seg.dyeName).length) return base;
+  return tintForStrength(base, dilutionStrength(seg.dilution));
+}
+
 function getManualColor(name) {
   const n = normalize(name);
   const found = allDyes.find(d => normalize(d.name) === n && d.hex);
@@ -410,6 +475,7 @@ async function loadLayout(record) {
         : (typeof rawDye === 'string' ? rawDye : '');
       comps.push({
         dyeName: resolvedName,
+        dilution: get('Dilution') || get('Dilution_Ratio') || '',
         dyeFull: get('Dye_Full') || '',
         stepNumber: get('Step_Number') || 0,
         applicationNotes: get('Application_Notes') || '',
@@ -421,6 +487,7 @@ async function loadLayout(record) {
     console.error('Failed to fetch dye components:', e);
     comps = [];
   }
+  dilutionsByDye = buildDilutionIndex(comps);
 
   const bases = [];
   const overlays = [];
@@ -441,6 +508,7 @@ async function loadLayout(record) {
         type: columnAsArray(table, 'Segment_Type')[i] || 'Solid',
         order: columnAsArray(table, 'Segment_Order')[i] || 0,
         notes: columnAsArray(table, 'Notes')[i] || '',
+        dilution: columnAsArray(table, 'Dilution')[i] || '',
         blendRatio: Number(columnAsArray(table, 'Blend_Ratio')[i]) || 50,
         applicationType: columnAsArray(table, 'Application_Type')[i] || 'Dye',
       };
@@ -467,7 +535,7 @@ async function loadLayout(record) {
       baseSegments = autoFilled;
       autoFilledLayout = true;
     } else {
-      baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '' }];
+      baseSegments = [{ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 0, endPct: 100, type: 'Solid', notes: '', dilution: '' }];
     }
   }
 
@@ -518,11 +586,11 @@ function renderRing() {
       fill = '#F0EDE8';
     } else if (seg.type === 'Blend') {
       const n = baseSegments.length;
-      const prevColor = guessColor(baseSegments[(idx - 1 + n) % n].dyeName);
-      const nextColor = guessColor(baseSegments[(idx + 1) % n].dyeName);
+      const prevColor = segFill(baseSegments[(idx - 1 + n) % n]);
+      const nextColor = segFill(baseSegments[(idx + 1) % n]);
       fill = mixColors(prevColor, nextColor, seg.blendRatio ?? 50);
     } else {
-      fill = guessColor(seg.dyeName);
+      fill = segFill(seg);
     }
     const strokeW = seg.clientKey === selectedSegmentKey ? 3 : 1;
     const strokeColor = seg.clientKey === selectedSegmentKey ? '#1A1614' : 'white';
@@ -547,12 +615,19 @@ function renderRing() {
     let widthPct = seg.endPct - seg.startPct;
     if (widthPct <= 0) widthPct += 100;
     const widthDeg = (widthPct / 100) * 360;
+    const showDil = seg.type !== 'Blend' && seg.dilution && dilutionChoicesFor(seg.dyeName).length;
     const label = seg.type === 'Blend'
       ? (widthDeg < 22 ? '⇄' : `⇄ ${Math.round(seg.blendRatio ?? 50)}%`)
       : abbreviateLabel(seg.dyeName, widthDeg);
     if (label) {
       const pt = polarToCartesian((BASE_R_OUT + BASE_R_IN) / 2, (midPct / 100) * 360);
-      html += `<text x="${pt.x}" y="${pt.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${esc(label)}</text>`;
+      // Ratio sits on a second line under the name, so the name keeps its
+      // position and narrow wedges just drop the ratio instead of colliding.
+      const dy = showDil && widthDeg >= 16 ? -6 : 0;
+      html += `<text x="${pt.x}" y="${pt.y + dy}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-family="Inter, sans-serif" font-weight="600" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="3" paint-order="stroke" style="pointer-events:none">${esc(label)}</text>`;
+      if (showDil && widthDeg >= 16) {
+        html += `<text x="${pt.x}" y="${pt.y + 7}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-family="DM Mono, monospace" font-weight="700" fill="white" stroke="rgba(0,0,0,0.55)" stroke-width="2.5" paint-order="stroke" style="pointer-events:none">${esc(seg.dilution)}</text>`;
+      }
     }
   });
 
@@ -700,6 +775,19 @@ function renderSegmentEditor() {
           <option ${seg.type === 'Space' ? 'selected' : ''}>Space</option>
         </select>
       </div>
+      ${(() => {
+        const choices = dilutionChoicesFor(seg.dyeName);
+        if (!choices.length) return '';   // one strength (or none) — nothing to disambiguate
+        return `
+      <div class="field-row">
+        <span class="field-label">Which dilution</span>
+        <select class="field-input" onchange="updateSegment(${seg.clientKey}, 'dilution', this.value)">
+          <option value="" ${!seg.dilution ? 'selected' : ''}>— not set —</option>
+          ${choices.map(d => `<option ${seg.dilution === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+        <div style="font-size:10px;color:#8B7D72;">This recipe uses ${esc(seg.dyeName)} at ${choices.length} strengths — pick which one this segment is, and the arc lightens to match.</div>
+      </div>`;
+      })()}
       ${seg.type === 'Blend' ? `
       <div class="field-row">
         <span class="field-label">Mix % (toward next segment)</span>
@@ -834,7 +922,7 @@ function splitSegment(key) {
   let unwrappedEnd = seg.endPct;
   if (unwrappedEnd <= seg.startPct) unwrappedEnd += 100; // handle wraparound segments correctly
   const mid = ((seg.startPct + unwrappedEnd) / 2) % 100;
-  const newSeg = { rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: mid, endPct: seg.endPct, type: 'Solid', notes: '' };
+  const newSeg = { rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: mid, endPct: seg.endPct, type: 'Solid', notes: '', dilution: '' };
   seg.endPct = mid;
   baseSegments.splice(idx + 1, 0, newSeg);
   markUnsaved();
@@ -864,6 +952,9 @@ function buildSegmentsFromDyeComponents() {
     rowId: null,
     clientKey: nextClientKey++,
     dyeName: c.dyeName,
+    // Seeded straight from the component, so filling from the recipe already
+    // separates two strengths of the same dye without anything to pick.
+    dilution: c.dilution || '',
     startPct: i * width,
     endPct: (i + 1) * width,
     type: 'Solid',
@@ -1049,6 +1140,7 @@ async function saveLayout() {
         Layer: 'Base',
         Segment_Order: i + 1,
         Notes: seg.notes || '',
+        Dilution: seg.dilution || '',
         Blend_Ratio: Number(seg.blendRatio) || 50,
       };
       if (seg.rowId) {
