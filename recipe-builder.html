@@ -125,6 +125,12 @@
   /* Dashed outline as well as the lighter fill: tint alone is easy to miss at
      14px, and reads as nothing at all to anyone colour-blind. */
   .dye-swatch.diluted { border: 1px dashed rgba(0,0,0,.45); }
+  .brand-tag {
+    font-size: 9px; font-weight: 700; letter-spacing: .04em; color: #6B5E52;
+    border: 1px solid var(--rule); border-radius: 3px; padding: 1px 4px;
+    flex-shrink: 0; white-space: nowrap;
+  }
+  .brand-tag.warn { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
   .dil-tag {
     font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 700;
     color: #6B5E52; background: var(--warm); border-radius: 3px;
@@ -469,6 +475,40 @@ function toggleDilutionLabel(clientKey, autoShown) {
   if (cur === autoShown) dilutionLabelOverride.set(clientKey, !autoShown);
   else dilutionLabelOverride.delete(clientKey);
   renderDyeRows();
+}
+
+// Short brand tag. 26 dye names are shared across brands, so the brand is not
+// decoration — it is the only thing distinguishing three different Turquoises.
+function brandCode(brand) {
+  const b = String(brand || '').trim();
+  if (!b) return '';
+  if (b.length <= 4 && !/\s/.test(b)) return b.toUpperCase();
+  // Split on separators AND drop tokens that don't start with a letter or digit,
+  // so an ampersand in "Pro Chemical & Dye" doesn't become part of the tag.
+  const words = b.split(/[\s\-_/&+.,]+/).filter(w => /^[a-z0-9]/i.test(w));
+  if (!words.length) return b.slice(0, 2).toUpperCase();
+  // A single long word has no initials to take — use its first letters instead,
+  // or "ProChem" collapses to a useless "P".
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words.map(w => w[0]).join('').toUpperCase().slice(0, 3);
+}
+
+// The row's brand, resolved through dyeId — the row ID, never the name, because
+// keying on the name is what makes three Turquoises indistinguishable.
+function rowBrand(row) {
+  if (!row.dyeId) return '';
+  const d = allDyes.find(x => x.id === row.dyeId);
+  return d ? brandCode(d.brand) : '';
+}
+
+// True when a typed name matches dyes from more than one brand and nothing has
+// been picked to say which. Silent ambiguity here becomes the wrong jar at the pot.
+function nameIsAmbiguous(row) {
+  if (row.dyeId) return false;
+  const n = normalize(row.Dye_Name || '');
+  if (!n) return false;
+  const brands = new Set(allDyes.filter(d => normalize(d.name) === n).map(d => brandCode(d.brand)));
+  return brands.size > 1;
 }
 
 function guessColor(name) {
@@ -1257,6 +1297,8 @@ function renderDyeRows() {
         <div class="dye-swatch ${strength !== null && strength < 1 ? 'diluted' : ''}"
              style="background:${tintForStrength(guessColor(row.Dye_Name), strength)}"
              onclick="toggleDilutionLabel(${row.clientKey}, ${autoShown})" title="${esc(swatchTitle)}"></div>
+        ${rowBrand(row) ? `<span class="brand-tag" title="Brand — picked from the dye list">${esc(rowBrand(row))}</span>` : ''}
+        ${nameIsAmbiguous(row) ? `<span class="brand-tag warn" title="This name exists under more than one brand — pick from the dropdown so the right one is linked">⚠ which brand?</span>` : ''}
         ${showLabel ? `<span class="dil-tag">${esc(row.dilution)}</span>` : ''}
         <input class="field-input dye-name-input" placeholder="Dye name..." value="${(row.Dye_Name || '').replace(/"/g, '&quot;')}"
           oninput="updateDyeField(${row.clientKey}, 'Dye_Name', this.value); searchDyeSuggestions(${row.clientKey}, this.value)"
