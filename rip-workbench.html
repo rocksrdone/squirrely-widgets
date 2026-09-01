@@ -156,7 +156,7 @@
           tool('ffmpeg')+' -hide_banner -ss 00:10:00 -i '+target+
           ' -vf cropdetect=24:2:0 -frames:v 300 -f null - 2>> '+rep};
     };
-    var F=function(def){return P(fileName||def);};
+    var F=function(def){return P(safeFile(def));};
 
     if(src==='dvd'){
       S.push({h:'See what is on the disc',
@@ -179,10 +179,10 @@
       var VTS=qq(join(vp.parent,vp.name));
       var RIP=qq(join(vp.parent,'rip'));
       var REP=qq(join(join(vp.parent,'rip'),'peplum-report.txt'));
-      var MK=qq(join(join(vp.parent,'rip'),fileName||'title_t00.mkv'));
+      var MK=qq(join(join(vp.parent,'rip'),safeFile('title_t00.mkv')));
       S.push({h:'Make somewhere for the output',
-        p:'MakeMKV will not create the folder itself, and writing MKVs in among the VOBs gets '+
-          'messy fast.',
+        p:'The rip lands in a <b>rip</b> folder beside VIDEO_TS, so it never mixes with the VOBs. '+
+          'MakeMKV will not create that folder itself.',
         c:(os==='win'?'mkdir ':'mkdir -p ')+RIP});
       S.push({h:'Rip the folder',
         p:'Note it points at <b>'+esc(join(vp.parent,vp.name))+'</b> using a full path, so it does '+
@@ -326,13 +326,14 @@
       'switches the whole set. Blank means the tool is already on your PATH.</div></fieldset>');
 
     h.push('<fieldset><legend>This job</legend><div class="row">'+
-      '<div style="grid-column:span 2"><label>'+
-        (src==='videots'?'Path to the VIDEO_TS folder (or the folder holding it)'
-                        :'Folder these files are in')+'</label>'+
+      '<div style="grid-column:span 2"><label>'+esc(fld().dir)+'</label>'+
       '<input id="o_dir" value="'+esc(workDir)+'" placeholder="'+
-        (os==='win'?'D:\\Rips\\Afrodite (1958)':'/mnt/nas/rips/afrodite')+'"></div>'+
-      '<div><label>File name</label><input id="o_file" value="'+esc(fileName)+
-        '" placeholder="title_t00.mkv"></div>'+
+        esc(os==='win'?fld().dirPh:fld().dirPh.replace(/^[A-Z]:\\/,'/mnt/').replace(/\\/g,'/'))+
+        '"></div>'+
+      '<div><label>'+esc(fld().file)+
+        (fld().fileWhen?' <span style="opacity:.7">\u2014 '+esc(fld().fileWhen)+'</span>':'')+
+        '</label><input id="o_file" value="'+esc(fileName)+
+        '" placeholder="'+esc(fld().filePh)+'"></div>'+
       '</div><div class="row"><div style="grid-column:1/-1">'+
       '<label style="display:flex;gap:6px;align-items:center;color:var(--fg);font-size:12px">'+
       '<input type="checkbox" id="o_cd" style="width:auto"'+(useCd?' checked':'')+
@@ -343,7 +344,7 @@
       '<br><span style="font-size:10.5px">In Explorer, Shift+right-click a file or folder and '+
       'choose <b>Copy as path</b> to get the folder above. On Linux, copy it from the address bar '+
       'in your file manager.</span></div>'+
-      '<input type="file" id="fpick" style="display:none"></fieldset>');
+      '<input type="file" id="fpick" style="display:none">'+fileWarn()+'</fieldset>');
 
     if(src==='download'){
       h.push('<div class="warnbox"><b>A file you did not make yourself.</b> Everything below still '+
@@ -393,6 +394,38 @@
     }
     return false;
   }
+  var FIELDS={
+    dvd:{dir:'Where to save the rip',dirPh:'D:\\Rips\\Afrodite (1958)',
+         file:'MKV name after ripping',filePh:'title_t00.mkv',
+         ok:/\.mkv$/i,fileWhen:'only used by the probe step, after the rip exists'},
+    videots:{dir:'Path to the VIDEO_TS folder (or the folder holding it)',
+         dirPh:'D:\\Rips\\Afrodite (1958)\\VIDEO_TS',
+         file:'MKV name after ripping',filePh:'title_t00.mkv',
+         ok:/\.mkv$/i,fileWhen:'only used by the probe step, after the rip exists'},
+    iso:{dir:'Folder holding the ISO',dirPh:'D:\\Images',
+         file:'ISO file name',filePh:'film.iso',ok:/\.iso$/i,fileWhen:''},
+    bluray:{dir:'Where to save the rip',dirPh:'D:\\Rips\\Film',
+         file:'MKV name after ripping',filePh:'title_t00.mkv',
+         ok:/\.mkv$/i,fileWhen:'only used by the probe step, after the rip exists'},
+    mine:{dir:'Folder holding the file',dirPh:'D:\\Rips\\Afrodite (1958)',
+         file:'File name',filePh:'Afrodite (1958) Medusa.mkv',
+         ok:/\.(mkv|mp4|m4v|avi|m2ts|ts)$/i,fileWhen:''},
+    download:{dir:'Folder holding the file',dirPh:'D:\\Downloads',
+         file:'File name',filePh:'unknown.mkv',
+         ok:/\.(mkv|mp4|m4v|avi|m2ts|ts)$/i,fileWhen:''}
+  };
+  function fld(){return FIELDS[src]||FIELDS.mine;}
+  // ignore anything that is not the kind of file this step needs
+  function safeFile(def){
+    if(!fileName)return def;
+    return fld().ok.test(fileName)?fileName:def;
+  }
+  function fileWarn(){
+    if(!fileName||fld().ok.test(fileName))return '';
+    return '<div class="warnbox" style="margin:7px 0 0;padding:7px 10px">'+
+      '<b>'+esc(fileName)+'</b> is not what this step needs \u2014 expecting something like '+
+      '<code>'+esc(fld().filePh)+'</code>. It is being ignored.</div>';
+  }
   function srcLabel(){
     return {dvd:'a disc in the drive',videots:'a VIDEO_TS folder',iso:'an ISO image',
             bluray:'a Blu-ray',mine:'a finished rip',
@@ -438,8 +471,15 @@
     };
     var fEl=document.getElementById('o_file');
     if(fEl)fEl.oninput=function(){
+      var bad=!!fileName&&!fld().ok.test(fileName);
       fileName=this.value.trim();
-      if(detectSrc())render(); else refreshSteps();
+      var nowBad=!!fileName&&!fld().ok.test(fileName);
+      if(detectSrc()||bad!==nowBad){
+        var pos=fEl.selectionStart;
+        render();
+        var e2=document.getElementById('o_file');
+        if(e2){e2.focus();try{e2.setSelectionRange(pos,pos);}catch(x){}}
+      } else refreshSteps();
     };
     var cdEl=document.getElementById('o_cd');
     if(cdEl)cdEl.onchange=function(){useCd=this.checked;refreshSteps();};
