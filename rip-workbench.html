@@ -160,7 +160,9 @@
 
     if(src==='dvd'){
       S.push({h:'See what is on the disc',
-        p:'Lists every title with its length. The feature is nearly always the longest.',
+        p:'Needs a real disc in a real drive. If you are working from a folder or an image on '+
+          'disk, change the dropdown at the top — <code>disc:0</code> will only ever report '+
+          'that it cannot find a drive.',
         c:mkv()+' -r info disc:0'});
       S.push({h:'Rip every title losslessly',
         p:'MakeMKV remuxes rather than re-encodes, so the video is bit-for-bit what is on the disc. '+
@@ -351,6 +353,8 @@
 
     if(!workDir)h.push('<div class="warnbox">Paste the folder above before copying anything \u2014 '+
       'the commands below are showing example paths.</div>');
+    else h.push('<div class="note" style="margin:0 0 4px">Reading that as <b>'+esc(srcLabel())+
+      '</b>. Change the dropdown at the top if that is wrong.</div>');
     h.push('<h2>Steps</h2><div id="stephost">'+stepsHtml()+'</div>');
 
     h.push('<h2>Is it really an untouched rip?</h2>');
@@ -375,6 +379,25 @@
     bind();
   }
 
+  function detectSrc(){
+    var p=(workDir+' '+fileName).toLowerCase();
+    var was=src;
+    if(/\.iso(\s|$)/.test(p))src='iso';
+    else if(/video_ts/.test(p))src='videots';
+    else if(/bdmv|\bstream\b|\.m2ts/.test(p))src='bluray';
+    else if(/\.(mkv|mp4|m4v|avi)(\s|$)/.test(p))src='mine';
+    if(src!==was){
+      var sel=document.getElementById('src');
+      if(sel)sel.value=src;
+      return true;
+    }
+    return false;
+  }
+  function srcLabel(){
+    return {dvd:'a disc in the drive',videots:'a VIDEO_TS folder',iso:'an ISO image',
+            bluray:'a Blu-ray',mine:'a finished rip',
+            download:'a file from elsewhere'}[src]||src;
+  }
   function refreshSteps(){
     var host=document.getElementById('stephost');
     if(!host)return;
@@ -409,9 +432,15 @@
       el.onchange=function(){saveOpt(os+p[1],el.value.trim());render();};
     });
     var dirEl=document.getElementById('o_dir');
-    if(dirEl)dirEl.oninput=function(){workDir=this.value.trim();refreshSteps();};
+    if(dirEl)dirEl.oninput=function(){
+      workDir=this.value.trim();
+      if(detectSrc())render(); else refreshSteps();
+    };
     var fEl=document.getElementById('o_file');
-    if(fEl)fEl.oninput=function(){fileName=this.value.trim();refreshSteps();};
+    if(fEl)fEl.oninput=function(){
+      fileName=this.value.trim();
+      if(detectSrc())render(); else refreshSteps();
+    };
     var cdEl=document.getElementById('o_cd');
     if(cdEl)cdEl.onchange=function(){useCd=this.checked;refreshSteps();};
     var fd=document.getElementById('fdrop'),fp=document.getElementById('fpick');
@@ -420,7 +449,8 @@
       fp.onchange=function(){
         if(!fp.files.length)return;
         fileName=fp.files[0].name;
-        document.getElementById('o_file').value=fileName;refreshSteps();
+        document.getElementById('o_file').value=fileName;
+        if(detectSrc())render(); else refreshSteps();
       };
       ['dragover','dragleave','drop'].forEach(function(ev){
         fd.addEventListener(ev,function(e){
@@ -428,7 +458,8 @@
           fd.style.borderColor=(ev==='dragover')?'var(--ok)':'var(--line)';
           if(ev==='drop'&&e.dataTransfer.files.length){
             fileName=e.dataTransfer.files[0].name;
-            document.getElementById('o_file').value=fileName;refreshSteps();
+            document.getElementById('o_file').value=fileName;
+            if(detectSrc())render(); else refreshSteps();
           }
         });
       });
