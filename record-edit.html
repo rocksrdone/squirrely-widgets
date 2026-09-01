@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Record Editor</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root{--bg:#fff;--fg:#1c1c1c;--muted:#6b7280;--line:#e3e3e6;--chip:#f3f4f6;--card:#fafafa;
+    --ok:#16b378;--bad:#d9534f;--warn:#e5a83b}
+  @media (prefers-color-scheme:dark){:root{--bg:#1e1e1e;--fg:#eaeaea;--muted:#9aa0a6;--line:#3a3a3a;
+    --chip:#2c2c2c;--card:#262626}}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:9px 12px;
+    border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .tabs{display:flex;gap:4px}
+  .tab{border:1px solid var(--line);background:var(--chip);color:var(--muted);border-radius:13px;
+    padding:4px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .tab.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  #q{flex:1;min-width:180px;max-width:380px;padding:6px 11px;border:1px solid var(--line);
+    border-radius:16px;background:var(--card);color:var(--fg);font:inherit;outline:none}
+  #q:focus{border-color:var(--ok)}
+  #hits{position:absolute;top:44px;left:12px;width:420px;max-height:320px;overflow:auto;z-index:30;
+    background:var(--bg);border:1px solid var(--line);border-radius:6px;
+    box-shadow:0 6px 22px rgba(0,0,0,.35);display:none}
+  #hits div{padding:6px 11px;cursor:pointer;border-bottom:1px solid var(--line);font-size:12px}
+  #hits div:last-child{border-bottom:0}
+  #hits div:hover,#hits div.sel{background:var(--chip)}
+  #hits .sub{color:var(--muted);font-size:11px}
+  #count{font-size:11px;color:var(--muted)}
+  #root{padding:12px;max-width:940px}
+  .grid{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .f.wide{grid-column:1/-1}
+  label{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+  input,select,textarea{width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:4px;
+    background:var(--card);color:var(--fg);font:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ok)}
+  textarea{min-height:56px;resize:vertical}
+  input[type=checkbox]{width:auto}
+  .bool{display:flex;gap:6px;align-items:center;padding-top:16px}
+  .bool label{margin:0;color:var(--fg);font-size:12px}
+  .chips{display:flex;gap:5px;flex-wrap:wrap}
+  .chips button{border:1px solid var(--line);background:var(--card);color:var(--muted);
+    border-radius:12px;padding:3px 10px;font:inherit;font-size:11px;cursor:pointer}
+  .chips button.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  .dirty{border-color:var(--warn)!important}
+  #acts{display:flex;gap:9px;align-items:center;margin-top:14px;position:sticky;bottom:0;
+    background:var(--bg);padding:10px 0;border-top:1px solid var(--line)}
+  .btn{padding:6px 14px;border:1px solid var(--line);border-radius:14px;background:var(--chip);
+    color:var(--fg);font:inherit;cursor:pointer}
+  .btn.go{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  .btn.del{border-color:var(--bad);color:var(--bad)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  #status{font-size:12px}
+  #status.ok{color:var(--ok)} #status.bad{color:var(--bad)}
+  #msg{padding:34px;text-align:center;color:var(--muted);line-height:1.7}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    margin:0 0 9px;font-weight:600}
+  .rid{font-size:11px;color:var(--muted);margin-left:auto}
+</style>
+</head>
+<body>
+<div id="bar">
+  <div class="tabs" id="tabs"></div>
+  <input id="q" placeholder="Search&hellip;" autocomplete="off">
+  <span id="count"></span>
+  <div id="hits"></div>
+</div>
+<div id="msg">Pick a table, then search for a record to edit.</div>
+<div id="root" style="display:none"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  var OPT={
+    branch:['Peplum','Biblical','Viking / Norse','Pirate / Age of Sail','Amazon / Jungle Queen',
+            'Sandokan / Eastern adventure','Barbarian / Fantasy','Medieval / Crusade','Mythic other'],
+    era:['Prehistoric','Egyptian','Greek Myth','Greek Historical','Biblical','Roman','Dark Ages',
+         'Medieval','Norse','Age of Sail','Colonial / Eastern','Mythic / Timeless','Modern'],
+    mode:['Fantasy','Historical','Mixed','Parody'],
+    work:['Feature','TV Episode','TV Movie','Serial','Short','Documentary'],
+    research:['Not started','Started','In progress','Deep dive done'],
+    master:['Not planned','Wanted','Sources gathering','Editing','Mastered','Blocked'],
+    prio:['1 \u00b7 Next up','2 \u00b7 Nearly ready','3 \u00b7 Want it','4 \u00b7 Blocked','5 \u00b7 Someday'],
+    format:['DVD','Blu-ray','UHD','VHS','Betamax','Laserdisc','16mm','TV capture','Streaming','Web download'],
+    std:['PAL','NTSC','Film 24','Progressive','Unknown'],
+    cut:['Uncut','Slightly cut','Cut','Heavily cut','Alternate cut','Extended','Unknown'],
+    own:['Owned','Wanted','Passed','Sold','Digital only','Borrowed','Lost'],
+    ptype:['Actor','Director','Writer','Composer','Dub voice','Crew'],
+    ctype:['Actor','Director','Writer','Cinematographer','Composer','Producer','Dub voice','Stunt','Other'],
+    conf:['Confirmed','Probable','Guess','Disputed'],
+    idfrom:['Print credits','Research','Screenshot','Dub credits','Guess'],
+    scan:['Progressive','Interlaced','Mixed','Unknown'],
+    field:['n/a','Top Field First','Bottom Field First'],
+    storage:['Anamorphic','Letterboxed 4:3','Open matte 4:3','Pillarboxed in 16:9',
+             'Windowboxed','Fills the frame','Unknown'],
+    prov:['Own disc rip','Own capture','Trusted rip','Unverified download',
+          'Streaming capture','Unknown'],
+    atype:['Original','Dub','Fandub','Commentary','Isolated score'],
+    stype:['Full','SDH','Forced','Songs only','Fan'],
+    sfmt:['VobSub','PGS','SRT','ASS','Burned-in','CC'],
+    ssrc:['Official','OCR','Fan','Machine translation'],
+    lang:['Italian','English','French','Spanish','German','Russian','Japanese',
+          'Portuguese','Other']
+  };
+
+  var SCHEMA={
+    Films:{ label:'Films', title:function(r){return (r.Original_Title||'(untitled)')+
+              (r.Year?' ('+parseInt(r.Year,10)+')':'');},
+      sub:function(r){return [r.English_Title,r.Branch,r.Master_Status].filter(Boolean).join(' \u00b7 ');},
+      search:['Original_Title','English_Title','Alt_Titles','Director','Year'],
+      fields:[
+       {id:'Original_Title',t:'text',wide:1},{id:'English_Title',t:'text',wide:1},
+       {id:'Alt_Titles',t:'text',wide:1},
+       {id:'Year',t:'num'},{id:'Country',t:'text'},{id:'Director',t:'text',wide:1},
+       {id:'Branch',t:'choice',o:'branch'},{id:'Setting_Era',t:'choice',o:'era'},
+       {id:'Mode',t:'choice',o:'mode'},{id:'Work_Type',t:'choice',o:'work'},
+       {id:'Franchise',t:'ref',ref:'Franchises',show:'Name'},
+       {id:'Series_Name',t:'text'},{id:'Season_Episode',t:'text'},
+       {id:'Reference_Runtime_Min',t:'num'},{id:'Longest_Known_Runtime_Min',t:'num'},
+       {id:'Priority',t:'choice',o:'prio'},
+       {id:'Research_Status',t:'choice',o:'research'},{id:'Master_Status',t:'choice',o:'master'},
+       {id:'Adult',t:'bool'},
+       {id:'IMDb_URL',t:'text',wide:1},{id:'Reference_URL',t:'text',wide:1},
+       {id:'Other_Links',t:'text',wide:1},
+       {id:'Content_Notes',t:'area',wide:1},
+       {id:'Best_Version_Notes',t:'area',wide:1},{id:'Notes',t:'area',wide:1}]},
+
+    Releases:{ label:'Releases', title:function(r){return r.Title_On_Release||'(untitled)';},
+      sub:function(r){return [r.Format,r.Country,r.Region_Code,r.Ownership].filter(Boolean).join(' \u00b7 ');},
+      search:['Title_On_Release','Format','Country','Catalog_Number','Region_Code'],
+      fields:[
+       {id:'Film',t:'ref',ref:'Films',show:'Original_Title',wide:1},
+       {id:'Title_On_Release',t:'text',wide:1},
+       {id:'Format',t:'choice',o:'format'},{id:'Label',t:'ref',ref:'Labels',show:'Name'},
+       {id:'Country',t:'text'},{id:'Region_Code',t:'text'},{id:'Catalog_Number',t:'text'},
+       {id:'Video_Standard',t:'choice',o:'std'},{id:'Aspect_Ratio',t:'text'},
+       {id:'Resolution',t:'text'},{id:'Runtime_Min',t:'num'},
+       {id:'Cut_Status',t:'choice',o:'cut'},{id:'Cropping',t:'text'},
+       {id:'Video_Quality',t:'num'},{id:'Anamorphic',t:'bool'},
+       {id:'Storage_Type',t:'choice',o:'storage'},
+       {id:'Video_Codec',t:'text'},{id:'Video_Bitrate',t:'num'},
+       {id:'Frame_Rate',t:'text'},{id:'Scan_Type',t:'choice',o:'scan'},
+       {id:'Field_Order',t:'choice',o:'field'},{id:'Container',t:'text'},
+       {id:'File_Size_GB',t:'num'},{id:'Bits_Per_Pixel',t:'num'},
+       {id:'Chapters',t:'num'},
+       {id:'Provenance',t:'choice',o:'prov'},{id:'Same_Master_As',t:'ref',ref:'Releases',
+        show:'Title_On_Release',wide:1},
+       {id:'Ownership',t:'choice',o:'own'},{id:'Physical_Location',t:'text'},
+       {id:'Purchase_Date',t:'date'},{id:'Purchase_Price',t:'num'},
+       {id:'Purchase_Source',t:'text'},{id:'Store_URL',t:'text',wide:1},
+       {id:'Ripped',t:'bool'},{id:'Untouched_Rip',t:'bool'},{id:'Rip_Path',t:'text',wide:1},
+       {id:'Print_Notes',t:'area',wide:1},{id:'Comparison_Notes',t:'area',wide:1},
+       {id:'Notes',t:'area',wide:1}]},
+
+    AudioTracks:{ label:'Audio',
+      title:function(r,ctx){var rl=ctx.Releases[r.Release];
+        return (r.Language||'?')+' \u00b7 '+((rl&&rl.Title_On_Release)||'no release');},
+      sub:function(r){return [r.Track_Type,r.Codec,r.Channels,
+        r.Bitrate?r.Bitrate+' kb/s':''].filter(Boolean).join(' \u00b7 ');},
+      search:['Language','Track_Type','Codec'],
+      searchRef:[['Release','Releases','Title_On_Release']],
+      fields:[
+       {id:'Release',t:'ref',ref:'Releases',show:'Title_On_Release',wide:1},
+       {id:'Language',t:'choice',o:'lang'},{id:'Track_Type',t:'choice',o:'atype'},
+       {id:'Channels',t:'text'},{id:'Codec',t:'text'},{id:'Bitrate',t:'num'},
+       {id:'Quality',t:'num'},{id:'Use_In_Master',t:'bool'},{id:'Extracted',t:'bool'},
+       {id:'File_Path',t:'text',wide:1},
+       {id:'Sync_Notes',t:'area',wide:1},{id:'Notes',t:'area',wide:1}]},
+
+    SubtitleTracks:{ label:'Subs',
+      title:function(r,ctx){var rl=ctx.Releases[r.Release];
+        return (r.Language||'?')+' \u00b7 '+((rl&&rl.Title_On_Release)||'no release');},
+      sub:function(r){return [r.Sub_Type,r.Format,r.Source].filter(Boolean).join(' \u00b7 ');},
+      search:['Language','Sub_Type','Format'],
+      searchRef:[['Release','Releases','Title_On_Release']],
+      fields:[
+       {id:'Release',t:'ref',ref:'Releases',show:'Title_On_Release',wide:1},
+       {id:'Language',t:'choice',o:'lang'},{id:'Sub_Type',t:'choice',o:'stype'},
+       {id:'Format',t:'choice',o:'sfmt'},{id:'Source',t:'choice',o:'ssrc'},
+       {id:'OCR_Done',t:'bool'},{id:'Use_In_Master',t:'bool'},
+       {id:'File_Path',t:'text',wide:1},{id:'Notes',t:'area',wide:1}]},
+
+    People:{ label:'People', title:function(r){return r.Credited_Name||'(unnamed)';},
+      sub:function(r){return [r.Real_Name,r.Aliases,r.Nationality].filter(Boolean).join(' \u00b7 ');},
+      search:['Credited_Name','Real_Name','Aliases','Nationality','Birthplace'],
+      fields:[
+       {id:'Credited_Name',t:'text',wide:1},{id:'Real_Name',t:'text',wide:1},
+       {id:'Aliases',t:'text',wide:1},
+       {id:'Born',t:'date'},{id:'Died',t:'date'},
+       {id:'Birthplace',t:'text'},{id:'Nationality',t:'text'},
+       {id:'Person_Type',t:'list',o:'ptype',wide:1},
+       {id:'Research_Status',t:'choice',o:'research'},{id:'Confidence',t:'choice',o:'conf'},
+       {id:'IMDb_URL',t:'text',wide:1},{id:'Sources',t:'text',wide:1},
+       {id:'Bio',t:'area',wide:1},{id:'Notes',t:'area',wide:1}]},
+
+    Credits:{ label:'Credits',
+      title:function(r,ctx){var p=ctx.People[r.Person];return (p&&p.Credited_Name)||'(no person)';},
+      sub:function(r,ctx){var f=ctx.Films[r.Film];
+        return [(f&&f.Original_Title)||'?',r.Character_Name,listText(r.Credit_Type)]
+          .filter(Boolean).join(' \u00b7 ');},
+      search:['Character_Name'],
+      searchRef:[['Person','People','Credited_Name'],['Film','Films','Original_Title']],
+      fields:[
+       {id:'Film',t:'ref',ref:'Films',show:'Original_Title',wide:1},
+       {id:'Person',t:'ref',ref:'People',show:'Credited_Name',wide:1},
+       {id:'Credit_Type',t:'list',o:'ctype',wide:1},
+       {id:'Character_Name',t:'text',wide:1},
+       {id:'Billing_Order',t:'num'},{id:'Uncredited',t:'bool'},
+       {id:'Identified_From',t:'choice',o:'idfrom'},{id:'Confidence',t:'choice',o:'conf'},
+       {id:'Screen_Time_Notes',t:'text',wide:1},{id:'Notes',t:'area',wide:1}]}
+  };
+
+  var TABLES=['Films','Releases','AudioTracks','SubtitleTracks','People','Credits'];
+  var data={},cur=null,curTable='Films',original={},edits={},hi=-1,suppress=0;
+
+  var root=document.getElementById('root'),msg=document.getElementById('msg'),
+      q=document.getElementById('q'),hits=document.getElementById('hits'),
+      cnt=document.getElementById('count');
+
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function recs(t){if(!t||!t.id)return[];var k=Object.keys(t),n=t.id.length,o=[];
+    for(var i=0;i<n;i++){var r={};for(var j=0;j<k.length;j++)r[k[j]]=t[k[j]][i];o.push(r);}return o;}
+  function get(tbl){return grist.docApi.fetchTable(tbl).then(recs).catch(function(){return[];});}
+  function listText(v){
+    if(v==null)return '';
+    if(Array.isArray(v))return (v[0]==='L'?v.slice(1):v).join(', ');
+    return String(v);
+  }
+  function listArr(v){
+    if(v==null)return [];
+    if(Array.isArray(v))return (v[0]==='L'?v.slice(1):v).slice();
+    return String(v)?[String(v)]:[];
+  }
+  function norm(s){return String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
+    .toLowerCase();}
+  function byId(list){var m={};list.forEach(function(r){m[r.id]=r;});return m;}
+  function ctx(){return {People:byId(data.People||[]),Films:byId(data.Films||[]),
+                         Releases:byId(data.Releases||[])};}
+
+  function toDateInput(v){
+    if(v===null||v===undefined||v==='')return '';
+    if(typeof v==='number'){
+      if(v>=1800&&v<=2200)return '';               // bare year, can't fill a date input
+      var d=new Date(v*1000);
+      return isNaN(d.getTime())?'':d.toISOString().slice(0,10);
+    }
+    var m=String(v).match(/\d{4}-\d{2}-\d{2}/);
+    return m?m[0]:'';
+  }
+  function fromDateInput(s){
+    if(!s)return null;
+    return Math.floor(Date.parse(s+'T00:00:00Z')/1000);
+  }
+
+  // ---- tabs ----------------------------------------------------------------
+  document.getElementById('tabs').innerHTML=TABLES.map(function(t){
+    return '<button class="tab'+(t===curTable?' on':'')+'" data-t="'+t+'">'+
+      SCHEMA[t].label+'</button>';}).join('');
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(b){
+    b.onclick=function(){
+      curTable=b.getAttribute('data-t');
+      Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(x){
+        x.classList.toggle('on',x===b);});
+      cur=null;root.style.display='none';
+      msg.style.display='block';
+      msg.textContent='Search for a '+SCHEMA[curTable].label.replace(/s$/,'')+' to edit.';
+      q.value='';q.placeholder='Search '+SCHEMA[curTable].label.toLowerCase()+'\u2026';
+      cnt.textContent=(data[curTable]||[]).length+' rows';
+      hits.style.display='none';
+    };
+  });
+
+  // ---- search --------------------------------------------------------------
+  function matchRow(r,words){
+    var S=SCHEMA[curTable],c=ctx(),hay=[];
+    (S.search||[]).forEach(function(f){if(r[f]!=null)hay.push(String(r[f]));});
+    (S.searchRef||[]).forEach(function(t){
+      var tgt=(c[t[1]]||{})[r[t[0]]];
+      if(tgt&&tgt[t[2]])hay.push(String(tgt[t[2]]));});
+    var s=norm(hay.join(' '));
+    return words.every(function(w){return s.indexOf(w)>=0;});
+  }
+  function drawHits(){
+    var S=SCHEMA[curTable],c=ctx();
+    var s=norm(q.value.trim()),words=s?s.split(/\s+/):[];
+    var list=(data[curTable]||[]).filter(function(r){
+      return !words.length||matchRow(r,words);}).slice(0,60);
+    if(!list.length){hits.style.display='none';return;}
+    hits.innerHTML=list.map(function(r,i){
+      return '<div data-id="'+r.id+'" class="'+(i===hi?'sel':'')+'"><b>'+
+        esc(S.title(r,c))+'</b><div class="sub">'+esc(S.sub(r,c))+'</div></div>';}).join('');
+    hits.style.display='block';
+    Array.prototype.forEach.call(hits.children,function(d){
+      d.onmousedown=function(e){e.preventDefault();open(Number(d.getAttribute('data-id')));};});
+  }
+  q.addEventListener('focus',function(){hi=-1;drawHits();});
+  q.addEventListener('input',function(){hi=-1;drawHits();});
+  q.addEventListener('blur',function(){setTimeout(function(){hits.style.display='none';},150);});
+  q.addEventListener('keydown',function(e){
+    var rows=hits.children;
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+      e.preventDefault();if(!rows.length)return;
+      hi=e.key==='ArrowDown'?Math.min(hi+1,rows.length-1):Math.max(hi-1,0);
+      Array.prototype.forEach.call(rows,function(r,i){r.classList.toggle('sel',i===hi);});
+      if(rows[hi])rows[hi].scrollIntoView({block:'nearest'});
+    } else if(e.key==='Enter'&&hi>=0&&rows[hi]){open(Number(rows[hi].getAttribute('data-id')));}
+    else if(e.key==='Escape'){hits.style.display='none';q.blur();}
+  });
+
+  // ---- form ----------------------------------------------------------------
+  function open(id){
+    var list=data[curTable]||[];
+    cur=null;
+    for(var i=0;i<list.length;i++){if(list[i].id===id){cur=list[i];break;}}
+    if(!cur)return;
+    original=JSON.parse(JSON.stringify(cur));
+    edits={};
+    hits.style.display='none';q.value='';q.blur();
+    suppress=Date.now();
+    try{grist.setCursorPos({rowId:id});}catch(e){}
+    try{grist.setSelectedRows([id]);}catch(e){}
+    render();
+  }
+
+  function render(){
+    if(!cur){msg.style.display='block';root.style.display='none';return;}
+    msg.style.display='none';root.style.display='block';
+    var S=SCHEMA[curTable],c=ctx();
+    var h=['<h2>'+esc(S.label)+' <span class="rid">row '+cur.id+'</span></h2><div class="grid">'];
+    S.fields.forEach(function(f){
+      var v=(f.id in edits)?edits[f.id]:cur[f.id];
+      h.push('<div class="f'+(f.wide?' wide':'')+'">');
+      if(f.t!=='bool')h.push('<label>'+esc(f.id.replace(/_/g,' '))+'</label>');
+      if(f.t==='text'||f.t==='num'){
+        h.push('<input data-f="'+f.id+'" type="'+(f.t==='num'?'number':'text')+
+               '" value="'+esc(v==null?'':v)+'">');
+      } else if(f.t==='area'){
+        h.push('<textarea data-f="'+f.id+'">'+esc(v==null?'':v)+'</textarea>');
+      } else if(f.t==='date'){
+        h.push('<input data-f="'+f.id+'" type="date" value="'+esc(toDateInput(v))+'">');
+      } else if(f.t==='bool'){
+        h.push('<div class="bool"><input data-f="'+f.id+'" type="checkbox"'+(v?' checked':'')+
+               '><label>'+esc(f.id.replace(/_/g,' '))+'</label></div>');
+      } else if(f.t==='choice'){
+        h.push('<select data-f="'+f.id+'"><option value="">\u2014</option>'+
+          OPT[f.o].map(function(o){return '<option'+(String(v)===o?' selected':'')+'>'+
+            esc(o)+'</option>';}).join('')+'</select>');
+      } else if(f.t==='list'){
+        var have=listArr(v);
+        h.push('<div class="chips" data-f="'+f.id+'">'+OPT[f.o].map(function(o){
+          return '<button type="button" data-v="'+esc(o)+'" class="'+
+            (have.indexOf(o)>=0?'on':'')+'">'+esc(o)+'</button>';}).join('')+'</div>');
+      } else if(f.t==='ref'){
+        var opts=(data[f.ref]||[]).slice().sort(function(a,b){
+          return String(a[f.show]||'').localeCompare(String(b[f.show]||''));});
+        h.push('<select data-f="'+f.id+'" data-ref="1"><option value="">\u2014</option>'+
+          opts.map(function(o){return '<option value="'+o.id+'"'+(v===o.id?' selected':'')+'>'+
+            esc(o[f.show]||('row '+o.id))+'</option>';}).join('')+'</select>');
+      }
+      h.push('</div>');
+    });
+    h.push('</div><div id="acts">'+
+      '<button class="btn go" id="save" disabled>Save</button>'+
+      '<button class="btn" id="revert" disabled>Revert</button>'+
+      '<button class="btn del" id="del">Delete row</button>'+
+      '<span id="status"></span></div>');
+    root.innerHTML=h.join('');
+    bind();
+  }
+
+  function markDirty(el){
+    el.classList.add('dirty');
+    document.getElementById('save').disabled=false;
+    document.getElementById('revert').disabled=false;
+  }
+  function bind(){
+    Array.prototype.forEach.call(root.querySelectorAll('[data-f]'),function(el){
+      var f=el.getAttribute('data-f');
+      if(el.classList.contains('chips')){
+        Array.prototype.forEach.call(el.querySelectorAll('button'),function(b){
+          b.onclick=function(){
+            b.classList.toggle('on');
+            edits[f]=Array.prototype.map.call(el.querySelectorAll('button.on'),
+              function(x){return x.getAttribute('data-v');});
+            markDirty(el);
+          };
+        });
+        return;
+      }
+      var ev=(el.tagName==='SELECT'||el.type==='checkbox'||el.type==='date')?'change':'input';
+      el.addEventListener(ev,function(){
+        if(el.type==='checkbox')edits[f]=el.checked;
+        else if(el.type==='number')edits[f]=el.value===''?null:Number(el.value);
+        else if(el.type==='date')edits[f]=fromDateInput(el.value);
+        else if(el.getAttribute('data-ref'))edits[f]=el.value?Number(el.value):0;
+        else edits[f]=el.value;
+        markDirty(el);
+      });
+    });
+    document.getElementById('save').onclick=save;
+    document.getElementById('revert').onclick=function(){edits={};render();};
+    document.getElementById('del').onclick=del;
+  }
+
+  async function save(){
+    var st=document.getElementById('status');
+    var S=SCHEMA[curTable],payload={};
+    S.fields.forEach(function(f){
+      if(!(f.id in edits))return;
+      var v=edits[f.id];
+      if(f.t==='list')payload[f.id]=['L'].concat(v);
+      else payload[f.id]=(v==='')?null:v;
+    });
+    if(!Object.keys(payload).length){st.textContent='Nothing changed.';return;}
+    var known=Object.keys(cur||{}),skipped=[];
+    Object.keys(payload).forEach(function(k){
+      if(known.indexOf(k)<0){skipped.push(k);delete payload[k];}
+    });
+    if(!Object.keys(payload).length){
+      st.className='bad';
+      st.textContent='None of those columns exist here: '+skipped.join(', ');return;
+    }
+    st.className='';st.textContent='Saving\u2026';
+    try{
+      await grist.docApi.applyUserActions([['UpdateRecord',curTable,cur.id,payload]]);
+      data[curTable]=await get(curTable);
+      var id=cur.id;
+      cur=null;
+      for(var i=0;i<data[curTable].length;i++){if(data[curTable][i].id===id){cur=data[curTable][i];break;}}
+      edits={};render();
+      document.getElementById('status').className='ok';
+      document.getElementById('status').innerHTML='Saved.'+
+        (skipped.length?' <span style="color:var(--warn)">Skipped '+skipped.join(', ')+
+         ' \u2014 no such column.</span>':'');
+    }catch(err){st.className='bad';st.textContent='Failed: '+(err&&err.message||err);}
+  }
+
+  async function del(){
+    var st=document.getElementById('status');
+    var S=SCHEMA[curTable],c=ctx();
+    if(!window.confirm('Delete this '+S.label.replace(/s$/,'')+'?\n\n'+S.title(cur,c)+
+       '\n\nThis cannot be undone from here (Grist\u2019s undo still works).'))return;
+    try{
+      await grist.docApi.applyUserActions([['RemoveRecord',curTable,cur.id]]);
+      data[curTable]=await get(curTable);
+      cur=null;root.style.display='none';msg.style.display='block';
+      msg.textContent='Deleted. Search for another record.';
+      cnt.textContent=data[curTable].length+' rows';
+    }catch(err){st.className='bad';st.textContent='Failed: '+(err&&err.message||err);}
+  }
+
+  // ---- boot ----------------------------------------------------------------
+  grist.ready({requiredAccess:'full',allowSelectBy:true});
+  grist.onRecord(function(rec){
+    if(Date.now()-suppress<1200)return;
+    if(!rec)return;
+    // follow the cursor when it lands on a table we handle
+    for(var i=0;i<TABLES.length;i++){
+      var t=TABLES[i],S=SCHEMA[t];
+      var key=S.fields[0].id;
+      if(rec[key]!==undefined&&(data[t]||[]).some(function(r){return r.id===rec.id;})){
+        if(curTable!==t)return;
+        open(rec.id);return;
+      }
+    }
+  });
+  (async function(){
+    var names=TABLES.concat(['Labels','Franchises']);
+    for(var i=0;i<names.length;i++)data[names[i]]=await get(names[i]);
+    cnt.textContent=(data[curTable]||[]).length+' rows';
+    q.placeholder='Search films\u2026';
+  })();
+})();
+</script>
+</body>
+</html>
