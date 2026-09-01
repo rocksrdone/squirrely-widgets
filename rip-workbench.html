@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rip Workbench</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root{--bg:#fff;--fg:#1c1c1c;--muted:#6b7280;--line:#e3e3e6;--chip:#f3f4f6;--card:#fafafa;
+    --ok:#16b378;--bad:#d9534f;--warn:#e5a83b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#1e1e1e;--fg:#eaeaea;--muted:#9aa0a6;--line:#3a3a3a;
+    --chip:#2c2c2c;--card:#262626}}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:9px 12px;
+    border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .tab{border:1px solid var(--line);background:var(--chip);color:var(--muted);border-radius:13px;
+    padding:4px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .tab.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  select,input{padding:5px 8px;border:1px solid var(--line);border-radius:5px;background:var(--card);
+    color:var(--fg);font:inherit;font-size:12px}
+  select:focus,input:focus{outline:none;border-color:var(--ok)}
+  #root{padding:14px;max-width:900px}
+  fieldset{border:1px solid var(--line);border-radius:7px;padding:11px 12px;margin:0 0 14px}
+  legend{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:0 5px}
+  label{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+  .row{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:9px}
+  .row:last-child{margin-bottom:0}
+  .row input,.row select{width:100%}
+  .step{border:1px solid var(--line);border-radius:7px;padding:11px 13px;margin-bottom:10px;
+    background:var(--card)}
+  .step h3{margin:0 0 5px;font-size:13px;display:flex;gap:8px;align-items:center}
+  .step h3 .n{flex:0 0 auto;width:20px;height:20px;border-radius:50%;background:var(--ok);color:#fff;
+    font-size:11px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .step p{margin:0 0 7px;font-size:12px;color:var(--muted)}
+  .step p b{color:var(--fg)}
+  pre{background:var(--chip);border:1px solid var(--line);border-radius:5px;padding:8px 10px;
+    font-family:var(--mono);font-size:11px;overflow-x:auto;margin:6px 0;white-space:pre-wrap;
+    word-break:break-all}
+  .btn{padding:4px 11px;border:1px solid var(--line);border-radius:13px;background:var(--chip);
+    color:var(--fg);font:inherit;font-size:11px;cursor:pointer}
+  .btn:hover{border-color:var(--muted)}
+  .btn.go{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+    margin:20px 0 9px;font-weight:600;border-bottom:1px solid var(--line);padding-bottom:4px}
+  .note{font-size:11.5px;color:var(--muted);line-height:1.7;margin-top:8px}
+  .note b{color:var(--fg)}
+  .warnbox{border:1px solid var(--warn);background:rgba(229,168,59,.11);border-radius:7px;
+    padding:10px 12px;font-size:12px;line-height:1.65;margin-bottom:12px}
+  .flag{display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:12px;
+    border-top:1px solid var(--line)}
+  .flag:first-child{border-top:0}
+  .flag .t{flex:0 0 auto;font-size:10px;padding:1px 8px;border-radius:9px;margin-top:1px}
+  .t.bad{background:var(--bad);color:#fff}
+  .t.warn{background:var(--warn);color:#1c1c1c}
+  .t.ok{background:var(--ok);color:#fff}
+  textarea{width:100%;min-height:90px;padding:7px 9px;border:1px solid var(--line);border-radius:5px;
+    background:var(--card);color:var(--fg);font-family:var(--mono);font-size:11px;resize:vertical}
+  code{background:var(--chip);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:11px}
+  .saved{font-size:10px;color:var(--ok)}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button class="tab on" data-os="win">Windows</button>
+  <button class="tab" data-os="nix">Linux</button>
+  <select id="src">
+    <option value="dvd">DVD disc in the drive</option>
+    <option value="videots">VIDEO_TS folder on disk</option>
+    <option value="iso">ISO image</option>
+    <option value="bluray">Blu-ray disc or BDMV folder</option>
+    <option value="mine">A rip I already made (MKV)</option>
+    <option value="download">A file from elsewhere (unverified)</option>
+  </select>
+  <span class="saved" id="saved"></span>
+</div>
+<div id="root"></div>
+
+<script>
+(function(){
+  "use strict";
+  var os='win',src='dvd',opt={},workDir='',fileName='',useCd=true;
+  var root=document.getElementById('root');
+
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function qq(p){return /[\s&()]/.test(p)?'"'+p+'"':p;}
+  function join(dir,name){
+    if(!dir)return name;
+    var sep=(os==='win')?'\\':'/';
+    return dir.replace(/[\\/]+$/,'')+sep+name;
+  }
+  function tool(name){
+    var d=opt[os+'_ff']||'';
+    var exe=(os==='win'&&/^(ffmpeg|ffprobe)$/.test(name))?name+'.exe':name;
+    return d?qq(join(d,exe)):exe;
+  }
+  function mkv(){
+    var d=opt[os+'_mkv']||'';
+    var exe=(os==='win')?'makemkvcon64.exe':'makemkvcon';
+    return d?qq(join(d,exe)):exe;
+  }
+  function outdir(){return opt[os+'_out']||(os==='win'?'D:\\Rips':'~/rips');}
+  // where the files actually are for this job
+  function W(){return workDir||outdir();}
+  // a file in that folder: bare name when we cd first, full path otherwise
+  function P(name){return useCd?qq(name):qq(join(W(),name));}
+  function parentOf(p){
+    var i=Math.max(p.lastIndexOf('\\'),p.lastIndexOf('/'));
+    return i>0?p.slice(0,i):p;
+  }
+  function baseOf(p){
+    var i=Math.max(p.lastIndexOf('\\'),p.lastIndexOf('/'));
+    return i>=0?p.slice(i+1):p;
+  }
+  // the folder holding VIDEO_TS, and the VIDEO_TS folder itself
+  function vtsParts(){
+    var d=W();
+    if(/^video_ts$/i.test(baseOf(d)))return {parent:parentOf(d),name:baseOf(d)};
+    return {parent:d,name:'VIDEO_TS'};
+  }
+  function cdTo(dir){
+    return (os==='win'
+      ? (/^[A-Za-z]:/.test(dir)?dir.slice(0,2)+'\n':'')+'cd '+qq(dir)
+      : 'cd '+qq(dir))+'\n';
+  }
+  function cdLine(){
+    if(!useCd)return '';
+    return cdTo(W());
+  }
+  function hashCmd(f){return os==='win'?'certutil -hashfile '+f+' SHA256':'sha256sum '+f;}
+
+  async function saveOpt(k,v){
+    opt[k]=v;
+    try{
+      if(grist.widgetApi&&grist.widgetApi.setOption)await grist.widgetApi.setOption(k,v);
+      document.getElementById('saved').textContent='saved';
+      setTimeout(function(){document.getElementById('saved').textContent='';},1200);
+    }catch(e){}
+  }
+
+  // ---- step definitions ------------------------------------------------------
+  function steps(){
+    var O=useCd?qq('.'):qq(outdir()), S=[];
+    var probe=function(target){
+      var rep=P('peplum-report.txt');
+      return {h:'Probe it and record the numbers',
+        p:'Writes one file holding the full technical report plus a measurement of the black bars. '+
+          'Paste it into <b>release-add</b> and the form fills itself.',
+        c:cdLine()+
+          tool('ffprobe')+' -v error -print_format json -show_format -show_streams -show_chapters '+
+          target+' > '+rep+'\n'+
+          (os==='win'?'echo ===CROPDETECT=== >> ':'echo "===CROPDETECT===" >> ')+rep+'\n'+
+          tool('ffmpeg')+' -hide_banner -ss 00:10:00 -i '+target+
+          ' -vf cropdetect=24:2:0 -frames:v 300 -f null - 2>> '+rep};
+    };
+    var F=function(def){return P(fileName||def);};
+
+    if(src==='dvd'){
+      S.push({h:'See what is on the disc',
+        p:'Lists every title with its length. The feature is nearly always the longest.',
+        c:mkv()+' -r info disc:0'});
+      S.push({h:'Rip every title losslessly',
+        p:'MakeMKV remuxes rather than re-encodes, so the video is bit-for-bit what is on the disc. '+
+          'It also copies the language tags out of the IFO, which raw VOBs do not carry.',
+        c:cdLine()+mkv()+' --minlength=60 mkv disc:0 all '+O});
+      S.push(probe(F('title_t00.mkv')));
+      S.push({h:'Keep the untouched rip',
+        p:'File it under <b>Untouched Releases</b> in the film folder and tick '+
+          '<code>Untouched_Rip</code> on the release. Everything later is derived from this.',c:''});
+    }
+    if(src==='videots'){
+      var vp=vtsParts();
+      // MakeMKV is fussy about relative paths, so these are always absolute
+      var VTS=qq(join(vp.parent,vp.name));
+      var RIP=qq(join(vp.parent,'rip'));
+      var REP=qq(join(join(vp.parent,'rip'),'peplum-report.txt'));
+      var MK=qq(join(join(vp.parent,'rip'),fileName||'title_t00.mkv'));
+      S.push({h:'Make somewhere for the output',
+        p:'MakeMKV will not create the folder itself, and writing MKVs in among the VOBs gets '+
+          'messy fast.',
+        c:(os==='win'?'mkdir ':'mkdir -p ')+RIP});
+      S.push({h:'Rip the folder',
+        p:'Note it points at <b>'+esc(join(vp.parent,vp.name))+'</b> using a full path, so it does '+
+          'not matter which folder your prompt is sitting in. MakeMKV reads the IFO files, so '+
+          'unlike a raw VOB you keep the language tags and chapters.',
+        c:mkv()+' --minlength=60 mkv file:'+VTS+' all '+RIP});
+      S.push({h:'Probe the rip and record the numbers',
+        p:'Writes one file holding the technical report plus a measurement of the black bars. '+
+          'Paste it into <b>release-add</b> and the form fills itself. Change the file name above '+
+          'if MakeMKV named it something other than title_t00.mkv.',
+        c:tool('ffprobe')+' -v error -print_format json -show_format -show_streams -show_chapters '+
+          MK+' > '+REP+'\n'+
+          (os==='win'?'echo ===CROPDETECT=== >> ':'echo "===CROPDETECT===" >> ')+REP+'\n'+
+          tool('ffmpeg')+' -hide_banner -ss 00:10:00 -i '+MK+
+          ' -vf cropdetect=24:2:0 -frames:v 300 -f null - 2>> '+REP});
+      S.push({h:'If MakeMKV refuses or the disc is damaged',
+        p:'Remuxes the VOBs directly. Streams are copied untouched, so the picture is identical, '+
+          'but you lose chapters and language tags. The extra flags force it past bad sectors and '+
+          'rebuild missing timestamps.',
+        c:tool('ffmpeg')+' -fflags +genpts+igndts -err_detect ignore_err -analyzeduration 100M '+
+          '-probesize 100M -i "concat:'+
+          [1,2,3,4,5].map(function(n){return join(join(vp.parent,vp.name),'VTS_01_'+n+'.VOB');}).join('|')+
+          '" -map 0:v -map 0:a -c copy -avoid_negative_ts make_zero '+
+          qq(join(join(vp.parent,'rip'),'remux.mkv'))});
+    }
+    if(src==='iso'){
+      S.push({h:'Rip straight from the image',
+        p:'No need to mount it \u2014 MakeMKV opens ISOs directly.',
+        c:cdLine()+mkv()+' --minlength=60 mkv iso:'+F('film.iso')+' all '+O});
+      S.push(probe(F('title_t00.mkv')));
+    }
+    if(src==='bluray'){
+      S.push({h:'List the titles',
+        p:'Blu-rays often carry decoy playlists of near-identical length. Compare against the '+
+          'runtime you expect before ripping.',
+        c:mkv()+' -r info disc:0'});
+      S.push({h:'Rip the feature',
+        p:'Replace <b>all</b> with the title number from the list above if you only want one.',
+        c:cdLine()+mkv()+' --minlength=600 mkv disc:0 all '+O});
+      S.push(probe(F('title_t00.mkv')));
+    }
+    if(src==='mine'){
+      S.push(probe(F('film.mkv')));
+      S.push({h:'Record a checksum',
+        p:'Lets you prove later that the file on the NAS is the one you measured, and catches '+
+          'silent corruption after a move.',
+        c:cdLine()+hashCmd(F('film.mkv'))});
+    }
+    if(src==='download'){
+      S.push({h:'Probe it exactly as you would your own rip',
+        p:'The numbers are still worth recording \u2014 they just describe <b>this file</b>, not a disc.',
+        c:cdLine()+tool('ffprobe')+
+          ' -v error -print_format json -show_format -show_streams -show_chapters '+
+          F('unknown.mkv')+' > '+P('peplum-report.txt')});
+      S.push({h:'Look for signs of re-encoding',
+        p:'Paste the report into the checker below and it will flag anything that does not look '+
+          'like an untouched disc.',c:''});
+      S.push({h:'Mark it honestly in the database',
+        p:'Set <code>Provenance</code> to <b>Unverified</b> and leave <code>Untouched_Rip</code> '+
+          'unticked. Quality figures from a re-encode tell you about the encoder, not the transfer.',
+        c:''});
+    }
+    return S;
+  }
+
+  // ---- re-encode checker -----------------------------------------------------
+  function checkProbe(txt){
+    var i=txt.indexOf('{');
+    if(i<0)return '<div class="note">That does not look like an ffprobe report.</div>';
+    var d;try{d=JSON.parse(txt.slice(i,txt.lastIndexOf('}')+1));}catch(e){
+      return '<div class="note">Could not read the JSON \u2014 paste the whole report.</div>';}
+    var st=d.streams||[],fmt=d.format||{};
+    var v=st.filter(function(x){return x.codec_type==='video';})[0]||{};
+    var a=st.filter(function(x){return x.codec_type==='audio';});
+    var out=[],score=0;
+    function flag(k,t){out.push('<div class="flag"><span class="t '+k+'">'+
+      (k==='bad'?'re-encoded':k==='warn'?'suspect':'consistent')+'</span><span>'+t+'</span></div>');
+      if(k==='bad')score+=2;else if(k==='warn')score+=1;}
+
+    var vc=String(v.codec_name||'').toLowerCase();
+    var w=+v.width||0,h=+v.height||0;
+    var sdSizes=['720x576','720x480','704x576','704x480','352x288'];
+    var isSD=sdSizes.indexOf(w+'x'+h)>=0;
+
+    if(/h264|hevc|vp9|av1|mpeg4/.test(vc)&&isSD)
+      flag('bad','Standard-definition frame encoded as '+vc.toUpperCase()+
+        '. A DVD holds MPEG-2, so this has been through an encoder.');
+    else if(/mpeg2/.test(vc)&&isSD)
+      flag('ok','MPEG-2 at DVD resolution \u2014 consistent with an untouched disc.');
+    else if(/h264|hevc/.test(vc)&&h>=720)
+      flag('ok',vc.toUpperCase()+' at HD resolution \u2014 normal for Blu-ray.');
+    if(w&&h&&!isSD&&h<720)
+      flag('warn','Unusual frame size '+w+'\u00d7'+h+'. Neither a standard DVD nor HD \u2014 '+
+        'probably resized.');
+
+    a.forEach(function(x){
+      var ac=String(x.codec_name||'').toLowerCase();
+      if(/aac|opus|vorbis|mp3/.test(ac))
+        flag('bad','Audio is '+ac.toUpperCase()+'. Discs carry AC-3, DTS, PCM or MP2, so the sound '+
+          'has been re-encoded too.');
+      else if(/ac3|dts|pcm|mp2|truehd|eac3|flac/.test(ac))
+        flag('ok','Audio is '+ac.toUpperCase()+' \u2014 consistent with a disc source.');
+    });
+    if(!a.length)flag('warn','No audio stream at all.');
+
+    if(!(d.chapters||[]).length)
+      flag('warn','No chapters. MakeMKV preserves them, so a rip without any has usually been '+
+        'passed through another tool.');
+    if(!a.some(function(x){return (x.tags||{}).language;})&&a.length)
+      flag('warn','No language tags. Common on raw VOBs, but unexpected in a finished MKV.');
+
+    var br=Number(v.bit_rate||fmt.bit_rate||0);
+    if(br&&isSD){
+      if(br<1500000)flag('bad','Video bitrate is only '+Math.round(br/1000)+
+        ' kb/s. Far below what a DVD carries \u2014 heavy compression.');
+      else if(br<3000000)flag('warn','Video bitrate '+Math.round(br/1000)+
+        ' kb/s is on the low side for a DVD.');
+      else flag('ok','Video bitrate '+Math.round(br/1000)+' kb/s is in the normal DVD range.');
+    }
+    var verdict=score===0?['ok','Nothing here contradicts an untouched disc rip.']
+      :score<=2?['warn','Some things do not add up. Treat the quality figures as approximate.']
+      :['bad','This has been re-encoded. Record it, but do not rank it against real disc rips.'];
+    return '<div class="warnbox" style="border-color:var(--'+
+      (verdict[0]==='ok'?'ok':verdict[0]==='warn'?'warn':'bad')+')"><b>'+esc(verdict[1])+
+      '</b></div>'+out.join('');
+  }
+
+  // ---- render ----------------------------------------------------------------
+  function render(){
+    var h=[];
+    h.push('<fieldset><legend>Where your tools live on '+(os==='win'?'Windows':'Linux')+'</legend>');
+    h.push('<div class="row">'+
+      '<div><label>ffmpeg / ffprobe folder</label><input id="o_ff" value="'+
+        esc(opt[os+'_ff']||'')+'" placeholder="'+(os==='win'?'C:\\ffmpeg\\bin':'/usr/bin')+'"></div>'+
+      '<div><label>MakeMKV folder</label><input id="o_mkv" value="'+
+        esc(opt[os+'_mkv']||'')+'" placeholder="'+
+        (os==='win'?'C:\\Program Files (x86)\\MakeMKV':'/usr/bin')+'"></div>'+
+      '<div><label>Where rips go</label><input id="o_out" value="'+
+        esc(opt[os+'_out']||'')+'" placeholder="'+(os==='win'?'D:\\Rips':'~/rips')+'"></div>'+
+      '</div><div class="note">Kept separately for each platform, so switching the tab above '+
+      'switches the whole set. Blank means the tool is already on your PATH.</div></fieldset>');
+
+    h.push('<fieldset><legend>This job</legend><div class="row">'+
+      '<div style="grid-column:span 2"><label>'+
+        (src==='videots'?'Path to the VIDEO_TS folder (or the folder holding it)'
+                        :'Folder these files are in')+'</label>'+
+      '<input id="o_dir" value="'+esc(workDir)+'" placeholder="'+
+        (os==='win'?'D:\\Rips\\Afrodite (1958)':'/mnt/nas/rips/afrodite')+'"></div>'+
+      '<div><label>File name</label><input id="o_file" value="'+esc(fileName)+
+        '" placeholder="title_t00.mkv"></div>'+
+      '</div><div class="row"><div style="grid-column:1/-1">'+
+      '<label style="display:flex;gap:6px;align-items:center;color:var(--fg);font-size:12px">'+
+      '<input type="checkbox" id="o_cd" style="width:auto"'+(useCd?' checked':'')+
+      '> start the command by changing into that folder</label></div></div>'+
+      '<div id="fdrop" class="note" style="border:1px dashed var(--line);border-radius:6px;'+
+      'padding:9px;text-align:center;cursor:pointer;margin-top:4px">'+
+      'Drop a file here to fill in its name'+
+      '<br><span style="font-size:10.5px">In Explorer, Shift+right-click a file or folder and '+
+      'choose <b>Copy as path</b> to get the folder above. On Linux, copy it from the address bar '+
+      'in your file manager.</span></div>'+
+      '<input type="file" id="fpick" style="display:none"></fieldset>');
+
+    if(src==='download'){
+      h.push('<div class="warnbox"><b>A file you did not make yourself.</b> Everything below still '+
+        'applies, but what you measure describes the file in front of you, not the disc it came '+
+        'from. Record it, mark it unverified, and replace it when you find a real source.</div>');
+    }
+
+    if(!workDir)h.push('<div class="warnbox">Paste the folder above before copying anything \u2014 '+
+      'the commands below are showing example paths.</div>');
+    h.push('<h2>Steps</h2><div id="stephost">'+stepsHtml()+'</div>');
+
+    h.push('<h2>Is it really an untouched rip?</h2>');
+    h.push('<div class="note">Paste an ffprobe report and it will tell you whether the numbers '+
+      'are consistent with a disc, or whether something has been through an encoder.</div>');
+    h.push('<textarea id="chk" placeholder="Paste the ffprobe JSON here"></textarea>');
+    h.push('<div style="margin-top:7px"><button class="btn go" id="docheck">Check it</button></div>');
+    h.push('<div id="verdict"></div>');
+
+    h.push('<h2>What format to keep</h2>');
+    h.push('<div class="note">'+
+      '<b>MKV, remuxed, never re-encoded.</b> It holds every audio track, every subtitle, chapters '+
+      'and language tags in one file, and MakeMKV copies the streams across untouched.<br><br>'+
+      '<b>Keep the untouched rip separately from anything you build.</b> Your folder structure '+
+      'already separates <code>Untouched Releases</code> from working copies \u2014 that boundary '+
+      'is what lets you redo a master later without re-ripping.<br><br>'+
+      '<b>Do not archive MP4.</b> It cannot carry VobSub or PGS subtitles, so a DVD or Blu-ray '+
+      'subtitle track has to be burned in or thrown away. Fine as an export, wrong as a master.<br><br>'+
+      '<b>Leave the video alone.</b> Every re-encode of MPEG-2 costs detail you cannot get back, '+
+      'and storage is cheaper than a second copy of a disc that may be out of print.</div>');
+    root.innerHTML=h.join('');
+    bind();
+  }
+
+  function refreshSteps(){
+    var host=document.getElementById('stephost');
+    if(!host)return;
+    host.innerHTML=stepsHtml();
+    bindCopies();
+  }
+  function stepsHtml(){
+    var h=[];
+    steps().forEach(function(s,i){
+      h.push('<div class="step"><h3><span class="n">'+(i+1)+'</span>'+esc(s.h)+'</h3>');
+      h.push('<p>'+s.p+'</p>');
+      if(s.c){
+        h.push('<pre id="c'+i+'">'+esc(s.c)+'</pre>');
+        h.push('<button class="btn" data-copy="c'+i+'">Copy</button>');
+      }
+      h.push('</div>');
+    });
+    return h.join('');
+  }
+  function bindCopies(){
+    Array.prototype.forEach.call(root.querySelectorAll('[data-copy]'),function(b){
+      b.onclick=function(){
+        navigator.clipboard.writeText(document.getElementById(b.getAttribute('data-copy')).textContent);
+        b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1300);
+      };
+    });
+  }
+  function bind(){
+    [['o_ff','_ff'],['o_mkv','_mkv'],['o_out','_out']].forEach(function(p){
+      var el=document.getElementById(p[0]);
+      if(!el)return;
+      el.onchange=function(){saveOpt(os+p[1],el.value.trim());render();};
+    });
+    var dirEl=document.getElementById('o_dir');
+    if(dirEl)dirEl.oninput=function(){workDir=this.value.trim();refreshSteps();};
+    var fEl=document.getElementById('o_file');
+    if(fEl)fEl.oninput=function(){fileName=this.value.trim();refreshSteps();};
+    var cdEl=document.getElementById('o_cd');
+    if(cdEl)cdEl.onchange=function(){useCd=this.checked;refreshSteps();};
+    var fd=document.getElementById('fdrop'),fp=document.getElementById('fpick');
+    if(fd&&fp){
+      fd.onclick=function(){fp.click();};
+      fp.onchange=function(){
+        if(!fp.files.length)return;
+        fileName=fp.files[0].name;
+        document.getElementById('o_file').value=fileName;refreshSteps();
+      };
+      ['dragover','dragleave','drop'].forEach(function(ev){
+        fd.addEventListener(ev,function(e){
+          e.preventDefault();
+          fd.style.borderColor=(ev==='dragover')?'var(--ok)':'var(--line)';
+          if(ev==='drop'&&e.dataTransfer.files.length){
+            fileName=e.dataTransfer.files[0].name;
+            document.getElementById('o_file').value=fileName;refreshSteps();
+          }
+        });
+      });
+    }
+    Array.prototype.forEach.call(root.querySelectorAll('[data-copy]'),function(b){
+      b.onclick=function(){
+        navigator.clipboard.writeText(document.getElementById(b.getAttribute('data-copy')).textContent);
+        b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1300);
+      };
+    });
+    var dc=document.getElementById('docheck');
+    if(dc)dc.onclick=function(){
+      document.getElementById('verdict').innerHTML=
+        checkProbe(document.getElementById('chk').value);
+    };
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(b){
+    b.onclick=function(){
+      os=b.getAttribute('data-os');
+      Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(x){
+        x.classList.toggle('on',x===b);});
+      render();
+    };
+  });
+  document.getElementById('src').onchange=function(){src=this.value;render();};
+
+  grist.ready({requiredAccess:'none'});
+  (async function(){
+    try{
+      if(grist.widgetApi&&grist.widgetApi.getOptions){
+        var o=await grist.widgetApi.getOptions();
+        if(o)opt=o;
+      }
+    }catch(e){}
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
