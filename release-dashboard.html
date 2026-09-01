@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Release Detail</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root{--bg:#fff;--fg:#1c1c1c;--muted:#6b7280;--line:#e3e3e6;--chip:#f3f4f6;--card:#fafafa;
+    --ok:#16b378;--bad:#d9534f;--warn:#e5a83b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#1e1e1e;--fg:#eaeaea;--muted:#9aa0a6;--line:#3a3a3a;
+    --chip:#2c2c2c;--card:#262626}}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:9px 12px;
+    border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  #q{flex:1;min-width:160px;max-width:340px;padding:6px 11px;border:1px solid var(--line);
+    border-radius:16px;background:var(--card);color:var(--fg);font:inherit;outline:none}
+  #q:focus{border-color:var(--ok)}
+  .mini{border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:12px;
+    padding:4px 10px;font:inherit;font-size:11px;cursor:pointer}
+  .mini.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
+  #count{font-size:11px;color:var(--muted);margin-left:auto}
+  #root{padding:12px}
+  .cols{display:grid;gap:14px;grid-template-columns:290px 1fr;align-items:start}
+  @media (max-width:900px){.cols{grid-template-columns:1fr}}
+  .listcol{border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--card)}
+  #list{max-height:76vh;overflow:auto}
+  .lgroup{padding:5px 9px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);background:var(--chip);position:sticky;top:0;font-weight:600}
+  .lrow{display:flex;gap:8px;align-items:center;padding:6px 9px;cursor:pointer;
+    border-bottom:1px solid var(--line)}
+  .lrow:hover{background:var(--chip)}
+  .lrow.on{background:rgba(22,179,120,.14);box-shadow:inset 3px 0 0 var(--ok)}
+  .lmeta{min-width:0;flex:1}
+  .lname{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lsub{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .own{flex:0 0 auto;font-size:9.5px;padding:1px 6px;border-radius:8px}
+  .own.Owned{background:var(--ok);color:#fff}
+  .own.Wanted{background:var(--warn);color:#1c1c1c}
+  .own.Passed,.own.Sold,.own.Lost{background:var(--chip);border:1px solid var(--line);color:var(--muted)}
+  h1{margin:0 0 2px;font-size:19px}
+  .filmline{color:var(--muted);font-size:12px;margin-bottom:9px}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .badge{font-size:11px;padding:2px 9px;border-radius:11px;background:var(--chip);
+    border:1px solid var(--line)}
+  .badge.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+  .badge.bad{background:var(--bad);border-color:var(--bad);color:#fff}
+  .badge.warn{background:var(--warn);border-color:var(--warn);color:#1c1c1c}
+  .folders{margin:0 0 14px}
+  .frow{display:flex;gap:9px;align-items:center;padding:3px 0;flex-wrap:wrap}
+  .frow .fk{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;
+    min-width:96px}
+  .frow code{background:var(--chip);padding:3px 8px;border-radius:4px;font-size:11px;
+    font-family:var(--mono);word-break:break-all}
+  .mini{border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:12px;
+    padding:3px 10px;font:inherit;font-size:10.5px;cursor:pointer;text-decoration:none}
+  .mini:hover{border-color:var(--muted)}
+  .covers{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .cv{width:74px;height:104px;border-radius:4px;border:1px solid var(--line);
+    background:var(--chip) center/contain no-repeat;cursor:zoom-in;position:relative}
+  .cv.empty{background:repeating-linear-gradient(45deg,var(--chip),var(--chip) 7px,var(--card) 7px,var(--card) 14px);
+    cursor:default}
+  .cv span{position:absolute;bottom:0;left:0;right:0;font-size:9px;text-align:center;
+    background:rgba(0,0,0,.55);color:#fff;border-radius:0 0 3px 3px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+    margin:18px 0 7px;font-weight:600;border-bottom:1px solid var(--line);padding-bottom:3px}
+  .specs{display:grid;gap:8px 18px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  .sp .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .sp .v{font-size:13px;font-weight:600}
+  .sp .v.n{font-weight:400;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:10.5px;font-weight:600}
+  td.n{color:var(--muted)}
+  .pill{font-size:10px;padding:1px 7px;border-radius:9px;background:var(--chip);
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pill.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+  .pill.bad{background:var(--bad);border-color:var(--bad);color:#fff}
+  .pill.warn{background:var(--warn);border-color:var(--warn);color:#1c1c1c}
+  .note{font-size:12px;color:var(--fg);background:var(--card);border:1px solid var(--line);
+    border-radius:6px;padding:8px 10px;margin-top:7px;line-height:1.6}
+  .strip{display:grid;gap:7px;grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
+  .strip figure{margin:0;border:1px solid var(--line);border-radius:5px;overflow:hidden;
+    background:var(--card);cursor:zoom-in}
+  .strip img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}
+  .strip figcaption{padding:3px 6px;font-size:10px;color:var(--muted)}
+  .empty{color:var(--muted);font-size:12px;padding:4px 0}
+  .me{font-weight:700}
+  #box{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;align-items:center;
+    justify-content:center;z-index:60;cursor:zoom-out;padding:20px;flex-direction:column;gap:9px}
+  #box img{max-width:100%;max-height:88%;object-fit:contain}
+  #box div{color:#eee;font-size:12px}
+  #msg{padding:36px;text-align:center;color:var(--muted)}
+  code{background:var(--chip);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:11px}
+</style>
+</head>
+<body>
+<div id="bar">
+  <input id="q" placeholder="Filter releases&hellip;" autocomplete="off">
+  <button class="mini" id="fowned">Owned only</button>
+  <button class="mini on" id="fgroup">Group by film</button>
+  <span id="count"></span>
+</div>
+<div id="msg">Reading the document&hellip;</div>
+<div id="root" style="display:none"></div>
+<div id="box"><img alt=""><div></div></div>
+
+<script>
+(function(){
+  "use strict";
+  var T={films:'Films',rel:'Releases',aud:'AudioTracks',sub:'SubtitleTracks',labels:'Labels',
+         scenes:'Scenes',avail:'SceneAvailability',stills:'Stills',fs:'FrameSets',extras:'Extras',
+         masters:'Masters'};
+  var D={},cur=null,ownedOnly=false,grouped=true,tok=null,tokAt=0,suppress=0;
+  var root=document.getElementById('root'),msg=document.getElementById('msg'),
+      q=document.getElementById('q'),cnt=document.getElementById('count'),
+      box=document.getElementById('box');
+
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function recs(t){if(!t||!t.id)return[];var k=Object.keys(t),n=t.id.length,o=[];
+    for(var i=0;i<n;i++){var r={};for(var j=0;j<k.length;j++)r[k[j]]=t[k[j]][i];o.push(r);}return o;}
+  function get(tbl){return grist.docApi.fetchTable(tbl).then(recs).catch(function(){return[];});}
+  function att(v){
+    if(v==null)return null;
+    if(typeof v==='number')return v;
+    if(Array.isArray(v)){var a=(v[0]==='L'?v.slice(1):v);return a.length?a[0]:null;}
+    return null;
+  }
+  function norm(s){return String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+  async function rTok(){
+    if(!tok||(Date.now()-tokAt)>60000){tok=await grist.docApi.getAccessToken({readOnly:true});tokAt=Date.now();}
+    return tok;
+  }
+  function url(t,id){return t.baseUrl+'/attachments/'+id+'/download?auth='+encodeURIComponent(t.token);}
+  function film(r){return (D.films||[]).filter(function(f){return f.id===r.Film;})[0]||{};}
+  function labelOf(r){var l=(D.labels||[]).filter(function(x){return x.id===r.Label;})[0];
+    return l&&l.Name||'';}
+  function stars(n){n=Number(n)||0;
+    return n?'\u2605'.repeat(n)+'<span style="color:var(--line)">'+'\u2605'.repeat(5-n)+'</span>':'';}
+  function clean(x){
+    return String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/['\u2019]/g,' ').replace(/[,\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim();
+  }
+  function relFolder(r){
+    var f=film(r);
+    var head=clean(f.Original_Title)+(f.Year?' ('+parseInt(f.Year,10)+')':'');
+    var bits=[head,r.Format,clean(labelOf(r)),r.Country,r.Region_Code];
+    return bits.filter(Boolean).join(' ');
+  }
+  function sp(k,v,dim){return '<div class="sp"><div class="k">'+esc(k)+'</div><div class="v'+
+    (dim?' n':'')+'">'+(v===''||v==null?'\u2014':esc(v))+'</div></div>';}
+
+  // ---- list -----------------------------------------------------------------
+  function listRows(){
+    var s=norm(q.value.trim()),w=s?s.split(/\s+/):[];
+    return (D.rel||[]).filter(function(r){
+      if(ownedOnly&&r.Ownership!=='Owned')return false;
+      if(!w.length)return true;
+      var f=film(r);
+      var hay=norm([r.Title_On_Release,r.Format,r.Country,r.Region_Code,r.Catalog_Number,
+                    labelOf(r),f.Original_Title,f.English_Title].join(' '));
+      return w.every(function(x){return hay.indexOf(x)>=0;});
+    });
+  }
+  function renderList(){
+    var rows=listRows();
+    cnt.textContent=rows.length+' of '+(D.rel||[]).length;
+    var h=[];
+    if(grouped){
+      var by={};
+      rows.forEach(function(r){(by[r.Film]=by[r.Film]||[]).push(r);});
+      Object.keys(by).map(function(k){return {f:film({Film:Number(k)}),k:k};})
+        .sort(function(a,b){return String(a.f.Original_Title||'')
+          .localeCompare(String(b.f.Original_Title||''));})
+        .forEach(function(g){
+          var f=g.f;
+          h.push('<div class="lgroup">'+esc(f.Original_Title||'(no film)')+
+            (f.Year?' ('+parseInt(f.Year,10)+')':'')+'</div>');
+          by[g.k].forEach(function(r){h.push(lrow(r,true));});
+        });
+    } else {
+      rows.sort(function(a,b){return String(a.Title_On_Release||'')
+        .localeCompare(String(b.Title_On_Release||''));});
+      rows.forEach(function(r){h.push(lrow(r,false));});
+    }
+    document.getElementById('list').innerHTML=h.join('')||'<div class="empty" style="padding:14px">Nothing matches.</div>';
+    Array.prototype.forEach.call(document.querySelectorAll('.lrow'),function(el){
+      el.onclick=function(){pick(Number(el.getAttribute('data-id')));};
+    });
+  }
+  function lrow(r,inGroup){
+    var f=film(r);
+    return '<div class="lrow'+(cur&&cur.id===r.id?' on':'')+'" data-id="'+r.id+'">'+
+      '<div class="lmeta"><div class="lname">'+esc(r.Title_On_Release||'(untitled)')+'</div>'+
+      '<div class="lsub">'+esc([inGroup?'':f.Original_Title,r.Format,labelOf(r),r.Country,
+        r.Region_Code].filter(Boolean).join(' \u00b7 '))+'</div></div>'+
+      (r.Ownership?'<span class="own '+esc(r.Ownership)+'">'+esc(r.Ownership)+'</span>':'')+'</div>';
+  }
+
+  function pick(id){
+    cur=(D.rel||[]).filter(function(r){return r.id===id;})[0]||null;
+    suppress=Date.now();
+    try{grist.setCursorPos({rowId:id});}catch(e){}
+    try{grist.setSelectedRows([id]);}catch(e){}
+    render();
+  }
+
+  // ---- detail ---------------------------------------------------------------
+  async function render(){
+    var t=null;try{t=await rTok();}catch(e){}
+    root.innerHTML='<div class="cols"><div class="listcol"><div id="list"></div></div>'+
+                   '<div id="panel"></div></div>';
+    renderList();
+    renderPanel(t);
+    msg.style.display='none';root.style.display='block';
+  }
+
+  function renderPanel(t){
+    var p=document.getElementById('panel');
+    if(!cur){p.innerHTML='<div class="empty" style="padding:46px;text-align:center">'+
+      'Pick a release on the left.</div>';return;}
+    var r=cur,f=film(r),h=[];
+    var auds=(D.aud||[]).filter(function(x){return x.Release===r.id;});
+    var subs=(D.sub||[]).filter(function(x){return x.Release===r.id;});
+    var siblings=(D.rel||[]).filter(function(x){return x.Film===r.Film;});
+
+    h.push('<h1>'+esc(r.Title_On_Release||'(untitled)')+'</h1>');
+    h.push('<div class="filmline">'+esc(f.Original_Title||'')+
+      (f.Year?' ('+parseInt(f.Year,10)+')':'')+
+      (f.English_Title&&f.English_Title!==f.Original_Title?' \u00b7 '+esc(f.English_Title):'')+'</div>');
+
+    h.push('<div class="badges">');
+    if(r.Ownership)h.push('<span class="badge '+(r.Ownership==='Owned'?'ok':
+      r.Ownership==='Wanted'?'warn':'')+'">'+esc(r.Ownership)+'</span>');
+    if(r.Format)h.push('<span class="badge">'+esc(r.Format)+'</span>');
+    if(labelOf(r))h.push('<span class="badge">'+esc(labelOf(r))+'</span>');
+    if(r.Country)h.push('<span class="badge">'+esc(r.Country)+(r.Region_Code?' '+esc(r.Region_Code):'')+'</span>');
+    if(r.Cut_Status)h.push('<span class="badge '+(r.Cut_Status==='Uncut'?'ok':
+      /cut/i.test(r.Cut_Status)?'bad':'')+'">'+esc(r.Cut_Status)+'</span>');
+    h.push('<span class="badge '+(r.Ripped?'ok':'')+'">'+(r.Ripped?'ripped':'not ripped')+'</span>');
+    if(r.Untouched_Rip)h.push('<span class="badge">untouched rip</span>');
+    h.push('</div>');
+
+    var f2=film(r);
+    h.push('<div class="folders">');
+    if(f2.Folder_Name)
+      h.push('<div class="frow"><span class="fk">Film folder</span>'+
+        '<code id="ff1">'+esc(f2.Folder_Name)+'</code>'+
+        '<button class="mini" data-cp="ff1">copy</button></div>');
+    h.push('<div class="frow"><span class="fk">Release folder</span>'+
+      '<code id="ff2">'+esc(relFolder(r))+'</code>'+
+      '<button class="mini" data-cp="ff2">copy</button></div>');
+    h.push('<div class="frow"><span class="fk">Full path</span>'+
+      '<code id="ff3">'+esc((f2.Folder_Name?f2.Folder_Name+'/':'')+'Untouched Releases/'+
+        relFolder(r))+'</code>'+
+      '<button class="mini" data-cp="ff3">copy</button></div>');
+    h.push('</div>');
+
+    // artwork
+    var arts=[['Cover_Front','Front'],['Cover_Back','Back'],['Disc_Art','Disc'],['Insert','Insert']];
+    var anyArt=arts.some(function(a){return att(r[a[0]]);});
+    if(anyArt&&t){
+      h.push('<div class="covers">');
+      arts.forEach(function(a){
+        var id=att(r[a[0]]);
+        h.push(id?'<div class="cv" data-img="'+url(t,id)+'" data-cap="'+esc(a[1])+'" '+
+          'style="background-image:url(\''+url(t,id)+'\')"><span>'+a[1]+'</span></div>'
+        :'<div class="cv empty"><span>'+a[1]+'</span></div>');
+      });
+      h.push('</div>');
+    }
+
+    // technical
+    h.push('<h2>Picture</h2><div class="specs">');
+    h.push(sp('Standard',r.Video_Standard));
+    h.push(sp('Aspect ratio',r.Aspect_Ratio));
+    h.push(sp('Anamorphic',r.Anamorphic?'Yes':'No',!r.Anamorphic));
+    h.push(sp('Resolution',r.Resolution));
+    h.push(sp('Runtime',r.Runtime_Min?r.Runtime_Min+' min':''));
+    h.push(sp('Cropping',r.Cropping));
+    h.push('<div class="sp"><div class="k">Quality</div><div class="v">'+
+      (r.Video_Quality?stars(r.Video_Quality):'\u2014')+'</div></div>');
+    h.push('</div>');
+    if(r.Print_Notes)h.push('<div class="note">'+esc(r.Print_Notes)+'</div>');
+
+    // audio / subs
+    h.push('<h2>Audio tracks</h2>');
+    if(!auds.length)h.push('<div class="empty">None logged.</div>');
+    else{
+      h.push('<table><tr><th>Language</th><th>Type</th><th>Channels</th><th>Codec</th>'+
+             '<th>Quality</th><th>Master</th></tr>');
+      auds.forEach(function(a){
+        h.push('<tr><td><b>'+esc(a.Language||'')+'</b></td><td class="n">'+esc(a.Track_Type||'')+
+          '</td><td class="n">'+esc(a.Channels||'')+'</td><td class="n">'+esc(a.Codec||'')+
+          '</td><td class="n">'+(a.Quality?stars(a.Quality):'')+'</td><td>'+
+          (a.Use_In_Master?'<span class="pill ok">use</span>':'')+'</td></tr>');
+        if(a.Sync_Notes)h.push('<tr><td colspan="6" class="n">'+esc(a.Sync_Notes)+'</td></tr>');
+      });
+      h.push('</table>');
+    }
+    h.push('<h2>Subtitle tracks</h2>');
+    if(!subs.length)h.push('<div class="empty">None logged.</div>');
+    else{
+      h.push('<table><tr><th>Language</th><th>Type</th><th>Format</th><th>Source</th>'+
+             '<th>OCR</th><th>Master</th></tr>');
+      subs.forEach(function(s){
+        h.push('<tr><td><b>'+esc(s.Language||'')+'</b></td><td class="n">'+esc(s.Sub_Type||'')+
+          '</td><td class="n">'+esc(s.Format||'')+'</td><td class="n">'+esc(s.Source||'')+
+          '</td><td>'+(s.OCR_Done?'<span class="pill ok">done</span>':
+            (s.Format==='VobSub'||s.Format==='PGS'?'<span class="pill warn">needed</span>':''))+
+          '</td><td>'+(s.Use_In_Master?'<span class="pill ok">use</span>':'')+'</td></tr>');
+      });
+      h.push('</table>');
+    }
+
+    // scenes
+    var scenes=(D.scenes||[]).filter(function(s){return s.Film===r.Film;})
+      .sort(function(a,b){return (a.Scene_No||0)-(b.Scene_No||0);});
+    if(scenes.length){
+      h.push('<h2>Contested scenes on this disc</h2>');
+      h.push('<table><tr><th>Scene</th><th>Presence</th><th>Timecode here</th></tr>');
+      scenes.forEach(function(s){
+        var a=(D.avail||[]).filter(function(x){return x.Scene===s.id&&x.Release===r.id;})[0];
+        var pr=a&&a.Presence||'';
+        h.push('<tr><td>'+esc((s.Scene_No?s.Scene_No+'. ':'')+(s.Title||''))+'</td><td>'+
+          (pr==='Present'?'<span class="pill ok">present</span>':
+           pr==='Absent'?'<span class="pill bad">absent</span>':
+           pr?'<span class="pill warn">'+esc(pr)+'</span>':'<span class="pill">not recorded</span>')+
+          '</td><td class="n">'+esc(a&&a.Timecode_In_Release||'')+'</td></tr>');
+      });
+      h.push('</table>');
+    }
+
+    // stills
+    var st=(D.stills||[]).filter(function(x){return x.Release===r.id&&att(x.Image);});
+    if(st.length&&t){
+      h.push('<h2>Frames captured from this release</h2><div class="strip">');
+      st.forEach(function(x){
+        var fs=(D.fs||[]).filter(function(y){return y.id===x.Frame_Set;})[0]||{};
+        var u=url(t,att(x.Image));
+        h.push('<figure data-img="'+u+'" data-cap="'+esc(fs.Label||'')+'"><img src="'+u+
+          '" loading="lazy" alt=""><figcaption>'+esc(fs.Label||x.Caption||'')+
+          (x.Timecode?' \u00b7 '+esc(x.Timecode):'')+'</figcaption></figure>');
+      });
+      h.push('</div>');
+    }
+
+    // extras
+    var ex=(D.extras||[]).filter(function(x){return x.Release===r.id;});
+    if(ex.length){
+      h.push('<h2>Extras on this disc</h2><table><tr><th>Category</th><th>Title</th>'+
+             '<th>Runtime</th><th>Ripped</th></tr>');
+      ex.forEach(function(x){
+        h.push('<tr><td class="n">'+esc(x.Category||'')+'</td><td>'+esc(x.Title||'')+
+          '</td><td class="n">'+(x.Runtime_Min?x.Runtime_Min+' min':'')+'</td><td>'+
+          (x.Ripped?'<span class="pill ok">yes</span>':'')+'</td></tr>');
+      });
+      h.push('</table>');
+    }
+
+    // acquisition + files
+    h.push('<h2>Acquisition and files</h2><div class="specs">');
+    h.push(sp('Catalog number',r.Catalog_Number));
+    h.push(sp('Shelf location',r.Physical_Location));
+    h.push(sp('Purchased',r.Purchase_Date?String(r.Purchase_Date).slice(0,10):''));
+    h.push(sp('Paid',r.Purchase_Price?String(r.Purchase_Price):''));
+    h.push(sp('Source',r.Purchase_Source));
+    h.push('</div>');
+    if(r.Rip_Path)h.push('<div class="note"><code>'+esc(r.Rip_Path)+'</code></div>');
+    if(r.Store_URL)h.push('<div style="margin-top:7px"><a class="mini" href="'+esc(r.Store_URL)+
+      '" target="_blank">Open store page</a></div>');
+
+    // siblings
+    if(siblings.length>1){
+      h.push('<h2>Other releases of this film</h2>');
+      h.push('<table><tr><th>Release</th><th>Format</th><th>Standard</th><th>AR</th>'+
+             '<th>Runtime</th><th>Cut</th><th>Quality</th><th>Owned</th></tr>');
+      siblings.sort(function(a,b){return (b.Video_Quality||0)-(a.Video_Quality||0);})
+        .forEach(function(x){
+        var me=x.id===r.id;
+        h.push('<tr'+(me?' class="me"':'')+'><td>'+(me?'\u25b8 ':'')+
+          esc(x.Title_On_Release||'')+'</td><td class="n">'+esc(x.Format||'')+
+          '</td><td class="n">'+esc(x.Video_Standard||'')+'</td><td class="n">'+
+          esc(x.Aspect_Ratio||'')+'</td><td class="n">'+(x.Runtime_Min||'')+
+          '</td><td class="n">'+esc(x.Cut_Status||'')+'</td><td class="n">'+
+          (x.Video_Quality?stars(x.Video_Quality):'')+'</td><td class="n">'+
+          esc(x.Ownership||'')+'</td></tr>');
+      });
+      h.push('</table>');
+      var runs=siblings.map(function(x){return x.Runtime_Min;}).filter(Boolean);
+      if(runs.length>1){
+        var mn=Math.min.apply(null,runs),mx=Math.max.apply(null,runs);
+        if(mx-mn>1)h.push('<div class="note">Runtimes across these releases span <b>'+mn+
+          '\u2013'+mx+' minutes</b>. A gap that size usually means missing scenes or a '+
+          'PAL/NTSC speed difference rather than a rounding error.</div>');
+      }
+    }
+
+    if(r.Comparison_Notes)h.push('<h2>Comparison notes</h2><div class="note">'+
+      esc(r.Comparison_Notes).replace(/\n/g,'<br>')+'</div>');
+    if(r.Notes)h.push('<h2>Notes</h2><div class="note">'+esc(r.Notes).replace(/\n/g,'<br>')+'</div>');
+
+    p.innerHTML=h.join('');
+    Array.prototype.forEach.call(p.querySelectorAll('[data-cp]'),function(b){
+      b.onclick=function(){
+        navigator.clipboard.writeText(document.getElementById(b.getAttribute('data-cp')).textContent);
+        b.textContent='copied';setTimeout(function(){b.textContent='copy';},1300);
+      };
+    });
+    Array.prototype.forEach.call(p.querySelectorAll('[data-img]'),function(el){
+      el.onclick=function(){
+        box.querySelector('img').src=el.getAttribute('data-img');
+        box.querySelector('div').textContent=el.getAttribute('data-cap')||'';
+        box.style.display='flex';
+      };
+    });
+  }
+
+  box.onclick=function(){box.style.display='none';};
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')box.style.display='none';});
+  q.addEventListener('input',function(){if(document.getElementById('list'))renderList();});
+  document.getElementById('fowned').onclick=function(){
+    ownedOnly=!ownedOnly;this.classList.toggle('on',ownedOnly);renderList();};
+  var gb=document.getElementById('fgroup');
+  if(gb){gb.classList.add('on');
+    gb.onclick=function(){grouped=!grouped;this.classList.toggle('on',grouped);renderList();};}
+
+  grist.ready({requiredAccess:'full',allowSelectBy:true});
+  grist.onRecord(function(rec){
+    if(Date.now()-suppress<1200)return;
+    if(rec&&rec.Title_On_Release!==undefined){cur=rec;render();}
+  });
+  async function load(){
+    D.films=await get(T.films); D.rel=await get(T.rel);
+    D.aud=await get(T.aud); D.sub=await get(T.sub); D.labels=await get(T.labels);
+    D.scenes=await get(T.scenes); D.avail=await get(T.avail);
+    D.stills=await get(T.stills); D.fs=await get(T.fs);
+    D.extras=await get(T.extras); D.masters=await get(T.masters);
+    render();
+  }
+  grist.onRecords(function(){load();});
+  load();
+})();
+</script>
+</body>
+</html>
