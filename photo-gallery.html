@@ -185,15 +185,31 @@ function getRefId(ref) {
   if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
   return null;
 }
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+
 function normalize(s) {
-  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+  return foldAccents((s || '').toString()).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 // normalize() strips separators entirely, which destroys word boundaries and makes
 // raw substring tests dangerously loose: "ukraineflag".includes("rain") is true, so
 // Ukraine Flag photos were matching every FFN_RAIN_* line. Keep words separated so
 // containment can be tested at whole-word granularity instead.
 function normWords(s) {
-  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return foldAccents((s || '').toString()).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 // True only when `needle`'s words appear as a complete whole-word run inside `hay`.
 // "sunset" matches "sunset glow"; "rain" does NOT match "ukraine flag".

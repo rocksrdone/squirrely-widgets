@@ -84,7 +84,23 @@ function getRefId(ref) {
   return null;
 }
 function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
-function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+
+function normalize(s) { return foldAccents((s || '').toString()).trim().toUpperCase(); }
 function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 function findColumn(t, candidates) {
   const keys = Object.keys(t);
@@ -128,7 +144,7 @@ const ALIASES = {
   'READY TO ASSIGN': DRY,
 };
 function stageOf(raw) {
-  const s = (raw || '').toString().trim();
+  const s = foldAccents((raw || '').toString()).trim();
   if (!s) return WET; // nothing recorded yet — it just came off the kettle
   return ALIASES[s.toUpperCase()] || null; // null = unrecognised, shown separately
 }

@@ -194,8 +194,27 @@ let allRecipes = [];
 // Per-photo UI state, keyed by photo path
 let cardState = {};
 
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+
 function slugify(name) {
-  return (name || '').toString().toLowerCase().trim()
+  // Folded first, or an accent becomes a separator: "Pathétique" slugged to
+  // "path-tique" instead of "pathetique", and the filed name stopped matching
+  // the colourway it came from.
+  return foldAccents(name).toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }

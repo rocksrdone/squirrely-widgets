@@ -427,7 +427,7 @@ let dilutionLabelOverride = new Map();   // clientKey -> true | false
 // part in four. Anything unparseable returns null and is left at full strength
 // rather than guessed at.
 function dilutionStrength(raw) {
-  const s = String(raw || '').trim().toLowerCase();
+  const s = foldAccents(String(raw || '')).trim().toLowerCase();
   if (!s) return null;
   if (/^(full|stock|neat|undiluted|straight)$/.test(s)) return 1;
   if (/^half$/.test(s)) return 0.5;
@@ -651,8 +651,24 @@ function toggleSection(id) {
   chevron.classList.toggle('collapsed');
 }
 
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+
 function normalize(s) {
-  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+  return foldAccents((s || '').toString()).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function showToast(msg) {
