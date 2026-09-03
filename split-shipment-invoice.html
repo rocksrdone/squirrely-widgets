@@ -267,6 +267,15 @@ tr.fully-shipped td { opacity: .5; }
 .declaration.hidden { display: none; }
 .empty-print { display: none; }
 .decl-toggle { font-size: 11px; color: #6B5E52; cursor: pointer; align-items: center; gap: 7px; }
+.shipper-tools {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--rule); font-size: 10px;
+}
+.shipper-tools span { color: #8B7D72; font-style: italic; }
+.shipper-tools button {
+  font-size: 10px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--rule);
+  background: white; color: #6B5E52; cursor: pointer; white-space: nowrap;
+}
 .cert-block h4 {
   font-family: 'Libre Baskerville', serif; font-size: 13px; margin: 0 0 3px; font-weight: 700;
 }
@@ -311,7 +320,7 @@ tr.fully-shipped td { opacity: .5; }
   body { padding: 0; background: white; }
   .no-print-box, .planner, .print-actions, .add-line-btn, .table-tools, .cert-controls, .decl-toggle,
   .col-check, .col-qty-ordered, .col-qty-shipped,
-  .meta-item.internal-only, .sub, h1 { display: none !important; }
+  .meta-item.internal-only, .sub, h1, .shipper-tools { display: none !important; }
   .cert-block { break-inside: avoid; }
   .cert-grid dd input { border-bottom: none !important; }
   .print-only { display: inline !important; }
@@ -338,7 +347,7 @@ tr.fully-shipped td { opacity: .5; }
 <body>
 
 <h1>Split Shipment Invoice</h1>
-<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-09-03-h</span></div>
+<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-09-03-i</span></div>
 
 <div class="no-print-box">
   <div class="lookup-row">
@@ -404,6 +413,10 @@ tr.fully-shipped td { opacity: .5; }
         <input id="fromPhone" placeholder="Contact phone">
         <label>Exporter Tax ID (EIN) — optional</label>
         <input id="fromTaxId" placeholder="Leave blank if you don't have one">
+        <div class="shipper-tools">
+          <span id="shipperSavedNote"></span>
+          <button type="button" id="forgetShipperBtn">Forget saved details</button>
+        </div>
       </div>
       <div class="field-block">
         <h3>Consignee / Importer</h3>
@@ -878,6 +891,79 @@ function clearOrderScopedFields() {
   document.getElementById('shipmentLabel').value = '';
   shopifyLines.forEach(li => { li.hs = ''; });
 }
+
+/* ------------------------------------------------ shipper details, remembered
+
+   Two layers. SHIPPER_DEFAULTS is the durable one: edit these values, commit,
+   and every browser gets them with no setup. Anything typed into the form on top
+   of that is saved locally per browser. If local storage is unavailable — some
+   sandboxed iframes block it — the defaults still apply and nothing breaks. */
+
+const SHIPPER_DEFAULTS = {
+  fromCompany: 'Squirrely Stash',
+  fromAddr1: '',
+  fromAddr2: '',
+  fromCityStateZip: '',
+  fromCountry: 'United States',
+  fromPhone: '',
+  fromTaxId: '',
+};
+
+const SHIPPER_KEY = 'ss_split_invoice_shipper_v1';
+const SHIPPER_IDS = Object.keys(SHIPPER_DEFAULTS);
+
+function readSavedShipper() {
+  try {
+    const raw = window.localStorage.getItem(SHIPPER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveShipper() {
+  const data = {};
+  SHIPPER_IDS.forEach(id => { data[id] = document.getElementById(id).value; });
+  let ok = false;
+  try {
+    window.localStorage.setItem(SHIPPER_KEY, JSON.stringify(data));
+    ok = true;
+  } catch (e) {
+    ok = false;
+  }
+  const note = document.getElementById('shipperSavedNote');
+  note.textContent = ok
+    ? 'Saved on this device.'
+    : 'This browser blocks local storage — set SHIPPER_DEFAULTS in the file instead.';
+  note.style.color = ok ? '#3A8B7A' : '#8B3A2A';
+}
+
+function loadShipper() {
+  const saved = readSavedShipper() || {};
+  SHIPPER_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    const value = saved[id] !== undefined ? saved[id] : SHIPPER_DEFAULTS[id];
+    if (value) el.value = value;
+  });
+  if (readSavedShipper()) {
+    document.getElementById('shipperSavedNote').textContent = 'Loaded from this device.';
+  }
+  markEmptyFieldsForPrint();
+}
+
+function forgetShipper() {
+  try { window.localStorage.removeItem(SHIPPER_KEY); } catch (e) { /* nothing to clear */ }
+  SHIPPER_IDS.forEach(id => { document.getElementById(id).value = SHIPPER_DEFAULTS[id] || ''; });
+  document.getElementById('shipperSavedNote').textContent = 'Cleared — back to the built-in defaults.';
+  document.getElementById('shipperSavedNote').style.color = '#8B7D72';
+  markEmptyFieldsForPrint();
+}
+
+SHIPPER_IDS.forEach(id => {
+  document.getElementById(id).addEventListener('change', saveShipper);
+});
+document.getElementById('forgetShipperBtn').addEventListener('click', forgetShipper);
+loadShipper();
 
 /* ------------------------------- customer record from Grist (PCC etc.) */
 
@@ -1402,7 +1488,7 @@ function buildPrintableSnapshot() {
   if (certClone && certClone.classList.contains('hidden')) certClone.remove();
   const declClone = clone.querySelector('#declarationBlock');
   if (declClone && declClone.classList.contains('hidden')) declClone.remove();
-  clone.querySelectorAll('.empty-print').forEach(el => el.remove());
+  clone.querySelectorAll('.empty-print, .shipper-tools').forEach(el => el.remove());
   clone.querySelectorAll('.print-only').forEach(el => { el.style.display = 'inline'; });
 
   return clone;
