@@ -264,6 +264,8 @@ tr.fully-shipped td { opacity: .5; }
   margin-top: 22px; border: 1.5px solid var(--ink); border-radius: 7px; padding: 14px 16px;
 }
 .cert-block.hidden { display: none; }
+.declaration.hidden { display: none; }
+.decl-toggle { font-size: 11px; color: #6B5E52; cursor: pointer; align-items: center; gap: 7px; }
 .cert-block h4 {
   font-family: 'Libre Baskerville', serif; font-size: 13px; margin: 0 0 3px; font-weight: 700;
 }
@@ -306,7 +308,7 @@ tr.fully-shipped td { opacity: .5; }
 
 @media print {
   body { padding: 0; background: white; }
-  .no-print-box, .planner, .print-actions, .add-line-btn, .table-tools, .cert-controls,
+  .no-print-box, .planner, .print-actions, .add-line-btn, .table-tools, .cert-controls, .decl-toggle,
   .col-check, .col-qty-ordered, .col-qty-shipped,
   .meta-item.internal-only, .sub, h1 { display: none !important; }
   .cert-block { break-inside: avoid; }
@@ -498,16 +500,20 @@ tr.fully-shipped td { opacity: .5; }
       <textarea id="invoiceNote">Hand-dyed thread for musical instrument reed making. Not for resale as apparel textile.</textarea>
     </div>
 
-    <div class="declaration">
-      <textarea id="declarationText">I declare that the information on this invoice is true and correct, that the values shown are the actual prices paid for the goods in this shipment, and that the contents are as described above.</textarea>
+    <div class="declaration" id="declarationBlock">
+      <label class="decl-toggle cert-controls" style="margin-bottom:10px;">
+        <input type="checkbox" id="includeDeclaration" checked>
+        Include the signed declaration on the printed invoice
+      </label>
+      <textarea id="declarationText">I declare that the information on this invoice is true and correct, and that the values shown are the actual prices charged for the goods in this shipment.</textarea>
       <div class="sig-grid">
         <div>
           <div class="sig-line"></div>
-          <div class="sig-cap">Signature of exporter</div>
+          <div class="sig-cap">Signature</div>
         </div>
         <div>
           <div class="sig-line"></div>
-          <div class="sig-cap">Printed name and title</div>
+          <div class="sig-cap">Name</div>
         </div>
         <div>
           <div class="sig-line"></div>
@@ -1371,6 +1377,8 @@ function buildPrintableSnapshot() {
     .forEach(el => el.remove());
   const certClone = clone.querySelector('#certBlock');
   if (certClone && certClone.classList.contains('hidden')) certClone.remove();
+  const declClone = clone.querySelector('#declarationBlock');
+  if (declClone && declClone.classList.contains('hidden')) declClone.remove();
   clone.querySelectorAll('.print-only').forEach(el => { el.style.display = 'inline'; });
 
   return clone;
@@ -1554,6 +1562,10 @@ function resetAll() {
   document.getElementById('plannerTitle').textContent = 'Shipment 1';
   setAgreement('none');
 }
+
+document.getElementById('includeDeclaration').addEventListener('change', (e) => {
+  document.getElementById('declarationBlock').classList.toggle('hidden', !e.target.checked);
+});
 
 document.getElementById('orderNumberInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') lookupOrder();
