@@ -586,6 +586,7 @@ tr.fully-shipped td { opacity: .5; }
 
   <div class="print-actions">
     <button class="btn" onclick="downloadPDF()" id="pdfBtn">⬇ Download PDF</button>
+    <button class="btn secondary" onclick="downloadShipStationCSV()" id="ssBtn">⬇ ShipStation CSV</button>
     <button class="btn secondary" onclick="window.print()">🖨 Print</button>
     <button class="btn secondary" onclick="resetAll()">Start Over</button>
   </div>
@@ -602,6 +603,7 @@ let customLines = [];       // [{key, description, qty, unitPrice, hs}]
 let customLineSeq = 0;
 let detectedShipments = []; // [{source, status, label, line_items}]
 let shippedSoFar = {};      // { lineId: qty already recorded in earlier shipments }
+let shipTo = {};            // raw ship_to from Shopify, for the ShipStation export
 let shipmentSeq = 1;
 let baseInvoiceNumber = '';
 
@@ -757,6 +759,7 @@ async function lookupOrder() {
     document.getElementById('invoiceDate').value = todayISO();
 
     const st = data.ship_to || {};
+    shipTo = st;
     document.getElementById('toName').value = [st.company, st.name].filter(Boolean).join(' — ') || st.name || '';
     document.getElementById('toAddr1').value = st.address1 || '';
     document.getElementById('toAddr2').value = st.address2 || '';
@@ -1087,6 +1090,8 @@ function currentQty(i) {
 
 function clearAllQuantities() {
   shopifyLines.forEach((li, i) => setShopifyQty(i, 0));
+  customLines.forEach(cl => { cl.qty = 0; });
+  renderItems();
   recalcTotals();
 }
 
@@ -1341,7 +1346,125 @@ async function downloadPDF() {
   }
 }
 
+/* --------------------------------------------- ShipStation CSV (manual import) */
+
+// ShipStation's CSV importer lets you map your columns to its fields on upload,
+// so header wording is flexible. One row per item, order-level values repeated.
+function csvCell(v) {
+  const s = String(v == null ? '' : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// "1.4 kg" / "2 lb 3 oz" / "18oz" -> ounces, blank if it can't be read.
+function grossWeightOz() {
+  const raw = (document.getElementById('grossWeight').value || '').toLowerCase();
+  if (!raw.trim()) return '';
+  let oz = 0;
+  let matched = false;
+  const units = [
+    [/([\d.]+)\s*(kg|kilo|kilogram)/, 35.27396],
+    [/([\d.]+)\s*(lbs|lb|pound)/, 16],
+    [/([\d.]+)\s*(g|gram)(?![a-z])/, 0.0352740],
+    [/([\d.]+)\s*(oz|ounce)/, 1],
+  ];
+  units.forEach(([re, factor]) => {
+    const m = raw.match(re);
+    if (m) { oz += parseFloat(m[1]) * factor; matched = true; }
+  });
+  if (!matched) {
+    const bare = parseFloat(raw);
+    return isNaN(bare) ? '' : (bare * 35.27396).toFixed(2); // bare number reads as kg
+  }
+  return oz.toFixed(2);
+}
+
+function shipmentRows() {
+  const rows = [];
+  shopifyLines.forEach((li, i) => {
+    const qty = currentQty(i);
+    if (qty > 0) rows.push({ sku: li.sku, name: li.name, qty, unit: li.unitPrice, hs: li.hs });
+  });
+  customLines.forEach(cl => {
+    if (cl.qty > 0) rows.push({ sku: '', name: cl.description, qty: cl.qty, unit: cl.unitPrice, hs: cl.hs });
+  });
+  return rows;
+}
+
+function downloadShipStationCSV() {
+  const rows = shipmentRows();
+  if (!rows.length) {
+    alert('Nothing is assigned to this shipment yet.');
+    return;
+  }
+
+  const get = (id) => (document.getElementById(id).value || '').trim();
+  const origin = get('countryOfOrigin');
+
+  // ShipStation's CSV import does not carry customs declarations, so the customs
+  // lines go into Internal Notes ready to copy into the declaration screen.
+  const customsCrib = rows.map(r =>
+    `${r.qty} x ${r.name} @ ${money(r.unit)} = ${money(r.qty * r.unit)}${r.hs ? ' | HS ' + r.hs : ''}`
+  ).join(' // ');
+  const notes = [
+    get('shipmentLabel') || 'Split shipment',
+    'Source ' + (get('sourceOrderNumber') || '—'),
+    get('toTaxId') ? 'Consignee customs ID ' + get('toTaxId') : '',
+    'Declared ' + money(document.getElementById('grandTotal').textContent) + ' ' + get('currency'),
+    'CUSTOMS: ' + customsCrib + (origin ? ' | Origin ' + origin : ''),
+  ].filter(Boolean).join(' — ');
+
+  const header = [
+    'Order Number', 'Order Date', 'Order Status', 'Order Total', 'Currency',
+    'Recipient Name', 'Recipient Company', 'Address Line 1', 'Address Line 2',
+    'City', 'State/Province', 'Postal Code', 'Country Code', 'Country', 'Phone',
+    'Item SKU', 'Item Name', 'Item Quantity', 'Item Unit Price',
+    'HS Code', 'Country of Origin', 'Order Weight (oz)', 'Internal Notes',
+  ];
+
+  const orderNumber = get('invoiceNumber');
+  const shared = [
+    orderNumber,
+    get('invoiceDate'),
+    'awaiting_shipment',
+    money(document.getElementById('grandTotal').textContent),
+    get('currency'),
+    shipTo.name || get('toName'),
+    shipTo.company || '',
+    get('toAddr1'),
+    get('toAddr2'),
+    shipTo.city || '',
+    shipTo.province || '',
+    shipTo.zip || '',
+    (shipTo.country_code || '').toUpperCase(),
+    get('toCountry'),
+    get('toPhone'),
+  ];
+
+  const weightOz = grossWeightOz();
+  const lines = [header.map(csvCell).join(',')];
+  rows.forEach((r, idx) => {
+    lines.push(shared.concat([
+      r.sku, r.name, r.qty, money(r.unit),
+      r.hs, origin,
+      // Weight and notes belong to the order, so only the first row carries them.
+      idx === 0 ? weightOz : '',
+      idx === 0 ? notes : '',
+    ]).map(csvCell).join(','));
+  });
+
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${orderNumber || 'shipment'}-shipstation.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function resetAll() {
+  shipTo = {};
   shopifyLines = [];
   customLines = [];
   customLineSeq = 0;
