@@ -758,6 +758,10 @@ async function lookupOrder() {
     document.getElementById('invoiceNumberDisplay').textContent = document.getElementById('invoiceNumber').value;
     document.getElementById('invoiceDate').value = todayISO();
 
+    // Everything scoped to one order must be wiped before the next one loads, or a
+    // previous consignee's customs ID rides along onto the wrong invoice.
+    clearOrderScopedFields();
+
     const st = data.ship_to || {};
     shipTo = st;
     document.getElementById('toName').value = [st.company, st.name].filter(Boolean).join(' — ') || st.name || '';
@@ -767,6 +771,7 @@ async function lookupOrder() {
     document.getElementById('toCountry').value = st.country || '';
     document.getElementById('toPhone').value = st.phone || '';
     applyDestinationHints(st.country_code || '', st.country || '');
+    const appliedFields = applyCustomerRecord(data.customer);
 
     document.getElementById('invoiceWrap').classList.add('ready');
     document.getElementById('planner').classList.add('ready');
@@ -776,7 +781,7 @@ async function lookupOrder() {
       : 'order';
     statusEl.textContent = `Loaded ${kind} ${data.order_number} — ${shopifyLines.length} line item(s).`;
 
-    renderDiscountNotice(data);
+    renderDiscountNotice(data, appliedFields);
     renderShipmentPicker();
     renderItems();
     recalcTotals();
@@ -828,9 +833,14 @@ function applyDestinationHints(code, countryName) {
   if (noticeEl) noticeEl.innerHTML = '';
 }
 
-function renderDiscountNotice(data) {
+function renderDiscountNotice(data, appliedFields) {
   const box = document.getElementById('discountNotice');
   const parts = [];
+
+  parts.push(customerNoticeHtml());
+  if (appliedFields && appliedFields.length) {
+    parts.push(`<div class="notice">Prefilled from the customer record: ${esc(appliedFields.join(', '))}.</div>`);
+  }
 
   const labelEl = document.getElementById('toTaxIdLabel');
   if (labelEl.dataset.note) {
@@ -842,7 +852,67 @@ function renderDiscountNotice(data) {
     parts.push(`<div class="notice">This order carries an order-level discount of ${esc(money(disc))} ${esc(data.currency || 'USD')}${data.order_discount_title ? ' (' + esc(data.order_discount_title) + ')' : ''}. Unit prices below are already reduced pro rata, so each shipment declares what the customer actually pays.</div>`);
   }
 
+  if (labelEl.dataset.note && !document.getElementById('toTaxId').value.trim()) {
+    parts.push(`<div class="notice"><strong>No customs ID for this customer.</strong> ${esc(labelEl.dataset.country)} needs one on the invoice — add it to the customer record in Grist so it fills automatically next time.</div>`);
+  }
+
   box.innerHTML = parts.join('');
+}
+
+function clearOrderScopedFields() {
+  ['toTaxId', 'toPhone', 'grossWeight', 'bulkHs'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('packageCount').value = '1';
+  document.getElementById('incoterms').value = 'DAP';
+  document.getElementById('countryOfOrigin').value = 'United States';
+  document.getElementById('shippingValue').value = '0.00';
+  document.getElementById('shipmentLabel').value = '';
+  shopifyLines.forEach(li => { li.hs = ''; });
+}
+
+/* ------------------------------- customer record from Grist (PCC etc.) */
+
+// Each entry maps an invoice field to the customer value that should fill it.
+// Adding a foreign field later means adding one line here plus an alias in the
+// workflow's pick() list — nothing else changes.
+const CUSTOMER_FIELD_MAP = [
+  { id: 'toTaxId',         keys: ['customs_code', 'tax_id'], label: 'importer customs / tax ID' },
+  { id: 'toPhone',         keys: ['phone'],                  label: 'consignee phone', onlyIfEmpty: true },
+  { id: 'incoterms',       keys: ['incoterms'],              label: 'terms of sale' },
+  { id: 'countryOfOrigin', keys: ['country_of_origin'],      label: 'country of origin' },
+  { id: 'bulkHs',          keys: ['hs_code'],                label: 'default HS code' },
+];
+
+let customerRecord = {};
+
+function applyCustomerRecord(cust) {
+  customerRecord = cust || {};
+  if (!customerRecord.matched) return [];
+
+  const applied = [];
+  CUSTOMER_FIELD_MAP.forEach(({ id, keys, label, onlyIfEmpty }) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const value = keys.map(k => customerRecord[k]).find(v => v && String(v).trim());
+    if (!value) return;
+    if (onlyIfEmpty && el.value.trim()) return;
+    el.value = value;
+    if (id === 'bulkHs') applyBulkHs(value);
+    applied.push(label);
+  });
+  return applied;
+}
+
+function customerNoticeHtml() {
+  if (!customerRecord.matched) {
+    return '<div class="notice">No matching customer found in Grist, so nothing was prefilled. Check the vendor code on the SKUs or the customer name.</div>';
+  }
+  const who = [customerRecord.code, customerRecord.name].filter(Boolean).join(' — ');
+  const note = customerRecord.customs_notes
+    ? ` Customer note: ${esc(customerRecord.customs_notes)}`
+    : '';
+  return `<div class="notice">Matched customer <strong>${esc(who)}</strong>.${note}</div>`;
 }
 
 /* ------------------------------------------------- origin certification */
@@ -1469,6 +1539,7 @@ function resetAll() {
   customLines = [];
   customLineSeq = 0;
   detectedShipments = [];
+  customerRecord = {};
   shippedSoFar = {};
   shipmentSeq = 1;
   baseInvoiceNumber = '';
