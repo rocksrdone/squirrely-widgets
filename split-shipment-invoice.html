@@ -346,7 +346,7 @@ tr.fully-shipped td { opacity: .5; }
 <body>
 
 <h1>Split Shipment Invoice</h1>
-<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-09-03-k</span></div>
+<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-09-03-l</span></div>
 
 <div class="no-print-box">
   <div class="lookup-row">
@@ -504,7 +504,7 @@ tr.fully-shipped td { opacity: .5; }
     <div class="totals-block">
       <div class="totals-table">
         <div class="row"><span>Goods Subtotal</span><span class="line-total" id="goodsSubtotal">0.00</span></div>
-        <div class="row"><span>Freight</span><input type="number" id="shippingValue" value="0.00" step="0.01" oninput="recalcTotals()"></div>
+        <div class="row"><span>Shipping</span><input type="number" id="shippingValue" value="0.00" step="0.01" oninput="recalcTotals()"></div>
         <div class="row grand"><span>Total Declared Value</span><span class="line-total" id="grandTotal">0.00</span></div>
       </div>
     </div>
@@ -1368,6 +1368,7 @@ function updateRemainingNote() {
 }
 
 // Walk down the lines adding whole units while they still fit under the cap.
+// Shipping counts toward the cap, since customs assesses the declared total.
 function fillToCap() {
   const cap = parseFloat(document.getElementById('maxPerShipment').value) || 0;
   const shipping = parseFloat(document.getElementById('shippingValue').value) || 0;
