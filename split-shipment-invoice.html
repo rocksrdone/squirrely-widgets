@@ -312,6 +312,29 @@ tr.fully-shipped td { opacity: .5; }
 .print-actions { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 
 .print-only { display: none; }
+/* Freight wording. DAP with a 0.00 shipping line reads as an incomplete value
+   unless the invoice states the carriage is already inside the prices. */
+.freight-note { font-size: 11px; color: #5C5147; margin-top: 6px; text-align: right; font-style: italic; }
+.weights-line { font-size: 11px; margin-top: 4px; text-align: right; font-family: 'DM Mono', monospace; }
+.profile-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 9px; margin-top: 6px; border: 1px dashed var(--rule); border-radius: 5px;
+  background: #FBF8F4; font-size: 11px; }
+.profile-who { color: var(--ink); }
+.profile-saved { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--teal); }
+.profile-none { font-size: 10px; color: #8B7D72; font-style: italic; }
+.profile-row button { font-size: 10.5px; padding: 3px 8px; border-radius: 4px;
+  border: 1px solid var(--teal); background: var(--teal); color: white; cursor: pointer; }
+.profile-row button.ghost { background: white; color: #8B7D72; border-color: var(--rule); }
+.profile-status { font-size: 10px; color: var(--teal); flex-basis: 100%; }
+.profile-status.err { color: var(--accent); }
+.goods-descr { margin: 12px 0 6px; }
+.goods-descr label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
+.goods-descr textarea { width: 100%; font-family: 'Inter', sans-serif; font-size: 11.5px; line-height: 1.4;
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; resize: vertical; }
+@media print {
+  .goods-descr textarea { border: none; padding: 0; font-size: 11px; resize: none; }
+}
 
 @page { size: letter; margin: 0.5in; }
 
@@ -447,7 +470,7 @@ tr.fully-shipped td { opacity: .5; }
       </div>
       <div class="meta-item">
         <label>Reason for Export</label>
-        <input id="reasonForExport" value="Sold Goods">
+        <input id="reasonForExport" value="Commercial sale \u2014 wholesale">
       </div>
       <div class="meta-item">
         <label>Country of Origin</label>
@@ -462,11 +485,26 @@ tr.fully-shipped td { opacity: .5; }
         <input id="incoterms" value="DAP">
       </div>
       <div class="meta-item">
+        <label>Freight</label>
+        <select id="freightTerms" onchange="recalcTotals()">
+          <option value="included" selected>Included in unit prices</option>
+          <option value="separate">Billed separately (line below)</option>
+        </select>
+      </div>
+      <div class="meta-item">
         <label>Packages</label>
         <input id="packageCount" value="1">
       </div>
+      <div class="meta-item internal-only">
+        <label>Net g per spool</label>
+        <input id="netPerUnit" value="28.5" step="0.1" type="number" oninput="netWeightTouched=false; recalcTotals()">
+      </div>
       <div class="meta-item">
-        <label>Gross Weight</label>
+        <label>Net Weight (goods)</label>
+        <input id="netWeight" placeholder="auto from spool count" oninput="netWeightTouched = true;">
+      </div>
+      <div class="meta-item">
+        <label>Gross Weight (incl. packaging)</label>
         <input id="grossWeight" placeholder="e.g. 1.4 kg">
       </div>
       <div class="meta-item internal-only">
@@ -477,6 +515,11 @@ tr.fully-shipped td { opacity: .5; }
         <label>Shipment Label</label>
         <input id="shipmentLabel" placeholder="e.g. Shipment 1 of 2">
       </div>
+    </div>
+
+    <div class="goods-descr" id="goodsDescrBlock">
+      <label class="screen-only">Customs description of the goods (prints above the table)</label>
+      <textarea id="goodsDescription" rows="2">Nylon sewing thread, twisted multifilament, dyed, wound on wooden spools, 100 yd per spool. Manufactured and dyed in the United States.</textarea>
     </div>
 
     <table class="items">
@@ -507,6 +550,7 @@ tr.fully-shipped td { opacity: .5; }
         <div class="row"><span>Shipping</span><input type="number" id="shippingValue" value="0.00" step="0.01" oninput="recalcTotals()"></div>
         <div class="row grand"><span>Total Declared Value</span><span class="line-total" id="grandTotal">0.00</span></div>
       </div>
+      <div class="freight-note" id="freightNote"></div>
     </div>
 
     <div class="note-block">
@@ -792,6 +836,8 @@ async function lookupOrder() {
     document.getElementById('toPhone').value = st.phone || '';
     applyDestinationHints(st.country_code || '', st.country || '');
     const appliedFields = applyCustomerRecord(data.customer);
+    const profile = applyCustomerProfile();
+    if (profile) appliedFields.push('saved export settings for this customer');
 
     document.getElementById('invoiceWrap').classList.add('ready');
     document.getElementById('planner').classList.add('ready');
@@ -858,6 +904,7 @@ function renderDiscountNotice(data, appliedFields) {
   const parts = [];
 
   parts.push(customerNoticeHtml());
+  parts.push('<div id="profileBar"></div>');
   if (appliedFields && appliedFields.length) {
     parts.push(`<div class="notice">Prefilled from the customer record: ${esc(appliedFields.join(', '))}.</div>`);
   }
@@ -877,12 +924,16 @@ function renderDiscountNotice(data, appliedFields) {
   }
 
   box.innerHTML = parts.join('');
+  renderProfileBar();   // after innerHTML, or the mount point does not exist yet
 }
 
 function clearOrderScopedFields() {
-  ['toTaxId', 'toPhone', 'grossWeight', 'bulkHs'].forEach(id => {
+  ['toTaxId', 'toPhone', 'grossWeight', 'netWeight', 'bulkHs'].forEach(id => {
     document.getElementById(id).value = '';
   });
+  // Net weight goes back to being computed — a hand-typed value from the last
+  // order must not silently carry over onto a different set of goods.
+  netWeightTouched = false;
   document.getElementById('packageCount').value = '1';
   document.getElementById('incoterms').value = 'DAP';
   document.getElementById('countryOfOrigin').value = 'United States';
@@ -1006,6 +1057,110 @@ function customerNoticeHtml() {
     ? ` Customer note: ${esc(customerRecord.customs_notes)}`
     : '';
   return `<div class="notice">Matched customer <strong>${esc(who)}</strong>.${note}</div>`;
+}
+
+/* ------------------------------- per-customer export profiles */
+
+// Saved locally, keyed by the vendor code, and applied ON TOP of whatever the
+// Grist customer record supplies. Kept out of Grist deliberately: these are
+// presentation and packing preferences for the invoice, not facts about the
+// customer, and putting them in the Customers table would mean a schema change
+// plus a workflow change for every new field. If they ever need to be shared
+// across machines, this is the function to swap for a Grist read.
+const CUSTOMER_PROFILE_KEY = 'ss_invoice_customer_profiles_v1';
+
+// Every field a profile remembers. Tax ID and phone are NOT here — those come
+// from Grist and are facts, not preferences; caching them locally would let a
+// stale copy override a corrected record.
+const PROFILE_FIELDS = [
+  'incoterms', 'freightTerms', 'reasonForExport', 'countryOfOrigin',
+  'bulkHs', 'goodsDescription', 'invoiceNote', 'netPerUnit',
+  'maxPerShipment', 'certAgreement', 'certRole', 'certCriterion',
+];
+
+function readProfiles() {
+  try { return JSON.parse(window.localStorage.getItem(CUSTOMER_PROFILE_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function writeProfiles(all) {
+  try { window.localStorage.setItem(CUSTOMER_PROFILE_KEY, JSON.stringify(all)); return true; }
+  catch (e) { console.error('Could not save profile:', e); return false; }
+}
+
+function activeCustomerCode() {
+  return (customerRecord && customerRecord.code) ? String(customerRecord.code).toUpperCase() : '';
+}
+
+function saveCustomerProfile() {
+  const code = activeCustomerCode();
+  if (!code) { profileStatus('Load an order first — there is no customer to save against.', true); return; }
+  const all = readProfiles();
+  const prof = {};
+  PROFILE_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && String(el.value).trim()) prof[id] = el.value;
+  });
+  prof._savedAt = new Date().toISOString().slice(0, 10);
+  all[code] = prof;
+  const ok = writeProfiles(all);
+  profileStatus(ok
+    ? `Saved these settings for ${code}. They will load automatically next time.`
+    : 'Could not save — browser storage may be full or blocked.', !ok);
+  renderProfileBar();
+}
+
+function applyCustomerProfile() {
+  const code = activeCustomerCode();
+  if (!code) return null;
+  const prof = readProfiles()[code];
+  if (!prof) return null;
+
+  PROFILE_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || prof[id] === undefined) return;
+    el.value = prof[id];
+    if (id === 'bulkHs') applyBulkHs(prof[id]);
+  });
+  // The agreement select drives the whole certification block, so it needs its
+  // own handler run rather than just having its value set.
+  if (prof.certAgreement) setAgreement(prof.certAgreement);
+  netWeightTouched = false;
+  recalcTotals();
+  renderCertification();
+  return prof;
+}
+
+function clearCustomerProfile() {
+  const code = activeCustomerCode();
+  if (!code) return;
+  const all = readProfiles();
+  delete all[code];
+  writeProfiles(all);
+  profileStatus(`Cleared saved settings for ${code}.`);
+  renderProfileBar();
+}
+
+function profileStatus(msg, isError) {
+  const el = document.getElementById('profileStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'profile-status' + (isError ? ' err' : '');
+}
+
+function renderProfileBar() {
+  const bar = document.getElementById('profileBar');
+  if (!bar) return;
+  const code = activeCustomerCode();
+  if (!code) { bar.innerHTML = ''; return; }
+  const prof = readProfiles()[code];
+  bar.innerHTML = `
+    <div class="profile-row">
+      <span class="profile-who">Export settings for <strong>${esc(code)}</strong></span>
+      ${prof ? `<span class="profile-saved">saved ${esc(prof._savedAt || '')}</span>` : '<span class="profile-none">nothing saved yet</span>'}
+      <button type="button" onclick="saveCustomerProfile()">Save current settings</button>
+      ${prof ? `<button type="button" class="ghost" onclick="clearCustomerProfile()">Forget</button>` : ''}
+      <span class="profile-status" id="profileStatus"></span>
+    </div>`;
 }
 
 /* ------------------------------------------------- origin certification */
@@ -1296,6 +1451,16 @@ function updateCustomField(key, field, value) {
 
 /* ---------------------------------------------------------- totals and cap */
 
+// Set once the net weight field is typed in by hand, so an override is never
+// clobbered by the automatic figure on the next recalc.
+let netWeightTouched = false;
+
+function totalUnitsThisShipment() {
+  const shopifyQty = shopifyLines.reduce((n, li, i) => n + currentQty(i), 0);
+  const customQty = customLines.reduce((n, cl) => n + (Number(cl.qty) || 0), 0);
+  return shopifyQty + customQty;
+}
+
 function recalcTotals() {
   const shopifySum = shopifyLines.reduce((sum, li, i) => sum + currentQty(i) * li.unitPrice, 0);
   const customSum = customLines.reduce((sum, cl) => sum + cl.qty * cl.unitPrice, 0);
@@ -1305,6 +1470,28 @@ function recalcTotals() {
 
   document.getElementById('goodsSubtotal').textContent = money(goodsSubtotal);
   document.getElementById('grandTotal').textContent = money(total);
+
+  // Net weight, from the unit count. 5401.10 is dutiable by the kilogram, so a
+  // blank net weight is a missing field rather than a cosmetic one — the earlier
+  // invoices went out without it because nothing ever filled it in.
+  const perUnit = parseFloat(document.getElementById('netPerUnit').value) || 0;
+  const units = totalUnitsThisShipment();
+  if (!netWeightTouched && perUnit > 0 && units > 0) {
+    const kg = (units * perUnit) / 1000;
+    document.getElementById('netWeight').value =
+      `${kg.toFixed(2)} kg (${units} spools)`;
+  }
+
+  // Freight wording. DAP with a 0.00 shipping line looks like an omitted cost
+  // unless the invoice says the carriage is already inside the unit prices.
+  const freight = document.getElementById('freightTerms').value;
+  const incoterm = (document.getElementById('incoterms').value || '').trim().toUpperCase();
+  const note = document.getElementById('freightNote');
+  if (freight === 'included') {
+    note.textContent = `Carriage included in the unit prices shown. No separate freight charge${incoterm ? ` (${incoterm})` : ''}.`;
+  } else {
+    note.textContent = '';
+  }
 
   updateCapReadout(total);
   updateRemainingNote();
@@ -1327,10 +1514,13 @@ function updateCapReadout(total) {
   const pct = Math.min(100, (total / cap) * 100);
   fill.style.width = pct + '%';
 
-  if (total > cap) {
+  if (total >= cap) {
     fill.className = 'cap-fill over';
     readout.className = 'cap-readout over';
-    readout.textContent = `${money(total)} ${currency} — over the ${money(cap)} cap by ${money(total - cap)}. Move something to the next box.`;
+    const over = total - cap;
+    readout.textContent = over > 0
+      ? `${money(total)} ${currency} — over the ${money(cap)} cap by ${money(over)}. Move something to the next box.`
+      : `${money(total)} ${currency} — exactly on the ${money(cap)} cap. The buyer asked to stay UNDER it, so move a line.`;
   } else if (pct >= 90) {
     fill.className = 'cap-fill near';
     readout.className = 'cap-readout near';
