@@ -177,10 +177,14 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
   display: block; font-size: 9px; letter-spacing: .05em;
   color: #8B7D72; margin-bottom: 5px;
 }
-.meta-item input {
-  width: 100%; padding: 0; border: none; font-size: 13px; outline: none;
+.meta-item { min-width: 0; }
+.meta-item input, .meta-item select {
+  width: 100%; max-width: 100%; box-sizing: border-box;
+  padding: 0; border: none; font-size: 13px; outline: none;
   background: transparent; font-family: 'DM Mono', monospace; color: var(--ink);
+  text-overflow: ellipsis;
 }
+.meta-item select { font-size: 12px; cursor: pointer; }
 .meta-item.internal-only { background: var(--warm); }
 .meta-item.internal-only label::after { content: ' (internal, not printed)'; font-style: italic; }
 
@@ -499,9 +503,10 @@ tr.fully-shipped td { opacity: .5; }
           <option value="separate">Billed separately (line below)</option>
         </select>
       </div>
-      <div class="meta-item">
-        <label>Packages</label>
+      <div class="meta-item" id="packagesCell">
+        <label id="packagesLabel">Packages</label>
         <input id="packageCount" value="1">
+        <div class="net-note" id="packagesNote"></div>
       </div>
       <div class="meta-item internal-only">
         <label>Net g per spool</label>
@@ -954,8 +959,52 @@ function choiceLabel(raw) {
   return m ? m[1].trim() : v;
 }
 
+// Set whenever an order loads, so the packages rule knows where this is going.
+// Declared ahead of applyPackagesRule: recalcTotals() calls that rule, and
+// recalcTotals can run during initial load — a `let` referenced before its
+// declaration throws rather than reading as undefined.
+let currentDestinationISO = '';
+
+// Packages, and why it is locked to 1 on exports.
+//
+// Each box crosses the border on its own invoice, under its own declared value,
+// and that is the whole point of splitting. Printing "Packages: 2" tells the
+// destination this is one consignment arriving in pieces, which invites customs
+// to aggregate the boxes and assess against the combined value — undoing the
+// split. The buyer still receives a single bill, but that happens through the
+// payment link, not the customs paperwork.
+//
+// Domestic US is the opposite case: nothing is being declared, and knowing how
+// many boxes are coming is genuinely useful on the packing list.
+function applyPackagesRule() {
+  const input = document.getElementById('packageCount');
+  const note = document.getElementById('packagesNote');
+  const label = document.getElementById('packagesLabel');
+  if (!input) return;
+
+  const cc = (currentDestinationISO || '').toUpperCase();
+  const isExport = !!cc && cc !== 'US';
+
+  if (isExport) {
+    input.value = '1';
+    input.readOnly = true;
+    if (label) label.textContent = 'Packages';
+    if (note) {
+      note.textContent = 'locked to 1 — each box declares separately';
+      note.className = 'net-note';
+    }
+  } else {
+    input.readOnly = false;
+    if (label) label.textContent = 'Packages in this shipment';
+    if (note) { note.textContent = ''; note.className = 'net-note'; }
+  }
+}
+
+
 function applyDestinationHints(code, countryName) {
   const cc = String(code || '').toUpperCase();
+  currentDestinationISO = cc;
+  applyPackagesRule();
   const hint = DESTINATION_TAX_ID[cc];
   setAgreement(DESTINATION_AGREEMENT[cc] || 'none');
   const labelEl = document.getElementById('toTaxIdLabel');
@@ -1008,6 +1057,8 @@ function clearOrderScopedFields() {
   // order must not silently carry over onto a different set of goods.
   netWeightTouched = false;
   document.getElementById('packageCount').value = '1';
+  currentDestinationISO = '';
+  applyPackagesRule();
   document.getElementById('incoterms').value = 'DAP';
   document.getElementById('countryOfOrigin').value = 'United States';
   document.getElementById('shippingValue').value = '0.00';
@@ -1661,16 +1712,17 @@ function recalcTotals() {
   // invoices went out without it because nothing ever filled it in.
   const nw = computeNetWeight();
   if (!netWeightTouched && nw.units > 0 && nw.kg > 0) {
-    document.getElementById('netWeight').value = `${nw.kg.toFixed(2)} kg (${nw.units} spools)`;
+    document.getElementById('netWeight').value = `${nw.kg.toFixed(2)} kg`;
   }
   const nwNote = document.getElementById('netWeightNote');
   if (nwNote) {
     nwNote.textContent = nw.units === 0 ? ''
-      : nw.unmatched === 0 ? `all ${nw.units} from Products table`
-      : nw.matchedUnits === 0 ? `no product specs matched — using ${document.getElementById('netPerUnit').value}g flat`
-      : `${nw.matchedUnits} from Products, ${nw.unmatched} at the flat weight`;
+      : nw.unmatched === 0 ? `${nw.units} spools, all from Products`
+      : nw.matchedUnits === 0 ? `${nw.units} spools — no product specs matched, using ${document.getElementById('netPerUnit').value}g flat`
+      : `${nw.units} spools — ${nw.matchedUnits} from Products, ${nw.unmatched} at the flat weight`;
     nwNote.className = 'net-note' + (nw.unmatched ? ' warn' : '');
   }
+  applyPackagesRule();
 
   // Freight wording. DAP with a 0.00 shipping line looks like an omitted cost
   // unless the invoice says the carriage is already inside the unit prices.
