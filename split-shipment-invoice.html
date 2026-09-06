@@ -328,13 +328,18 @@ tr.fully-shipped td { opacity: .5; }
 .profile-status { font-size: 10px; color: var(--teal); flex-basis: 100%; }
 .profile-status.err { color: var(--accent); }
 .hidden-empty { display: none !important; }
+.net-note { font-size: 9px; color: var(--teal); margin-top: 2px; }
+.net-note.warn { color: var(--gold); }
 .goods-descr { margin: 12px 0 6px; }
 .goods-descr label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
 .goods-descr textarea { width: 100%; font-family: 'Inter', sans-serif; font-size: 11.5px; line-height: 1.4;
   padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; resize: vertical; }
 @media print {
-  .goods-descr textarea { border: none; padding: 0; font-size: 11px; resize: none; }
+  .goods-descr textarea, .note-block textarea {
+    border: none; padding: 0; font-size: 11px; resize: none;
+    height: auto !important; overflow: visible !important;
+  }
 }
 
 @page { size: letter; margin: 0.5in; }
@@ -501,6 +506,7 @@ tr.fully-shipped td { opacity: .5; }
       <div class="meta-item internal-only">
         <label>Net g per spool</label>
         <input id="netPerUnit" value="28.5" step="0.1" type="number" oninput="netWeightTouched=false; recalcTotals()">
+        <div class="net-note" id="netWeightNote"></div>
       </div>
       <div class="meta-item">
         <label>Net Weight (goods)</label>
@@ -522,7 +528,7 @@ tr.fully-shipped td { opacity: .5; }
 
     <div class="goods-descr" id="goodsDescrBlock">
       <label class="screen-only">Customs description of the goods (prints above the table)</label>
-      <textarea id="goodsDescription" rows="2">Nylon sewing thread, twisted multifilament, dyed, wound on wooden spools, 100 yd per spool. Manufactured and dyed in the United States.</textarea>
+      <textarea id="goodsDescription" rows="3">Nylon sewing thread, twisted multifilament, dyed, wound on wooden spools, 100 yd per spool. Manufactured and dyed in the United States.</textarea>
     </div>
 
     <table class="items">
@@ -840,6 +846,7 @@ async function lookupOrder() {
     // Shopify's country first, then the Grist Ship Country column. A vendor whose
     // Shopify address has no country set was getting no destination guidance at
     // all — which is exactly the international customer who needs it most.
+    productSpecs = (data && data.products) || {};
     const gristCountry = (data.customer && data.customer.ship_country) || '';
     const cc = st.country_code || isoFromChoice(gristCountry);
     const cName = st.country || choiceLabel(gristCountry);
@@ -1608,6 +1615,37 @@ function totalUnitsThisShipment() {
   return shopifyQty + customQty;
 }
 
+// Product specs from the Grist Products table, keyed on the SKU's leading
+// segment: FFN_AUTUMN_MMI -> FFN.
+let productSpecs = {};
+
+function productForSku(sku) {
+  const key = String(sku || '').split('_')[0].trim().toUpperCase();
+  return key ? (productSpecs[key] || null) : null;
+}
+
+// Net weight, per line, from each product's own figure. A box mixing FF Nylon
+// (100 yd) with E Nylon (150 yd) has two different spool weights, so a single
+// flat number was wrong for every mixed shipment. Lines with no product row fall
+// back to the manual per-spool field, and the caller is told how many did.
+function computeNetWeight() {
+  const fallback = parseFloat(document.getElementById('netPerUnit').value) || 0;
+  let grams = 0, units = 0, unmatched = 0, matchedUnits = 0;
+
+  const add = (sku, qty) => {
+    if (!qty) return;
+    units += qty;
+    const p = productForSku(sku);
+    if (p && p.net_g != null) { grams += qty * p.net_g; matchedUnits += qty; }
+    else { grams += qty * fallback; unmatched += qty; }
+  };
+
+  shopifyLines.forEach((li, i) => add(li.sku, currentQty(i)));
+  customLines.forEach(cl => add(cl.sku || '', Number(cl.qty) || 0));
+
+  return { kg: grams / 1000, units, unmatched, matchedUnits };
+}
+
 function recalcTotals() {
   const shopifySum = shopifyLines.reduce((sum, li, i) => sum + currentQty(i) * li.unitPrice, 0);
   const customSum = customLines.reduce((sum, cl) => sum + cl.qty * cl.unitPrice, 0);
@@ -1621,12 +1659,17 @@ function recalcTotals() {
   // Net weight, from the unit count. 5401.10 is dutiable by the kilogram, so a
   // blank net weight is a missing field rather than a cosmetic one — the earlier
   // invoices went out without it because nothing ever filled it in.
-  const perUnit = parseFloat(document.getElementById('netPerUnit').value) || 0;
-  const units = totalUnitsThisShipment();
-  if (!netWeightTouched && perUnit > 0 && units > 0) {
-    const kg = (units * perUnit) / 1000;
-    document.getElementById('netWeight').value =
-      `${kg.toFixed(2)} kg (${units} spools)`;
+  const nw = computeNetWeight();
+  if (!netWeightTouched && nw.units > 0 && nw.kg > 0) {
+    document.getElementById('netWeight').value = `${nw.kg.toFixed(2)} kg (${nw.units} spools)`;
+  }
+  const nwNote = document.getElementById('netWeightNote');
+  if (nwNote) {
+    nwNote.textContent = nw.units === 0 ? ''
+      : nw.unmatched === 0 ? `all ${nw.units} from Products table`
+      : nw.matchedUnits === 0 ? `no product specs matched — using ${document.getElementById('netPerUnit').value}g flat`
+      : `${nw.matchedUnits} from Products, ${nw.unmatched} at the flat weight`;
+    nwNote.className = 'net-note' + (nw.unmatched ? ' warn' : '');
   }
 
   // Freight wording. DAP with a 0.00 shipping line looks like an omitted cost
@@ -2023,6 +2066,26 @@ document.getElementById('orderNumberInput').addEventListener('keydown', (e) => {
 });
 
 markEmptyFieldsForPrint();
+
+// Textareas keep their fixed row height when printed, so anything past the
+// visible rows is simply clipped off the paper — the PDF path escapes this by
+// swapping textareas for spans, but window.print() uses the live DOM.
+// Growing them to fit content makes both routes agree.
+function autoGrowTextarea(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = (el.scrollHeight + 2) + 'px';
+}
+function autoGrowAll() {
+  ['goodsDescription', 'invoiceNote'].forEach(id => autoGrowTextarea(document.getElementById(id)));
+}
+['goodsDescription', 'invoiceNote'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', () => autoGrowTextarea(el));
+});
+window.addEventListener('beforeprint', autoGrowAll);
+window.addEventListener('load', autoGrowAll);
+
 </script>
 </body>
 </html>
