@@ -177,14 +177,17 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
   display: block; font-size: 9px; letter-spacing: .05em;
   color: #8B7D72; margin-bottom: 5px;
 }
-.meta-item { min-width: 0; }
 .meta-item input, .meta-item select {
-  width: 100%; max-width: 100%; box-sizing: border-box;
+  width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
   padding: 0; border: none; font-size: 13px; outline: none;
   background: transparent; font-family: 'DM Mono', monospace; color: var(--ink);
-  text-overflow: ellipsis;
 }
 .meta-item select { font-size: 12px; cursor: pointer; }
+/* Internal working notes. Screen only — these are reminders to the person
+   filling the invoice in, not statements to the destination's customs. */
+.net-note { font-size: 9px; color: var(--teal); margin-top: 2px; }
+.net-note.warn { color: var(--gold); }
+@media print { .net-note { display: none !important; } }
 .meta-item.internal-only { background: var(--warm); }
 .meta-item.internal-only label::after { content: ' (internal, not printed)'; font-style: italic; }
 
@@ -332,8 +335,6 @@ tr.fully-shipped td { opacity: .5; }
 .profile-status { font-size: 10px; color: var(--teal); flex-basis: 100%; }
 .profile-status.err { color: var(--accent); }
 .hidden-empty { display: none !important; }
-.net-note { font-size: 9px; color: var(--teal); margin-top: 2px; }
-.net-note.warn { color: var(--gold); }
 .goods-descr { margin: 12px 0 6px; }
 .goods-descr label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
@@ -482,7 +483,7 @@ tr.fully-shipped td { opacity: .5; }
       </div>
       <div class="meta-item">
         <label>Reason for Export</label>
-        <input id="reasonForExport" value="Commercial sale \u2014 wholesale">
+        <input id="reasonForExport" value="Commercial sale">
       </div>
       <div class="meta-item">
         <label>Country of Origin</label>
@@ -499,8 +500,8 @@ tr.fully-shipped td { opacity: .5; }
       <div class="meta-item">
         <label>Freight</label>
         <select id="freightTerms" onchange="recalcTotals()">
-          <option value="included" selected>Included in unit prices</option>
-          <option value="separate">Billed separately (line below)</option>
+          <option value="included" selected>Included</option>
+          <option value="separate">Billed separately</option>
         </select>
       </div>
       <div class="meta-item" id="packagesCell">
@@ -1914,7 +1915,7 @@ function buildPrintableSnapshot() {
   });
 
   // Match what the Print view hides.
-  clone.querySelectorAll('.meta-item.internal-only, tr.zero-qty, .col-check, .col-qty-ordered, .col-qty-shipped, .table-tools, .cert-controls, .screen-only')
+  clone.querySelectorAll('.meta-item.internal-only, .net-note, tr.zero-qty, .col-check, .col-qty-ordered, .col-qty-shipped, .table-tools, .cert-controls, .screen-only')
     .forEach(el => el.remove());
   const certClone = clone.querySelector('#certBlock');
   if (certClone && certClone.classList.contains('hidden')) certClone.remove();
