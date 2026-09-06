@@ -286,6 +286,20 @@ tr.fully-shipped td { opacity: .5; }
   font-family: 'Libre Baskerville', serif; font-size: 13px; margin: 0 0 3px; font-weight: 700;
 }
 .cert-block .cert-sub { font-size: 10px; color: #8B7D72; margin-bottom: 12px; }
+/* Always visible, whether or not a certification is being printed. */
+.cert-picker {
+  display: flex !important; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 14px 0 4px; padding: 8px 10px; border: 1px dashed var(--rule);
+  border-radius: 5px; background: #FBF8F4;
+}
+.cert-picker label { font-size: 10px; letter-spacing: .04em; color: #6B5E52;
+  text-transform: uppercase; font-weight: 600; }
+.cert-picker select { font-size: 12px; padding: 3px 6px; border: 1px solid var(--rule);
+  border-radius: 4px; background: white; }
+.cert-picker.on { border-color: var(--teal); border-style: solid; background: var(--teal-light); }
+.cert-hint { font-size: 10.5px; color: #6B5E52; flex-basis: 100%; }
+.cert-hint.prompt { color: var(--accent); font-weight: 600; }
+@media print { .cert-picker { display: none !important; } }
 .cert-controls {
   display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
   padding: 10px 12px; margin-bottom: 12px; background: var(--warm);
@@ -335,6 +349,8 @@ tr.fully-shipped td { opacity: .5; }
 .profile-status { font-size: 10px; color: var(--teal); flex-basis: 100%; }
 .profile-status.err { color: var(--accent); }
 .hidden-empty { display: none !important; }
+.series-btn { font-size: 9px; padding: 1px 5px; margin-top: 2px; border: 1px solid var(--rule);
+  border-radius: 3px; background: white; color: #8B7D72; cursor: pointer; }
 .goods-descr { margin: 12px 0 6px; }
 .goods-descr label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
@@ -475,7 +491,9 @@ tr.fully-shipped td { opacity: .5; }
     <div class="meta-row">
       <div class="meta-item">
         <label>Invoice Number</label>
-        <input id="invoiceNumber" oninput="document.getElementById('invoiceNumberDisplay').textContent = this.value || '—';">
+        <input id="invoiceNumber" oninput="document.getElementById('invoiceNumberDisplay').textContent = this.value || '—'; renderSeriesNote();">
+        <div class="net-note" id="seriesNote"></div>
+        <button type="button" class="series-btn screen-only" onclick="editInvoiceSeries()">series…</button>
       </div>
       <div class="meta-item">
         <label>Invoice Date</label>
@@ -595,16 +613,18 @@ tr.fully-shipped td { opacity: .5; }
       </div>
     </div>
 
+    <div class="cert-picker cert-controls" id="certPicker">
+      <label for="certAgreement">Claim preferential origin (FTA)</label>
+      <select id="certAgreement">
+        <option value="none">None — do not print a certification</option>
+        <option value="korus">KORUS — United States–Korea FTA</option>
+        <option value="cusma">CUSMA / USMCA — Canada &amp; Mexico</option>
+      </select>
+      <span class="cert-hint" id="certHint"></span>
+    </div>
+
     <div class="cert-block hidden" id="certBlock">
       <div class="cert-controls">
-        <div class="ctl">
-          <label for="certAgreement">Trade agreement</label>
-          <select id="certAgreement">
-            <option value="none">None — do not print a certification</option>
-            <option value="korus">KORUS — United States–Korea FTA</option>
-            <option value="cusma">CUSMA / USMCA — Canada &amp; Mexico</option>
-          </select>
-        </div>
         <div class="ctl">
           <label for="certRole">Certifier is the</label>
           <select id="certRole">
@@ -833,8 +853,7 @@ async function lookupOrder() {
     baseInvoiceNumber = String(data.order_number || raw).replace(/^#/, '');
     document.getElementById('sourceOrderNumber').value = data.order_number || '';
     document.getElementById('currency').value = data.currency || 'USD';
-    document.getElementById('invoiceNumber').value = `${baseInvoiceNumber}-1`;
-    document.getElementById('invoiceNumberDisplay').textContent = document.getElementById('invoiceNumber').value;
+    setInvoiceNumber(takeInvoiceNumber());
     document.getElementById('invoiceDate').value = todayISO();
 
     // Everything scoped to one order must be wiped before the next one loads, or a
@@ -1006,6 +1025,7 @@ function applyDestinationHints(code, countryName) {
   const cc = String(code || '').toUpperCase();
   currentDestinationISO = cc;
   applyPackagesRule();
+  setTimeout(updateCertHint, 0);
   const hint = DESTINATION_TAX_ID[cc];
   setAgreement(DESTINATION_AGREEMENT[cc] || 'none');
   const labelEl = document.getElementById('toTaxIdLabel');
@@ -1197,6 +1217,75 @@ function customerNoticeHtml() {
     ? ` Customer note: ${esc(customerRecord.customs_notes)}`
     : '';
   return `<div class="notice">Matched customer <strong>${esc(who)}</strong>.${note}</div>`;
+}
+
+/* ------------------------------- invoice numbering */
+
+// The old scheme numbered boxes "D53-1", "D53-2" off the order number, which
+// tells the destination in the clearest possible terms that this is one order
+// arriving in pieces — the same signal the Packages count was locked down for.
+// Two boxes an hour apart with consecutive suffixes on a shared base is an
+// invitation to aggregate them and assess against the combined value.
+//
+// A plain running series is what an ordinary business issues: every invoice is
+// unique, nothing reveals a relationship between them, and the link back to the
+// order is kept in Source Order # and Shipment Label, both internal-only.
+const INVOICE_SERIES_KEY = 'ss_invoice_series_v1';
+
+function readSeries() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(INVOICE_SERIES_KEY) || '{}');
+    return { prefix: raw.prefix || `SS-${new Date().getFullYear()}-`, next: Number(raw.next) || 1, used: raw.used || [] };
+  } catch (e) {
+    return { prefix: `SS-${new Date().getFullYear()}-`, next: 1, used: [] };
+  }
+}
+function writeSeries(v) {
+  try { window.localStorage.setItem(INVOICE_SERIES_KEY, JSON.stringify(v)); } catch (e) { /* non-fatal */ }
+}
+
+function peekInvoiceNumber() {
+  const s = readSeries();
+  return s.prefix + String(s.next).padStart(4, '0');
+}
+
+// Consumes the number. Called when an invoice is actually issued, not on every
+// keystroke, so browsing an order does not burn numbers.
+function takeInvoiceNumber() {
+  const s = readSeries();
+  const num = s.prefix + String(s.next).padStart(4, '0');
+  s.next += 1;
+  s.used = [num, ...(s.used || [])].slice(0, 200);
+  writeSeries(s);
+  return num;
+}
+
+function setInvoiceNumber(num) {
+  document.getElementById('invoiceNumber').value = num;
+  document.getElementById('invoiceNumberDisplay').textContent = num || '—';
+  renderSeriesNote();
+}
+
+function renderSeriesNote() {
+  const el = document.getElementById('seriesNote');
+  if (!el) return;
+  const s = readSeries();
+  const cur = (document.getElementById('invoiceNumber').value || '').trim();
+  const dupe = cur && (s.used || []).filter(n => n === cur).length > 1;
+  el.textContent = dupe
+    ? `${cur} has already been issued — change it before printing.`
+    : `next in series: ${peekInvoiceNumber()}`;
+  el.className = 'net-note' + (dupe ? ' warn' : '');
+}
+
+function editInvoiceSeries() {
+  const s = readSeries();
+  const prefix = window.prompt('Invoice number prefix', s.prefix);
+  if (prefix === null) return;
+  const next = window.prompt('Next number in the series', String(s.next));
+  if (next === null) return;
+  writeSeries({ prefix: prefix.trim(), next: Math.max(1, parseInt(next, 10) || 1), used: s.used });
+  renderSeriesNote();
 }
 
 /* ------------------------------- per-customer export profiles */
@@ -1406,6 +1495,34 @@ function addYear(iso) {
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10);
 }
 
+// Destinations where a US-origin shipment can claim preference.
+const AGREEMENT_FOR_DESTINATION = { KR: 'korus', CA: 'cusma', MX: 'cusma' };
+
+function updateCertHint() {
+  const key = document.getElementById('certAgreement').value;
+  const hint = document.getElementById('certHint');
+  const picker = document.getElementById('certPicker');
+  if (!hint) return;
+  const cc = (currentDestinationISO || '').toUpperCase();
+  const available = AGREEMENT_FOR_DESTINATION[cc];
+
+  if (key && key !== 'none') {
+    picker.classList.add('on');
+    hint.className = 'cert-hint';
+    hint.textContent = 'Certification will print below. The buyer needs this to get the preferential rate.';
+  } else if (available) {
+    picker.classList.remove('on');
+    hint.className = 'cert-hint prompt';
+    hint.textContent = `This shipment is eligible for ${available.toUpperCase()}. Without a certification the buyer pays the standard duty rate on the full declared value.`;
+  } else {
+    picker.classList.remove('on');
+    hint.className = 'cert-hint';
+    hint.textContent = cc
+      ? 'No US free-trade agreement covers this destination, so there is nothing to claim.'
+      : '';
+  }
+}
+
 function setAgreement(key) {
   const sel = document.getElementById('certAgreement');
   if (sel.value !== key) sel.value = key;
@@ -1501,7 +1618,7 @@ function renderCertification() {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('change', () => {
-    if (id === 'certAgreement') setAgreement(el.value); else renderCertification();
+    if (id === 'certAgreement') { setAgreement(el.value); updateCertHint(); } else renderCertification();
   });
   el.addEventListener('input', renderCertification);
 });
@@ -1850,8 +1967,7 @@ function recordAndAdvance() {
 
   shipmentSeq += 1;
   document.getElementById('plannerTitle').textContent = `Shipment ${shipmentSeq}`;
-  document.getElementById('invoiceNumber').value = `${baseInvoiceNumber}-${shipmentSeq}`;
-  document.getElementById('invoiceNumberDisplay').textContent = document.getElementById('invoiceNumber').value;
+  setInvoiceNumber(takeInvoiceNumber());
   document.getElementById('shipmentLabel').value = `Shipment ${shipmentSeq}`;
   document.getElementById('invoiceDate').value = todayISO();
 
@@ -1864,8 +1980,7 @@ function resetShipmentHistory() {
   shippedSoFar = {};
   shipmentSeq = 1;
   document.getElementById('plannerTitle').textContent = 'Shipment 1';
-  document.getElementById('invoiceNumber').value = `${baseInvoiceNumber}-1`;
-  document.getElementById('invoiceNumberDisplay').textContent = document.getElementById('invoiceNumber').value;
+  setInvoiceNumber(takeInvoiceNumber());
   document.getElementById('shipmentLabel').value = '';
   renderItems();
   recalcTotals();
