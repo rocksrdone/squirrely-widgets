@@ -2147,44 +2147,56 @@ function downloadShipStationCSV() {
     get('toTaxId') ? 'Consignee customs ID ' + get('toTaxId') : '',
     'Declared ' + money(document.getElementById('grandTotal').textContent) + ' ' + get('currency'),
     'CUSTOMS: ' + customsCrib + (origin ? ' | Origin ' + origin : ''),
+    'Net ' + (get('netWeight') || '?') + ' / Gross ' + (get('grossWeight') || '?'),
   ].filter(Boolean).join(' — ');
 
+  // ShipStation's own header names, taken from its OrderImportSample.csv, and in
+  // its column order. Its importer still asks you to map each field, but naming
+  // them identically means every row matches by name instead of by guesswork —
+  // the previous headers were invented and had to be paired up one at a time.
+  //
+  // "HS Code" and "Country of Origin" are absent because ShipStation's CSV
+  // importer has no fields for them; they ride in Internal Notes instead.
   const header = [
-    'Order Number', 'Order Date', 'Order Status', 'Order Total', 'Currency',
-    'Recipient Name', 'Recipient Company', 'Address Line 1', 'Address Line 2',
-    'City', 'State/Province', 'Postal Code', 'Country Code', 'Country', 'Phone',
-    'Item SKU', 'Item Name', 'Item Quantity', 'Item Unit Price',
-    'HS Code', 'Country of Origin', 'Order Weight (oz)', 'Internal Notes',
+    'Order #', 'Order Date', 'Order Total', 'Amount Paid', 'Shipping Paid',
+    'Weight(oz)', 'Order Source', 'Internal Notes',
+    'Recipient Full Name', 'Recipient Company', 'Recipient Phone',
+    'Address Line 1', 'Address Line 2', 'City', 'State', 'Postal Code', 'Country Code',
+    'Item SKU', 'Item Name / Title', 'Item Quantity', 'Item Unit Price',
   ];
 
   const orderNumber = get('invoiceNumber');
+  const total = money(document.getElementById('grandTotal').textContent);
+  const weightOz = grossWeightOz();
+
+  // Order-level values repeat on every row — ShipStation groups rows by Order #
+  // and takes the order fields from the first one it sees. Repeating rather than
+  // blanking them avoids depending on which row that turns out to be.
   const shared = [
     orderNumber,
     get('invoiceDate'),
-    'awaiting_shipment',
-    money(document.getElementById('grandTotal').textContent),
-    get('currency'),
+    total,
+    total,          // Amount Paid: billed separately via the payment link, but the
+                    // order is not partially paid — leaving it blank shows as unpaid.
+    '0.00',         // Shipping Paid: carriage is inside the unit prices.
+    weightOz,
+    'Squirrely Stash',
+    notes,
     shipTo.name || get('toName'),
     shipTo.company || '',
+    get('toPhone'),
     get('toAddr1'),
     get('toAddr2'),
     shipTo.city || '',
     shipTo.province || '',
     shipTo.zip || '',
-    (shipTo.country_code || '').toUpperCase(),
-    get('toCountry'),
-    get('toPhone'),
+    (shipTo.country_code || isoFromChoice(get('toCountry'))).toUpperCase(),
   ];
 
-  const weightOz = grossWeightOz();
   const lines = [header.map(csvCell).join(',')];
-  rows.forEach((r, idx) => {
+  rows.forEach(r => {
     lines.push(shared.concat([
       r.sku, r.name, r.qty, money(r.unit),
-      r.hs, origin,
-      // Weight and notes belong to the order, so only the first row carries them.
-      idx === 0 ? weightOz : '',
-      idx === 0 ? notes : '',
     ]).map(csvCell).join(','));
   });
 
