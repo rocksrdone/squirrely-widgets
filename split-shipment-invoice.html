@@ -837,7 +837,14 @@ async function lookupOrder() {
     document.getElementById('toCityStateZip').value = [st.city, st.province, st.zip].filter(Boolean).join(', ');
     document.getElementById('toCountry').value = st.country || '';
     document.getElementById('toPhone').value = st.phone || '';
-    applyDestinationHints(st.country_code || '', st.country || '');
+    // Shopify's country first, then the Grist Ship Country column. A vendor whose
+    // Shopify address has no country set was getting no destination guidance at
+    // all — which is exactly the international customer who needs it most.
+    const gristCountry = (data.customer && data.customer.ship_country) || '';
+    const cc = st.country_code || isoFromChoice(gristCountry);
+    const cName = st.country || choiceLabel(gristCountry);
+    applyDestinationHints(cc, cName);
+    if (!st.country && cName) document.getElementById('toCountry').value = cName;
     const appliedFields = applyCustomerRecord(data.customer);
     const profile = applyCustomerProfile();
     if (profile) appliedFields.push('saved export settings for this customer');
@@ -907,6 +914,38 @@ const DESTINATION_TAX_ID = {
 // block below only when you actually intend to claim preferential treatment.
 // To go back to auto-selecting, use: { KR: 'korus', CA: 'cusma', MX: 'cusma' }
 const DESTINATION_AGREEMENT = {};
+
+// Ship Country is stored as a Grist Choice in "KR — South Korea" form: the ISO
+// code is what the destination rules key on, the name is what a human reads, and
+// keeping both in one cell avoids a second column that could disagree with the
+// first. Plain "South Korea" or plain "KR" still parse, so old rows keep working.
+const COUNTRY_NAME_TO_ISO = {
+  'united states': 'US', 'usa': 'US', 'south korea': 'KR', 'korea': 'KR',
+  'poland': 'PL', 'australia': 'AU', 'canada': 'CA', 'japan': 'JP',
+  'united kingdom': 'GB', 'great britain': 'GB', 'new zealand': 'NZ',
+  'thailand': 'TH', 'switzerland': 'CH', 'norway': 'NO', 'mexico': 'MX',
+  'brazil': 'BR', 'china': 'CN', 'taiwan': 'TW', 'france': 'FR',
+  'germany': 'DE', 'italy': 'IT', 'spain': 'ES', 'netherlands': 'NL',
+  'belgium': 'BE', 'austria': 'AT', 'sweden': 'SE', 'denmark': 'DK',
+  'finland': 'FI', 'ireland': 'IE', 'portugal': 'PT', 'czechia': 'CZ',
+  'czech republic': 'CZ', 'singapore': 'SG', 'hong kong': 'HK',
+  'israel': 'IL', 'india': 'IN', 'turkey': 'TR', 'türkiye': 'TR',
+};
+
+function isoFromChoice(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  const m = /^([A-Za-z]{2})\s*[—–-]\s*/.exec(v);      // "KR — South Korea"
+  if (m) return m[1].toUpperCase();
+  if (/^[A-Za-z]{2}$/.test(v)) return v.toUpperCase(); // bare "KR"
+  return COUNTRY_NAME_TO_ISO[v.toLowerCase()] || '';   // "South Korea"
+}
+
+function choiceLabel(raw) {
+  const v = String(raw || '').trim();
+  const m = /^[A-Za-z]{2}\s*[—–-]\s*(.+)$/.exec(v);
+  return m ? m[1].trim() : v;
+}
 
 function applyDestinationHints(code, countryName) {
   const cc = String(code || '').toUpperCase();
