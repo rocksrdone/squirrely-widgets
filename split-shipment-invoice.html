@@ -327,6 +327,7 @@ tr.fully-shipped td { opacity: .5; }
 .profile-row button.ghost { background: white; color: #8B7D72; border-color: var(--rule); }
 .profile-status { font-size: 10px; color: var(--teal); flex-basis: 100%; }
 .profile-status.err { color: var(--accent); }
+.hidden-empty { display: none !important; }
 .goods-descr { margin: 12px 0 6px; }
 .goods-descr label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
@@ -456,6 +457,8 @@ tr.fully-shipped td { opacity: .5; }
         <input id="toPhone">
         <label id="toTaxIdLabel">Importer Tax ID / Customs Code</label>
         <input id="toTaxId" placeholder="Required by many destinations">
+        <label id="toTaxId2Label" class="hidden-empty">Second Importer ID</label>
+        <input id="toTaxId2" class="hidden-empty" placeholder="e.g. VAT number alongside an EORI">
       </div>
     </div>
 
@@ -838,6 +841,7 @@ async function lookupOrder() {
     const appliedFields = applyCustomerRecord(data.customer);
     const profile = applyCustomerProfile();
     if (profile) appliedFields.push('saved export settings for this customer');
+    refreshProfileFromGrist();   // not awaited — the cached copy is already applied
 
     document.getElementById('invoiceWrap').classList.add('ready');
     document.getElementById('planner').classList.add('ready');
@@ -872,9 +876,32 @@ const DESTINATION_TAX_ID = {
   TR: { label: 'Importer Tax ID — Vergi No.', note: 'Türkiye requires the consignee tax number on the invoice.' },
   ID: { label: 'Importer Tax ID — NPWP', note: 'Indonesia requires the consignee NPWP on the invoice.' },
   IN: { label: 'Importer Tax ID — GSTIN / IEC', note: 'India requires the consignee GSTIN or Importer Exporter Code.' },
+  PL: { label: 'Importer EORI (and VAT number if registered)',
+        note: 'Poland is in the EU. Commercial importers need an EORI number; a VAT number as well if the buyer is VAT-registered. Since 1 July 2026 the EU\u2019s \u20ac150 duty-free threshold is gone, so duty applies at any value. A B2B sale to a VAT-registered buyer takes normal tariff duty rather than the \u20ac3 flat rate that hits B2C parcels \u2014 so put the buyer\u2019s VAT number on the invoice. Import VAT is due on everything and is the importer\u2019s to pay under DAP.' },
+  AU: { label: 'Importer ABN, if the buyer is a registered business',
+        note: 'Australia clears goods at or below AUD 1,000 customs value without duty, GST or origin documentation, so most single boxes pass straight through. Above AUD 1,000 it becomes a formal entry with 10% GST plus duty, and the ABN matters. Watch the split: two boxes under the threshold clear more cheaply than one over it.' },
+  GB: { label: 'Importer EORI (GB prefix) and VAT number',
+        note: 'Great Britain left the EU customs union, so an EU EORI will not work \u2014 the buyer needs a GB-prefixed one. VAT is due on all imports.' },
+  NZ: { label: 'Importer NZBN, if the buyer is a registered business',
+        note: 'New Zealand collects GST at the border above NZD 1,000; below that, GST is generally the seller\u2019s to collect if registered.' },
+  JP: { label: 'Importer name and address; corporate number if a business',
+        note: 'Japan clears most low-value commercial goods on the invoice alone. Consumption tax applies above JPY 10,000 customs value.' },
+  CH: { label: 'Importer VAT/UID number, if known',
+        note: 'Switzerland is outside the EU customs union. VAT applies from a low threshold and the buyer clears the goods.' },
+  NO: { label: 'Importer organisation number, if known',
+        note: 'Norway is outside the EU customs union. VAT applies from the first krone on commercial imports.' },
+  TH: { label: 'Importer Tax ID (13 digits)',
+        note: 'Thailand requires the consignee tax ID for commercial imports. Duty and VAT apply above THB 1,500.' },
   CA: { label: 'Importer Business Number (BN15), if known',
         note: 'Canada waives formal proof of origin for commercial shipments valued at CAD 3,300 or less, so a CUSMA claim under that threshold needs only the certifying statement below — no separate certificate. Your buyer supplies their own business number and CARM registration.' },
 };
+
+// Every EU member gets Poland's guidance — same customs union, same rules, and
+// listing them individually would just be 26 copies of the same paragraph.
+['AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV',
+ 'LT','LU','MT','NL','PT','RO','SK','SI','ES','SE'].forEach(cc => {
+  if (!DESTINATION_TAX_ID[cc]) DESTINATION_TAX_ID[cc] = DESTINATION_TAX_ID.PL;
+});
 
 // Certification of origin is opt-in. Nothing auto-selects; pick an agreement in the
 // block below only when you actually intend to claim preferential treatment.
@@ -928,7 +955,7 @@ function renderDiscountNotice(data, appliedFields) {
 }
 
 function clearOrderScopedFields() {
-  ['toTaxId', 'toPhone', 'grossWeight', 'netWeight', 'bulkHs'].forEach(id => {
+  ['toTaxId', 'toTaxId2', 'toPhone', 'grossWeight', 'netWeight', 'bulkHs'].forEach(id => {
     document.getElementById(id).value = '';
   });
   // Net weight goes back to being computed — a hand-typed value from the last
@@ -1022,6 +1049,7 @@ loadShipper();
 // workflow's pick() list — nothing else changes.
 const CUSTOMER_FIELD_MAP = [
   { id: 'toTaxId',         keys: ['customs_code', 'tax_id'], label: 'importer customs / tax ID' },
+  { id: 'toTaxId2',        keys: ['tax_id_2'],               label: 'second importer ID' },
   { id: 'toPhone',         keys: ['phone'],                  label: 'consignee phone', onlyIfEmpty: true },
   { id: 'incoterms',       keys: ['incoterms'],              label: 'terms of sale' },
   { id: 'countryOfOrigin', keys: ['country_of_origin'],      label: 'country of origin' },
@@ -1035,6 +1063,19 @@ function applyCustomerRecord(cust) {
   if (!customerRecord.matched) return [];
 
   const applied = [];
+  // Runs after the field loop below.
+  const finish = () => {
+    const type = (customerRecord.customs_id_type || '').trim();
+    const lbl = document.getElementById('toTaxIdLabel');
+    // A stated type wins over the destination's generic guess: the customer
+    // record knows which number was actually collected.
+    if (type && lbl) lbl.textContent = `Importer ${type}`;
+    // An empty second field would print as a blank labelled row on the invoice.
+    const has2 = !!document.getElementById('toTaxId2').value.trim();
+    document.getElementById('toTaxId2').classList.toggle('hidden-empty', !has2);
+    document.getElementById('toTaxId2Label').classList.toggle('hidden-empty', !has2);
+  };
+
   CUSTOMER_FIELD_MAP.forEach(({ id, keys, label, onlyIfEmpty }) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1045,6 +1086,7 @@ function applyCustomerRecord(cust) {
     if (id === 'bulkHs') applyBulkHs(value);
     applied.push(label);
   });
+  finish();
   return applied;
 }
 
@@ -1078,35 +1120,96 @@ const PROFILE_FIELDS = [
   'maxPerShipment', 'certAgreement', 'certRole', 'certCriterion',
 ];
 
+const PROFILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/customer-export-profile';
+
+// localStorage is now a CACHE, not the store. Grist is authoritative so profiles
+// follow you between machines; the local copy is what lets the bar render
+// instantly and keeps things usable if n8n is unreachable.
 function readProfiles() {
   try { return JSON.parse(window.localStorage.getItem(CUSTOMER_PROFILE_KEY) || '{}'); }
   catch (e) { return {}; }
 }
 function writeProfiles(all) {
   try { window.localStorage.setItem(CUSTOMER_PROFILE_KEY, JSON.stringify(all)); return true; }
-  catch (e) { console.error('Could not save profile:', e); return false; }
+  catch (e) { console.error('Could not cache profile:', e); return false; }
+}
+function cacheProfile(code, prof) {
+  const all = readProfiles();
+  if (prof) all[code] = prof; else delete all[code];
+  writeProfiles(all);
+}
+
+async function fetchProfileRemote(code) {
+  const res = await fetch(`${PROFILE_WEBHOOK_URL}?code=${encodeURIComponent(code)}`);
+  if (!res.ok) throw new Error('Profile lookup returned ' + res.status);
+  const out = await res.json();
+  if (!out || !out.success) throw new Error('Profile lookup failed');
+  if (out.parse_error) throw new Error(`The Export_Settings cell for ${code} is not valid JSON — fix or clear it in Grist.`);
+  if (!out.found) throw new Error(out.message || `No customer row for ${code}`);
+  return out.profile;
+}
+
+async function saveProfileRemote(code, prof) {
+  const res = await fetch(PROFILE_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, profile: JSON.stringify(prof) }),
+  });
+  if (!res.ok) throw new Error('Save returned ' + res.status);
+  const out = await res.json();
+  if (!out || !out.success) throw new Error('Save failed');
+  return true;
 }
 
 function activeCustomerCode() {
   return (customerRecord && customerRecord.code) ? String(customerRecord.code).toUpperCase() : '';
 }
 
-function saveCustomerProfile() {
+async function saveCustomerProfile() {
   const code = activeCustomerCode();
   if (!code) { profileStatus('Load an order first — there is no customer to save against.', true); return; }
-  const all = readProfiles();
+
   const prof = {};
   PROFILE_FIELDS.forEach(id => {
     const el = document.getElementById(id);
     if (el && String(el.value).trim()) prof[id] = el.value;
   });
   prof._savedAt = new Date().toISOString().slice(0, 10);
-  all[code] = prof;
-  const ok = writeProfiles(all);
-  profileStatus(ok
-    ? `Saved these settings for ${code}. They will load automatically next time.`
-    : 'Could not save — browser storage may be full or blocked.', !ok);
+
+  profileStatus('Saving to Grist...');
+  try {
+    await saveProfileRemote(code, prof);
+    cacheProfile(code, prof);
+    profileStatus(`Saved for ${code} in Grist — available on any machine.`);
+  } catch (e) {
+    // Cache it anyway so the work is not lost, but be explicit that it did not
+    // reach Grist. A silent local-only save is how two machines drift apart.
+    cacheProfile(code, prof);
+    console.error('Profile save failed:', e);
+    profileStatus(`Saved on THIS computer only — Grist save failed: ${e.message}`, true);
+  }
   renderProfileBar();
+}
+
+// Applies the cached copy immediately, then refreshes from Grist and reapplies
+// if the stored copy differs — so a profile saved on another machine wins
+// without making the whole order load wait on a network round trip.
+async function refreshProfileFromGrist() {
+  const code = activeCustomerCode();
+  if (!code) return;
+  try {
+    const remote = await fetchProfileRemote(code);
+    const local = readProfiles()[code] || null;
+    cacheProfile(code, remote);
+    if (JSON.stringify(remote) !== JSON.stringify(local)) {
+      applyCustomerProfile();
+      profileStatus(remote ? `Loaded settings saved on another machine.` : 'No settings saved for this customer yet.');
+    }
+    renderProfileBar();
+  } catch (e) {
+    console.error('Profile refresh failed:', e);
+    profileStatus(`Using local settings — could not reach Grist: ${e.message}`, true);
+  }
 }
 
 function applyCustomerProfile() {
@@ -1130,13 +1233,18 @@ function applyCustomerProfile() {
   return prof;
 }
 
-function clearCustomerProfile() {
+async function clearCustomerProfile() {
   const code = activeCustomerCode();
   if (!code) return;
-  const all = readProfiles();
-  delete all[code];
-  writeProfiles(all);
-  profileStatus(`Cleared saved settings for ${code}.`);
+  profileStatus('Clearing...');
+  try {
+    await saveProfileRemote(code, null);   // writes an empty blob to Grist
+    cacheProfile(code, null);
+    profileStatus(`Cleared settings for ${code} everywhere.`);
+  } catch (e) {
+    cacheProfile(code, null);
+    profileStatus(`Cleared locally, but Grist still has them: ${e.message}`, true);
+  }
   renderProfileBar();
 }
 
