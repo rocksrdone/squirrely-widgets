@@ -233,6 +233,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
       <span><input type="checkbox" id="wSkip" checked> skip batches needing no dye</span>
       <span><input type="checkbox" id="wPull" checked> dye pull sheet</span>
     </div>
+    <div><label>spare sheets</label><input type="number" id="spareSheets" value="2" min="0" max="12" onchange="render()"></div>
     <div><button onclick="window.print()">Print</button></div>
     <div><button class="sec" onclick="load()">Reload plan</button></div>
   </div>
@@ -313,13 +314,14 @@ function impose(total, perPage) {
 /* ── load from Grist ──────────────────────────────────────────────────── */
 async function load() {
   try {
-    const [dp, recT, wolT, woT, lotT, allocT, phT, compT, dyeT, stkT] = await Promise.all([
+    const [dp, recT, wolT, woT, lotT, allocT, custT, phT, compT, dyeT, stkT] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Lot_Allocations'),
+      grist.docApi.fetchTable('Customers').catch(() => null),
       grist.docApi.fetchTable('Product_Photos').catch(() => null),
       grist.docApi.fetchTable('Recipe_Dye_Components').catch(() => null),
       grist.docApi.fetchTable('Dyes').catch(() => null),
@@ -331,17 +333,26 @@ async function load() {
     const REC = resolveCols(recT, 'Recipes',           { name: ['Recipe_Name'], sku: opt(['SKU_Base']), fiber: opt(['Fiber_Type']) }, missing);
     const PULL_READY = !!(compT && dyeT && stkT);
     const WOL = resolveCols(wolT, 'Work_Order_Lines',  { workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'], recipe: opt(['Recipe']), sku: opt(['SKU']), status: opt(['Queue_Status']) }, missing);
-    const WO  = resolveCols(woT,  'Work_Orders',       { status: ['Status'], customerName: opt(['Customer_Name']), orderNumber: opt(['Order_Number']), orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']) }, missing);
+    const WO  = resolveCols(woT,  'Work_Orders',       { status: ['Status'], customerName: opt(['Customer_Name']), customer: opt(['Customer']), orderNumber: opt(['Order_Number']), orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']) }, missing);
     const LOT = resolveCols(lotT, 'Production_Lots',   { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']) }, missing);
     const ALC = resolveCols(allocT,'Lot_Allocations',  { lot: ['Lot'], line: ['Work_Order_Line'], qty: ['Qty_Spools'] }, missing);
     if (missing.length) throw new Error('Columns not found: ' + missing.join(', '));
 
     // orders
+    // Short customer codes, for the O-CODE-ORDER bin on each sheet. Optional:
+    // without a Customers table the bin simply prints blank rather than failing.
+    const custCode = {};
+    if (custT) {
+      const cCode = findColumn(custT, ['Code', 'Customer_Code', 'Vendor_Code']);
+      if (cCode) (custT.id || []).forEach((id, i) => { custCode[id] = columnAsArray(custT, cCode)[i] || ''; });
+    }
+
     const woInfo = {};
     (woT.id || []).forEach((id, i) => {
       woInfo[id] = {
         active: String(columnAsArray(woT, WO.status)[i] || '') === 'Active',
         customer: WO.customerName ? columnAsArray(woT, WO.customerName)[i] : '',
+        code: WO.customer ? (custCode[getRefId(columnAsArray(woT, WO.customer)[i])] || '') : '',
         number: WO.orderNumber ? columnAsArray(woT, WO.orderNumber)[i] : '',
         due: effectiveDue(WO.orderDate ? columnAsArray(woT, WO.orderDate)[i] : null,
                           WO.dueDate   ? columnAsArray(woT, WO.dueDate)[i]   : null),
@@ -386,7 +397,8 @@ async function load() {
       const rem = (Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0) - (byLine[id] || 0);
       if (rem <= 0) return;
       (demand[rid] = demand[rid] || []).push({
-        customer: info.customer || '(no name)', number: info.number || '', qty: rem, due: info.due,
+        customer: info.customer || '(no name)', code: info.code || '',
+        number: info.number || '', qty: rem, due: info.due,
       });
     });
 
@@ -510,57 +522,137 @@ function blankTag(n) {
   </div>`;
 }
 
-function sheet(b, n) {
-  if (!b) return '<div class="sh"></div>';
-  let rows = '';
-  for (let k = 0; k < 4; k++) {
-    const o = b.orders[k];
-    rows += `<tr><td>${o ? esc(o.customer) : ''}</td><td>${o ? esc(o.number) : ''}</td>` +
-      `<td>${o ? o.qty : ''}</td><td class="lc"><i></i>SS<i></i>custom</td>` +
-      `<td class="pc"><i></i><u></u></td><td style="text-align:center"><span class="cb"></span></td>` +
-      `<td style="text-align:center"><span class="cb"></span></td></tr>`;
-  }
-  const spare = Math.max(0, b.spools - b.orders.reduce((s, o) => s + o.qty, 0));
+/* One sheet PER ORDER, not one per bag.
+   A dye lot routinely covers several orders, and the old sheet listed all of
+   them in a table on a single page. That is fine at the bench and useless
+   afterwards: the labeller is holding one piece of paper that belongs to three
+   customer bins at once, so nothing can be filed and mistakes are invisible
+   until the box is packed.
+
+   The lot is still the real thing — same bag code, same tag — but each order
+   gets its own sheet that travels with its own portion. Back stock gets its own
+   sheet too, because it goes to a different rack entirely, and spare sheets are
+   printed for redos so a bad batch does not stall waiting for paperwork.
+
+   The split is deliberately NOT made at the drying rack. Lots vary, a 20-spool
+   order may need two lots that only might match, and that call is made at the
+   winding bench with the lots side by side. The sheets are printed per order;
+   who physically gets which spools is decided when someone can see them. */
+
+function sheetShell(code, sub, ident, body) {
   return `<div class="sh">
     <div class="head">
-      <div><div class="ttl">One bag</div>
-        <div class="sub">Control fills it in &middot; labelling finishes it &middot; anything unresolved goes back to control.</div></div>
-      <div><div class="bagcap">bag</div><div class="bagcode">${code(n)}</div></div>
+      <div><div class="ttl">One order</div><div class="sub">${sub}</div></div>
+      <div><div class="bagcap">bag</div><div class="bagcode">${code}</div></div>
     </div>
-    <div class="id">
-      <div class="f"><div class="ln">${esc(b.colorway)}</div><div class="cp">colorway</div></div>
-      <div class="f"><div class="ln"></div><div class="cp">lot number</div></div>
-      <div class="f s"><div class="ln">${esc(b.fiber)}</div><div class="cp">fiber</div></div>
-      <div class="f s"><div class="ln"></div><div class="cp">spools</div></div>
-    </div>
-    <div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
-      <span class="sg">initials</span><span class="sgl"></span></div>
-    <div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
-      <span><i></i>taken</span><span><i></i>shares recorded</span>
-      <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
-    <table>
-      <tr><th style="width:1.85in">customer</th><th style="width:.85in">order #</th>
-          <th style="width:.55in">spools</th><th style="width:1.25in;text-align:center">label</th>
-          <th style="width:1.55in;text-align:center">part of a larger order &mdash; rest in bag</th>
-          <th style="width:.7in;text-align:center">photo shared</th>
-          <th style="width:.6in;text-align:center">packed</th></tr>
-      ${rows}
-    </table>
-    <div class="stock"><b>Back stock</b><div class="qb">${spare || ''}</div><em>recount first</em>
-      <div class="sep"></div><b><i></i>Limited Edition</b><em>why</em><u></u></div>
-    <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
-      <span class="sg">initials</span><span class="sgl"></span></div>
-    <div class="nl"></div>
-    <div class="ncap">tick each order above as you finish it &mdash; anything that did not go to plan, here</div>
-    <div class="gate">
-      <div class="g"><span class="gt">All yes &rarr; finish it</span><span><i></i>counts match</span>
-        <span><i></i>right label on each</span><span><i></i>nothing waiting on a partner bag</span></div>
-      <div class="g"><span class="gn">then</span><span><i></i>weighed</span><span><i></i>shipping label</span>
-        <span><i></i>sealed</span><span><i></i>complete</span>
-        <span class="gn" style="margin-left:auto">LE goes back to control to be named</span></div>
-      <div class="back"><i></i><b>Any no &mdash; back to control</b><u></u></div>
-    </div>
+    <div class="id">${ident}</div>
+    ${body}
   </div>`;
+}
+
+function idFields(b, extra) {
+  return `<div class="f"><div class="ln">${esc(b.colorway)}</div><div class="cp">colorway</div></div>
+    <div class="f"><div class="ln"></div><div class="cp">lot number</div></div>
+    <div class="f s"><div class="ln">${esc(b.fiber)}</div><div class="cp">fiber</div></div>
+    ${extra}`;
+}
+
+// Order bin code. Same prefix discipline as the dye and staging racks: O- means
+// a customer order bin, so a code never has to be guessed at.
+function orderBin(o) {
+  const code = (o.code || '').toUpperCase();
+  return code && o.number ? `O-${code}-${o.number}` : '';
+}
+
+function sheetOrder(b, n, o, idx, total) {
+  const bin = orderBin(o);
+  return sheetShell(code(n),
+    `Order ${idx + 1} of ${total} from this lot &middot; this sheet and its spools stay together`,
+    idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
+    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
+       <span><i></i>taken</span><span><i></i>shared to this order</span>
+       <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
+     <table>
+       <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
+           <th style="width:.7in">spools</th><th style="width:1.4in;text-align:center">label</th>
+           <th style="width:1.2in;text-align:center">order bin</th></tr>
+       <tr><td><b>${esc(o.customer)}</b></td><td>${esc(o.number)}</td>
+           <td class="q">${o.qty}</td>
+           <td class="lc"><i></i>SS<i></i>custom</td>
+           <td style="text-align:center"><b>${esc(bin || '\u2014')}</b></td></tr>
+     </table>
+     <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
+       <div class="sep"></div><b><i></i>Sorted to ${esc(bin || 'order bin')}</b><em>then labelling</em><u></u></div>
+     <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="nl"></div>
+     <div class="ncap">anything that did not go to plan, here</div>
+     <div class="gate">
+       <div class="g"><span class="gt">All yes &rarr; finish it</span><span><i></i>count matches</span>
+         <span><i></i>right label on each</span><span><i></i>in the right order bin</span></div>
+       <div class="back"><i></i><b>Any no &mdash; back to control</b><u></u></div>
+     </div>`);
+}
+
+function sheetStock(b, n, spare) {
+  return sheetShell(code(n),
+    'Back stock from this lot &middot; goes to the back stock rack, not an order bin',
+    idFields(b, `<div class="f s"><div class="ln">${spare}</div><div class="cp">spools to stock</div></div>`),
+    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="stock"><b>Back stock</b><div class="qb">${spare || ''}</div><em>recount first</em>
+       <div class="sep"></div><b>Bin</b><em>write the bin you used</em><u></u></div>
+     <div class="stock"><b><i></i>Limited Edition</b><em>why</em><u></u></div>
+     <div class="band"><span class="who">2 &nbsp;Label &amp; shelve</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="nl"></div>
+     <div class="ncap">notes</div>`);
+}
+
+// Blank sheet for a redo. A bad batch needs paper immediately or the rework
+// waits on a reprint, so a few go out with every day's stack.
+function sheetSpare(n) {
+  return sheetShell(n == null ? '' : code(n),
+    'Spare &middot; for a redo or an unplanned lot',
+    idFields({ colorway: '', fiber: '' }, `<div class="f s"><div class="ln"></div><div class="cp">spools</div></div>`)
+      .replace('<div class="ln"></div><div class="cp">colorway</div>', '<div class="ln"></div><div class="cp">colorway</div>'),
+    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <table>
+       <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
+           <th style="width:.7in">spools</th><th style="width:1.4in;text-align:center">label</th>
+           <th style="width:1.2in;text-align:center">order bin</th></tr>
+       <tr><td></td><td></td><td></td><td class="lc"><i></i>SS<i></i>custom</td><td></td></tr>
+     </table>
+     <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
+       <div class="sep"></div><b>Sorted to</b><em>bin</em><u></u></div>
+     <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
+       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="nl"></div>
+     <div class="ncap">notes</div>`);
+}
+
+// Flattens the day into the sheets that will actually be printed: one per order
+// on every batch, one for back stock where there is a remainder, then the spares.
+function sheetList(printable, nSpare) {
+  const out = [];
+  printable.forEach(b => {
+    const orders = b.orders || [];
+    orders.forEach((o, i) => out.push({ kind: 'order', b, o, idx: i, total: orders.length }));
+    const spare = Math.max(0, b.spools - orders.reduce((s, o) => s + o.qty, 0));
+    if (spare > 0) out.push({ kind: 'stock', b, spare });
+  });
+  for (let i = 0; i < nSpare; i++) out.push({ kind: 'spare' });
+  return out;
+}
+
+function sheetFor(item) {
+  if (!item) return '<div class="sh"></div>';
+  if (item.kind === 'order') return sheetOrder(item.b, item.b.code, item.o, item.idx, item.total);
+  if (item.kind === 'stock') return sheetStock(item.b, item.b.code, item.spare);
+  return sheetSpare(null);
 }
 
 
@@ -1058,10 +1150,11 @@ function render() {
       html += '<div class="page">' + p.map(i => i === null ? tag(null, null)
         : (tagList[i].blank ? tag('blank', tagList[i].code) : tag(tagList[i], tagList[i].code))).join('') + '</div>';
     });
-  if (n && document.getElementById('wSheets').checked)
-    impose(n, 2).forEach(p => {
-      html += '<div class="page">' + p.map(i => sheet(i === null ? null : printable[i],
-        i === null ? null : printable[i].code)).join('') + '</div>';
+  const nSpareSheets = Math.max(0, Number((document.getElementById('spareSheets') || {}).value) || 0);
+  const SHEETS = sheetList(printable, nSpareSheets);
+  if (SHEETS.length && document.getElementById('wSheets').checked)
+    impose(SHEETS.length, 2).forEach(p => {
+      html += '<div class="page">' + p.map(i => sheetFor(i === null ? null : SHEETS[i])).join('') + '</div>';
     });
   // Pull pages go last so the tag and sheet pages stay one contiguous stack to
   // guillotine. Same printable array, so staging bin N is always bag code N.
