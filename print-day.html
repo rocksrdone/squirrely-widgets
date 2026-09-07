@@ -106,6 +106,15 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
          border-bottom: 2px solid #000; padding: 0 4px 3px; text-align: left; font-weight: normal; }
 .sh td { border-bottom: 1.5px solid #000; height: .3in; padding: 0 4px; font-size: 12px;
          overflow: hidden; white-space: nowrap; }
+.sh .lbl { display: flex; align-items: center; gap: 10px; border: 2px solid #000;
+  border-radius: 3px; padding: 5px 8px; margin-top: 5px; }
+.sh .lbl-cap { font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; }
+.sh .lbl-stock { font-family: 'DM Mono', monospace; font-size: 17px; font-weight: 700; white-space: nowrap; }
+.sh .lbl-desc { font-size: 9.5px; line-height: 1.25; flex: 1; }
+.sh .lbl-desc em { display: block; color: #555; font-size: 8.5px; }
+.sh .lbl-done { display: flex; align-items: center; gap: 5px; font-size: 10px;
+  font-weight: 700; white-space: nowrap; }
+.sh .lbl-done i { width: 14px; height: 14px; border: 1.5px solid #000; display: inline-block; }
 .sh .lc { text-align: center; font-size: 10px; white-space: nowrap; }
 .sh .pc { text-align: center; white-space: nowrap; }
 .sh .pc u { display: inline-block; border-bottom: 1.5px solid #000; width: 1.1in; height: .2in;
@@ -314,7 +323,7 @@ function impose(total, perPage) {
 /* ── load from Grist ──────────────────────────────────────────────────── */
 async function load() {
   try {
-    const [dp, recT, wolT, woT, lotT, allocT, custT, phT, compT, dyeT, stkT] = await Promise.all([
+    const [dp, recT, wolT, woT, lotT, allocT, custT, clsT, tplT, phT, compT, dyeT, stkT] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Work_Order_Lines'),
@@ -322,6 +331,8 @@ async function load() {
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Lot_Allocations'),
       grist.docApi.fetchTable('Customers').catch(() => null),
+      grist.docApi.fetchTable('Customer_Label_Settings').catch(() => null),
+      grist.docApi.fetchTable('Label_Templates').catch(() => null),
       grist.docApi.fetchTable('Product_Photos').catch(() => null),
       grist.docApi.fetchTable('Recipe_Dye_Components').catch(() => null),
       grist.docApi.fetchTable('Dyes').catch(() => null),
@@ -347,12 +358,15 @@ async function load() {
       if (cCode) (custT.id || []).forEach((id, i) => { custCode[id] = columnAsArray(custT, cCode)[i] || ''; });
     }
 
+    LABELS = buildLabelIndex(clsT, tplT);
+
     const woInfo = {};
     (woT.id || []).forEach((id, i) => {
       woInfo[id] = {
         active: String(columnAsArray(woT, WO.status)[i] || '') === 'Active',
         customer: WO.customerName ? columnAsArray(woT, WO.customerName)[i] : '',
         code: WO.customer ? (custCode[getRefId(columnAsArray(woT, WO.customer)[i])] || '') : '',
+        custId: WO.customer ? getRefId(columnAsArray(woT, WO.customer)[i]) : null,
         number: WO.orderNumber ? columnAsArray(woT, WO.orderNumber)[i] : '',
         due: effectiveDue(WO.orderDate ? columnAsArray(woT, WO.orderDate)[i] : null,
                           WO.dueDate   ? columnAsArray(woT, WO.dueDate)[i]   : null),
@@ -397,7 +411,7 @@ async function load() {
       const rem = (Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0) - (byLine[id] || 0);
       if (rem <= 0) return;
       (demand[rid] = demand[rid] || []).push({
-        customer: info.customer || '(no name)', code: info.code || '',
+        customer: info.customer || '(no name)', code: info.code || '', custId: info.custId || null,
         number: info.number || '', qty: rem, due: info.due,
       });
     });
@@ -522,6 +536,81 @@ function blankTag(n) {
   </div>`;
 }
 
+/* Which label stock this order needs.
+   Every customer with a preference has one in Customer_Label_Settings; anyone
+   without falls back to the house stock. That makes the label a fact, not a
+   decision — so the sheet prints the answer rather than two checkboxes asking
+   the labeller to pick. Choosing at the bench was the wrong place for it: the
+   database already knows, and a station that works best one task at a time
+   should not be resolving lookups on paper.
+
+   A customer can have several stocks (one per fiber), so the fiber narrows it:
+   Label_Templates.Fiber_Codes lists which fibers each stock serves. */
+const HOUSE_STOCK = { FFN: 'OL3012WI', FFC: 'OL3012WI', EN: 'OL1025WI' };
+let LABELS = { byCustomer: {}, stockFibers: {}, stockDesc: {} };
+
+// "FF Nylon" -> FFN. Recipes store the readable name; everything else uses codes.
+function fiberCode(fiber) {
+  const f = normalize(fiber);
+  if (!f) return '';
+  if (f.includes('COTTON')) return 'FFC';
+  if (f.startsWith('E ') || f === 'ENYLON' || f.includes('E NYLON')) return 'EN';
+  if (f.includes('NYLON')) return 'FFN';
+  return '';
+}
+
+function buildLabelIndex(clsT, tplT) {
+  const stockFibers = {};      // stock code -> [fiber codes it serves]
+  const stockDesc = {};
+  if (tplT) {
+    const sc = findColumn(tplT, ['Stock_Code']);
+    const fc = findColumn(tplT, ['Fiber_Codes']);
+    const de = findColumn(tplT, ['Description']);
+    if (sc) (tplT.id || []).forEach((id, i) => {
+      const code = columnAsArray(tplT, sc)[i];
+      if (!code) return;
+      stockDesc[code] = de ? (columnAsArray(tplT, de)[i] || '') : '';
+      stockFibers[code] = fc
+        ? String(columnAsArray(tplT, fc)[i] || '').split(',').map(x => normalize(x)).filter(Boolean)
+        : [];
+    });
+  }
+
+  const byCustomer = {};       // customer row id -> [{stock, scale}]
+  if (clsT) {
+    const cu = findColumn(clsT, ['Customer']);
+    const sc = findColumn(clsT, ['Stock_Code']);
+    const scl = findColumn(clsT, ['Scale']);
+    if (cu && sc) (clsT.id || []).forEach((id, i) => {
+      const cid = getRefId(columnAsArray(clsT, cu)[i]);
+      const stock = columnAsArray(clsT, sc)[i];
+      if (!cid || !stock) return;
+      (byCustomer[cid] = byCustomer[cid] || []).push({
+        stock, scale: scl ? columnAsArray(clsT, scl)[i] : null,
+      });
+    });
+  }
+  return { byCustomer, stockFibers, stockDesc };
+}
+
+// Returns { stock, desc, scale, house } — house=true when nothing was set for
+// this customer and the SS label applies.
+function labelFor(LBL, custId, fiber) {
+  const fcode = fiberCode(fiber);
+  const prefs = (custId && LBL.byCustomer[custId]) || [];
+
+  // Prefer a stock that actually serves this fiber; fall back to their only one.
+  let hit = prefs.find(p => {
+    const serves = LBL.stockFibers[p.stock] || [];
+    return serves.length ? serves.includes(fcode) : false;
+  });
+  if (!hit && prefs.length === 1) hit = prefs[0];
+
+  if (hit) return { stock: hit.stock, desc: LBL.stockDesc[hit.stock] || '', scale: hit.scale, house: false };
+  const stock = HOUSE_STOCK[fcode] || '';
+  return { stock, desc: LBL.stockDesc[stock] || '', scale: null, house: true };
+}
+
 /* One sheet PER ORDER, not one per bag.
    A dye lot routinely covers several orders, and the old sheet listed all of
    them in a table on a single page. That is fine at the bench and useless
@@ -566,6 +655,7 @@ function orderBin(o) {
 
 function sheetOrder(b, n, o, idx, total) {
   const bin = orderBin(o);
+  const lab = labelFor(LABELS, o.custId, b.fiber);
   return sheetShell(code(n),
     `Order ${idx + 1} of ${total} from this lot &middot; this sheet and its spools stay together`,
     idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
@@ -575,16 +665,21 @@ function sheetOrder(b, n, o, idx, total) {
        <span><i></i>taken</span><span><i></i>shared to this order</span>
        <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
      <table>
-       <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
-           <th style="width:.7in">spools</th><th style="width:1.4in;text-align:center">label</th>
-           <th style="width:1.2in;text-align:center">order bin</th></tr>
+       <tr><th style="width:3.2in">customer</th><th style="width:1.1in">order #</th>
+           <th style="width:.8in">spools</th><th style="width:1.6in;text-align:center">order bin</th></tr>
        <tr><td><b>${esc(o.customer)}</b></td><td>${esc(o.number)}</td>
            <td class="q">${o.qty}</td>
-           <td class="lc"><i></i>SS<i></i>custom</td>
            <td style="text-align:center"><b>${esc(bin || '\u2014')}</b></td></tr>
      </table>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b><i></i>Sorted to ${esc(bin || 'order bin')}</b><em>then labelling</em><u></u></div>
+     <div class="lbl">
+       <div class="lbl-cap">Label</div>
+       <div class="lbl-stock">${esc(lab.stock || '\u2014')}</div>
+       <div class="lbl-desc">${esc(lab.desc || '')}${lab.scale ? ` &middot; scale ${lab.scale}` : ''}
+         <em>${lab.house ? 'house SS label \u2014 no customer preference set' : 'customer\u2019s own stock'}</em></div>
+       <div class="lbl-done"><i></i>all ${o.qty} labelled</div>
+     </div>
      <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
        <span class="sg">initials</span><span class="sgl"></span></div>
      <div class="nl"></div>
@@ -622,10 +717,12 @@ function sheetSpare(n) {
        <span class="sg">initials</span><span class="sgl"></span></div>
      <table>
        <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
-           <th style="width:.7in">spools</th><th style="width:1.4in;text-align:center">label</th>
-           <th style="width:1.2in;text-align:center">order bin</th></tr>
-       <tr><td></td><td></td><td></td><td class="lc"><i></i>SS<i></i>custom</td><td></td></tr>
+           <th style="width:.8in">spools</th><th style="width:1.6in;text-align:center">order bin</th></tr>
+       <tr><td></td><td></td><td></td><td></td></tr>
      </table>
+     <div class="lbl"><div class="lbl-cap">Label</div><div class="lbl-stock">&nbsp;</div>
+       <div class="lbl-desc"><em>write the stock code once the customer is known</em></div>
+       <div class="lbl-done"><i></i>labelled</div></div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Sorted to</b><em>bin</em><u></u></div>
      <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
