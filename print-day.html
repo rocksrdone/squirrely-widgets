@@ -371,6 +371,7 @@ async function load() {
     });
     BIN_IDX = buildBinIndex(binsT, (t, c) => findColumn(t, c));
     BIN_STATE = buildBinState(lotT, LOTB, allocByLot, BIN_IDX.code);
+    Object.keys(BIN_FOR_BATCH).forEach(k => delete BIN_FOR_BATCH[k]);
 
     // orders
     // Short customer codes, for the O-CODE-ORDER bin on each sheet. Optional:
@@ -579,11 +580,35 @@ function assignBin(state, idx, recipeId, fiberName, qty) {
 let BIN_IDX = { code: {}, byFiber: {} };
 let BIN_STATE = { fill: {}, memory: {} };
 
-// Bin this pot's thread goes to once bagged. Computed here, at print time, so
-// the tag carries the answer and nobody records it separately afterwards.
+/* Bin this pot's thread goes to once bagged. Computed here, at print time, so
+   the tag carries the answer and nobody records it separately afterwards.
+
+   Assignments ACCUMULATE across the print run. Each pot was previously assigned
+   against the same untouched snapshot of bin fill, so on a day where no bin has
+   anything in it yet — which is every day right now — every tag named A1. The
+   spools from each pot are added to the running fill as it is assigned, so the
+   next pot sees the bin filling up and moves on.
+
+   Memoised per batch: tag() renders more than once per pass, and without this a
+   pot would be counted twice and could even get two different bins. */
+const BIN_FOR_BATCH = {};
+
 function binForBatch(b) {
-  const a = assignBin(BIN_STATE, BIN_IDX, b.rid, b.fiber, b.spools || 0);
-  return a.bin ? a.bin.code : '';
+  const key = b.rid + ':' + (b.code || '');
+  if (BIN_FOR_BATCH[key]) return BIN_FOR_BATCH[key];
+
+  const qty = b.spools || 0;
+  const a = assignBin(BIN_STATE, BIN_IDX, b.rid, b.fiber, qty);
+  const code = a.bin ? a.bin.code : '';
+  BIN_FOR_BATCH[key] = code;
+
+  if (a.bin) {
+    BIN_STATE.fill[a.bin.id] = (BIN_STATE.fill[a.bin.id] || 0) + qty;
+    // And remember it for this colourway, so a second pot of the same thread
+    // today joins the first rather than starting a new bin.
+    if (!BIN_STATE.memory[b.rid]) BIN_STATE.memory[b.rid] = { id: a.bin.id, code: a.bin.code };
+  }
+  return code;
 }
 
 function tag(b, n) {
