@@ -162,6 +162,10 @@
   .lot-line input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
   .mix-warn { background:#FBECC9; color:#8B5A2A; font-size:10px; border-radius:4px; padding:5px 7px; margin-top:6px; }
   .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
+  .st-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:7px 9px;
+    margin-bottom:8px; border:1px dashed var(--warn-text); border-radius:6px;
+    background:var(--warn-bg); font-size:12px; color:var(--warn-text); }
+  .st-bar span { flex:1; min-width:180px; }
   .stock-auto { font-family:'DM Mono',monospace; font-weight:700; font-size:15px; min-width:2ch; text-align:right; }
   .extra-row.stock { background:white; color:var(--teal); }
   .extra-row input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
@@ -294,7 +298,20 @@ async function loadEverything() {
     let binById = {};
     try {
       const binsT = await grist.docApi.fetchTable('Storage_Locations');
-      const BIN = resolveCols(binsT, 'Storage_Locations', { code: ['Bin_Code'] }, []);
+      const BIN = resolveCols(binsT, 'Storage_Locations', {
+        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']),
+      }, []);
+      // Bins that hold loose back stock, grouped by fiber. Customer-reserved bins
+      // (FOR, MMI, RDG) are excluded: those hold thread already promised, which is
+      // the opposite of what a surplus tag is for.
+      S.stockBins = {};
+      (binsT.id || []).forEach((id, i) => {
+        const codeV = columnAsArray(binsT, BIN.code)[i];
+        const fibV = BIN.fiber ? columnAsArray(binsT, BIN.fiber)[i] : '';
+        const resV = BIN.reserved ? getRefId(columnAsArray(binsT, BIN.reserved)[i]) : null;
+        if (!codeV || !fibV || resV) return;
+        (S.stockBins[fibV] = S.stockBins[fibV] || []).push(codeV);
+      });
       if (BIN.code) {
         (binsT.id || []).forEach((id, i) => {
           binById[id] = (columnAsArray(binsT, BIN.code)[i] || '').toString();
@@ -424,6 +441,7 @@ async function loadEverything() {
         freshWet: (unwound > 0 && !isDry) ? unwound : 0,
         stock,
         bin: LOT.bin ? (binById[getRefId(columnAsArray(lotsT, LOT.bin)[i])] || '') : '',
+        fiberName: LOT.fiber ? (columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber || '') : (recipe.fiber || ''),
         storeCol: LOT.vendorStock || LOT.generalStock || LOT.storeStock,
         storeVal: LOT.vendorStock ? vendor : (general || store),
       });
@@ -506,6 +524,7 @@ async function loadEverything() {
       const shortByDrying = !ready && (availNow + drying) >= outstanding; // only wet thread is holding it up
       S.lines.push({
         lineId: id, recipeId, recipeName: recipe.name, method: recipe.method,
+        fiberName: recipe.fiber || '', sku: (recipeById[recipeId] || {}).sku || '',
         customerId: info.customerId || custIdByName[normalize(info.customerName)] || null,
         customerName: info.customerName, orderNumber: info.orderNumber, dueDate: info.dueDate,
         bump: !!info.bump,
@@ -655,6 +674,89 @@ async function undoSorted(woId, itemKey) {
   } catch (e) {
     console.error('Could not undo sort:', e);
   }
+}
+
+/* ── Back stock tags ──────────────────────────────────────────────────
+   Surplus now routes to vendor stock automatically, but the spools still have
+   to physically reach a bin, and nothing was telling anyone which. Bins are
+   assigned by fiber rather than by colorway — A1..D5 all take FF Nylon — so
+   there is no single right answer to print. The tag therefore states everything
+   that IS known and leaves the bin as a write-in, with the eligible bins listed
+   so whoever shelves it is choosing from the right set rather than guessing.
+
+   Tags queue up as you wind and print in a batch, because walking to the printer
+   after every line is how a station stops being one task at a time. */
+const STOCK_TAG_KEY = 'ss_wind_stock_tags_v1';
+
+function readStockTags() {
+  try { return JSON.parse(window.localStorage.getItem(STOCK_TAG_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function writeStockTags(list) {
+  try { window.localStorage.setItem(STOCK_TAG_KEY, JSON.stringify(list)); } catch (e) { /* non-fatal */ }
+}
+function queueStockTag(tag) {
+  const list = readStockTags();
+  list.push(tag);
+  writeStockTags(list);
+}
+function clearStockTags() {
+  writeStockTags([]);
+  render();
+}
+
+function stockTagBar() {
+  const n = readStockTags().length;
+  if (!n) return '';
+  return `<div class="st-bar">
+    <span>${n} back stock tag${n === 1 ? '' : 's'} waiting &mdash; write the bin on each as you shelve it</span>
+    <button class="glove sort" onclick="printStockTags()">Print ${n}</button>
+    <button class="glove ghost" onclick="clearStockTags()" title="Clear the queue without printing">Clear</button>
+  </div>`;
+}
+
+function stockTagHtml(t) {
+  const bins = (S.stockBins && S.stockBins[t.fiber]) || [];
+  return `<div class="st-tag">
+    <div class="st-hd">BACK STOCK &middot; VENDOR</div>
+    <div class="st-name">${esc(t.colorway || '')}</div>
+    <div class="st-meta">${esc(t.sku || '')}${t.sku && t.fiber ? ' &middot; ' : ''}${esc(t.fiber || '')}</div>
+    <div class="st-row">
+      <div class="st-qty"><div class="st-cap">spools</div><div class="st-big">${t.qty}</div></div>
+      <div class="st-lot"><div class="st-cap">lot</div><div class="st-big sm">${esc(t.lot || '')}</div></div>
+    </div>
+    <div class="st-bin"><span class="st-cap">bin</span><span class="st-line"></span></div>
+    ${bins.length ? `<div class="st-hint">${esc(t.fiber)} bins: ${bins.join(' &middot; ')}</div>` : ''}
+    <div class="st-date">${esc(t.date || '')}</div>
+  </div>`;
+}
+
+function printStockTags() {
+  const list = readStockTags();
+  if (!list.length) return;
+  const w = window.open('', '_blank', 'width=800,height=900');
+  if (!w) { showToast('Allow pop-ups to print tags'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Back stock tags</title>
+    <style>
+      @page { size: letter portrait; margin: .3in; }
+      body { font-family: Helvetica, Arial, sans-serif; margin: 0; display: flex; flex-wrap: wrap; }
+      .st-tag { width: 3.7in; height: 2.4in; padding: .14in .16in; outline: 1px dashed #aaa;
+        outline-offset: -.5px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
+      .st-hd { font-size: 9px; font-weight: bold; letter-spacing: 1.2px; }
+      .st-name { font-size: 19px; font-weight: bold; line-height: 1.1; margin-top: 3px; overflow-wrap: anywhere; }
+      .st-meta { font-size: 10px; color: #444; margin-top: 1px; }
+      .st-row { display: flex; gap: .2in; margin-top: 6px; }
+      .st-cap { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #555; }
+      .st-big { font-size: 21px; font-weight: bold; line-height: 1.05; }
+      .st-big.sm { font-size: 14px; }
+      .st-bin { display: flex; align-items: flex-end; gap: 7px; margin-top: auto; }
+      .st-line { flex: 1; border-bottom: 2px solid #000; height: .3in; }
+      .st-hint { font-size: 8.5px; color: #666; margin-top: 3px; }
+      .st-date { font-size: 8px; color: #888; margin-top: 2px; }
+    </style></head><body>${list.map(stockTagHtml).join('')}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { w.print(); }, 250);
 }
 
 function binsHtml(withTitle) {
@@ -823,6 +925,7 @@ function render() {
   c.innerHTML = `
     <div class="header-title">Wind &amp; Box</div>
     ${viewBar()}
+    ${stockTagBar()}
     <input class="search-input" id="searchBox" placeholder="Search colorway, order, or customer..." value="${esc(S.search || '')}" oninput="onSearch(this.value)">
     ${doneHtml}
     ${showBins ? boxedHtml : ''}
@@ -953,6 +1056,19 @@ async function confirmWind() {
     if (brokenLotId != null && S.brokenCol) lotUpdate[S.brokenCol] = (brokenBefore || 0) + p.broken;
     if (Object.keys(lotUpdate).length) {
       await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]]);
+    }
+
+    if (p.stock > 0) {
+      // Queued rather than printed now: the winder is mid-flow with spools in
+      // hand, and a print dialog per line breaks the run.
+      queueStockTag({
+        colorway: p.line.recipeName || '',
+        sku: p.line.sku || '',
+        fiber: (anchor && anchor.fiberName) || p.line.fiberName || '',
+        qty: p.stock,
+        lot: (anchor && anchor.lotNumber) || '',
+        date: new Date().toISOString().slice(0, 10),
+      });
     }
 
     S.done.unshift({
