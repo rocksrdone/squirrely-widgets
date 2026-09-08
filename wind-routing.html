@@ -172,8 +172,6 @@
   .bin-choice .glove { min-width:52px; min-height:38px; font-family:'DM Mono',monospace; font-size:13px; }
   .bin-choice .glove:disabled { opacity:1; }
   .bin-choice-note { font-size:11px; color:#6B5E52; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-  .bin-change { background:none; border:0; padding:0; font-size:11px; color:var(--teal);
-    text-decoration:underline; cursor:pointer; font-family:'Inter',sans-serif; }
   .bin-split { margin-top:5px; font-size:11px; color:var(--warn-text); background:var(--warn-bg);
     border:1px solid var(--warn-text); border-radius:4px; padding:4px 7px; }
   .stock-auto { font-family:'DM Mono',monospace; font-weight:700; font-size:15px; min-width:2ch; text-align:right; }
@@ -459,6 +457,7 @@ async function loadEverything() {
     // Where each colourway's back stock already lives, newest lot first. Read
     // from every lot, not just windable ones, because the shelved thread is
     // usually from an older lot that has nothing left to wind.
+    S.binFill = buildBinFill(lotsT, LOT);
     S.binMemory = {};
     if (LOT.bin) {
       const seen = {};
@@ -599,7 +598,7 @@ function onSearch(v) {
 }
 
 function selectLine(id) {
-  S.stockBinPick = undefined; S.binOverride = false;   // each colourway resolves its own bin
+  S.stockBinPick = undefined;   // recomputed for each colourway
   S.selected = S.selected === id ? null : id;
   // pre-fill draw suggestion: oldest dry lots + stock first, up to outstanding
   if (S.selected != null) {
@@ -706,21 +705,42 @@ async function undoSorted(woId, itemKey) {
   }
 }
 
-/* Which bin does this colourway already live in?
-   Bins are assigned by fibre, not by colourway, so listing every FF Nylon bin
-   told nobody anything. The answer that matters is "where is the rest of this
-   colourway" — back stock only stays findable if one colourway lives in one
-   bin. Nothing recorded that, so it gets recorded here: the winder picks the
-   bin once, it is written to Production_Lots.Storage_Bin, and every later
-   surplus of the same colourway is told where to go instead of asked. */
-function knownBinForRecipe(recipeId) {
-  const lots = (S.binMemory && S.binMemory[recipeId]) || [];
-  return lots.length ? lots[0] : null;      // { id, code }
+/* Back stock bin assignment — automatic.
+   Which bin a colourway sits in does not matter, because retrieval is by lookup
+   rather than by memory. What matters is that bins fill EVENLY, so nobody digs
+   through a heaving bin for four spools, and that one colourway stays in one
+   bin, because its bags are grouped together.
+
+   So: keep an established colourway where it is while that bin has room, and
+   otherwise send it to the emptiest bin for its fibre. Nothing to choose, and
+   no buttons — the winder is told, not asked.
+
+   Fill is derived from the lots assigned to each bin rather than read from
+   Storage_Locations. A stored counter drifts the moment anything is moved by
+   hand, and the lots already know where they went. */
+const BIN_CAPACITY = 60;   // spools a bin holds comfortably
+
+function buildBinFill(lotsT, LOT) {
+  const fill = {};
+  if (!LOT.bin) return fill;
+  (lotsT.id || []).forEach((id, i) => {
+    const bid = getRefId(columnAsArray(lotsT, LOT.bin)[i]);
+    if (!bid) return;
+    const v = LOT.vendorStock ? (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0) : 0;
+    const g = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
+    const st = LOT.storeStock ? (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0) : 0;
+    fill[bid] = (fill[bid] || 0) + v + g + st;
+  });
+  return fill;
 }
 
-// One colourway lives in one bin — the bags get grouped into a single large bag,
-// so a split is not a variation, it is a mistake that makes stock unfindable.
-// More than one bin recorded for a recipe means an earlier pick went astray.
+function knownBinForRecipe(recipeId) {
+  const lots = (S.binMemory && S.binMemory[recipeId]) || [];
+  return lots.length ? lots[0] : null;
+}
+
+// Two bins for one colourway means its bags got separated — the thing that
+// makes stock unfindable. Worth saying out loud rather than silently picking one.
 function splitBinsForRecipe(recipeId) {
   const lots = (S.binMemory && S.binMemory[recipeId]) || [];
   return lots.length > 1 ? lots : null;
@@ -729,54 +749,50 @@ function splitBinsForRecipe(recipeId) {
 function binChoicesFor(fiberName) {
   const list = (S.stockBins && S.stockBins[fiberName]) || [];
   if (list.length) return list;
-  // Unknown fibre — offer everything rather than nothing.
   return Object.values(S.stockBins || {}).reduce((a, b) => a.concat(b), []);
 }
 
-function pickStockBin(binId, code) {
-  S.stockBinPick = binId ? { id: binId, code } : null;
-  updateTally();
-  const row = document.getElementById('bin-choice-row');
-  if (row) row.querySelectorAll('.glove').forEach(b => {
-    b.classList.toggle('sort', Number(b.dataset.bin) === binId);
-  });
+function binFill(binId) { return (S.binFill && S.binFill[binId]) || 0; }
+
+function assignStockBin(line, qty) {
+  const known = knownBinForRecipe(line.recipeId);
+  if (known && binFill(known.id) + qty <= BIN_CAPACITY) {
+    return { bin: known, reason: 'where this colourway already lives', tight: false };
+  }
+  const choices = binChoicesFor(line.fiberName).slice()
+    .sort((a, b) => (binFill(a.id) - binFill(b.id)) || String(a.code).localeCompare(String(b.code)));
+  if (!choices.length) return { bin: null, reason: 'no back stock bins for this fibre', tight: true };
+
+  const roomy = choices.find(b => binFill(b.id) + qty <= BIN_CAPACITY);
+  if (!roomy) {
+    // Everything is over capacity — name the emptiest anyway, because the
+    // spools have to go somewhere tonight.
+    return { bin: choices[0], reason: 'every bin is full — this one has most room', tight: true };
+  }
+  return {
+    bin: roomy,
+    reason: known ? `${known.code} is full, so this colourway moves here` : 'emptiest bin for this fibre',
+    tight: false,
+  };
 }
 
-function toggleBinOverride() { S.binOverride = !S.binOverride; render(); }
-
 function binChoiceHtml(line) {
-  const known = knownBinForRecipe(line.recipeId);
+  const p = currentPlan();
+  const qty = p ? p.stock : 0;
+  const a = assignStockBin(line, qty);
+  S.stockBinPick = a.bin;                    // what confirmWind records
   const split = splitBinsForRecipe(line.recipeId);
-  if (S.stockBinPick === undefined) S.stockBinPick = known || null;
-  const choices = binChoicesFor(line.fiberName);
-  if (!choices.length) return '';
-  const sel = S.stockBinPick ? S.stockBinPick.id : null;
+  if (!a.bin) return `<div class="bin-choice"><div class="bin-split">${esc(a.reason)}</div></div>`;
 
-  // A settled colourway is not a question. Showing 26 buttons invites a
-  // different answer than last time, which is exactly the split being avoided —
-  // so the known bin is stated, and changing it takes a deliberate second step.
-  if (known && !S.binOverride) {
-    return `<div class="bin-choice" id="bin-choice-wrap">
-      <div class="bin-choice-cap">Back stock bin</div>
-      <div class="btn-row">
-        <button class="glove sort" disabled>${esc(known.code)}</button>
-        <span class="bin-choice-note">this colourway already lives here &mdash; keep it together
-          <button class="bin-change" onclick="toggleBinOverride()">change bin</button></span>
-      </div>
-      ${split ? `<div class="bin-split">Already recorded in ${split.map(b => esc(b.code)).join(' and ')} &mdash;
-        that colourway is split across bins and should be consolidated.</div>` : ''}
-    </div>`;
-  }
-
+  const after = binFill(a.bin.id) + qty;
   return `<div class="bin-choice" id="bin-choice-wrap">
-    <div class="bin-choice-cap">${known
-      ? `Moving this colourway out of <strong>${esc(known.code)}</strong> &mdash; shift every bag, do not split it`
-      : 'Back stock bin &mdash; nothing of this colourway is shelved yet, pick one'}</div>
-    <div class="btn-row" id="bin-choice-row">
-      ${choices.map(b => `<button class="glove ${b.id === sel ? 'sort' : ''}" data-bin="${b.id}"
-        onclick="pickStockBin(${b.id}, '${esc(b.code)}')">${esc(b.code)}</button>`).join('')}
+    <div class="bin-choice-cap">Back stock bin</div>
+    <div class="btn-row">
+      <button class="glove sort" disabled>${esc(a.bin.code)}</button>
+      <span class="bin-choice-note">${esc(a.reason)} &middot; ${after} of ${BIN_CAPACITY} after this</span>
     </div>
-    ${known ? `<div class="btn-row"><button class="bin-change" onclick="toggleBinOverride()">keep ${esc(known.code)}</button></div>` : ''}
+    ${a.tight ? `<div class="bin-split">Bins are over capacity &mdash; time to deploy some stock.</div>` : ''}
+    ${split ? `<div class="bin-split">This colourway is recorded in ${split.map(b => esc(b.code)).join(' and ')} &mdash; consolidate it.</div>` : ''}
   </div>`;
 }
 
@@ -1197,7 +1213,7 @@ async function confirmWind() {
         + (p.stock ? ` · ${p.stock} to stock` : '')
         + (p.broken ? ` · ${p.broken} broken` : ''),
     });
-    S.selected = null; S.draw = {}; S.stockBinPick = undefined; S.binOverride = false;
+    S.selected = null; S.draw = {}; S.stockBinPick = undefined;
     showToast('Boxed ✓');
     await loadEverything();
   } catch (e) {
