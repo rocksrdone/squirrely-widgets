@@ -86,7 +86,6 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .sh .ttl { font-size: 17px; font-weight: bold; letter-spacing: .5px; text-transform: uppercase; }
 .sh .sub { font-size: 10px; color: #555; }
 .sh .bagcode { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; text-align: right; }
-.sh .bagcap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .8px; text-align: right; }
 .sh .id { display: flex; margin-top: 6px; }
 .sh .id .f + .f { margin-left: .16in; }
 .sh .id .f { flex: 1; } .sh .id .f.s { flex: 0 0 .9in; }
@@ -606,7 +605,7 @@ function sheetShell(code, title, sub, ident, body) {
   return `<div class="sh">
     <div class="head">
       <div style="min-width:0"><div class="ttl">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
-      <div><div class="bagcap">bag</div><div class="bagcode">${code}</div></div>
+      <div><div class="bagcode">${code}</div></div>
     </div>
     <div class="id">${ident}</div>
     ${body}
@@ -637,7 +636,7 @@ function sheetOrder(b, n, o, idx, total) {
     total > 1 ? `one of ${total} orders from this lot` : '',
     idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
     `<div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
-       <span><i></i>taken</span><span><i></i>shared to this order</span>
+       <span><i></i>taken</span><span><i></i>shared to order</span>
        <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
      <table>
        <tr><th style="width:3.2in">customer</th><th style="width:1.1in">order #</th>
