@@ -162,6 +162,7 @@
   .lot-line input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
   .mix-warn { background:#FBECC9; color:#8B5A2A; font-size:10px; border-radius:4px; padding:5px 7px; margin-top:6px; }
   .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
+  .stock-auto { font-family:'DM Mono',monospace; font-weight:700; font-size:15px; min-width:2ch; text-align:right; }
   .extra-row.stock { background:white; color:var(--teal); }
   .extra-row input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
   .tally.partial { background:var(--warn-bg); color:var(--warn-text); }
@@ -423,8 +424,8 @@ async function loadEverything() {
         freshWet: (unwound > 0 && !isDry) ? unwound : 0,
         stock,
         bin: LOT.bin ? (binById[getRefId(columnAsArray(lotsT, LOT.bin)[i])] || '') : '',
-        storeCol: LOT.generalStock || LOT.storeStock,
-        storeVal: general || store,
+        storeCol: LOT.vendorStock || LOT.generalStock || LOT.storeStock,
+        storeVal: LOT.vendorStock ? vendor : (general || store),
       });
     });
     Object.values(lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0))); // oldest first
@@ -864,7 +865,7 @@ function fillPanel(l) {
   const brokenHtml = S.brokenCol
     ? `<div class="extra-row"><span>Broken / tied-off spools</span><input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()"></div>`
     : '';
-  const stockHtml = `<div class="extra-row stock"><span>Extra good spools → back stock</span><input type="number" min="0" id="stock-qty" value="0" oninput="updateTally()"></div>`;
+  const stockHtml = `<div class="extra-row stock"><span>Anything over the order goes to <strong>vendor back stock</strong></span><span class="stock-auto" id="stock-auto">0</span></div>`;
 
   return `
     <div class="fill-panel">
@@ -890,13 +891,13 @@ function currentPlan() {
   const draws = line.lots
     .map(lot => ({ lot, qty: Math.max(0, Number((document.getElementById(`draw-${lot.lotId}`) || {}).value) || 0) }))
     .filter(d => d.qty > 0);
-  const toOrder = draws.reduce((s, d) => s + d.qty, 0);
+  const drawn = draws.reduce((s, d) => s + d.qty, 0);
   const brokenEl = document.getElementById('broken-qty');
-  const broken = brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0;
-  const stockEl = document.getElementById('stock-qty');
-  const stock = stockEl ? Math.max(0, Number(stockEl.value) || 0) : 0;
-  // over-draw check is per-lot (handled by max), here we check the ORDER need
-  return { line, draws, toOrder, broken, stock };
+  const broken = Math.min(drawn, brokenEl ? Math.max(0, Number(brokenEl.value) || 0) : 0);
+  const good = Math.max(0, drawn - broken);
+  const toOrder = Math.min(good, line.outstanding);
+  const stock = good - toOrder;      // surplus, always to vendor back stock
+  return { line, draws, drawn, toOrder, broken, stock, good };
 }
 
 function updateTally() {
@@ -905,18 +906,19 @@ function updateTally() {
   const t = document.getElementById('tally');
   const btn = document.getElementById('confirmBtn');
   if (!t) return;
-  const over = p.toOrder > p.line.outstanding;
-  t.className = 'tally ' + (over ? 'over' : (p.toOrder === p.line.outstanding ? 'ok' : 'partial'));
-  t.innerHTML = over
-    ? `Over by ${p.toOrder - p.line.outstanding} — this order needs ${p.line.outstanding}.`
-    : `${p.toOrder} of ${p.line.outstanding} for this order${p.toOrder < p.line.outstanding ? ' (partial — rest stays open)' : ''}${p.stock ? ` · ${p.stock} to stock` : ''}${p.broken ? ` · ${p.broken} broken` : ''}`;
-  if (btn) btn.disabled = over || p.toOrder === 0;
+  t.className = 'tally ' + (p.toOrder === p.line.outstanding ? 'ok' : (p.toOrder === 0 ? 'over' : 'partial'));
+  t.innerHTML = `${p.toOrder} of ${p.line.outstanding} for this order`
+    + (p.toOrder < p.line.outstanding && p.toOrder > 0 ? ' (partial — rest stays open)' : '')
+    + (p.stock ? ` &middot; <strong>${p.stock} &rarr; vendor back stock</strong>` : '')
+    + (p.broken ? ` &middot; ${p.broken} broken` : '');
+  if (btn) btn.disabled = p.good === 0;
+  const sa = document.getElementById('stock-auto');
+  if (sa) sa.textContent = p.stock || '0';
 }
 
 async function confirmWind() {
   const p = currentPlan();
-  if (!p || p.toOrder === 0) { showToast('Draw some spools first'); return; }
-  if (p.toOrder > p.line.outstanding) { showToast('More than this order needs'); return; }
+  if (!p || p.good === 0) { showToast('Draw some spools first'); return; }
   if (!p.line.customerId) { showToast(`No customer row for ${p.line.customerName || 'this order'} — allocation needs one`); return; }
 
   const { ALLOC } = S.cols;
