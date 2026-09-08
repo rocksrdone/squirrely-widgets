@@ -174,6 +174,15 @@
   .bin-choice-note { font-size:11px; color:#6B5E52; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .bin-split { margin-top:5px; font-size:11px; color:var(--warn-text); background:var(--warn-bg);
     border:1px solid var(--warn-text); border-radius:4px; padding:4px 7px; }
+  .short-help { margin-top:8px; padding:8px 10px; border:1px solid var(--warn-text);
+    border-radius:6px; background:var(--warn-bg); }
+  .short-cap { font-size:12px; font-weight:700; color:var(--warn-text); margin-bottom:5px; }
+  .short-list { margin:0; padding-left:18px; font-size:11.5px; line-height:1.5; }
+  .short-list li { margin-bottom:5px; }
+  .short-list li.muted { color:#8B7D72; }
+  .short-list .btn-row { display:flex; flex-wrap:wrap; gap:5px; margin-top:4px; }
+  .glove.warn { background:#fff; border-color:var(--warn-text); color:var(--warn-text); }
+  input.over-cap { border-color:var(--warn-text); background:var(--warn-bg); }
   .stock-auto { font-family:'DM Mono',monospace; font-weight:700; font-size:15px; min-width:2ch; text-align:right; }
   .extra-row.stock { background:white; color:var(--teal); }
   .extra-row input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
@@ -337,6 +346,7 @@ async function loadEverything() {
     const WOL = resolveCols(wolT, 'Work_Order_Lines', {
       workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
       recipe: opt(['Recipe']), sku: opt(['SKU']),
+      priority: opt(['Production_Priority', 'Priority']), notes: opt(['Notes']),
     }, missing);
     const WO = resolveCols(woT, 'Work_Orders', {
       status: ['Status'], orderNumber: opt(['Order_Number']),
@@ -511,6 +521,7 @@ async function loadEverything() {
       const key = a.lineId != null ? `L${a.lineId}` : `R${meta.recipeId}`;
       const it = b.items[key] = b.items[key] || {
         key, name: (recipeById[meta.recipeId] || {}).name || 'Unknown colorway',
+        recipeId: meta.recipeId,
         qty: 0, allocIds: [], boxedQty: 0, sortedQty: 0,
       };
       if (waiting) {
@@ -553,6 +564,8 @@ async function loadEverything() {
       S.lines.push({
         lineId: id, recipeId, recipeName: recipe.name, method: recipe.method,
         fiberName: recipe.fiber || '', sku: (recipeById[recipeId] || {}).sku || '',
+        woId,
+        notes: WOL.notes ? (columnAsArray(wolT, WOL.notes)[i] || '') : '',
         customerId: info.customerId || custIdByName[normalize(info.customerName)] || null,
         customerName: info.customerName, orderNumber: info.orderNumber, dueDate: info.dueDate,
         bump: !!info.bump,
@@ -703,6 +716,117 @@ async function undoSorted(woId, itemKey) {
   } catch (e) {
     console.error('Could not undo sort:', e);
   }
+}
+
+/* ── Short fill ───────────────────────────────────────────────────────
+   When the dry rack cannot cover an order, the winder needs options rather
+   than a dead end. Three exist, in the order they should be tried:
+
+   1. Back stock of the same colourway. Already possible — shelved lots appear
+      in the draw list marked "back stock", so it is a matter of pointing at
+      them rather than new machinery.
+   2. Spools already wound for a DIFFERENT order of the same colourway. Moving
+      those is a real decision with a real cost, so it is offered explicitly
+      and names who it takes from.
+   3. Neither works. Then it goes back to control to be re-dyed, and the point
+      is that the line returns to the day planner as urgent rather than sitting
+      wound-but-short in a bin.
+
+   Deliberately NOT automatic. Taking from another customer is the kind of call
+   that wants a person's name against it. */
+function shortfallFor(p) {
+  return Math.max(0, p.line.outstanding - p.toOrder);
+}
+
+// Allocations of this colourway wound for other orders, newest first.
+function borrowableFor(line) {
+  const out = [];
+  (S.bins || []).forEach(b => {
+    if (b.woId === line.woId) return;
+    b.itemList.forEach(it => {
+      if (it.qty <= 0 || it.recipeId !== line.recipeId) return;
+      out.push({ woId: b.woId, customerName: b.customerName, orderNumber: b.orderNumber,
+                 key: it.key, qty: it.qty, allocIds: it.allocIds });
+    });
+  });
+  return out.sort((a, b) => b.qty - a.qty);
+}
+
+async function borrowFrom(woId, itemKey, lineId) {
+  const line = S.lines.find(l => l.lineId === lineId);
+  const src = borrowableFor(line).find(x => x.woId === woId && x.key === itemKey);
+  if (!line || !src) return;
+  const need = Math.min(src.qty, line.outstanding);
+  if (!window.confirm(`Move ${need} spool${need === 1 ? '' : 's'} of ${line.recipeName}\nfrom ${src.customerName || 'order ' + src.orderNumber}\nto ${line.customerName || 'this order'}?\n\n${src.customerName || 'That order'} will be short by ${need}.`)) return;
+
+  const { ALLOC } = S.cols;
+  try {
+    // Reassign whole allocations up to the need. Splitting one would leave two
+    // rows for one physical bag, which the labelling station cannot act on.
+    const move = [];
+    let got = 0;
+    for (const id of src.allocIds) {
+      if (got >= need) break;
+      move.push(id);
+      got += 1;   // qty per allocation is unknown here; reassign then let control reconcile
+    }
+    const fields = { [ALLOC.line]: move.map(() => line.lineId) };
+    if (ALLOC.customer) fields[ALLOC.customer] = move.map(() => line.customerId);
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', move, fields]]);
+    showToast(`Moved to ${line.customerName || 'this order'} — tell control`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not move allocation:', e);
+    showToast('Could not move — see console');
+  }
+}
+
+/* Cannot be filled. Sets the line urgent and writes why, leaving Queue_Status
+   as Open on purpose: a non-Open status drops the line out of the planners
+   entirely, which is the opposite of "fix this first". */
+async function sendBackToControl(lineId) {
+  const line = S.lines.find(l => l.lineId === lineId);
+  if (!line) return;
+  const who = (window.prompt('Your initials, and what went wrong:', '') || '').trim();
+  if (!who) return;
+  const { WOL } = S.cols;
+  const fields = {};
+  if (WOL.priority) fields[WOL.priority] = 'Urgent';
+  if (WOL.notes) {
+    const stamp = new Date().toISOString().slice(0, 10);
+    fields[WOL.notes] = `${line.notes ? line.notes + '\n' : ''}[${stamp}] SHORT at winding — ${who}`;
+  }
+  if (!Object.keys(fields).length) { showToast('No priority or notes column to write to'); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Order_Lines', lineId, fields]]);
+    showToast('Back to control as urgent — it will reappear on the day plan');
+    S.selected = null;
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not flag the line:', e);
+    showToast('Could not update — see console');
+  }
+}
+
+function shortHelpHtml(p) {
+  const short = shortfallFor(p);
+  if (short <= 0) return '';
+  const borrow = borrowableFor(p.line);
+  return `<div class="short-help">
+    <div class="short-cap">Short by ${short} &mdash; options</div>
+    <ol class="short-list">
+      <li>Draw from back stock above &mdash; shelved lots are listed with the dry ones.</li>
+      ${borrow.length
+        ? `<li>Take from another order of the same colourway:
+             <div class="btn-row">${borrow.map(b => `<button class="glove"
+               onclick="borrowFrom(${b.woId}, '${b.key}', ${p.line.lineId})">
+               ${esc(b.customerName || 'order ' + b.orderNumber)} &middot; ${b.qty}</button>`).join('')}</div></li>`
+        : `<li class="muted">Nothing of this colourway is wound for another order.</li>`}
+      <li>Neither works &mdash;
+        <button class="glove warn" onclick="sendBackToControl(${p.line.lineId})">Can't fill &mdash; back to control</button>
+      </li>
+    </ol>
+  </div>`;
 }
 
 /* Back stock bin assignment — automatic.
@@ -1081,7 +1205,7 @@ function fillPanel(l) {
           ${lot.bin ? `<span class="lot-bin">${esc(lot.bin)}</span>` : `<span class="lot-bin lot-bin-none">no bin</span>`}
           <span class="lot-line-src">${src} · ${cap} avail</span>
         </div>
-        <input type="number" min="0" max="${cap}" id="draw-${lot.lotId}"
+        <input type="number" min="0" id="draw-${lot.lotId}" data-cap="${cap}"
                value="${S.draw[lot.lotId] || 0}" oninput="onDraw(${lot.lotId}, ${cap})">
       </div>`;
   }).join('');
@@ -1093,7 +1217,8 @@ function fillPanel(l) {
     ? `<div class="extra-row"><span>Broken / tied-off spools</span><input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()"></div>`
     : '';
   const stockHtml = `<div class="extra-row stock"><span>Anything over the order goes to <strong>vendor back stock</strong></span><span class="stock-auto" id="stock-auto">0</span></div>`
-    + `<div id="bin-choice-slot">${binChoiceHtml(l)}</div>`;
+    + `<div id="bin-choice-slot">${binChoiceHtml(l)}</div>`
+    + `<div id="short-help-slot"></div>`;
 
   return `
     <div class="fill-panel">
@@ -1108,9 +1233,19 @@ function fillPanel(l) {
 
 function onDraw(lotId, cap) {
   const el = document.getElementById(`draw-${lotId}`);
-  let v = Math.max(0, Math.min(cap, Number(el.value) || 0));
+  // No longer clamped to cap. A pot sometimes yields a spool more than it was
+  // recorded as making, and refusing the entry meant the spool went unrecorded
+  // or the winder rounded down. Accepted and flagged instead, so the surplus
+  // shows up as a lot correction rather than a silent discrepancy.
+  const v = Math.max(0, Number(el.value) || 0);
   S.draw[lotId] = v;
+  el.classList.toggle('over-cap', v > cap);
   updateTally();
+}
+
+// Spools drawn beyond what the lots were recorded as holding.
+function foundExtra(p) {
+  return p.draws.reduce((n, d) => n + Math.max(0, d.qty - (d.lot.freshDry + d.lot.stock)), 0);
 }
 
 function currentPlan() {
@@ -1138,12 +1273,15 @@ function updateTally() {
   t.innerHTML = `${p.toOrder} of ${p.line.outstanding} for this order`
     + (p.toOrder < p.line.outstanding && p.toOrder > 0 ? ' (partial — rest stays open)' : '')
     + (p.stock ? ` &middot; <strong>${p.stock} &rarr; vendor back stock</strong>` : '')
-    + (p.broken ? ` &middot; ${p.broken} broken` : '');
+    + (p.broken ? ` &middot; ${p.broken} broken` : '')
+    + (foundExtra(p) ? ` &middot; <strong>${foundExtra(p)} more than the lot recorded</strong>` : '');
   if (btn) btn.disabled = p.good === 0;
   const sa = document.getElementById('stock-auto');
   if (sa) sa.textContent = p.stock || '0';
   const slot = document.getElementById('bin-choice-slot');
   if (slot) slot.style.display = p.stock > 0 ? '' : 'none';
+  const sh = document.getElementById('short-help-slot');
+  if (sh) sh.innerHTML = shortHelpHtml(p);
 }
 
 async function confirmWind() {
