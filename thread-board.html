@@ -45,18 +45,18 @@
   .aged { color: var(--warn-text); font-weight: 600; }
 
   .card-actions { display: flex; align-items: center; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
-  .pos-field { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 130px; }
-  .pos-field label { font-size: 10px; color: #8B7D72; white-space: nowrap; }
-  .pos-field input {
-    flex: 1; min-width: 60px; padding: 4px 6px; border: 1px solid var(--rule);
-    border-radius: 4px; font-size: 12px;
-  }
   button {
     padding: 6px 11px; border: none; border-radius: 4px; font-size: 12px;
     font-weight: 600; cursor: pointer; white-space: nowrap;
   }
   .btn-next { background: var(--teal); color: white; }
   .btn-back { background: #EEE9E2; color: #6B6157; padding: 6px 8px; }
+  .btn-bag { background:var(--teal); color:#fff; border:0; border-radius:6px;
+    min-height:38px; padding:7px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+  .bin-why { font-size:10px; color:#8B7D72; margin-left:6px; }
+  .bin-tag { font-size:12px; color:var(--done-text); background:var(--done-bg);
+    border:1px solid var(--done-text); border-radius:5px; padding:5px 9px; display:flex;
+    align-items:center; gap:7px; }
   .btn-save { background: var(--teal-light); color: var(--teal); }
 
   .empty-stage { font-size: 11px; color: #A99C8E; font-style: italic; padding: 4px 2px 8px; }
@@ -165,12 +165,13 @@ let S = { lots: [], cols: null, hasPos: true };
 
 async function loadBoard() {
   try {
-    const [lotsT, recipesT, allocT, wolT, woT] = await Promise.all([
+    const [lotsT, recipesT, allocT, wolT, woT, binsT] = await Promise.all([
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Lot_Allocations'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Storage_Locations').catch(() => null),
     ]);
 
     const missing = [];
@@ -182,6 +183,7 @@ async function loadBoard() {
       date: opt(['Date_Dyed']), draft: opt(['Draft_Code']),
       storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
       generalStock: opt(['General_Stock_Spools']), broken: opt(['Broken_Spools']),
+      bin: opt(['Storage_Bin']),
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
@@ -200,6 +202,25 @@ async function loadBoard() {
     }
     S.cols = { LOT, REC, ALLOC, WOL, WO };
     S.hasPos = !!LOT.position;
+    S.hasBin = !!LOT.bin && !!binsT;
+
+    // Bin codes by row id, and which bins take which fibre. Customer-reserved
+    // bins are excluded — those hold thread already promised to an order.
+    S.binCode = {}; S.stockBins = {};
+    if (binsT) {
+      const BINC = resolveCols(binsT, 'Storage_Locations', {
+        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']),
+      }, []);
+      (binsT.id || []).forEach((id, i) => {
+        const codeV = columnAsArray(binsT, BINC.code)[i];
+        if (!codeV) return;
+        S.binCode[id] = codeV;
+        const fibV = BINC.fiber ? columnAsArray(binsT, BINC.fiber)[i] : '';
+        const resV = BINC.reserved ? getRefId(columnAsArray(binsT, BINC.reserved)[i]) : null;
+        if (!fibV || resV) return;
+        (S.stockBins[fibV] = S.stockBins[fibV] || []).push({ id, code: codeV });
+      });
+    }
 
     const recipeById = {};
     (recipesT.id || []).forEach((id, i) => {
@@ -251,6 +272,8 @@ async function loadBoard() {
         lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || draft || `Lot #${id}`,
         name: recipe.name || (draft ? 'draft — not named yet' : ''),
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
+        fiberName: (columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber || ''),
+        binId: LOT.bin ? getRefId(columnAsArray(lotsT, LOT.bin)[i]) : null,
         position: LOT.position ? (columnAsArray(lotsT, LOT.position)[i] || '') : '',
         rawStatus, stage: stageOf(rawStatus),
         total, unwound: Math.max(0, total - spoken),
@@ -260,6 +283,24 @@ async function loadBoard() {
       };
     }).filter(l => l.unwound > 0); // once every spool is spoken for, it leaves the board
 
+    // Bin fill counts BOTH bagged unwound thread and wound surplus, because the
+    // two share a bin and go in the same large bag. Derived from the lots rather
+    // than stored on Storage_Locations, whose count columns are empty formulas.
+    S.binFill = {}; S.binMemory = {};
+    (lotsT.id || []).forEach((id, i) => {
+      const bid = LOT.bin ? getRefId(columnAsArray(lotsT, LOT.bin)[i]) : null;
+      if (!bid) return;
+      const t = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
+      const st = (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0)
+        + (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0)
+        + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0);
+      const br = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
+      const al = allocByLot[id] || 0;
+      S.binFill[bid] = (S.binFill[bid] || 0) + st + Math.max(0, t - al - st - br);
+      const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      if (rid && !S.binMemory[rid]) S.binMemory[rid] = { id: bid, code: S.binCode[bid] || '' };
+    });
+
     render();
   } catch (e) {
     console.error('Failed to load thread board:', e);
@@ -268,16 +309,82 @@ async function loadBoard() {
   }
 }
 
+/* ── Bagging dry thread into bins ─────────────────────────────────────
+   Wet-to-dry happens on its own and nobody was ever going to type it in, which
+   is why Rack_Position sat empty on all 202 lots. The step that IS worth
+   recording is the one after: a dry lot gets bagged with its paper slips and
+   put in a bin, and from then on nobody can find it without being told where.
+
+   Winding straight off the dry rack stays supported — a lot with no bin simply
+   has not been bagged yet, and Wind & Box draws from it either way. Bagging is
+   what you do when you are NOT winding it today.
+
+   Bins are shared with wound surplus (they go in the same large bag), so fill
+   counts both, and the same even-fill rule applies: keep a colourway where it
+   already lives while there is room, otherwise use the emptiest bin. */
+const BIN_CAPACITY = 60;
+
+function binFill(id) { return (S.binFill && S.binFill[id]) || 0; }
+
+function binsForFiber(fiberName) {
+  const list = (S.stockBins && S.stockBins[fiberName]) || [];
+  if (list.length) return list;
+  return Object.values(S.stockBins || {}).reduce((a, b) => a.concat(b), []);
+}
+
+function suggestBin(lot) {
+  const known = (S.binMemory && S.binMemory[lot.recipeId]) || null;
+  if (known && binFill(known.id) + lot.unwound <= BIN_CAPACITY) {
+    return { bin: known, why: 'where this colourway already lives' };
+  }
+  const choices = binsForFiber(lot.fiberName).slice()
+    .sort((a, b) => (binFill(a.id) - binFill(b.id)) || String(a.code).localeCompare(String(b.code)));
+  if (!choices.length) return { bin: null, why: 'no bins for this fibre' };
+  const roomy = choices.find(b => binFill(b.id) + lot.unwound <= BIN_CAPACITY);
+  return {
+    bin: roomy || choices[0],
+    why: roomy ? (known ? `${known.code} is full` : 'emptiest bin') : 'every bin is full — most room here',
+  };
+}
+
+async function bagToBin(lotId) {
+  const lot = S.lots.find(l => l.id === lotId);
+  if (!lot || !S.hasBin) return;
+  const sug = suggestBin(lot);
+  if (!sug.bin) { showToast(sug.why); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId,
+      { [S.cols.LOT.bin]: sug.bin.id }]]);
+    showToast(`${lot.lotNumber} → ${sug.bin.code}`);
+    await loadBoard();
+  } catch (e) {
+    console.error('Could not bag to bin:', e);
+    showToast('Could not update — see console');
+  }
+}
+
+async function unbag(lotId) {
+  if (!S.hasBin) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId,
+      { [S.cols.LOT.bin]: 0 }]]);
+    await loadBoard();
+  } catch (e) { console.error('Could not unbag:', e); }
+}
+
 function cardHtml(l) {
-  const posPlaceholder = l.stage === WET ? 'W-C4' : 'D-B7';
-  const posField = S.hasPos
-    ? `<div class="pos-field">
-         <label>where</label>
-         <input id="pos-${l.id}" value="${esc(l.position)}" placeholder="${posPlaceholder}"
-                onkeydown="if(event.key==='Enter')savePosition(${l.id})">
-         <button class="btn-save" onclick="savePosition(${l.id})">save</button>
-       </div>`
-    : '';
+  // Rack position was never filled in on a single lot in two years of use —
+  // wet-to-dry happens on its own and nobody stops to type where a hank hangs.
+  // The bin is the thing worth recording, and only once it is bagged.
+  const sug = (S.hasBin && l.stage === DRY && !l.binId) ? suggestBin(l) : null;
+  const binField = !S.hasBin ? ''
+    : l.binId
+      ? `<div class="bin-tag">in <strong>${esc(S.binCode[l.binId] || '?')}</strong>
+           <button class="btn-back" onclick="unbag(${l.id})" title="Take it back out">undo</button></div>`
+      : (sug && sug.bin
+          ? `<button class="btn-bag" onclick="bagToBin(${l.id})">Bag &rarr; ${esc(sug.bin.code)}</button>
+             <span class="bin-why">${esc(sug.why)}</span>`
+          : '');
   const nextBtn = l.stage === WET
     ? `<button class="btn-next" onclick="moveTo(${l.id},'dry')">→ dry rack</button>`
     : (l.stage === DRY
@@ -290,7 +397,7 @@ function cardHtml(l) {
     l.name ? esc(l.name) : null,
     l.fiber || null,
     l.days != null ? `<span class="${aged ? 'aged' : ''}">${ageLabel(l.days)}</span>` : null,
-    l.position ? `at ${esc(l.position)}` : null,
+    l.binId ? `bin ${esc(S.binCode[l.binId] || '?')}` : null,
   ].filter(Boolean).join(' · ');
 
   return `
@@ -302,7 +409,7 @@ function cardHtml(l) {
       <div class="card-meta">${meta}</div>
       ${l.stage === DRY && l.waiting ? `<div class="waiting">${l.waiting} order${l.waiting === 1 ? '' : 's'} waiting — ready to wind</div>` : ''}
       ${l.isDraft ? `<div class="card-meta" style="color:var(--warn-text);">draft — name it in Recipe Builder</div>` : ''}
-      <div class="card-actions">${posField}${nextBtn}</div>
+      <div class="card-actions">${binField}${nextBtn}</div>
     </div>`;
 }
 
@@ -321,8 +428,8 @@ function render() {
   const byAge = (a, b) => (b.days == null ? -1 : b.days) - (a.days == null ? -1 : a.days);
   wet.sort(byAge); dry.sort(byAge); other.sort(byAge);
 
-  const posWarn = S.hasPos ? '' :
-    `<div class="warn">No <strong>Rack_Position</strong> column on Production_Lots — add a Text column with that name to record where each hank is hanging.</div>`;
+  const posWarn = S.hasBin ? '' :
+    `<div class="warn">No <strong>Storage_Bin</strong> column on Production_Lots, or no Storage_Locations table — bagging into bins is unavailable.</div>`;
 
   const section = (list, cls, label, emptyMsg) => `
     <div class="stage">
@@ -340,23 +447,6 @@ function render() {
   `;
 }
 
-async function savePosition(lotId) {
-  if (!S.hasPos) return;
-  const el = document.getElementById(`pos-${lotId}`);
-  const val = (el.value || '').trim();
-  try {
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Production_Lots', lotId, { [S.cols.LOT.position]: val }]
-    ]);
-    const lot = S.lots.find(l => l.id === lotId);
-    if (lot) lot.position = val;
-    showToast(val ? `Saved — ${val} ✓` : 'Position cleared');
-    render();
-  } catch (e) {
-    console.error('Failed to save position:', e);
-    showToast('Failed to save position');
-  }
-}
 
 async function moveTo(lotId, which) {
   const lot = S.lots.find(l => l.id === lotId);

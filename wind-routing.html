@@ -467,7 +467,11 @@ async function loadEverything() {
     // Where each colourway's back stock already lives, newest lot first. Read
     // from every lot, not just windable ones, because the shelved thread is
     // usually from an older lot that has nothing left to wind.
-    S.binFill = buildBinFill(lotsT, LOT);
+    // Allocated spools per lot, so the fill calc can work out what is still
+    // unwound in each bin.
+    const allocByLot = {};
+    allocs.forEach(a => { if (a.lotId) allocByLot[a.lotId] = (allocByLot[a.lotId] || 0) + a.qty; });
+    S.binFill = buildBinFill(lotsT, LOT, allocByLot);
     S.binMemory = {};
     if (LOT.bin) {
       const seen = {};
@@ -844,7 +848,7 @@ function shortHelpHtml(p) {
    hand, and the lots already know where they went. */
 const BIN_CAPACITY = 60;   // spools a bin holds comfortably
 
-function buildBinFill(lotsT, LOT) {
+function buildBinFill(lotsT, LOT, allocByLot) {
   const fill = {};
   if (!LOT.bin) return fill;
   (lotsT.id || []).forEach((id, i) => {
@@ -853,7 +857,14 @@ function buildBinFill(lotsT, LOT) {
     const v = LOT.vendorStock ? (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0) : 0;
     const g = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
     const st = LOT.storeStock ? (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0) : 0;
-    fill[bid] = (fill[bid] || 0) + v + g + st;
+    const total = LOT.spoolsMade ? (Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0) : 0;
+    const broken = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
+    // Bagged unwound thread shares these bins with wound surplus, so a bin full
+    // of hanks is just as full as one full of spools. Counting only the wound
+    // side meant the emptiest-bin rule would keep sending stock to a bin that
+    // was already packed.
+    const unwound = Math.max(0, total - (allocByLot[id] || 0) - (v + g + st) - broken);
+    fill[bid] = (fill[bid] || 0) + v + g + st + unwound;
   });
   return fill;
 }
