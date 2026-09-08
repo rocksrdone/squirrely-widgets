@@ -34,7 +34,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 
 /* ---------- kettle tag : 4 x 3.5in, 6 per page ---------- */
 .tag { width: 4in; height: 3.5in; padding: .15in .17in; outline: 1px dashed #B9B9B9;
-       outline-offset: -.5px; display: flex; flex-direction: column; }
+       outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden; }
 .tag > * { flex: none; }
 .tag .r1 { display: flex; justify-content: space-between; align-items: flex-start; }
 .tag .r1 > * + * { margin-left: .1in; }
@@ -47,22 +47,22 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
                  font-size: 17px; font-weight: bold; line-height: .32in; overflow: hidden;
                  white-space: nowrap; }
 .tag .cap { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .8px; margin-top: 1px; }
-.tag .meta { display: flex; margin-top: 5px; }
+.tag .meta { display: flex; margin-top: 4px; }
 .tag .meta div + div { margin-left: .13in; }
 .tag .meta div { border-bottom: 1.5px solid #000; height: .27in; font-size: 12.5px; font-weight: bold;
                  line-height: .27in; overflow: hidden; white-space: nowrap; }
 .tag .mcap { display: flex; font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .7px; }
 .tag .mcap span + span { margin-left: .13in; }
-.tag .photo { display: flex; margin-top: 6px; border: 2.5px solid #000; padding: 3px 7px; }
+.tag .photo { display: flex; margin-top: 4px; border: 2px solid #000; padding: 2px 7px; }
 .tag .photo span + span { margin-left: .28in; }
 .tag .photo span { font-size: 11.5px; font-weight: bold; text-transform: uppercase; letter-spacing: .6px;
                    flex: none; white-space: nowrap; }
 .tag .photo i, .tag .flags i, .tag .who i { display: inline-block; border: 2px solid #000; vertical-align: -2px; }
 .tag .photo i { width: 13px; height: 13px; margin-right: 5px; }
 .tag .photo i.on { background: #000; }
-.tag .who { margin-top: 6px; }
+.tag .who { margin-top: 4px; }
 .tag .who table { width: 100%; border-collapse: collapse; }
-.tag .who td { border-bottom: 1.5px solid #000; height: .28in; font-size: 12px; line-height: .28in;
+.tag .who td { border-bottom: 1.5px solid #000; height: .23in; font-size: 11.5px; line-height: .23in;
                overflow: hidden; white-space: nowrap; }
 .tag .who td.c { width: .26in; border-bottom: none; }
 .tag .who td.on { font-family: 'DM Mono', monospace; font-size: 9.5px; width: .55in; }
@@ -526,8 +526,7 @@ function tag(b, n) {
     <div class="mcap"><span style="flex:1">SKU</span>
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>LE</span><span><i></i>combining lots</span>
-      <span><i></i>short</span></div>
+    <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
     <div class="note"></div>
   </div>`;
 }
@@ -553,7 +552,7 @@ function blankTag(n) {
     <div class="mcap"><span style="flex:1">SKU</span>
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>LE</span><span><i></i>combining lots</span><span><i></i>short</span></div>
+    <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
     <div class="note"></div>
   </div>`;
 }
