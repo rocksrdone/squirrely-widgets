@@ -130,7 +130,10 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
                height: .2in; text-decoration: none; }
 .sh .nl { border-bottom: 1.5px solid #000; height: .28in; margin-top: 6px; }
 .sh .ncap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
-.sh .gate { border: 2.5px solid #000; padding: 5px 9px; margin-top: auto; }
+.sh .gate { border: 2px solid #000; padding: 5px 9px; margin-top: auto; }
+.sh .gcap { font-size: 8.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+  margin-bottom: 4px; }
+.sh .nl { border-bottom: 1.5px solid #000; height: .34in; margin-top: 7px; }
 .sh .g { display: flex; align-items: center; }
 .sh .g > * + * { margin-left: .22in; }
 .sh .g + .g { margin-top: 5px; }
@@ -358,7 +361,7 @@ async function load() {
       if (cCode) (custT.id || []).forEach((id, i) => { custCode[id] = columnAsArray(custT, cCode)[i] || ''; });
     }
 
-    LABELS = buildLabelIndex(clsT, tplT);
+    LOGO_BY_CUSTOMER = buildLogoIndex(custT);
 
     const woInfo = {};
     (woT.id || []).forEach((id, i) => {
@@ -546,69 +549,22 @@ function blankTag(n) {
 
    A customer can have several stocks (one per fiber), so the fiber narrows it:
    Label_Templates.Fiber_Codes lists which fibers each stock serves. */
-const HOUSE_STOCK = { FFN: 'OL3012WI', FFC: 'OL3012WI', EN: 'OL1025WI' };
-let LABELS = { byCustomer: {}, stockFibers: {}, stockDesc: {} };
+// Whose logo goes on the front. That is the only label fact this station acts
+// on — which stock to print on is the label widget's business, and the stock
+// code on this sheet was noise. Customers.Label_Front_Logo already holds the
+// answer for every customer; anything unset is the house logo.
+let LOGO_BY_CUSTOMER = {};
 
-// "FF Nylon" -> FFN. Recipes store the readable name; everything else uses codes.
-function fiberCode(fiber) {
-  const f = normalize(fiber);
-  if (!f) return '';
-  if (f.includes('COTTON')) return 'FFC';
-  if (f.startsWith('E ') || f === 'ENYLON' || f.includes('E NYLON')) return 'EN';
-  if (f.includes('NYLON')) return 'FFN';
-  return '';
-}
-
-function buildLabelIndex(clsT, tplT) {
-  const stockFibers = {};      // stock code -> [fiber codes it serves]
-  const stockDesc = {};
-  if (tplT) {
-    const sc = findColumn(tplT, ['Stock_Code']);
-    const fc = findColumn(tplT, ['Fiber_Codes']);
-    const de = findColumn(tplT, ['Description']);
-    if (sc) (tplT.id || []).forEach((id, i) => {
-      const code = columnAsArray(tplT, sc)[i];
-      if (!code) return;
-      stockDesc[code] = de ? (columnAsArray(tplT, de)[i] || '') : '';
-      stockFibers[code] = fc
-        ? String(columnAsArray(tplT, fc)[i] || '').split(',').map(x => normalize(x)).filter(Boolean)
-        : [];
-    });
-  }
-
-  const byCustomer = {};       // customer row id -> [{stock, scale}]
-  if (clsT) {
-    const cu = findColumn(clsT, ['Customer']);
-    const sc = findColumn(clsT, ['Stock_Code']);
-    const scl = findColumn(clsT, ['Scale']);
-    if (cu && sc) (clsT.id || []).forEach((id, i) => {
-      const cid = getRefId(columnAsArray(clsT, cu)[i]);
-      const stock = columnAsArray(clsT, sc)[i];
-      if (!cid || !stock) return;
-      (byCustomer[cid] = byCustomer[cid] || []).push({
-        stock, scale: scl ? columnAsArray(clsT, scl)[i] : null,
-      });
-    });
-  }
-  return { byCustomer, stockFibers, stockDesc };
-}
-
-// Returns { stock, desc, scale, house } — house=true when nothing was set for
-// this customer and the SS label applies.
-function labelFor(LBL, custId, fiber) {
-  const fcode = fiberCode(fiber);
-  const prefs = (custId && LBL.byCustomer[custId]) || [];
-
-  // Prefer a stock that actually serves this fiber; fall back to their only one.
-  let hit = prefs.find(p => {
-    const serves = LBL.stockFibers[p.stock] || [];
-    return serves.length ? serves.includes(fcode) : false;
+function buildLogoIndex(custT) {
+  const out = {};
+  if (!custT) return out;
+  const col = findColumn(custT, ['Label_Front_Logo', 'Front_Logo_Choice']);
+  if (!col) return out;
+  (custT.id || []).forEach((id, i) => {
+    const v = String(columnAsArray(custT, col)[i] || '');
+    out[id] = /customer/i.test(v) ? 'custom' : 'ss';
   });
-  if (!hit && prefs.length === 1) hit = prefs[0];
-
-  if (hit) return { stock: hit.stock, desc: LBL.stockDesc[hit.stock] || '', scale: hit.scale, house: false };
-  const stock = HOUSE_STOCK[fcode] || '';
-  return { stock, desc: LBL.stockDesc[stock] || '', scale: null, house: true };
+  return out;
 }
 
 /* One sheet PER ORDER, not one per bag.
@@ -655,13 +611,11 @@ function orderBin(o) {
 
 function sheetOrder(b, n, o, idx, total) {
   const bin = orderBin(o);
-  const lab = labelFor(LABELS, o.custId, b.fiber);
+  const logo = LOGO_BY_CUSTOMER[o.custId] === 'custom' ? 'custom' : 'ss';
   return sheetShell(code(n),
     `Order ${idx + 1} of ${total} from this lot &middot; this sheet and its spools stay together`,
     idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
-    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
-     <div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
+    `<div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
        <span><i></i>taken</span><span><i></i>shared to this order</span>
        <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
      <table>
@@ -671,23 +625,20 @@ function sheetOrder(b, n, o, idx, total) {
            <td class="q">${o.qty}</td>
            <td style="text-align:center"><b>${esc(bin || '\u2014')}</b></td></tr>
      </table>
-     <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
-       <div class="sep"></div><b><i></i>Sorted to ${esc(bin || 'order bin')}</b></div>
      <div class="lbl">
-       <div class="lbl-cap">Label</div>
-       <div class="lbl-stock">${esc(lab.stock || '\u2014')}</div>
-       <div class="lbl-desc">${esc(lab.desc || '')}${lab.scale ? ` &middot; scale ${lab.scale}` : ''}
-         <em>${lab.house ? 'house SS label \u2014 no customer preference set' : 'customer\u2019s own stock'}</em></div>
-       <div class="lbl-done"><i></i>all ${o.qty} labelled</div>
+       <div class="lbl-cap">Front logo</div>
+       <div class="lbl-stock">${logo === 'custom' ? 'CUSTOMER LOGO' : 'SS LOGO'}</div>
+       <div class="lbl-desc"><em>${logo === 'custom' ? esc(o.customer) + '\u2019s own artwork' : 'house Squirrely Stash logo'}</em></div>
      </div>
-     <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
+     <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
+       <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
      <div class="nl"></div>
-     <div class="ncap">anything that did not go to plan, here</div>
+     <div class="ncap">note from the dye bench &mdash; anything winding or labelling should know</div>
      <div class="gate">
-       <div class="g"><span class="gt">All yes &rarr; finish it</span><span><i></i>count matches</span>
-         <span><i></i>right label on each</span><span><i></i>in the right order bin</span></div>
-       <div class="back"><i></i><b>Any no &mdash; back to control</b><u></u></div>
+       <div class="gcap">Only tick if something is wrong &mdash; then it goes back to control</div>
+       <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
+         <span><i></i>lots do not match</span></div>
+       <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
      </div>`);
 }
 
@@ -695,13 +646,10 @@ function sheetStock(b, n, spare) {
   return sheetShell(code(n),
     'Back stock from this lot &middot; goes to the back stock rack, not an order bin',
     idFields(b, `<div class="f s"><div class="ln">${spare}</div><div class="cp">spools to stock</div></div>`),
-    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
+    `
      <div class="stock"><b>Back stock</b><div class="qb">${spare || ''}</div><em>recount first</em>
        <div class="sep"></div><b>Bin</b><em>write the bin you used</em><u></u></div>
      <div class="stock"><b><i></i>Limited Edition</b><em>why</em><u></u></div>
-     <div class="band"><span class="who">2 &nbsp;Label &amp; shelve</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
      <div class="nl"></div>
      <div class="ncap">notes</div>`);
 }
@@ -713,8 +661,7 @@ function sheetSpare(n) {
     'Spare &middot; for a redo or an unplanned lot',
     idFields({ colorway: '', fiber: '' }, `<div class="f s"><div class="ln"></div><div class="cp">spools</div></div>`)
       .replace('<div class="ln"></div><div class="cp">colorway</div>', '<div class="ln"></div><div class="cp">colorway</div>'),
-    `<div class="band"><span class="who">1 &nbsp;Control</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
+    `
      <table>
        <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
            <th style="width:.8in">spools</th><th style="width:1.6in;text-align:center">order bin</th></tr>
@@ -725,8 +672,6 @@ function sheetSpare(n) {
        <div class="lbl-done"><i></i>labelled</div></div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Sorted to</b><em>write the order bin</em><u></u></div>
-     <div class="band"><span class="who">2 &nbsp;Label &amp; pack</span><span class="rule"></span>
-       <span class="sg">initials</span><span class="sgl"></span></div>
      <div class="nl"></div>
      <div class="ncap">notes</div>`);
 }
