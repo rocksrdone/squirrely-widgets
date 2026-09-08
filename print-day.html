@@ -65,6 +65,8 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .who td { border-bottom: 1.5px solid #000; height: .28in; font-size: 12px; line-height: .28in;
                overflow: hidden; white-space: nowrap; }
 .tag .who td.c { width: .26in; border-bottom: none; }
+.tag .who td.on { font-family: 'DM Mono', monospace; font-size: 9.5px; width: .55in; }
+.tag .who tr.bs td { font-style: italic; }
 .tag .who td.q { width: .58in; font-weight: bold; text-align: right; padding-right: 3px; }
 .tag .who i { width: 13px; height: 13px; }
 .tag .flags { display: flex; align-items: center; margin-top: 6px; }
@@ -79,6 +81,8 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
       outline-offset: -.5px; display: flex; flex-direction: column; }
 .sh .head { display: flex; justify-content: space-between; align-items: flex-start;
             border-bottom: 2.5px solid #000; padding-bottom: 5px; }
+.sh .ttl.cw { font-size: 21px; line-height: 1.1; letter-spacing: 0; text-transform: none;
+  font-weight: 700; overflow-wrap: anywhere; }
 .sh .ttl { font-size: 17px; font-weight: bold; letter-spacing: .5px; text-transform: uppercase; }
 .sh .sub { font-size: 10px; color: #555; }
 .sh .bagcode { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; text-align: right; }
@@ -486,29 +490,44 @@ const code = n => 'SS-' + n;
 function tag(b, n) {
   if (b === 'blank') return blankTag(n);
   if (!b) return '<div class="tag"></div>';
+  // The tag is the record of INTENT at the kettle, and the only place the
+  // physical thread meets the plan. It gets discarded once the lot is bagged, so
+  // everything on it has to be actionable before that: which orders this pot is
+  // meant to cover, how many each expects, and what is left for stock.
+  //
+  // Each order is a tick, not a write-in. One pot commonly covers several orders
+  // plus a remainder, and deciding that at the kettle is the whole job — ticking
+  // three boxes is fast enough to do with wet gloves, writing three names is not.
+  const planned = (b.orders || []).slice(0, 4);
+  const spare = Math.max(0, b.spools - planned.reduce((t, o) => t + o.qty, 0));
   let rows = '';
-  for (let k = 0; k < 3; k++) {
-    const o = b.orders[k];
+  for (let k = 0; k < 4; k++) {
+    const o = planned[k];
     rows += `<tr><td class="c"><i></i></td><td>${o ? esc(o.customer) : ''}</td>` +
+            `<td class="on">${o ? esc(o.number) : ''}</td>` +
             `<td class="q">${o ? o.qty : ''}</td></tr>`;
   }
+  // Remainder gets its own tickable row, so "extra left over" is a decision that
+  // was made rather than a number discovered at the rack.
+  rows += `<tr class="bs"><td class="c"><i></i></td><td>back stock</td>` +
+          `<td class="on"></td><td class="q">${spare || ''}</td></tr>`;
+
   return `<div class="tag">
     <div class="r1">
-      <div style="flex:1">
+      <div style="flex:1;min-width:0">
         <div class="code">${code(n)}</div>
         <div class="nameline">${esc(b.colorway)}</div>
         <div class="cap">colorway</div>
       </div>
-      <div class="bin"><div class="l">bin</div><div class="b"></div></div>
+      <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
     </div>
-    <div class="meta"><div style="flex:1"></div><div style="flex:1">${esc(b.sku)}</div>
-      <div style="flex:0 0 .6in">${esc(b.fiber)}</div><div style="flex:0 0 .6in">${b.spools || ''}</div></div>
-    <div class="mcap"><span style="flex:1">lot</span><span style="flex:1">SKU</span>
-      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .6in">spools</span></div>
-    <div class="photo"><span><i class="${b.photo ? 'on' : ''}"></i>photo</span>
-      <span><i class="${b.photo ? '' : 'on'}"></i>no photo</span></div>
-    <div class="who"><div class="cap">likely for</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>LE</span><span><i></i>combining</span></div>
+    <div class="meta"><div style="flex:1">${esc(b.sku)}</div>
+      <div style="flex:0 0 .6in">${esc(b.fiber)}</div><div style="flex:0 0 .7in">${b.spools || ''}</div></div>
+    <div class="mcap"><span style="flex:1">SKU</span>
+      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
+    <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
+    <div class="flags"><span><i></i>LE</span><span><i></i>combining lots</span>
+      <span><i></i>short</span></div>
     <div class="note"></div>
   </div>`;
 }
@@ -518,23 +537,23 @@ function tag(b, n) {
 // else is written by hand at the kettle.
 function blankTag(n) {
   let rows = '';
-  for (let k = 0; k < 3; k++) rows += '<tr><td class="c"><i></i></td><td></td><td class="q"></td></tr>';
+  for (let k = 0; k < 4; k++) rows += '<tr><td class="c"><i></i></td><td></td><td class="on"></td><td class="q"></td></tr>';
+  rows += '<tr class="bs"><td class="c"><i></i></td><td>back stock</td><td class="on"></td><td class="q"></td></tr>';
   return `<div class="tag">
     <div class="r1">
-      <div style="flex:1">
-        <div class="code">${code(n)}<span style="font-family:Helvetica,Arial,sans-serif;font-size:9px;font-weight:normal;letter-spacing:1px;color:#777;margin-left:8px;">SPARE &mdash; NOT PLANNED</span></div>
+      <div style="flex:1;min-width:0">
+        <div class="code">${code(n)}<span style="font-family:Helvetica,Arial,sans-serif;font-size:9px;font-weight:normal;letter-spacing:1px;color:#777;margin-left:8px;">SPARE</span></div>
         <div class="nameline"></div>
         <div class="cap">colorway</div>
       </div>
-      <div class="bin"><div class="l">bin</div><div class="b"></div></div>
+      <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
     </div>
-    <div class="meta"><div style="flex:1"></div><div style="flex:1"></div>
-      <div style="flex:0 0 .6in"></div><div style="flex:0 0 .6in"></div></div>
-    <div class="mcap"><span style="flex:1">lot</span><span style="flex:1">SKU</span>
-      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .6in">spools</span></div>
-    <div class="photo"><span><i></i>photo</span><span><i></i>no photo</span></div>
-    <div class="who"><div class="cap">likely for &mdash; leave blank if this is a one-off</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>LE</span><span><i></i>combining</span></div>
+    <div class="meta"><div style="flex:1"></div>
+      <div style="flex:0 0 .6in"></div><div style="flex:0 0 .7in"></div></div>
+    <div class="mcap"><span style="flex:1">SKU</span>
+      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
+    <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
+    <div class="flags"><span><i></i>LE</span><span><i></i>combining lots</span><span><i></i>short</span></div>
     <div class="note"></div>
   </div>`;
 }
@@ -584,10 +603,10 @@ function buildLogoIndex(custT) {
    winding bench with the lots side by side. The sheets are printed per order;
    who physically gets which spools is decided when someone can see them. */
 
-function sheetShell(code, sub, ident, body) {
+function sheetShell(code, title, sub, ident, body) {
   return `<div class="sh">
     <div class="head">
-      <div><div class="ttl">One order</div><div class="sub">${sub}</div></div>
+      <div style="min-width:0"><div class="ttl">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
       <div><div class="bagcap">bag</div><div class="bagcode">${code}</div></div>
     </div>
     <div class="id">${ident}</div>
@@ -595,8 +614,10 @@ function sheetShell(code, sub, ident, body) {
   </div>`;
 }
 
+// The colourway is now the heading, so this strip carries the SKU in the slot
+// the colourway used to hold — still wanted, just not at heading size.
 function idFields(b, extra) {
-  return `<div class="f"><div class="ln">${esc(b.colorway)}</div><div class="cp">colorway</div></div>
+  return `<div class="f"><div class="ln">${esc(b.sku || '')}</div><div class="cp">SKU</div></div>
     <div class="f"><div class="ln"></div><div class="cp">lot number</div></div>
     <div class="f s"><div class="ln">${esc(b.fiber)}</div><div class="cp">fiber</div></div>
     ${extra}`;
@@ -613,7 +634,8 @@ function sheetOrder(b, n, o, idx, total) {
   const bin = orderBin(o);
   const logo = LOGO_BY_CUSTOMER[o.custId] === 'custom' ? 'custom' : 'ss';
   return sheetShell(code(n),
-    `Order ${idx + 1} of ${total} from this lot &middot; this sheet and its spools stay together`,
+    `<span class="ttl cw">${esc(b.colorway)}</span>`,
+    total > 1 ? `one of ${total} orders from this lot` : '',
     idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
     `<div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
        <span><i></i>taken</span><span><i></i>shared to this order</span>
@@ -633,7 +655,9 @@ function sheetOrder(b, n, o, idx, total) {
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
      <div class="nl"></div>
-     <div class="ncap">note from the dye bench &mdash; anything winding or labelling should know</div>
+     <div class="ncap">for winding &mdash; from the dye bench</div>
+     <div class="nl"></div>
+     <div class="ncap">for labelling &mdash; from the dye bench or the winder</div>
      <div class="gate">
        <div class="gcap">Only tick if something is wrong &mdash; then it goes back to control</div>
        <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
@@ -644,7 +668,8 @@ function sheetOrder(b, n, o, idx, total) {
 
 function sheetStock(b, n, spare) {
   return sheetShell(code(n),
-    'Back stock from this lot &middot; goes to the back stock rack, not an order bin',
+    `<span class="ttl cw">${esc(b.colorway)}</span>`,
+    'back stock &mdash; to the back stock rack, not an order bin',
     idFields(b, `<div class="f s"><div class="ln">${spare}</div><div class="cp">spools to stock</div></div>`),
     `
      <div class="stock"><b>Back stock</b><div class="qb">${spare || ''}</div><em>recount first</em>
@@ -658,7 +683,8 @@ function sheetStock(b, n, spare) {
 // waits on a reprint, so a few go out with every day's stack.
 function sheetSpare(n) {
   return sheetShell(n == null ? '' : code(n),
-    'Spare &middot; for a redo or an unplanned lot',
+    '<span class="ttl cw">&nbsp;</span>',
+    'spare &mdash; write the colourway above',
     idFields({ colorway: '', fiber: '' }, `<div class="f s"><div class="ln"></div><div class="cp">spools</div></div>`)
       .replace('<div class="ln"></div><div class="cp">colorway</div>', '<div class="ln"></div><div class="cp">colorway</div>'),
     `
