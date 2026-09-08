@@ -106,7 +106,7 @@
   .bin-name { font-weight:700; font-size:13px; }
   .bin-meta { font-size:10px; color:#8B7D72; }
   .bin-items { margin-top:4px; }
-  .bin-item { display:flex; align-items:center; gap:8px; padding:4px 0;
+  .bin-item { display:flex; align-items:center; gap:8px; padding:4px 0; flex-wrap:wrap;
               border-top:1px solid var(--rule); font-size:12px; color:#5A5048; }
   .bin-item-name { flex:1; min-width:0; }
   .bin-item-qty { font-weight:700; color:var(--teal); }
@@ -114,6 +114,17 @@
   .bin-item.done .bin-item-name { text-decoration:line-through; opacity:.65; }
   .bin-item-tick { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
                    background:var(--done-bg); color:var(--done-text); border-radius:9px; padding:2px 7px; }
+  /* Glove-sized. 40px is about the smallest target that stays reliable with
+     nitrile on, and this row gets pressed with bagged spools in the other hand. */
+  .bin-btns { display:flex; gap:5px; flex:none; }
+  .glove { min-height:40px; min-width:74px; padding:6px 11px; border:1px solid var(--rule);
+    border-radius:6px; background:white; font-family:'Inter',sans-serif; font-size:12px;
+    font-weight:600; color:var(--ink); cursor:pointer; white-space:nowrap; }
+  .glove:active { transform:translateY(1px); }
+  .glove:disabled { opacity:.35; cursor:default; }
+  .glove.sort { background:var(--warn-bg); border-color:var(--warn-text); color:var(--warn-text); }
+  .glove.pack { background:var(--done-bg); border-color:var(--done-text); color:var(--done-text); }
+  .glove.ghost { background:white; color:#6B5E52; }
   button.mini { background:var(--teal); color:white; border:0; border-radius:5px; padding:7px 11px;
                 font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
   button.mini.ghost { background:white; color:var(--teal); border:1px solid var(--teal); padding:5px 9px; }
@@ -294,6 +305,8 @@ async function loadEverything() {
     const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
       lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
       customer: opt(['Customer']), line: opt(['Work_Order_Line']),
+      // Optional: without it the sort step hides and nothing else changes.
+      orderBin: opt(['Order_Bin', 'Sorted_Bin', 'Bin']),
     }, missing);
     const WOL = resolveCols(wolT, 'Work_Order_Lines', {
       workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
@@ -304,7 +317,9 @@ async function loadEverything() {
       customerName: opt(['Customer_Name']), customer: opt(['Customer']),
       dueDate: opt(['Due_Date']), bump: opt(['Priority_Bump']),
     }, missing);
-    const CUST = resolveCols(custT, 'Customers', { name: opt(['Customer_Name']) }, missing);
+    const CUST = resolveCols(custT, 'Customers', {
+      name: opt(['Customer_Name']), code: opt(['Code', 'Customer_Code', 'Vendor_Code']),
+    }, missing);
 
     if (missing.length) {
       document.getElementById('content').innerHTML =
@@ -347,12 +362,19 @@ async function loadEverything() {
         lineId: ALLOC.line ? getRefId(columnAsArray(allocT, ALLOC.line)[i]) : null,
         qty: Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0,
         status: st,
+        orderBin: ALLOC.orderBin ? (columnAsArray(allocT, ALLOC.orderBin)[i] || '') : '',
       };
     });
     S.woundStatus = BIN_STATUS;
     S.packedStatus = pickPackedStatus(statusValues);
 
     // Work orders
+    // Short codes, so a bin can be named O-MMI-1073 rather than by row id.
+    const custCodeById = {};
+    if (CUST.code) (custT.id || []).forEach((id, i) => {
+      custCodeById[id] = columnAsArray(custT, CUST.code)[i] || '';
+    });
+
     const woInfo = {};
     (woT.id || []).forEach((id, i) => {
       woInfo[id] = {
@@ -360,6 +382,7 @@ async function loadEverything() {
         orderNumber: columnAsArray(woT, WO.orderNumber)[i],
         customerName: columnAsArray(woT, WO.customerName)[i] || '',
         customerId: getRefId(columnAsArray(woT, WO.customer)[i]),
+        customerCode: CUST.code ? (custCodeById[getRefId(columnAsArray(woT, WO.customer)[i])] || '') : '',
         dueDate: columnAsArray(woT, WO.dueDate)[i],
         bump: WO.bump ? !!columnAsArray(woT, WO.bump)[i] : false,
       };
@@ -434,15 +457,19 @@ async function loadEverything() {
       if (!info) return;
       const b = binsByWo[meta.woId] = binsByWo[meta.woId] || {
         woId: meta.woId, orderNumber: info.orderNumber || '',
-        customerName: info.customerName || '', items: {}, total: 0,
+        customerName: info.customerName || '', customerCode: info.customerCode || '',
+        items: {}, total: 0,
       };
       // One row per order line, because that is one colorway going into the box.
       const key = a.lineId != null ? `L${a.lineId}` : `R${meta.recipeId}`;
       const it = b.items[key] = b.items[key] || {
         key, name: (recipeById[meta.recipeId] || {}).name || 'Unknown colorway',
-        qty: 0, allocIds: [], boxedQty: 0,
+        qty: 0, allocIds: [], boxedQty: 0, sortedQty: 0,
       };
-      if (waiting) { it.qty += a.qty; it.allocIds.push(a.id); b.total += a.qty; }
+      if (waiting) {
+        it.qty += a.qty; it.allocIds.push(a.id); b.total += a.qty;
+        if (a.orderBin) it.sortedQty += a.qty;
+      }
       else { it.boxedQty += a.qty; }
     });
     // Only orders with something still waiting; already-boxed rows ride along so
@@ -573,6 +600,62 @@ function binMatch(b) {
   return normalize(`${b.customerName} ${b.orderNumber} ${b.itemList.map(i => i.name).join(' ')}`).includes(q);
 }
 
+/* ── Sort step: wound → order bin → labelled ──────────────────────────
+   Winding used to hand straight to labelling, but physically there is a step
+   between: bagged spools go into a bin belonging to one customer order, and
+   only once a bin holds everything does labelling start. Without recording
+   that, the labeller cannot tell a bin that is merely started from one that is
+   complete, and the per-order sheets now printed at the kettle assume the bin
+   exists by name.
+
+   Recorded as a bin code on the allocation rather than a new status value:
+   allocBucket() is byte-identical across four widgets and adding a stage there
+   would mean changing all of them in lockstep. A bin code answers "is it
+   sorted" on its own and carries the more useful fact besides.
+
+   Needs one Text column on Lot_Allocations — Order_Bin. Without it the sort
+   step hides itself and the widget behaves exactly as it did before. */
+function orderBinCode(customerCode, orderNumber) {
+  const c = String(customerCode || '').trim().toUpperCase();
+  const o = String(orderNumber || '').trim().replace(/^#/, '');
+  return c && o ? `O-${c}-${o}` : '';
+}
+
+async function markSorted(woId, itemKey) {
+  const b = S.bins.find(x => x.woId === woId);
+  if (!b || !S.cols.ALLOC.orderBin) return;
+  const items = (itemKey ? b.itemList.filter(i => i.key === itemKey) : b.itemList)
+    .filter(i => i.qty > 0 && !i.sorted);
+  const ids = items.reduce((acc, i) => acc.concat(i.allocIds), []);
+  if (!ids.length) return;
+  const bin = orderBinCode(b.customerCode, b.orderNumber);
+  if (!bin) { showToast('No customer code — cannot name the bin'); return; }
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', ids,
+      { [S.cols.ALLOC.orderBin]: ids.map(() => bin) }]]);
+    showToast(`${items.length === 1 ? items[0].name : b.customerName || 'Order'} → ${bin}`);
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not mark sorted:', e);
+    showToast('Could not update — see console');
+  }
+}
+
+async function undoSorted(woId, itemKey) {
+  const b = S.bins.find(x => x.woId === woId);
+  if (!b || !S.cols.ALLOC.orderBin) return;
+  const items = b.itemList.filter(i => i.key === itemKey);
+  const ids = items.reduce((acc, i) => acc.concat(i.allocIds), []);
+  if (!ids.length) return;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', ids,
+      { [S.cols.ALLOC.orderBin]: ids.map(() => '') }]]);
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not undo sort:', e);
+  }
+}
+
 function binsHtml(withTitle) {
   const list = S.bins.filter(binMatch);
   if (!list.length) return '';
@@ -580,22 +663,45 @@ function binsHtml(withTitle) {
     // Buttons are verbs (what pressing this does); chips are past tense (what
     // already happened). The old wording used "In box ✓" for both, so the same
     // words meant "do this" on one row and "done" on the next.
-    const rows = b.itemList.map(it => it.qty === 0
-      ? `<div class="bin-item done">
+    const bin = orderBinCode(b.customerCode, b.orderNumber);
+    const canSort = !!S.cols.ALLOC.orderBin;
+
+    const rows = b.itemList.map(it => {
+      if (it.qty === 0) {
+        return `<div class="bin-item done">
            <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty}</span>
            <span class="bin-item-tick">&#10003; boxed</span>
-         </div>`
-      : `<div class="bin-item">
+         </div>`;
+      }
+      const sorted = canSort && it.sortedQty >= it.qty;
+      // Sorting comes first: a bagged colorway goes into the customer's bin,
+      // and only then is it labelled. Labelling stays locked until it is in the
+      // bin, because that is the order the physical work happens in and an
+      // out-of-order tap here means a bag labelled on the bench and lost.
+      const sortBtn = !canSort ? ''
+        : sorted
+          ? `<button class="glove ghost" onclick="undoSorted(${b.woId}, '${it.key}')"
+               title="Put it back — not actually in the bin">&#10003; in ${esc(bin)}</button>`
+          : `<button class="glove sort" onclick="markSorted(${b.woId}, '${it.key}')"
+               title="These ${it.qty} spools are bagged and going into the bin">&rarr; ${esc(bin || 'bin')}</button>`;
+      const labelBtn = (canSort && !sorted)
+        ? `<button class="glove" disabled title="Sort it into the bin first">Labelled &rarr; box</button>`
+        : `<button class="glove pack" onclick="markPacked(${b.woId}, '${it.key}')"
+             title="Labels are on these ${it.qty} spool${it.qty === 1 ? '' : 's'} and they're in the box">Labelled &rarr; box</button>`;
+      return `<div class="bin-item">
            <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span></span>
-           <button class="mini" onclick="markPacked(${b.woId}, '${it.key}')"
-             title="Labels are on these ${it.qty} spool${it.qty === 1 ? '' : 's'} and they're in the box">Labelled &rarr; box</button>
-         </div>`).join('');
+           <span class="bin-btns">${sortBtn}${labelBtn}</span>
+         </div>`;
+    }).join('');
     const openItems = b.itemList.filter(i => i.qty > 0).length;
     // Spools and colorways are different units — say which is which rather
     // than running "12 to go · 2 of 5" together and leaving it ambiguous.
-    const progress = b.doneCount
-      ? ` &middot; ${b.doneCount} of ${b.itemList.length} colorways boxed`
-      : '';
+    const nSorted = b.itemList.filter(i => i.qty > 0 && i.sortedQty >= i.qty).length;
+    const nOpen = b.itemList.filter(i => i.qty > 0).length;
+    const progress = [
+      b.doneCount ? `${b.doneCount} of ${b.itemList.length} colorways boxed` : '',
+      (canSort && nOpen) ? `${nSorted} of ${nOpen} in ${bin || 'the bin'}` : '',
+    ].filter(Boolean).map(x => ' &middot; ' + x).join('');
     return `
       <div class="bin-card">
         <div class="bin-head">
@@ -604,8 +710,11 @@ function binsHtml(withTitle) {
             <div class="bin-meta">${esc(b.orderNumber || '')}${b.orderNumber ? ' &middot; ' : ''}${
               b.total} spool${b.total === 1 ? '' : 's'} still to label${progress}</div>
           </div>
-          ${openItems > 1 ? `<button class="mini ghost" onclick="markPacked(${b.woId}, null)"
-            title="Mark all ${openItems} remaining colorways labelled and boxed">All ${openItems} done</button>` : ''}
+          ${openItems > 1 ? (canSort && b.itemList.some(i => i.qty > 0 && i.sortedQty < i.qty)
+            ? `<button class="glove sort" onclick="markSorted(${b.woId}, null)"
+                 title="All remaining bagged colorways into ${esc(bin)}">All &rarr; ${esc(bin || 'bin')}</button>`
+            : `<button class="glove ghost" onclick="markPacked(${b.woId}, null)"
+                 title="Mark all ${openItems} remaining colorways labelled and boxed">All ${openItems} done</button>`) : ''}
         </div>
         <div class="bin-items">${rows}</div>
       </div>`;
