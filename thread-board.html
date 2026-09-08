@@ -23,6 +23,15 @@
   .sub { font-size: 11px; color: #8B7D72; margin-bottom: 8px; }
 
   .stage { margin-bottom: 12px; }
+  .stale-banner { font-size:11.5px; color:var(--warn-text); background:var(--warn-bg);
+    border:1px solid var(--warn-text); border-radius:6px; padding:7px 10px; margin-bottom:8px; }
+  .resolve { margin-top:7px; padding:7px 9px; border:1px solid var(--warn-text);
+    border-radius:6px; background:var(--warn-bg); }
+  .resolve-cap { font-size:11px; color:var(--warn-text); font-weight:600; margin-bottom:5px; }
+  .resolve-btns { display:flex; gap:5px; flex-wrap:wrap; }
+  .btn-res { min-height:36px; padding:6px 11px; border:1px solid var(--warn-text); border-radius:5px;
+    background:#fff; color:var(--warn-text); font-size:11.5px; font-weight:600; cursor:pointer; }
+  .btn-res.ghost { border-color:var(--rule); color:#8B7D72; }
   .stage-bagged { background:var(--done-bg); color:var(--done-text); }
   .stage-head {
     display: flex; justify-content: space-between; align-items: center;
@@ -278,6 +287,10 @@ async function loadBoard() {
         position: LOT.position ? (columnAsArray(lotsT, LOT.position)[i] || '') : '',
         rawStatus, stage: stageOf(rawStatus),
         total, unwound: Math.max(0, total - spoken),
+        stockNow: (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0)
+          + (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0)
+          + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0),
+        brokenNow: LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0,
         days: daysSince(LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null),
         waiting: waitingByRecipe[recipeId] || 0,
         isDraft: !!draft && !recipe.name,
@@ -373,6 +386,83 @@ async function unbag(lotId) {
   } catch (e) { console.error('Could not unbag:', e); }
 }
 
+/* ── Closing out stale lots ───────────────────────────────────────────
+   A lot shows here while its arithmetic says spools are unaccounted for:
+   made, minus allocated, minus stock, minus broken. When winding was recorded
+   elsewhere but the leftover never was, the remainder sits on the board for
+   weeks — 81 lots and roughly 600 spools of it at the time this was written,
+   some dyed five weeks earlier.
+
+   The remainder is not a mystery, it is one of three things, so it is offered
+   as three buttons rather than a free-text field. Each writes the number into
+   the column that makes the lot balance, which is what takes it off the board.
+
+   Deliberately per lot, not a bulk sweep: "everything older than a month is
+   back stock" would be a guess written 37 times, and a wrong write here is
+   invisible afterwards. */
+const STALE_DAYS = 21;
+
+function isStale(l) { return l.days != null && l.days >= STALE_DAYS; }
+
+async function resolveRemainder(lotId, how) {
+  const l = S.lots.find(x => x.id === lotId);
+  if (!l || l.unwound <= 0) return;
+  const n = l.unwound;
+  const { LOT } = S.cols;
+  const label = { stock: `${n} to back stock`, broken: `${n} broken or lost`, never: `${n} never made` }[how];
+  if (!window.confirm(`${l.lotNumber}\n\n${label}.\n\nThis balances the lot and takes it off the board.`)) return;
+
+  const fields = {};
+  if (how === 'stock') {
+    const col = LOT.vendorStock || LOT.generalStock || LOT.storeStock;
+    if (!col) { showToast('No stock column to write to'); return; }
+    fields[col] = (l.stockNow || 0) + n;
+    // Shelved thread needs a bin, same rule as everywhere else.
+    if (LOT.bin && !l.binId && S.hasBin) {
+      const sug = suggestBin({ ...l, unwound: n });
+      if (sug.bin) fields[LOT.bin] = sug.bin.id;
+    }
+  } else if (how === 'broken') {
+    if (!LOT.broken) { showToast('No Broken_Spools column'); return; }
+    fields[LOT.broken] = (l.brokenNow || 0) + n;
+  } else {
+    if (!LOT.spoolsMade) { showToast('No Spools_Made column'); return; }
+    fields[LOT.spoolsMade] = Math.max(0, (l.total || 0) - n);
+  }
+
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, fields]]);
+    showToast(`${l.lotNumber} — ${label}`);
+    await loadBoard();
+  } catch (e) {
+    console.error('Could not resolve remainder:', e);
+    showToast('Could not update — see console');
+  }
+}
+
+function staleBanner() {
+  const stale = S.lots.filter(l => isStale(l) && l.unwound > 0);
+  if (!stale.length) return '';
+  const spools = stale.reduce((n, l) => n + l.unwound, 0);
+  return `<div class="stale-banner">
+    <strong>${stale.length} lot${stale.length === 1 ? '' : 's'}</strong> with
+    <strong>${spools} spool${spools === 1 ? '' : 's'}</strong> unaccounted for over ${STALE_DAYS} days.
+    Each has buttons on its card to close it out.
+  </div>`;
+}
+
+function resolveHtml(l) {
+  if (!isStale(l) || l.unwound <= 0) return '';
+  return `<div class="resolve">
+    <div class="resolve-cap">${l.unwound} spool${l.unwound === 1 ? '' : 's'} unaccounted for ${ageLabel(l.days)} &mdash; what happened to them?</div>
+    <div class="resolve-btns">
+      <button class="btn-res" onclick="resolveRemainder(${l.id},'stock')">Back stock</button>
+      <button class="btn-res" onclick="resolveRemainder(${l.id},'broken')">Broken / lost</button>
+      <button class="btn-res ghost" onclick="resolveRemainder(${l.id},'never')">Never made</button>
+    </div>
+  </div>`;
+}
+
 function cardHtml(l) {
   // Rack position was never filled in on a single lot in two years of use —
   // wet-to-dry happens on its own and nobody stops to type where a hank hangs.
@@ -411,6 +501,7 @@ function cardHtml(l) {
       ${l.waiting ? `<div class="waiting">${l.waiting} order${l.waiting === 1 ? '' : 's'} waiting on this colorway</div>` : ''}
       ${l.isDraft ? `<div class="card-meta" style="color:var(--warn-text);">draft — name it in Recipe Builder</div>` : ''}
       <div class="card-actions">${binField}${nextBtn}</div>
+      ${resolveHtml(l)}
     </div>`;
 }
 
@@ -444,6 +535,7 @@ function render() {
   c.innerHTML = `
     <div class="head"><span class="title">Thread Board</span></div>
     <div class="sub">Where every unwound lot is &mdash; drying, waiting to be bagged, or in a bin.</div>
+    ${staleBanner()}
     ${posWarn}
     ${section(wet, 'stage-wet', 'Drying', 'nothing on the wet rack')}
     ${section(dry, 'stage-dry', 'Dry \u2014 wind it or bag it', 'nothing waiting')}
