@@ -166,6 +166,16 @@
     margin-bottom:8px; border:1px dashed var(--warn-text); border-radius:6px;
     background:var(--warn-bg); font-size:12px; color:var(--warn-text); }
   .st-bar span { flex:1; min-width:180px; }
+  .bin-choice { margin-top:8px; padding-top:7px; border-top:1px dashed var(--rule); }
+  .bin-choice-cap { font-size:11px; color:var(--ink); margin-bottom:5px; }
+  .bin-choice .btn-row { display:flex; flex-wrap:wrap; gap:4px; }
+  .bin-choice .glove { min-width:52px; min-height:38px; font-family:'DM Mono',monospace; font-size:13px; }
+  .bin-choice .glove:disabled { opacity:1; }
+  .bin-choice-note { font-size:11px; color:#6B5E52; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .bin-change { background:none; border:0; padding:0; font-size:11px; color:var(--teal);
+    text-decoration:underline; cursor:pointer; font-family:'Inter',sans-serif; }
+  .bin-split { margin-top:5px; font-size:11px; color:var(--warn-text); background:var(--warn-bg);
+    border:1px solid var(--warn-text); border-radius:4px; padding:4px 7px; }
   .stock-auto { font-family:'DM Mono',monospace; font-weight:700; font-size:15px; min-width:2ch; text-align:right; }
   .extra-row.stock { background:white; color:var(--teal); }
   .extra-row input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
@@ -310,7 +320,7 @@ async function loadEverything() {
         const fibV = BIN.fiber ? columnAsArray(binsT, BIN.fiber)[i] : '';
         const resV = BIN.reserved ? getRefId(columnAsArray(binsT, BIN.reserved)[i]) : null;
         if (!codeV || !fibV || resV) return;
-        (S.stockBins[fibV] = S.stockBins[fibV] || []).push(codeV);
+        (S.stockBins[fibV] = S.stockBins[fibV] || []).push({ id, code: codeV });
       });
       if (BIN.code) {
         (binsT.id || []).forEach((id, i) => {
@@ -446,6 +456,25 @@ async function loadEverything() {
         storeVal: LOT.vendorStock ? vendor : (general || store),
       });
     });
+    // Where each colourway's back stock already lives, newest lot first. Read
+    // from every lot, not just windable ones, because the shelved thread is
+    // usually from an older lot that has nothing left to wind.
+    S.binMemory = {};
+    if (LOT.bin) {
+      const seen = {};
+      (lotsT.id || []).forEach((id, i) => {
+        const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+        const bid = getRefId(columnAsArray(lotsT, LOT.bin)[i]);
+        if (!rid || !bid) return;
+        const codeV = binById[bid];
+        if (!codeV) return;
+        const key = rid + ':' + bid;
+        if (seen[key]) return;
+        seen[key] = 1;
+        (S.binMemory[rid] = S.binMemory[rid] || []).push({ id: bid, code: codeV });
+      });
+    }
+
     Object.values(lotsByRecipe).forEach(arr => arr.sort((a, b) => (a.date || 0) - (b.date || 0))); // oldest first
 
     /* Allocations sitting in a customer bin waiting for labels, grouped by order
@@ -570,6 +599,7 @@ function onSearch(v) {
 }
 
 function selectLine(id) {
+  S.stockBinPick = undefined; S.binOverride = false;   // each colourway resolves its own bin
   S.selected = S.selected === id ? null : id;
   // pre-fill draw suggestion: oldest dry lots + stock first, up to outstanding
   if (S.selected != null) {
@@ -676,6 +706,80 @@ async function undoSorted(woId, itemKey) {
   }
 }
 
+/* Which bin does this colourway already live in?
+   Bins are assigned by fibre, not by colourway, so listing every FF Nylon bin
+   told nobody anything. The answer that matters is "where is the rest of this
+   colourway" — back stock only stays findable if one colourway lives in one
+   bin. Nothing recorded that, so it gets recorded here: the winder picks the
+   bin once, it is written to Production_Lots.Storage_Bin, and every later
+   surplus of the same colourway is told where to go instead of asked. */
+function knownBinForRecipe(recipeId) {
+  const lots = (S.binMemory && S.binMemory[recipeId]) || [];
+  return lots.length ? lots[0] : null;      // { id, code }
+}
+
+// One colourway lives in one bin — the bags get grouped into a single large bag,
+// so a split is not a variation, it is a mistake that makes stock unfindable.
+// More than one bin recorded for a recipe means an earlier pick went astray.
+function splitBinsForRecipe(recipeId) {
+  const lots = (S.binMemory && S.binMemory[recipeId]) || [];
+  return lots.length > 1 ? lots : null;
+}
+
+function binChoicesFor(fiberName) {
+  const list = (S.stockBins && S.stockBins[fiberName]) || [];
+  if (list.length) return list;
+  // Unknown fibre — offer everything rather than nothing.
+  return Object.values(S.stockBins || {}).reduce((a, b) => a.concat(b), []);
+}
+
+function pickStockBin(binId, code) {
+  S.stockBinPick = binId ? { id: binId, code } : null;
+  updateTally();
+  const row = document.getElementById('bin-choice-row');
+  if (row) row.querySelectorAll('.glove').forEach(b => {
+    b.classList.toggle('sort', Number(b.dataset.bin) === binId);
+  });
+}
+
+function toggleBinOverride() { S.binOverride = !S.binOverride; render(); }
+
+function binChoiceHtml(line) {
+  const known = knownBinForRecipe(line.recipeId);
+  const split = splitBinsForRecipe(line.recipeId);
+  if (S.stockBinPick === undefined) S.stockBinPick = known || null;
+  const choices = binChoicesFor(line.fiberName);
+  if (!choices.length) return '';
+  const sel = S.stockBinPick ? S.stockBinPick.id : null;
+
+  // A settled colourway is not a question. Showing 26 buttons invites a
+  // different answer than last time, which is exactly the split being avoided —
+  // so the known bin is stated, and changing it takes a deliberate second step.
+  if (known && !S.binOverride) {
+    return `<div class="bin-choice" id="bin-choice-wrap">
+      <div class="bin-choice-cap">Back stock bin</div>
+      <div class="btn-row">
+        <button class="glove sort" disabled>${esc(known.code)}</button>
+        <span class="bin-choice-note">this colourway already lives here &mdash; keep it together
+          <button class="bin-change" onclick="toggleBinOverride()">change bin</button></span>
+      </div>
+      ${split ? `<div class="bin-split">Already recorded in ${split.map(b => esc(b.code)).join(' and ')} &mdash;
+        that colourway is split across bins and should be consolidated.</div>` : ''}
+    </div>`;
+  }
+
+  return `<div class="bin-choice" id="bin-choice-wrap">
+    <div class="bin-choice-cap">${known
+      ? `Moving this colourway out of <strong>${esc(known.code)}</strong> &mdash; shift every bag, do not split it`
+      : 'Back stock bin &mdash; nothing of this colourway is shelved yet, pick one'}</div>
+    <div class="btn-row" id="bin-choice-row">
+      ${choices.map(b => `<button class="glove ${b.id === sel ? 'sort' : ''}" data-bin="${b.id}"
+        onclick="pickStockBin(${b.id}, '${esc(b.code)}')">${esc(b.code)}</button>`).join('')}
+    </div>
+    ${known ? `<div class="btn-row"><button class="bin-change" onclick="toggleBinOverride()">keep ${esc(known.code)}</button></div>` : ''}
+  </div>`;
+}
+
 /* ── Back stock tags ──────────────────────────────────────────────────
    Surplus now routes to vendor stock automatically, but the spools still have
    to physically reach a bin, and nothing was telling anyone which. Bins are
@@ -725,8 +829,10 @@ function stockTagHtml(t) {
       <div class="st-qty"><div class="st-cap">spools</div><div class="st-big">${t.qty}</div></div>
       <div class="st-lot"><div class="st-cap">lot</div><div class="st-big sm">${esc(t.lot || '')}</div></div>
     </div>
-    <div class="st-bin"><span class="st-cap">bin</span><span class="st-line"></span></div>
-    ${bins.length ? `<div class="st-hint">${esc(t.fiber)} bins: ${bins.join(' &middot; ')}</div>` : ''}
+    ${t.bin
+      ? `<div class="st-bin has"><span class="st-cap">bin</span><span class="st-binbig">${esc(t.bin)}</span></div>`
+      : `<div class="st-bin"><span class="st-cap">bin</span><span class="st-line"></span></div>
+         ${bins.length ? `<div class="st-hint">${esc(t.fiber)} bins: ${bins.map(b => b.code).join(' &middot; ')}</div>` : ''}`}
     <div class="st-date">${esc(t.date || '')}</div>
   </div>`;
 }
@@ -751,6 +857,8 @@ function printStockTags() {
       .st-big.sm { font-size: 14px; }
       .st-bin { display: flex; align-items: flex-end; gap: 7px; margin-top: auto; }
       .st-line { flex: 1; border-bottom: 2px solid #000; height: .3in; }
+      .st-binbig { font-size: 30px; font-weight: bold; line-height: 1; letter-spacing: 1px; }
+      .st-bin.has { align-items: baseline; }
       .st-hint { font-size: 8.5px; color: #666; margin-top: 3px; }
       .st-date { font-size: 8px; color: #888; margin-top: 2px; }
     </style></head><body>${list.map(stockTagHtml).join('')}</body></html>`);
@@ -968,7 +1076,8 @@ function fillPanel(l) {
   const brokenHtml = S.brokenCol
     ? `<div class="extra-row"><span>Broken / tied-off spools</span><input type="number" min="0" id="broken-qty" value="0" oninput="updateTally()"></div>`
     : '';
-  const stockHtml = `<div class="extra-row stock"><span>Anything over the order goes to <strong>vendor back stock</strong></span><span class="stock-auto" id="stock-auto">0</span></div>`;
+  const stockHtml = `<div class="extra-row stock"><span>Anything over the order goes to <strong>vendor back stock</strong></span><span class="stock-auto" id="stock-auto">0</span></div>`
+    + `<div id="bin-choice-slot">${binChoiceHtml(l)}</div>`;
 
   return `
     <div class="fill-panel">
@@ -1017,6 +1126,8 @@ function updateTally() {
   if (btn) btn.disabled = p.good === 0;
   const sa = document.getElementById('stock-auto');
   if (sa) sa.textContent = p.stock || '0';
+  const slot = document.getElementById('bin-choice-slot');
+  if (slot) slot.style.display = p.stock > 0 ? '' : 'none';
 }
 
 async function confirmWind() {
@@ -1053,6 +1164,11 @@ async function confirmWind() {
 
     const lotUpdate = {};
     if (stockCol) lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
+    // Remember the bin on the lot, so the next surplus of this colourway is told
+    // where to go rather than asked again.
+    if (p.stock > 0 && S.stockBinPick && S.cols.LOT.bin) {
+      lotUpdate[S.cols.LOT.bin] = S.stockBinPick.id;
+    }
     if (brokenLotId != null && S.brokenCol) lotUpdate[S.brokenCol] = (brokenBefore || 0) + p.broken;
     if (Object.keys(lotUpdate).length) {
       await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]]);
@@ -1067,6 +1183,7 @@ async function confirmWind() {
         fiber: (anchor && anchor.fiberName) || p.line.fiberName || '',
         qty: p.stock,
         lot: (anchor && anchor.lotNumber) || '',
+        bin: (S.stockBinPick && S.stockBinPick.code) || '',
         date: new Date().toISOString().slice(0, 10),
       });
     }
@@ -1080,7 +1197,7 @@ async function confirmWind() {
         + (p.stock ? ` · ${p.stock} to stock` : '')
         + (p.broken ? ` · ${p.broken} broken` : ''),
     });
-    S.selected = null; S.draw = {};
+    S.selected = null; S.draw = {}; S.stockBinPick = undefined; S.binOverride = false;
     showToast('Boxed ✓');
     await loadEverything();
   } catch (e) {
