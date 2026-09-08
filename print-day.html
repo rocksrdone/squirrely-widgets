@@ -39,7 +39,9 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .r1 { display: flex; justify-content: space-between; align-items: flex-start; }
 .tag .r1 > * + * { margin-left: .1in; }
 .tag .code { font-family: "Courier New", monospace; font-size: 19px; font-weight: bold; letter-spacing: .5px; }
+.tag .r1-right { display: flex; gap: .08in; flex: none; }
 .tag .bin { text-align: center; border: 2.5px solid #000; width: .85in; flex: none; }
+.tag .bin.binto .b { font-weight: bold; }
 .tag .bin .l { font-size: 8.5px; font-weight: bold; letter-spacing: 1px; background: #000; color: #fff;
                text-transform: uppercase; padding: 1px 0; }
 .tag .bin .b { height: .34in; }
@@ -329,7 +331,7 @@ function impose(total, perPage) {
 /* ── load from Grist ──────────────────────────────────────────────────── */
 async function load() {
   try {
-    const [dp, recT, wolT, woT, lotT, allocT, custT, clsT, tplT, phT, compT, dyeT, stkT] = await Promise.all([
+    const [dp, recT, wolT, woT, lotT, allocT, custT, binsT, clsT, tplT, phT, compT, dyeT, stkT] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Work_Order_Lines'),
@@ -337,6 +339,7 @@ async function load() {
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Lot_Allocations'),
       grist.docApi.fetchTable('Customers').catch(() => null),
+      grist.docApi.fetchTable('Storage_Locations').catch(() => null),
       grist.docApi.fetchTable('Customer_Label_Settings').catch(() => null),
       grist.docApi.fetchTable('Label_Templates').catch(() => null),
       grist.docApi.fetchTable('Product_Photos').catch(() => null),
@@ -354,6 +357,20 @@ async function load() {
     const LOT = resolveCols(lotT, 'Production_Lots',   { recipe: ['Recipe'], made: ['Spools_Made'], back: opt(['General_Stock_Spools']), store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']), broken: opt(['Broken_Spools']) }, missing);
     const ALC = resolveCols(allocT,'Lot_Allocations',  { lot: ['Lot'], line: ['Work_Order_Line'], qty: ['Qty_Spools'] }, missing);
     if (missing.length) throw new Error('Columns not found: ' + missing.join(', '));
+
+    // Bin assignment. Names mapped onto the shared block's expectations so that
+    // block stays byte-identical with batch-assignment.html and wind-routing.html.
+    const LOTB = {
+      bin: findColumn(lotT, ['Storage_Bin']), recipe: LOT.recipe, spoolsMade: LOT.made,
+      storeStock: LOT.store, vendorStock: LOT.vendor, generalStock: LOT.back, broken: LOT.broken,
+    };
+    const allocByLot = {};
+    (allocT.id || []).forEach((id, i) => {
+      const lid = getRefId(columnAsArray(allocT, ALC.lot)[i]);
+      if (lid) allocByLot[lid] = (allocByLot[lid] || 0) + (Number(columnAsArray(allocT, ALC.qty)[i]) || 0);
+    });
+    BIN_IDX = buildBinIndex(binsT, (t, c) => findColumn(t, c));
+    BIN_STATE = buildBinState(lotT, LOTB, allocByLot, BIN_IDX.code);
 
     // orders
     // Short customer codes, for the O-CODE-ORDER bin on each sheet. Optional:
@@ -486,6 +503,89 @@ async function load() {
 /* ── printable pieces ─────────────────────────────────────────────────── */
 const code = n => 'SS-' + n;
 
+/* ── Back stock bin assignment — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   Bagged unwound thread and wound surplus share these bins and go into the same
+   large bag, so fill counts both. The rule: keep a colourway where it already
+   lives while that bin has room, otherwise use the emptiest bin for its fibre.
+   Even distribution is the whole point — retrieval is by lookup, so which bin
+   hardly matters, but digging through a heaving bin for four spools does.
+
+   Assigned at PRINT time and written when the pot is logged, so nobody walks to
+   a computer to record something they have already done physically. Fill can
+   shift between printing a tag and dyeing the pot, so a tag occasionally names
+   a bin that has filled up since — the bin is visibly full when that happens,
+   and a confirmation step would cost more than the rare correction.
+
+   Fill is derived from the lots rather than read from Storage_Locations, whose
+   count columns are formula columns with no formulas in them. */
+const BIN_CAPACITY = 60;
+
+function buildBinIndex(binsT, colOf) {
+  const idx = { code: {}, byFiber: {} };
+  if (!binsT) return idx;
+  const cCode = colOf(binsT, ['Bin_Code']);
+  const cFib = colOf(binsT, ['Fiber']);
+  const cRes = colOf(binsT, ['Reserved_For']);
+  (binsT.id || []).forEach((id, i) => {
+    const code = cCode ? columnAsArray(binsT, cCode)[i] : null;
+    if (!code) return;
+    idx.code[id] = code;
+    const fib = cFib ? columnAsArray(binsT, cFib)[i] : '';
+    // Customer-reserved bins hold thread already promised to an order — the
+    // opposite of loose stock.
+    const res = cRes ? getRefId(columnAsArray(binsT, cRes)[i]) : null;
+    if (!fib || res) return;
+    (idx.byFiber[fib] = idx.byFiber[fib] || []).push({ id, code });
+  });
+  return idx;
+}
+
+function buildBinState(lotsT, L, allocByLot, binCode) {
+  const fill = {}, memory = {};
+  if (!L.bin) return { fill, memory };
+  (lotsT.id || []).forEach((id, i) => {
+    const bid = getRefId(columnAsArray(lotsT, L.bin)[i]);
+    if (!bid) return;
+    const made = L.spoolsMade ? (Number(columnAsArray(lotsT, L.spoolsMade)[i]) || 0) : 0;
+    const stock = (L.storeStock ? (Number(columnAsArray(lotsT, L.storeStock)[i]) || 0) : 0)
+      + (L.vendorStock ? (Number(columnAsArray(lotsT, L.vendorStock)[i]) || 0) : 0)
+      + (L.generalStock ? (Number(columnAsArray(lotsT, L.generalStock)[i]) || 0) : 0);
+    const broken = L.broken ? (Number(columnAsArray(lotsT, L.broken)[i]) || 0) : 0;
+    const unwound = Math.max(0, made - (allocByLot[id] || 0) - stock - broken);
+    fill[bid] = (fill[bid] || 0) + stock + unwound;
+    const rid = getRefId(columnAsArray(lotsT, L.recipe)[i]);
+    if (rid && !memory[rid]) memory[rid] = { id: bid, code: binCode[bid] || '' };
+  });
+  return { fill, memory };
+}
+
+/* Returns { bin, why } — bin is { id, code } or null. */
+function assignBin(state, idx, recipeId, fiberName, qty) {
+  const fillOf = b => (state.fill && state.fill[b.id]) || 0;
+  const known = state.memory ? state.memory[recipeId] : null;
+  if (known && fillOf(known) + qty <= BIN_CAPACITY) {
+    return { bin: known, why: 'where this colorway already lives' };
+  }
+  let choices = (idx.byFiber && idx.byFiber[fiberName]) || [];
+  if (!choices.length) choices = Object.values(idx.byFiber || {}).reduce((a, b) => a.concat(b), []);
+  if (!choices.length) return { bin: null, why: 'no back stock bins' };
+  choices = choices.slice().sort((a, b) => (fillOf(a) - fillOf(b)) || String(a.code).localeCompare(String(b.code)));
+  const roomy = choices.find(b => fillOf(b) + qty <= BIN_CAPACITY);
+  return roomy
+    ? { bin: roomy, why: known ? `${known.code} is full` : 'emptiest bin' }
+    : { bin: choices[0], why: 'every bin is full — most room here' };
+}
+
+let BIN_IDX = { code: {}, byFiber: {} };
+let BIN_STATE = { fill: {}, memory: {} };
+
+// Bin this pot's thread goes to once bagged. Computed here, at print time, so
+// the tag carries the answer and nobody records it separately afterwards.
+function binForBatch(b) {
+  const a = assignBin(BIN_STATE, BIN_IDX, b.rid, b.fiber, b.spools || 0);
+  return a.bin ? a.bin.code : '';
+}
+
 function tag(b, n) {
   if (b === 'blank') return blankTag(n);
   if (!b) return '<div class="tag"></div>';
@@ -518,7 +618,10 @@ function tag(b, n) {
         <div class="nameline">${esc(b.colorway)}</div>
         <div class="cap">colorway</div>
       </div>
-      <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
+      <div class="r1-right">
+        <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
+        <div class="bin binto"><div class="l">bag to</div><div class="b">${esc(binForBatch(b))}</div></div>
+      </div>
     </div>
     <div class="meta"><div style="flex:1">${esc(b.sku)}</div>
       <div style="flex:0 0 .6in">${esc(b.fiber)}</div><div style="flex:0 0 .7in">${b.spools || ''}</div></div>

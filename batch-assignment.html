@@ -294,6 +294,79 @@ let RC_ALLOC = null, RC_WOL = null;
 let S_COLS = { ALLOC: {} };  // resolved Lot_Allocations column ids for stock fulfillment
 let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status string
 
+/* ── Back stock bin assignment — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   Bagged unwound thread and wound surplus share these bins and go into the same
+   large bag, so fill counts both. The rule: keep a colourway where it already
+   lives while that bin has room, otherwise use the emptiest bin for its fibre.
+   Even distribution is the whole point — retrieval is by lookup, so which bin
+   hardly matters, but digging through a heaving bin for four spools does.
+
+   Assigned at PRINT time and written when the pot is logged, so nobody walks to
+   a computer to record something they have already done physically. Fill can
+   shift between printing a tag and dyeing the pot, so a tag occasionally names
+   a bin that has filled up since — the bin is visibly full when that happens,
+   and a confirmation step would cost more than the rare correction.
+
+   Fill is derived from the lots rather than read from Storage_Locations, whose
+   count columns are formula columns with no formulas in them. */
+const BIN_CAPACITY = 60;
+
+function buildBinIndex(binsT, colOf) {
+  const idx = { code: {}, byFiber: {} };
+  if (!binsT) return idx;
+  const cCode = colOf(binsT, ['Bin_Code']);
+  const cFib = colOf(binsT, ['Fiber']);
+  const cRes = colOf(binsT, ['Reserved_For']);
+  (binsT.id || []).forEach((id, i) => {
+    const code = cCode ? columnAsArray(binsT, cCode)[i] : null;
+    if (!code) return;
+    idx.code[id] = code;
+    const fib = cFib ? columnAsArray(binsT, cFib)[i] : '';
+    // Customer-reserved bins hold thread already promised to an order — the
+    // opposite of loose stock.
+    const res = cRes ? getRefId(columnAsArray(binsT, cRes)[i]) : null;
+    if (!fib || res) return;
+    (idx.byFiber[fib] = idx.byFiber[fib] || []).push({ id, code });
+  });
+  return idx;
+}
+
+function buildBinState(lotsT, L, allocByLot, binCode) {
+  const fill = {}, memory = {};
+  if (!L.bin) return { fill, memory };
+  (lotsT.id || []).forEach((id, i) => {
+    const bid = getRefId(columnAsArray(lotsT, L.bin)[i]);
+    if (!bid) return;
+    const made = L.spoolsMade ? (Number(columnAsArray(lotsT, L.spoolsMade)[i]) || 0) : 0;
+    const stock = (L.storeStock ? (Number(columnAsArray(lotsT, L.storeStock)[i]) || 0) : 0)
+      + (L.vendorStock ? (Number(columnAsArray(lotsT, L.vendorStock)[i]) || 0) : 0)
+      + (L.generalStock ? (Number(columnAsArray(lotsT, L.generalStock)[i]) || 0) : 0);
+    const broken = L.broken ? (Number(columnAsArray(lotsT, L.broken)[i]) || 0) : 0;
+    const unwound = Math.max(0, made - (allocByLot[id] || 0) - stock - broken);
+    fill[bid] = (fill[bid] || 0) + stock + unwound;
+    const rid = getRefId(columnAsArray(lotsT, L.recipe)[i]);
+    if (rid && !memory[rid]) memory[rid] = { id: bid, code: binCode[bid] || '' };
+  });
+  return { fill, memory };
+}
+
+/* Returns { bin, why } — bin is { id, code } or null. */
+function assignBin(state, idx, recipeId, fiberName, qty) {
+  const fillOf = b => (state.fill && state.fill[b.id]) || 0;
+  const known = state.memory ? state.memory[recipeId] : null;
+  if (known && fillOf(known) + qty <= BIN_CAPACITY) {
+    return { bin: known, why: 'where this colorway already lives' };
+  }
+  let choices = (idx.byFiber && idx.byFiber[fiberName]) || [];
+  if (!choices.length) choices = Object.values(idx.byFiber || {}).reduce((a, b) => a.concat(b), []);
+  if (!choices.length) return { bin: null, why: 'no back stock bins' };
+  choices = choices.slice().sort((a, b) => (fillOf(a) - fillOf(b)) || String(a.code).localeCompare(String(b.code)));
+  const roomy = choices.find(b => fillOf(b) + qty <= BIN_CAPACITY);
+  return roomy
+    ? { bin: roomy, why: known ? `${known.code} is full` : 'emptiest bin' }
+    : { bin: choices[0], why: 'every bin is full — most room here' };
+}
+
 // ── STAGING SHELF ──────────────────────────────────────────────────
 // Must match stgCols in dye-pull-sheet.html and PULL_CFG.stgCols in
 // print-day.html. If those change and this doesn't, this widget will name a
@@ -1000,9 +1073,35 @@ async function logPot() {
       dryingStatus: opt(['Drying_Status']), fiber: opt(['Fiber', 'Form', 'Fiber_Type']),
       date: opt(['Date_Dyed', 'Lot_Date', 'Date']),
       storeStock: opt(['Store_Stock_Spools']), vendorStock: opt(['Vendor_Stock_Spools']),
-      generalStock: opt(['General_Stock_Spools']),
+      generalStock: opt(['General_Stock_Spools']), bin: opt(['Storage_Bin']),
+      broken: opt(['Broken_Spools']),
     }, lm);
     if (lm.length) { showToast('Production_Lots missing ' + lm.join(', ')); return; }
+
+    // Which bin this pot is bagged into. Recorded here rather than at the rack:
+    // walking to a computer to log something already done physically is the step
+    // that gets skipped, and then the data is wrong in a way nobody notices.
+    let binPick = null;
+    if (LOT.bin) {
+      try {
+        const [binsTable, allocTable] = await Promise.all([
+          grist.docApi.fetchTable('Storage_Locations'),
+          grist.docApi.fetchTable('Lot_Allocations'),
+        ]);
+        const AC = { lot: findColumn(allocTable, ['Lot']), qty: findColumn(allocTable, ['Qty_Spools']) };
+        const allocByLot = {};
+        if (AC.lot && AC.qty) (allocTable.id || []).forEach((id, i) => {
+          const lid = getRefId(columnAsArray(allocTable, AC.lot)[i]);
+          if (lid) allocByLot[lid] = (allocByLot[lid] || 0) + (Number(columnAsArray(allocTable, AC.qty)[i]) || 0);
+        });
+        const idx = buildBinIndex(binsTable, (t, c) => findColumn(t, c));
+        const state = buildBinState(lotsTable, LOT, allocByLot, idx.code);
+        binPick = assignBin(state, idx, e.recipeId, e.fiberType || '', spools).bin;
+      } catch (err) {
+        // No Storage_Locations, or it could not be read — log the pot anyway.
+        console.warn('Bin assignment skipped:', err);
+      }
+    }
 
     const lotNumber = nextLotNumber(lotsTable, LOT.lotNumber);
     const lotFields = {};
@@ -1013,6 +1112,7 @@ async function logPot() {
     if (LOT.dryingStatus) lotFields[LOT.dryingStatus] = 'Drying - Wet Rack';
     if (LOT.fiber && e.fiberType) lotFields[LOT.fiber] = fiberCode(e.fiberType);
     if (LOT.date) lotFields[LOT.date] = todayEpochSeconds();
+    if (LOT.bin && binPick) lotFields[LOT.bin] = binPick.id;
     if (leftover > 0) {
       const col = bucket === 'vendor' ? (LOT.vendorStock || LOT.generalStock)
                                       : (LOT.storeStock || LOT.generalStock);
@@ -1025,7 +1125,8 @@ async function logPot() {
     sessionPots.push({ lotId: newLotId, lotNumber, spools, leftover, bucket });
     spoolsInput.value = '';
     await loadForRecipe({ id: e.recipeId }); // recompute coverage from the new lot
-    showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'} ✓`);
+    showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'}`
+      + (binPick ? ` · bag to ${binPick.code}` : ''));
   } catch (err) {
     console.error('Failed to log pot:', err);
     showToast('Failed — check Production_Lots / Work_Order_Lines');

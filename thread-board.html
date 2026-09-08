@@ -61,12 +61,9 @@
   }
   .btn-next { background: var(--teal); color: white; }
   .btn-back { background: #EEE9E2; color: #6B6157; padding: 6px 8px; }
-  .btn-bag { background:var(--teal); color:#fff; border:0; border-radius:6px;
-    min-height:38px; padding:7px 12px; font-size:12px; font-weight:600; cursor:pointer; }
-  .bin-why { font-size:10px; color:#8B7D72; margin-left:6px; }
   .bin-tag { font-size:12px; color:var(--done-text); background:var(--done-bg);
-    border:1px solid var(--done-text); border-radius:5px; padding:5px 9px; display:flex;
-    align-items:center; gap:7px; }
+    border:1px solid var(--done-text); border-radius:5px; padding:5px 9px; }
+  .bin-tag.none { color:#8B7D72; background:transparent; border-color:var(--rule); }
   .btn-save { background: var(--teal-light); color: var(--teal); }
 
   .empty-stage { font-size: 11px; color: #A99C8E; font-style: italic; padding: 4px 2px 8px; }
@@ -361,30 +358,7 @@ function suggestBin(lot) {
   };
 }
 
-async function bagToBin(lotId) {
-  const lot = S.lots.find(l => l.id === lotId);
-  if (!lot || !S.hasBin) return;
-  const sug = suggestBin(lot);
-  if (!sug.bin) { showToast(sug.why); return; }
-  try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId,
-      { [S.cols.LOT.bin]: sug.bin.id }]]);
-    showToast(`${lot.lotNumber} → ${sug.bin.code}`);
-    await loadBoard();
-  } catch (e) {
-    console.error('Could not bag to bin:', e);
-    showToast('Could not update — see console');
-  }
-}
 
-async function unbag(lotId) {
-  if (!S.hasBin) return;
-  try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId,
-      { [S.cols.LOT.bin]: 0 }]]);
-    await loadBoard();
-  } catch (e) { console.error('Could not unbag:', e); }
-}
 
 /* ── Closing out stale lots ───────────────────────────────────────────
    A lot shows here while its arithmetic says spools are unaccounted for:
@@ -467,15 +441,13 @@ function cardHtml(l) {
   // Rack position was never filled in on a single lot in two years of use —
   // wet-to-dry happens on its own and nobody stops to type where a hank hangs.
   // The bin is the thing worth recording, and only once it is bagged.
-  const sug = (S.hasBin && l.stage === DRY && !l.binId) ? suggestBin(l) : null;
+  // The bin comes from the kettle tag and is recorded when the pot is logged, so
+  // this is a read-out, not a control. A lot with no bin was logged before that
+  // existed — the badge says so rather than offering to fix it here.
   const binField = !S.hasBin ? ''
     : l.binId
-      ? `<div class="bin-tag">in <strong>${esc(S.binCode[l.binId] || '?')}</strong>
-           <button class="btn-back" onclick="unbag(${l.id})" title="Take it back out">undo</button></div>`
-      : (sug && sug.bin
-          ? `<button class="btn-bag" onclick="bagToBin(${l.id})">Bag &rarr; ${esc(sug.bin.code)}</button>
-             <span class="bin-why">${esc(sug.why)}</span>`
-          : '');
+      ? `<div class="bin-tag">bag to <strong>${esc(S.binCode[l.binId] || '?')}</strong></div>`
+      : `<div class="bin-tag none">no bin on this lot</div>`;
   const nextBtn = l.stage === WET
     ? `<button class="btn-next" onclick="moveTo(${l.id},'dry')">→ dry rack</button>`
     : (l.stage === DRY
