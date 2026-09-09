@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recipe Doc Viewer</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --muted: #8B7D72;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+button { font-family: 'Inter', sans-serif; }
+
+/* ---------- top bar ---------- */
+.topbar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.search-input {
+  flex: 1 1 auto; min-width: 80px;
+  padding: 7px 9px; border: 1.5px solid var(--rule); border-radius: 6px;
+  font-size: 13px; font-family: 'Inter', sans-serif; outline: none; background: white;
+}
+.search-input:focus { border-color: var(--accent); }
+.icon-btn {
+  flex: 0 0 auto;
+  font-size: 12px; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer;
+}
+.icon-btn:hover { background: var(--warm); }
+.icon-btn.on { background: var(--teal-light); border-color: var(--teal); color: var(--teal); }
+.icon-btn:disabled { opacity: .35; cursor: default; }
+.statusbar { flex: 0 0 auto; font-size: 10px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.statusbar .warn { color: var(--accent); }
+
+/* ---------- panes ---------- */
+.panes { flex: 1 1 auto; display: flex; gap: 8px; min-height: 0; }
+.pane-list {
+  flex: 0 0 240px; min-width: 160px;
+  border: 1px solid var(--rule); border-radius: 8px; background: white;
+  overflow-y: auto; overflow-x: hidden;
+}
+.pane-list.hidden { display: none; }
+.pane-view {
+  flex: 1 1 auto; min-width: 0;
+  border: 1px solid var(--rule); border-radius: 8px; background: white;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+@media (max-width: 620px) {
+  .panes { flex-direction: column; }
+  .pane-list { flex: 0 0 auto; max-height: 34vh; }
+}
+
+/* ---------- result list ---------- */
+.list-head {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--warm); border-bottom: 1px solid var(--rule);
+  padding: 5px 8px; font-size: 9px; text-transform: uppercase;
+  letter-spacing: .05em; font-weight: 600; color: #6B5E52;
+}
+.row {
+  padding: 7px 9px; border-bottom: 1px solid #EEE7DE; cursor: pointer;
+}
+.row:hover { background: var(--accent-light); }
+.row.active { background: var(--gold-light); border-left: 3px solid var(--gold); padding-left: 6px; }
+.row-name { font-size: 12px; font-weight: 500; word-break: break-word; }
+.row-name mark { background: #FBE7A1; color: inherit; padding: 0 1px; border-radius: 2px; }
+.row-meta { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); word-break: break-all; margin-top: 1px; }
+.badge {
+  display: inline-block; font-size: 8px; padding: 0 4px; border-radius: 3px;
+  vertical-align: 1px; margin-right: 4px; font-weight: 600; letter-spacing: .04em;
+}
+.badge-pdf { background: var(--accent-light); color: var(--accent); }
+.badge-img { background: var(--teal-light); color: var(--teal); }
+.list-empty { padding: 24px 14px; text-align: center; color: var(--muted); font-style: italic; font-size: 12px; }
+.more-btn { display: block; width: 100%; padding: 8px; border: none; border-top: 1px solid var(--rule);
+  background: var(--paper); font-size: 11px; color: var(--accent); cursor: pointer; }
+
+/* ---------- viewer ---------- */
+.view-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 5px 7px; border-bottom: 1px solid var(--rule); background: var(--warm);
+}
+.view-title {
+  flex: 1 1 120px; min-width: 0; font-size: 11px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mini-btn {
+  font-size: 11px; line-height: 1; padding: 5px 7px; border-radius: 4px;
+  border: 1px solid var(--rule); background: white; cursor: pointer; color: var(--ink);
+}
+.mini-btn:hover { background: var(--paper); }
+.mini-btn:disabled { opacity: .3; cursor: default; }
+.page-ind { font-family: 'DM Mono', monospace; font-size: 11px; color: #6B5E52; padding: 0 2px; }
+.view-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto; background: #D9D2C8;
+  display: flex; justify-content: center; align-items: flex-start; padding: 10px;
+}
+.view-body canvas, .view-body img {
+  background: white; box-shadow: 0 2px 10px rgba(0,0,0,.18); max-width: none; display: block;
+}
+.view-msg { margin: auto; color: #5B5148; font-size: 12px; text-align: center; padding: 30px 20px; }
+.view-msg .hint { display: block; margin-top: 6px; font-size: 11px; color: #6B5E52; }
+.find-bar {
+  flex: 0 0 auto; display: none; gap: 5px; align-items: center; flex-wrap: wrap;
+  padding: 5px 7px; border-bottom: 1px solid var(--rule); background: var(--paper);
+}
+.find-bar.show { display: flex; }
+.find-input {
+  flex: 1 1 100px; min-width: 70px; padding: 5px 7px; border: 1px solid var(--rule);
+  border-radius: 4px; font-size: 12px; outline: none;
+}
+.hit-chip {
+  font-size: 10px; padding: 2px 6px; border-radius: 3px; cursor: pointer;
+  background: var(--gold-light); border: 1px solid var(--gold); color: #7A5518;
+  font-family: 'DM Mono', monospace;
+}
+.find-note { font-size: 10px; color: var(--muted); }
+
+/* ---------- setup panel ---------- */
+.setup {
+  position: absolute; inset: 10px; z-index: 40; background: var(--paper);
+  border: 1.5px solid var(--rule); border-radius: 10px; padding: 16px;
+  overflow-y: auto; display: none;
+}
+.setup.show { display: block; }
+.setup h2 { font-family: 'Libre Baskerville', serif; font-size: 16px; margin-bottom: 4px; }
+.setup p { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+.setup label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 600; color: #6B5E52; margin: 10px 0 3px; }
+.setup input[type=text] {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'DM Mono', monospace; outline: none; background: white;
+}
+.setup input[type=text]:focus { border-color: var(--accent); }
+.setup .help { font-size: 10px; color: var(--muted); margin-top: 3px; }
+.setup-actions { margin-top: 16px; display: flex; gap: 8px; }
+.btn-primary {
+  padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent);
+  background: var(--accent); color: white; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.toast {
+  position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--paper); padding: 7px 14px; border-radius: 6px;
+  font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 90;
+}
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <input class="search-input" id="q" placeholder="Search old recipe files..." autocomplete="off">
+  <button class="icon-btn" id="followBtn" title="Follow the recipe selected in the linked widget">⇄</button>
+  <button class="icon-btn" id="listBtn" title="Show / hide the results list">☰</button>
+  <button class="icon-btn" id="refreshBtn" title="Rescan the Nextcloud folders">⟳</button>
+  <button class="icon-btn" id="setupBtn" title="Settings">⚙</button>
+</div>
+
+<div class="statusbar" id="status">Starting…</div>
+
+<div class="panes">
+  <div class="pane-list" id="listPane">
+    <div class="list-head" id="listHead">Files</div>
+    <div id="listBody"><div class="list-empty">Loading index…</div></div>
+  </div>
+  <div class="pane-view">
+    <div class="view-bar">
+      <span class="view-title" id="viewTitle">No file open</span>
+      <button class="mini-btn" id="prevBtn" title="Previous page">‹</button>
+      <span class="page-ind" id="pageInd">–</span>
+      <button class="mini-btn" id="nextBtn" title="Next page">›</button>
+      <button class="mini-btn" id="zoomOutBtn" title="Zoom out">−</button>
+      <button class="mini-btn" id="fitBtn" title="Fit to width">⤢</button>
+      <button class="mini-btn" id="zoomInBtn" title="Zoom in">+</button>
+      <button class="mini-btn" id="rotBtn" title="Rotate 90°">↻</button>
+      <button class="mini-btn" id="findBtn" title="Find text inside this file">🔍</button>
+      <a class="mini-btn" id="openBtn" target="_blank" rel="noopener" title="Open the original in a new tab">↗</a>
+    </div>
+    <div class="find-bar" id="findBar">
+      <input class="find-input" id="findInput" placeholder="Find text in this file…" autocomplete="off">
+      <button class="mini-btn" id="findGoBtn">Find</button>
+      <span class="find-note" id="findNote"></span>
+      <span id="findHits" style="display:flex; gap:4px; flex-wrap:wrap;"></span>
+    </div>
+    <div class="view-body" id="viewBody">
+      <div class="view-msg">Pick a file on the left to read it here.</div>
+    </div>
+  </div>
+</div>
+
+<div class="setup" id="setup">
+  <h2>Where do the old recipe files live?</h2>
+  <p>Nextcloud paths, relative to the account root — the same style of path the photo widgets use.</p>
+
+  <label>Folders to scan</label>
+  <input type="text" id="rootsInput" placeholder="Squirrely Stash/recipes/archive">
+  <div class="help">Comma-separated for more than one. Subfolders are scanned automatically.</div>
+
+  <label>Skip any folder whose name contains</label>
+  <input type="text" id="skipInput" placeholder="photos, thumbnails, backup">
+  <div class="help">Keeps the scan away from the big photo folders. Comma-separated, leave blank for none.</div>
+
+  <label>File types to index</label>
+  <input type="text" id="extInput" placeholder="pdf, jpg, jpeg, png, webp">
+  <div class="help">PDFs render page by page; images are shown as-is.</div>
+
+  <label>Scan depth</label>
+  <input type="text" id="depthInput" placeholder="4">
+  <div class="help">How many folder levels below each root to walk.</div>
+
+  <div class="setup-actions">
+    <button class="btn-primary" id="saveSetupBtn">Save &amp; rescan</button>
+    <button class="icon-btn" id="closeSetupBtn">Cancel</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================================
+   Recipe Doc Viewer
+   Sits beside recipe-builder while old recipes are being retyped into Grist:
+   search the Nextcloud archive by filename, open the PDF, read it without
+   leaving the Grist page.
+
+   Two n8n webhooks back it (see SS - List Nextcloud Files / SS - Serve
+   Nextcloud File). Nothing is ever exposed as a public Nextcloud share —
+   n8n authenticates on its side and streams the bytes back, the same
+   arrangement SS - Serve Photo - CACHED uses for photos.
+   ========================================================================= */
+
+const N8N_BASE = 'https://squirrelystash.app.n8n.cloud/webhook';
+const LIST_URL = N8N_BASE + '/nc-list';
+const FILE_URL = N8N_BASE + '/nc-file';
+
+const SETTINGS_KEY = 'ss-doc-viewer-settings-v1';
+const INDEX_KEY    = 'ss-doc-viewer-index-v1';
+const RECENT_KEY   = 'ss-doc-viewer-recent-v1';
+
+// Cap on folders visited per scan. The n8n webhook is a shared resource and
+// photo-inbox has already taught us that hammering it trips n8n's crash
+// detection, which auto-disables the workflow.
+const MAX_FOLDERS = 250;
+const CRAWL_CONCURRENCY = 2;
+
+const DEFAULTS = {
+  roots: '',
+  skip: 'photos, thumbnails, backup, .trash',
+  exts: 'pdf, jpg, jpeg, png, webp',
+  depth: 4,
+};
+
+let settings = { ...DEFAULTS };
+let fileIndex = [];        // [{path, filename, folder, modified, size}]
+let indexedAt = 0;
+let results = [];
+let visibleCount = 60;
+let activePath = null;
+let followSelection = true;
+let recentPaths = [];
+
+/* ---------- small helpers ---------- */
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* Same accent folding the photo widgets use: NFD splits a letter from its
+   diacritic so the diacritic can be dropped, and the map covers the letters
+   that have no decomposition. "Pathétique" has to match "Pathetique.pdf". */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function fold(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c)
+    .toLowerCase();
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function setStatus(html) { document.getElementById('status').innerHTML = html; }
+
+function splitList(s) {
+  return String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+}
+function stripSlashes(p) { return String(p || '').replace(/^\/+/, '').replace(/\/+$/, ''); }
+function folderOf(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(0, i) : ''; }
+function extOf(p) { const m = /\.([a-z0-9]+)$/i.exec(p || ''); return m ? m[1].toLowerCase() : ''; }
+function isImage(p) { return ['jpg','jpeg','png','webp','gif','bmp'].includes(extOf(p)); }
+function fileUrl(p) { return FILE_URL + '?path=' + encodeURIComponent(stripSlashes(p)); }
+
+function ago(ts) {
+  if (!ts) return 'never';
+  const mins = Math.round((Date.now() - ts) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
+
+/* ---------- settings + cached index ---------- */
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) settings = { ...DEFAULTS, ...JSON.parse(raw) };
+  } catch (e) { console.warn('settings read failed', e); }
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+  catch (e) { console.warn('settings write failed', e); }
+}
+function loadCachedIndex() {
+  try {
+    const raw = localStorage.getItem(INDEX_KEY);
+    if (!raw) return false;
+    const c = JSON.parse(raw);
+    if (!c || c.roots !== settings.roots || !Array.isArray(c.files)) return false;
+    fileIndex = c.files;
+    indexedAt = c.ts || 0;
+    return true;
+  } catch (e) { return false; }
+}
+function saveCachedIndex() {
+  try {
+    localStorage.setItem(INDEX_KEY, JSON.stringify({ roots: settings.roots, ts: indexedAt, files: fileIndex }));
+  } catch (e) {
+    // Quota is the realistic failure here; a missing cache only costs a rescan.
+    console.warn('index cache write failed', e);
+  }
+}
+function loadRecent() {
+  try { recentPaths = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); }
+  catch (e) { recentPaths = []; }
+}
+function pushRecent(path) {
+  recentPaths = [path].concat(recentPaths.filter(p => p !== path)).slice(0, 12);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(recentPaths)); } catch (e) {}
+}
+
+/* ---------- crawl ---------- */
+
+async function listFolder(path) {
+  const url = LIST_URL + '?path=' + encodeURIComponent(stripSlashes(path));
+  const res = await fetch(url);           // no custom headers: stays a simple
+  if (!res.ok) throw new Error('list ' + res.status);   // request, so no preflight
+  const json = await res.json();
+  return Array.isArray(json.entries) ? json.entries : [];
+}
+
+async function rebuildIndex() {
+  const roots = splitList(settings.roots);
+  if (!roots.length) { openSetup(); return; }
+
+  const skips = splitList(settings.skip).map(fold);
+  const exts = splitList(settings.exts).map(x => x.replace(/^\./, '').toLowerCase());
+  const maxDepth = Math.max(0, parseInt(settings.depth, 10) || 4);
+
+  const found = [];
+  const seen = new Set();
+  let queue = roots.map(r => ({ path: stripSlashes(r), depth: 0 }));
+  queue.forEach(q => seen.add(q.path));
+  let visited = 0, failed = 0, capped = false;
+
+  document.getElementById('refreshBtn').disabled = true;
+
+  while (queue.length) {
+    if (visited >= MAX_FOLDERS) { capped = true; break; }
+    const batch = queue.splice(0, CRAWL_CONCURRENCY);
+    const settled = await Promise.all(batch.map(async q => {
+      try { return { q, entries: await listFolder(q.path) }; }
+      catch (e) { failed++; return { q, entries: [] }; }
+    }));
+    visited += batch.length;
+
+    for (const { q, entries } of settled) {
+      for (const e of entries) {
+        const p = stripSlashes(e.path);
+        if (!p) continue;
+        if (e.kind === 'folder') {
+          const name = fold(p.split('/').pop());
+          if (skips.some(s => name.includes(s))) continue;
+          if (q.depth >= maxDepth || seen.has(p)) continue;
+          seen.add(p);
+          queue.push({ path: p, depth: q.depth + 1 });
+        } else {
+          if (exts.length && !exts.includes(extOf(p))) continue;
+          found.push({
+            path: p,
+            filename: p.split('/').pop(),
+            folder: folderOf(p),
+            modified: e.modified || '',
+            size: e.size || 0,
+          });
+        }
+      }
+    }
+    setStatus(`Scanning… ${found.length} files, ${queue.length} folders left`);
+  }
+
+  document.getElementById('refreshBtn').disabled = false;
+
+  found.sort((a, b) => fold(a.filename).localeCompare(fold(b.filename)));
+  fileIndex = found;
+  indexedAt = Date.now();
+  saveCachedIndex();
+
+  if (!found.length && failed) {
+    setStatus('<span class="warn">Scan failed — check the SS - List Nextcloud Files workflow is active and the folder path is right.</span>');
+  } else {
+    setStatus(statusLine() + (capped ? ' <span class="warn">· folder cap hit, narrow the roots</span>' : '')
+      + (failed ? ` <span class="warn">· ${failed} folder(s) unreadable</span>` : ''));
+  }
+  applySearch();
+}
+
+function statusLine() {
+  return `${fileIndex.length} file${fileIndex.length === 1 ? '' : 's'} indexed · scanned ${ago(indexedAt)}`;
+}
+
+/* ---------- search ---------- */
+
+function applySearch() {
+  const raw = document.getElementById('q').value.trim();
+  visibleCount = 60;
+
+  if (!raw) {
+    // Empty box shows what was open recently, which is what you want when
+    // hopping between one old recipe and the next.
+    const recent = recentPaths.map(p => fileIndex.find(f => f.path === p)).filter(Boolean);
+    results = recent.length ? recent : fileIndex.slice(0, 60);
+    renderList(recent.length ? 'Recently opened' : 'All files', '');
+    return;
+  }
+
+  const tokens = fold(raw).split(/\s+/).filter(Boolean);
+  const scored = [];
+  for (const f of fileIndex) {
+    const name = fold(f.filename);
+    const full = fold(f.path);
+    if (!tokens.every(t => full.includes(t))) continue;
+    // Name hits beat folder-only hits; an earlier hit beats a later one.
+    const inName = tokens.every(t => name.includes(t));
+    const pos = name.indexOf(tokens[0]);
+    scored.push({ f, score: (inName ? 0 : 1000) + (pos < 0 ? 500 : pos) });
+  }
+  scored.sort((a, b) => a.score - b.score || fold(a.f.filename).localeCompare(fold(b.f.filename)));
+  results = scored.map(s => s.f);
+  renderList(`${results.length} match${results.length === 1 ? '' : 'es'}`, raw);
+}
+
+function highlight(text, query) {
+  const tokens = fold(query).split(/\s+/).filter(Boolean);
+  if (!tokens.length) return esc(text);
+  // Mark on the folded index but slice from the original, so accented
+  // characters survive display untouched.
+  const folded = fold(text);
+  const spans = [];
+  for (const t of tokens) {
+    let i = folded.indexOf(t);
+    while (i !== -1) { spans.push([i, i + t.length]); i = folded.indexOf(t, i + t.length); }
+  }
+  if (!spans.length) return esc(text);
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else merged.push([s[0], s[1]]);
+  }
+  let out = '', cur = 0;
+  for (const [a, b] of merged) {
+    out += esc(text.slice(cur, a)) + '<mark>' + esc(text.slice(a, b)) + '</mark>';
+    cur = b;
+  }
+  return out + esc(text.slice(cur));
+}
+
+function renderList(headText, query) {
+  document.getElementById('listHead').textContent = headText;
+  const body = document.getElementById('listBody');
+  if (!fileIndex.length) {
+    body.innerHTML = '<div class="list-empty">Nothing indexed yet — set the folder with ⚙, then hit ⟳.</div>';
+    return;
+  }
+  if (!results.length) {
+    body.innerHTML = '<div class="list-empty">No file matches that.</div>';
+    return;
+  }
+  const shown = results.slice(0, visibleCount);
+  const rest = results.length - shown.length;
+  body.innerHTML = shown.map((f, i) => {
+    const badge = isImage(f.path)
+      ? '<span class="badge badge-img">IMG</span>'
+      : '<span class="badge badge-pdf">' + esc(extOf(f.path).toUpperCase() || 'FILE') + '</span>';
+    return `<div class="row ${f.path === activePath ? 'active' : ''}" data-idx="${i}">
+      <div class="row-name">${badge}${highlight(f.filename, query)}</div>
+      <div class="row-meta">${esc(f.folder)}</div>
+    </div>`;
+  }).join('') + (rest > 0 ? `<button class="more-btn" id="moreBtn">Show ${Math.min(60, rest)} more (${rest} left)</button>` : '');
+
+  body.querySelectorAll('.row').forEach(el => {
+    el.addEventListener('click', () => {
+      const f = results[parseInt(el.dataset.idx, 10)];
+      if (f) openFile(f);
+    });
+  });
+  const more = document.getElementById('moreBtn');
+  if (more) more.addEventListener('click', () => { visibleCount += 60; renderList(headText, query); });
+}
+
+/* ---------- viewer ---------- */
+
+let pdfDoc = null;
+let curPage = 1;
+let rotation = 0;
+let zoomScale = null;      // null = fit to width
+let renderTask = null;
+let renderToken = 0;
+let lastScale = 1;
+let pageText = {};
+
+function setViewMsg(html) {
+  document.getElementById('viewBody').innerHTML = `<div class="view-msg">${html}</div>`;
+}
+
+async function openFile(f) {
+  activePath = f.path;
+  pdfDoc = null; curPage = 1; rotation = 0; zoomScale = null; pageText = {};
+  renderToken++;
+  if (renderTask) { try { renderTask.cancel(); } catch (e) {} renderTask = null; }
+
+  document.getElementById('viewTitle').textContent = f.filename;
+  document.getElementById('viewTitle').title = f.path;
+  document.getElementById('openBtn').href = fileUrl(f.path);
+  document.getElementById('findBar').classList.remove('show');
+  document.getElementById('findHits').innerHTML = '';
+  document.getElementById('findNote').textContent = '';
+  pushRecent(f.path);
+  applySearchKeepScroll();
+
+  const url = fileUrl(f.path);
+
+  if (isImage(f.path)) {
+    document.getElementById('pageInd').textContent = 'img';
+    document.getElementById('viewBody').innerHTML =
+      `<img id="viewImg" src="${esc(url)}" alt="${esc(f.filename)}">`;
+    const img = document.getElementById('viewImg');
+    img.style.maxWidth = '100%';
+    img.onerror = () => setViewMsg('Could not load that image.<span class="hint">Is SS - Serve Nextcloud File active?</span>');
+    updateNav();
+    return;
+  }
+
+  if (extOf(f.path) !== 'pdf') {
+    setViewMsg(`No inline viewer for <b>.${esc(extOf(f.path))}</b> files.<span class="hint">Use ↗ to open it in a new tab.</span>`);
+    updateNav();
+    return;
+  }
+
+  setViewMsg('Loading…');
+  const token = renderToken;
+  try {
+    // Range and streaming are switched off deliberately: a Range header is not
+    // CORS-safelisted, so pdf.js would fire an OPTIONS preflight that the n8n
+    // webhook does not answer, and the whole load would fail.
+    const task = pdfjsLib.getDocument({
+      url,
+      disableRange: true,
+      disableStream: true,
+      disableAutoFetch: true,
+    });
+    const doc = await task.promise;
+    if (token !== renderToken) return;
+    pdfDoc = doc;
+    curPage = 1;
+    await renderPage();
+  } catch (e) {
+    console.error('PDF load failed', e);
+    if (token !== renderToken) return;
+    setViewMsg('Could not open that PDF.<span class="hint">Check SS - Serve Nextcloud File is active, and that the file really is a PDF.</span>');
+    updateNav();
+  }
+}
+
+async function renderPage() {
+  if (!pdfDoc) return;
+  const token = ++renderToken;
+  const body = document.getElementById('viewBody');
+  try {
+    const page = await pdfDoc.getPage(curPage);
+    if (token !== renderToken) return;
+
+    const base = page.getViewport({ scale: 1, rotation });
+    const avail = Math.max(160, body.clientWidth - 24);
+    const scale = zoomScale || (avail / base.width);
+    lastScale = scale;   // so a zoom step starts from the fitted size, not 1.0
+    const viewport = page.getViewport({ scale, rotation });
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width * dpr);
+    canvas.height = Math.floor(viewport.height * dpr);
+    canvas.style.width = Math.floor(viewport.width) + 'px';
+    canvas.style.height = Math.floor(viewport.height) + 'px';
+
+    const ctx = canvas.getContext('2d');
+    if (renderTask) { try { renderTask.cancel(); } catch (e) {} }
+    renderTask = page.render({
+      canvasContext: ctx,
+      viewport,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+    });
+    await renderTask.promise;
+    renderTask = null;
+    if (token !== renderToken) return;
+
+    body.innerHTML = '';
+    body.appendChild(canvas);
+    body.scrollTop = 0;
+    updateNav();
+  } catch (e) {
+    if (e && e.name === 'RenderingCancelledException') return;
+    console.error('render failed', e);
+    setViewMsg('That page would not render.');
+  }
+}
+
+function updateNav() {
+  const n = pdfDoc ? pdfDoc.numPages : 0;
+  document.getElementById('pageInd').textContent = pdfDoc ? `${curPage}/${n}` : (activePath ? 'img' : '–');
+  document.getElementById('prevBtn').disabled = !pdfDoc || curPage <= 1;
+  document.getElementById('nextBtn').disabled = !pdfDoc || curPage >= n;
+  document.getElementById('findBtn').disabled = !pdfDoc;
+  ['zoomInBtn','zoomOutBtn','fitBtn','rotBtn'].forEach(id => {
+    document.getElementById(id).disabled = !pdfDoc && !isImage(activePath || '');
+  });
+}
+
+function goPage(delta) {
+  if (!pdfDoc) return;
+  const next = Math.min(Math.max(1, curPage + delta), pdfDoc.numPages);
+  if (next === curPage) return;
+  curPage = next;
+  renderPage();
+}
+
+function zoomBy(factor) {
+  if (isImage(activePath || '')) {
+    const img = document.getElementById('viewImg');
+    if (!img) return;
+    const cur = img.clientWidth || 300;
+    img.style.maxWidth = 'none';
+    img.style.width = Math.round(cur * factor) + 'px';
+    return;
+  }
+  if (!pdfDoc) return;
+  zoomScale = Math.min(6, Math.max(0.15, (zoomScale || lastScale || 1) * factor));
+  renderPage();
+}
+
+function fitWidth() {
+  if (isImage(activePath || '')) {
+    const img = document.getElementById('viewImg');
+    if (img) { img.style.width = ''; img.style.maxWidth = '100%'; }
+    return;
+  }
+  zoomScale = null;
+  renderPage();
+}
+
+/* ---------- find inside the open PDF ---------- */
+
+async function findInFile() {
+  const q = document.getElementById('findInput').value.trim();
+  const hitsEl = document.getElementById('findHits');
+  const noteEl = document.getElementById('findNote');
+  hitsEl.innerHTML = '';
+  if (!pdfDoc || !q) { noteEl.textContent = ''; return; }
+
+  noteEl.textContent = 'Searching…';
+  const needle = fold(q);
+  const hits = [];
+  for (let p = 1; p <= pdfDoc.numPages; p++) {
+    if (pageText[p] == null) {
+      try {
+        const page = await pdfDoc.getPage(p);
+        const tc = await page.getTextContent();
+        pageText[p] = tc.items.map(i => i.str).join(' ');
+      } catch (e) { pageText[p] = ''; }
+    }
+    if (fold(pageText[p]).includes(needle)) hits.push(p);
+  }
+  if (!hits.length) {
+    noteEl.textContent = 'No text hits — a scanned PDF has no text layer.';
+    return;
+  }
+  noteEl.textContent = `${hits.length} page${hits.length === 1 ? '' : 's'}:`;
+  hitsEl.innerHTML = hits.map(p => `<span class="hit-chip" data-page="${p}">p${p}</span>`).join('');
+  hitsEl.querySelectorAll('.hit-chip').forEach(el => {
+    el.addEventListener('click', () => { curPage = parseInt(el.dataset.page, 10); renderPage(); });
+  });
+}
+
+/* ---------- Grist link ---------- */
+
+function recipeSearchTerm(rec) {
+  if (!rec) return '';
+  const name = rec.Recipe_Name || rec.Name || rec.Colorway || '';
+  return String(name || '').trim();
+}
+
+/* ---------- wiring ---------- */
+
+let searchTimer = null;
+let listScroll = 0;
+function applySearchKeepScroll() {
+  const pane = document.getElementById('listPane');
+  listScroll = pane.scrollTop;
+  applySearch();
+  pane.scrollTop = listScroll;
+}
+
+function openSetup() {
+  document.getElementById('rootsInput').value = settings.roots;
+  document.getElementById('skipInput').value = settings.skip;
+  document.getElementById('extInput').value = settings.exts;
+  document.getElementById('depthInput').value = settings.depth;
+  document.getElementById('setup').classList.add('show');
+}
+
+function wire() {
+  document.getElementById('q').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applySearch, 120);
+  });
+  document.getElementById('refreshBtn').addEventListener('click', rebuildIndex);
+  document.getElementById('setupBtn').addEventListener('click', openSetup);
+  document.getElementById('closeSetupBtn').addEventListener('click', () => {
+    document.getElementById('setup').classList.remove('show');
+  });
+  document.getElementById('saveSetupBtn').addEventListener('click', () => {
+    settings = {
+      roots: document.getElementById('rootsInput').value.trim(),
+      skip: document.getElementById('skipInput').value.trim(),
+      exts: document.getElementById('extInput').value.trim() || DEFAULTS.exts,
+      depth: parseInt(document.getElementById('depthInput').value, 10) || DEFAULTS.depth,
+    };
+    saveSettings();
+    document.getElementById('setup').classList.remove('show');
+    rebuildIndex();
+  });
+  document.getElementById('listBtn').addEventListener('click', () => {
+    document.getElementById('listPane').classList.toggle('hidden');
+  });
+  document.getElementById('followBtn').addEventListener('click', () => {
+    followSelection = !followSelection;
+    document.getElementById('followBtn').classList.toggle('on', followSelection);
+    showToast(followSelection ? 'Following the selected recipe' : 'Selection ignored');
+  });
+
+  document.getElementById('prevBtn').addEventListener('click', () => goPage(-1));
+  document.getElementById('nextBtn').addEventListener('click', () => goPage(1));
+  document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(1.25));
+  document.getElementById('zoomOutBtn').addEventListener('click', () => zoomBy(0.8));
+  document.getElementById('fitBtn').addEventListener('click', fitWidth);
+  document.getElementById('rotBtn').addEventListener('click', () => {
+    rotation = (rotation + 90) % 360;
+    if (isImage(activePath || '')) {
+      const img = document.getElementById('viewImg');
+      if (img) img.style.transform = `rotate(${rotation}deg)`;
+    } else renderPage();
+  });
+  document.getElementById('findBtn').addEventListener('click', () => {
+    const bar = document.getElementById('findBar');
+    bar.classList.toggle('show');
+    if (bar.classList.contains('show')) document.getElementById('findInput').focus();
+  });
+  document.getElementById('findGoBtn').addEventListener('click', findInFile);
+  document.getElementById('findInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') findInFile();
+  });
+
+  document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA)$/.test((e.target.tagName || ''));
+    if (typing) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') { goPage(1); e.preventDefault(); }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { goPage(-1); e.preventDefault(); }
+    if (e.key === '/') { document.getElementById('q').focus(); e.preventDefault(); }
+  });
+
+  // Fit-to-width has to be recomputed when the pane changes size, which it
+  // does whenever the Grist page layout is dragged.
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (zoomScale !== null || !pdfDoc) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(renderPage, 200);
+  });
+}
+
+async function start() {
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  } catch (e) { console.warn('pdf.js worker not set', e); }
+
+  loadSettings();
+  loadRecent();
+  wire();
+  document.getElementById('followBtn').classList.toggle('on', followSelection);
+  updateNav();
+
+  if (!splitList(settings.roots).length) {
+    setStatus('No folder set yet.');
+    renderList('Files', '');
+    openSetup();
+  } else if (loadCachedIndex()) {
+    setStatus(statusLine() + ' · ⟳ to rescan');
+    applySearch();
+  } else {
+    setStatus('Scanning…');
+    rebuildIndex();
+  }
+
+  // grist.ready() goes last, after the static shell is up, so a Grist hiccup
+  // leaves a usable widget rather than a blank panel.
+  try {
+    grist.ready({ requiredAccess: 'read table' });
+    grist.onRecord(rec => {
+      if (!followSelection || !rec) return;
+      const term = recipeSearchTerm(rec);
+      if (!term) return;
+      const box = document.getElementById('q');
+      if (box.value === term) return;
+      box.value = term;
+      applySearch();
+    });
+  } catch (e) {
+    console.warn('Grist API unavailable — running standalone', e);
+  }
+}
+
+start();
+</script>
+</body>
+</html>
