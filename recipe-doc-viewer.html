@@ -139,6 +139,7 @@ button { font-family: 'Inter', sans-serif; }
 }
 .mini-btn:hover { background: var(--paper); }
 .mini-btn:disabled { opacity: .3; cursor: default; }
+.mini-btn.confirming { background: var(--accent); border-color: var(--accent); color: white; }
 .page-ind { font-family: 'DM Mono', monospace; font-size: 11px; color: #6B5E52; padding: 0 2px; }
 .view-body {
   flex: 1 1 auto; min-height: 0; overflow: auto; background: #D9D2C8;
@@ -289,6 +290,7 @@ table.sheet tr:first-child td { background: var(--warm); font-weight: 600; posit
       <button class="mini-btn" id="rotBtn" title="Rotate 90°">↻</button>
       <button class="mini-btn" id="findBtn" title="Find text inside this file">🔍</button>
       <button class="mini-btn" id="copyBtn" title="Copy this file's Nextcloud path">⧉</button>
+      <button class="mini-btn" id="archiveBtn" title="Move this file to the archive folder">📦</button>
       <a class="mini-btn" id="openBtn" target="_blank" rel="noopener" title="Download / open the original">↗</a>
     </div>
     <div class="find-bar" id="findBar">
@@ -336,6 +338,10 @@ table.sheet tr:first-child td { background: var(--warm); font-weight: 600; posit
     <input type="text" id="extInput" placeholder="pdf, indd, xlsx, xls">
     <div class="help">PDFs and Excel files render here; InDesign files are indexed and downloadable but cannot be previewed in a browser.</div>
 
+    <label>Archive folder</label>
+    <input type="text" id="archiveInput" placeholder="Squirrely Stash/archive">
+    <div class="help">Where the 📦 button moves a file once you've transferred it. The original folder tree is recreated underneath, so nothing about where it came from is lost.</div>
+
     <label>Scan depth</label>
     <input type="text" id="depthInput" placeholder="4">
     <div class="help">How many folder levels below each root to walk.</div>
@@ -365,6 +371,7 @@ table.sheet tr:first-child td { background: var(--warm); font-weight: 600; posit
 const N8N_BASE = 'https://squirrelystash.app.n8n.cloud/webhook';
 const LIST_URL = N8N_BASE + '/nc-list';
 const FILE_URL = N8N_BASE + '/nc-file';
+const ARCHIVE_URL = N8N_BASE + '/nc-archive';
 
 const SETTINGS_KEY = 'ss-doc-viewer-settings-v1';
 const INDEX_KEY    = 'ss-doc-viewer-index-v1';
@@ -381,6 +388,7 @@ const DEFAULTS = {
   skip: 'photos, thumbnails, backup, .trash',
   exts: 'pdf, indd, indt, xlsx, xls, xlsm',
   depth: 4,
+  archiveRoot: 'Squirrely Stash/archive',
 };
 
 let settings = { ...DEFAULTS };
@@ -694,6 +702,7 @@ function setViewMsg(html) {
 }
 
 async function openFile(f) {
+  disarmArchive();
   activePath = f.path;
   pdfDoc = null; sheetBook = null; curPage = 1; rotation = 0; zoomScale = null; pageText = {};
   renderToken++;
@@ -876,6 +885,7 @@ function updateNav() {
   });
   document.getElementById('rotBtn').disabled = !pdfDoc && !isImage(path);
   document.getElementById('copyBtn').disabled = !path;
+  document.getElementById('archiveBtn').disabled = !path;
 }
 
 function goPage(delta) {
@@ -955,6 +965,74 @@ async function findInFile() {
   });
 }
 
+/* ---------- archive ---------- */
+
+// Two-click confirm rather than confirm(): a native dialog can be suppressed
+// inside a sandboxed iframe, and a silently-skipped confirmation on a button
+// that moves files is not a risk worth taking.
+let archiveArmed = false;
+let archiveTimer = null;
+
+function disarmArchive() {
+  archiveArmed = false;
+  clearTimeout(archiveTimer);
+  const b = document.getElementById('archiveBtn');
+  b.classList.remove('confirming');
+  b.textContent = '📦';
+  b.title = 'Move this file to the archive folder';
+}
+
+async function archiveCurrent() {
+  if (!activePath) return;
+  const btn = document.getElementById('archiveBtn');
+
+  if (!archiveArmed) {
+    archiveArmed = true;
+    btn.classList.add('confirming');
+    btn.textContent = 'Move?';
+    btn.title = 'Click again to move this file into ' + (settings.archiveRoot || DEFAULTS.archiveRoot);
+    archiveTimer = setTimeout(disarmArchive, 4000);
+    return;
+  }
+
+  const src = activePath;
+  disarmArchive();
+  btn.disabled = true;
+  showToast('Moving…');
+
+  try {
+    const res = await fetch(ARCHIVE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: src, archive_root: settings.archiveRoot || DEFAULTS.archiveRoot }),
+    });
+    const out = await res.json().catch(() => null);
+    if (!res.ok || !out || !out.ok) throw new Error((out && out.error) || ('HTTP ' + res.status));
+
+    // Repoint the cached index at the new location instead of dropping the
+    // entry: the file still exists and is still worth finding.
+    const entry = fileIndex.find(f => f.path === src);
+    if (entry) {
+      entry.path = out.dest;
+      entry.filename = out.dest.split('/').pop();
+      entry.folder = folderOf(out.dest);
+      saveCachedIndex();
+    }
+    recentPaths = recentPaths.map(p => (p === src ? out.dest : p));
+    activePath = out.dest;
+    document.getElementById('openBtn').href = fileUrl(out.dest);
+    document.getElementById('viewTitle').title = out.dest;
+    applySearchKeepScroll();
+
+    showToast(out.renamed ? 'Archived (renamed — name was taken)' : 'Archived');
+  } catch (e) {
+    console.error('archive failed', e);
+    showToast('Move failed — ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ---------- Grist link ---------- */
 
 function recipeSearchTerm(rec) {
@@ -981,6 +1059,7 @@ function openSetup() {
   document.getElementById('skipInput').value = settings.skip || '';
   document.getElementById('extInput').value = settings.exts || DEFAULTS.exts;
   document.getElementById('depthInput').value = settings.depth || DEFAULTS.depth;
+  document.getElementById('archiveInput').value = settings.archiveRoot || DEFAULTS.archiveRoot;
   document.getElementById('checkOut').innerHTML = '';
   document.getElementById('browser').classList.remove('show');
   document.getElementById('setup').classList.add('show');
@@ -1106,6 +1185,7 @@ function wire() {
       skip: document.getElementById('skipInput').value.trim(),
       exts: document.getElementById('extInput').value.trim() || DEFAULTS.exts,
       depth: parseInt(document.getElementById('depthInput').value, 10) || DEFAULTS.depth,
+      archiveRoot: document.getElementById('archiveInput').value.trim() || DEFAULTS.archiveRoot,
     };
     saveSettings();
     document.getElementById('setup').classList.remove('show');
@@ -1121,6 +1201,7 @@ function wire() {
   });
 
   document.getElementById('copyBtn').addEventListener('click', () => copyPath(activePath));
+  document.getElementById('archiveBtn').addEventListener('click', archiveCurrent);
   document.getElementById('prevBtn').addEventListener('click', () => goPage(-1));
   document.getElementById('nextBtn').addEventListener('click', () => goPage(1));
   document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(1.25));
