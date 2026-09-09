@@ -6,6 +6,7 @@
 <title>Recipe Doc Viewer</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -98,7 +99,15 @@ button { font-family: 'Inter', sans-serif; }
 }
 .row {
   padding: 7px 9px; border-bottom: 1px solid #EEE7DE; cursor: pointer;
+  display: flex; gap: 6px; align-items: flex-start;
 }
+.row-main { flex: 1 1 auto; min-width: 0; }
+.row-copy {
+  flex: 0 0 auto; font-size: 11px; line-height: 1; padding: 4px 6px;
+  border: 1px solid var(--rule); border-radius: 4px; background: white;
+  color: var(--muted); cursor: pointer;
+}
+.row-copy:hover { background: var(--gold-light); color: #7A5518; border-color: var(--gold); }
 .row:hover { background: var(--accent-light); }
 .row.active { background: var(--gold-light); border-left: 3px solid var(--gold); padding-left: 6px; }
 .row-name { font-size: 12px; font-weight: 500; word-break: break-word; }
@@ -110,6 +119,7 @@ button { font-family: 'Inter', sans-serif; }
 }
 .badge-pdf { background: var(--accent-light); color: var(--accent); }
 .badge-img { background: var(--teal-light); color: var(--teal); }
+.badge-other { background: var(--gold-light); color: #7A5518; }
 .list-empty { padding: 24px 14px; text-align: center; color: var(--muted); font-style: italic; font-size: 12px; }
 .more-btn { display: block; width: 100%; padding: 8px; border: none; border-top: 1px solid var(--rule);
   background: var(--paper); font-size: 11px; color: var(--accent); cursor: pointer; }
@@ -137,6 +147,29 @@ button { font-family: 'Inter', sans-serif; }
 .view-body canvas, .view-body img {
   background: white; box-shadow: 0 2px 10px rgba(0,0,0,.18); max-width: none; display: block;
 }
+.sheet-wrap { width: 100%; background: white; padding: 8px; }
+.sheet-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.sheet-tab {
+  font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+}
+.sheet-tab.on { background: var(--teal-light); border-color: var(--teal); color: var(--teal); font-weight: 600; }
+table.sheet { border-collapse: collapse; font-size: 11px; }
+table.sheet td {
+  border: 1px solid #E4DCD1; padding: 2px 6px; vertical-align: top;
+  white-space: pre-wrap; max-width: 320px;
+}
+table.sheet tr:first-child td { background: var(--warm); font-weight: 600; position: sticky; top: 0; }
+.file-card {
+  margin: auto; text-align: center; padding: 24px 18px; max-width: 380px;
+}
+.file-card .big { font-size: 26px; margin-bottom: 8px; }
+.file-card .fname { font-size: 13px; font-weight: 600; word-break: break-word; }
+.file-card .fpath {
+  font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted);
+  word-break: break-all; margin: 6px 0 14px;
+}
+.file-card .note { font-size: 11px; color: #6B5E52; margin-top: 12px; }
 .view-msg { margin: auto; color: #5B5148; font-size: 12px; text-align: center; padding: 30px 20px; }
 .view-msg .hint { display: block; margin-top: 6px; font-size: 11px; color: #6B5E52; }
 .find-bar {
@@ -185,6 +218,29 @@ button { font-family: 'Inter', sans-serif; }
 .setup .help { font-size: 10px; color: var(--muted); margin-top: 3px; }
 .setup .field-row { display: flex; gap: 6px; align-items: stretch; }
 .setup .field-row input[type=text] { flex: 1 1 auto; min-width: 0; }
+.browser {
+  margin-top: 8px; border: 1px solid var(--rule); border-radius: 6px;
+  background: white; overflow: hidden; display: none;
+}
+.browser.show { display: block; }
+.browser-crumb {
+  padding: 5px 8px; background: var(--warm); border-bottom: 1px solid var(--rule);
+  font-family: 'DM Mono', monospace; font-size: 10px; word-break: break-all;
+}
+.browser-crumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.browser-crumb a:hover { text-decoration: underline; }
+.browser-list { max-height: 190px; overflow-y: auto; }
+.browser-row {
+  padding: 5px 8px; border-bottom: 1px solid #F0EAE2; font-size: 11px;
+  cursor: pointer; display: flex; justify-content: space-between; gap: 8px;
+}
+.browser-row:hover { background: var(--accent-light); }
+.browser-row .cnt { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); flex: 0 0 auto; }
+.browser-foot {
+  padding: 6px 8px; border-top: 1px solid var(--rule); background: var(--paper);
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.browser-foot .here { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); word-break: break-all; }
 .check-out { margin-top: 5px; font-size: 10px; font-family: 'DM Mono', monospace; }
 .check-out .good { color: var(--teal); }
 .check-out .bad { color: var(--accent); }
@@ -232,7 +288,8 @@ button { font-family: 'Inter', sans-serif; }
       <button class="mini-btn" id="zoomInBtn" title="Zoom in">+</button>
       <button class="mini-btn" id="rotBtn" title="Rotate 90°">↻</button>
       <button class="mini-btn" id="findBtn" title="Find text inside this file">🔍</button>
-      <a class="mini-btn" id="openBtn" target="_blank" rel="noopener" title="Open the original in a new tab">↗</a>
+      <button class="mini-btn" id="copyBtn" title="Copy this file's Nextcloud path">⧉</button>
+      <a class="mini-btn" id="openBtn" target="_blank" rel="noopener" title="Download / open the original">↗</a>
     </div>
     <div class="find-bar" id="findBar">
       <input class="find-input" id="findInput" placeholder="Find text in this file…" autocomplete="off">
@@ -256,18 +313,28 @@ button { font-family: 'Inter', sans-serif; }
     <label>Folders to scan</label>
     <div class="field-row">
       <input type="text" id="rootsInput" placeholder="Squirrely Stash/archive">
+      <button class="icon-btn" id="browseBtn" title="Click through the Nextcloud folder tree">Browse</button>
       <button class="icon-btn" id="checkBtn" title="Ask Nextcloud what is actually in these folders">Check</button>
     </div>
     <div class="help">Comma-separated for more than one. Subfolders are scanned automatically.</div>
     <div class="check-out" id="checkOut"></div>
+
+    <div class="browser" id="browser">
+      <div class="browser-crumb" id="browserCrumb"></div>
+      <div class="browser-list" id="browserList"></div>
+      <div class="browser-foot">
+        <button class="icon-btn" id="useFolderBtn">Use this folder</button>
+        <span class="here" id="browserHere"></span>
+      </div>
+    </div>
 
     <label>Skip any folder whose name contains</label>
     <input type="text" id="skipInput" placeholder="photos, thumbnails, backup">
     <div class="help">Keeps the scan away from the big photo folders. Comma-separated, leave blank for none.</div>
 
     <label>File types to index</label>
-    <input type="text" id="extInput" placeholder="pdf, jpg, jpeg, png, webp">
-    <div class="help">PDFs render page by page; images are shown as-is.</div>
+    <input type="text" id="extInput" placeholder="pdf, indd, xlsx, xls">
+    <div class="help">PDFs and Excel files render here; InDesign files are indexed and downloadable but cannot be previewed in a browser.</div>
 
     <label>Scan depth</label>
     <input type="text" id="depthInput" placeholder="4">
@@ -312,7 +379,7 @@ const CRAWL_CONCURRENCY = 2;
 const DEFAULTS = {
   roots: '',
   skip: 'photos, thumbnails, backup, .trash',
-  exts: 'pdf, jpg, jpeg, png, webp',
+  exts: 'pdf, indd, indt, xlsx, xls, xlsm',
   depth: 4,
 };
 
@@ -352,6 +419,18 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+async function copyPath(path) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    showToast('Path copied');
+  } catch (e) {
+    // Clipboard writes are blocked in some sandboxed frames; show it instead
+    // so it can still be selected by hand.
+    window.prompt('Copy this path:', path);
+  }
+}
+
 function setStatus(html) { document.getElementById('status').innerHTML = html; }
 
 function splitList(s) {
@@ -361,6 +440,8 @@ function stripSlashes(p) { return String(p || '').replace(/^\/+/, '').replace(/\
 function folderOf(p) { const i = p.lastIndexOf('/'); return i >= 0 ? p.slice(0, i) : ''; }
 function extOf(p) { const m = /\.([a-z0-9]+)$/i.exec(p || ''); return m ? m[1].toLowerCase() : ''; }
 function isImage(p) { return ['jpg','jpeg','png','webp','gif','bmp'].includes(extOf(p)); }
+function isSheet(p) { return ['xlsx','xls','xlsm','xlsb'].includes(extOf(p)); }
+function isPdf(p) { return extOf(p) === 'pdf'; }
 function fileUrl(p) { return FILE_URL + '?path=' + encodeURIComponent(stripSlashes(p)); }
 
 function ago(ts) {
@@ -416,7 +497,8 @@ function pushRecent(path) {
 /* ---------- crawl ---------- */
 
 async function listFolder(path) {
-  const url = LIST_URL + '?path=' + encodeURIComponent(stripSlashes(path));
+  // An empty path means the account root, which is where browsing starts.
+  const url = LIST_URL + '?path=' + encodeURIComponent(stripSlashes(path) || '/');
   const res = await fetch(url);           // no custom headers: stays a simple
   if (!res.ok) throw new Error('list ' + res.status);   // request, so no preflight
   const json = await res.json();
@@ -565,12 +647,15 @@ function renderList(headText, query) {
   const shown = results.slice(0, visibleCount);
   const rest = results.length - shown.length;
   body.innerHTML = shown.map((f, i) => {
-    const badge = isImage(f.path)
-      ? '<span class="badge badge-img">IMG</span>'
-      : '<span class="badge badge-pdf">' + esc(extOf(f.path).toUpperCase() || 'FILE') + '</span>';
+    const ext = extOf(f.path).toUpperCase() || 'FILE';
+    const cls = isPdf(f.path) ? 'badge-pdf' : (isSheet(f.path) || isImage(f.path)) ? 'badge-img' : 'badge-other';
+    const badge = `<span class="badge ${cls}">${esc(ext)}</span>`;
     return `<div class="row ${f.path === activePath ? 'active' : ''}" data-idx="${i}">
-      <div class="row-name">${badge}${highlight(f.filename, query)}</div>
-      <div class="row-meta">${esc(f.folder)}</div>
+      <div class="row-main">
+        <div class="row-name">${badge}${highlight(f.filename, query)}</div>
+        <div class="row-meta">${esc(f.folder)}</div>
+      </div>
+      <button class="row-copy" data-copy="${i}" title="Copy full path">⧉</button>
     </div>`;
   }).join('') + (rest > 0 ? `<button class="more-btn" id="moreBtn">Show ${Math.min(60, rest)} more (${rest} left)</button>` : '');
 
@@ -578,6 +663,15 @@ function renderList(headText, query) {
     el.addEventListener('click', () => {
       const f = results[parseInt(el.dataset.idx, 10)];
       if (f) openFile(f);
+    });
+  });
+  body.querySelectorAll('.row-copy').forEach(el => {
+    el.addEventListener('click', ev => {
+      // Stop the row's own handler, or copying would also open the file —
+      // a pointless download for the formats that can't be previewed anyway.
+      ev.stopPropagation();
+      const f = results[parseInt(el.dataset.copy, 10)];
+      if (f) copyPath(f.path);
     });
   });
   const more = document.getElementById('moreBtn');
@@ -601,7 +695,7 @@ function setViewMsg(html) {
 
 async function openFile(f) {
   activePath = f.path;
-  pdfDoc = null; curPage = 1; rotation = 0; zoomScale = null; pageText = {};
+  pdfDoc = null; sheetBook = null; curPage = 1; rotation = 0; zoomScale = null; pageText = {};
   renderToken++;
   if (renderTask) { try { renderTask.cancel(); } catch (e) {} renderTask = null; }
 
@@ -627,8 +721,24 @@ async function openFile(f) {
     return;
   }
 
-  if (extOf(f.path) !== 'pdf') {
-    setViewMsg(`No inline viewer for <b>.${esc(extOf(f.path))}</b> files.<span class="hint">Use ↗ to open it in a new tab.</span>`);
+  if (isSheet(f.path)) {
+    document.getElementById('pageInd').textContent = 'xls';
+    await openSheet(f);
+    return;
+  }
+
+  if (!isPdf(f.path)) {
+    // InDesign and friends: no browser can render these, so give the two
+    // things that actually help — the exact path, and a download.
+    document.getElementById('pageInd').textContent = '–';
+    document.getElementById('viewBody').innerHTML = `
+      <div class="file-card">
+        <div class="big">📄</div>
+        <div class="fname">${esc(f.filename)}</div>
+        <div class="fpath">${esc(f.path)}</div>
+        <a class="btn-primary" style="text-decoration:none" href="${esc(fileUrl(f.path))}" target="_blank" rel="noopener">Download</a>
+        <div class="note">A .${esc(extOf(f.path))} file can't be previewed in a browser. Download it, or use ⧉ to copy the path and open it from the Nextcloud folder on your desktop.</div>
+      </div>`;
     updateNav();
     return;
   }
@@ -656,6 +766,58 @@ async function openFile(f) {
     setViewMsg('Could not open that PDF.<span class="hint">Check SS - Serve Nextcloud File is active, and that the file really is a PDF.</span>');
     updateNav();
   }
+}
+
+let sheetBook = null;
+let sheetFont = 11;
+
+/* Excel recipes render as plain tables — enough to read a dye list off and
+   retype it, which is the whole job here. Cells are escaped and rebuilt rather
+   than passed through SheetJS's HTML output, so nothing inside an old
+   spreadsheet can inject markup into the widget. */
+async function openSheet(f) {
+  setViewMsg('Loading spreadsheet…');
+  const token = renderToken;
+  try {
+    const res = await fetch(fileUrl(f.path));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const buf = await res.arrayBuffer();
+    if (token !== renderToken) return;
+    sheetBook = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    sheetFont = 11;
+    renderSheet(sheetBook.SheetNames[0]);
+  } catch (e) {
+    console.error('sheet load failed', e);
+    if (token !== renderToken) return;
+    setViewMsg('Could not read that spreadsheet.<span class="hint">Older .xls files sometimes need re-saving as .xlsx.</span>');
+  }
+  updateNav();
+}
+
+function renderSheet(name) {
+  if (!sheetBook) return;
+  const ws = sheetBook.Sheets[name];
+  const rows = ws ? XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: '' }) : [];
+
+  const tabs = sheetBook.SheetNames.map(n =>
+    `<button class="sheet-tab ${n === name ? 'on' : ''}" data-sheet="${esc(n)}">${esc(n)}</button>`).join('');
+
+  const width = rows.reduce((m, r) => Math.max(m, r.length), 0);
+  const body = rows.map(r => {
+    const cells = [];
+    for (let i = 0; i < width; i++) cells.push(`<td>${esc(r[i] == null ? '' : r[i])}</td>`);
+    return `<tr>${cells.join('')}</tr>`;
+  }).join('');
+
+  document.getElementById('viewBody').innerHTML =
+    `<div class="sheet-wrap">
+       ${sheetBook.SheetNames.length > 1 ? `<div class="sheet-tabs">${tabs}</div>` : ''}
+       ${rows.length ? `<table class="sheet" style="font-size:${sheetFont}px">${body}</table>`
+                     : '<div class="view-msg">That sheet is empty.</div>'}
+     </div>`;
+
+  document.querySelectorAll('.sheet-tab').forEach(el =>
+    el.addEventListener('click', () => renderSheet(el.dataset.sheet)));
 }
 
 async function renderPage() {
@@ -707,9 +869,13 @@ function updateNav() {
   document.getElementById('prevBtn').disabled = !pdfDoc || curPage <= 1;
   document.getElementById('nextBtn').disabled = !pdfDoc || curPage >= n;
   document.getElementById('findBtn').disabled = !pdfDoc;
-  ['zoomInBtn','zoomOutBtn','fitBtn','rotBtn'].forEach(id => {
-    document.getElementById(id).disabled = !pdfDoc && !isImage(activePath || '');
+  const path = activePath || '';
+  const zoomable = !!pdfDoc || isImage(path) || isSheet(path);
+  ['zoomInBtn','zoomOutBtn','fitBtn'].forEach(id => {
+    document.getElementById(id).disabled = !zoomable;
   });
+  document.getElementById('rotBtn').disabled = !pdfDoc && !isImage(path);
+  document.getElementById('copyBtn').disabled = !path;
 }
 
 function goPage(delta) {
@@ -721,6 +887,12 @@ function goPage(delta) {
 }
 
 function zoomBy(factor) {
+  if (isSheet(activePath || '')) {
+    sheetFont = Math.min(22, Math.max(7, sheetFont * factor));
+    const t = document.querySelector('table.sheet');
+    if (t) t.style.fontSize = sheetFont + 'px';
+    return;
+  }
   if (isImage(activePath || '')) {
     const img = document.getElementById('viewImg');
     if (!img) return;
@@ -735,6 +907,12 @@ function zoomBy(factor) {
 }
 
 function fitWidth() {
+  if (isSheet(activePath || '')) {
+    sheetFont = 11;
+    const t = document.querySelector('table.sheet');
+    if (t) t.style.fontSize = '11px';
+    return;
+  }
   if (isImage(activePath || '')) {
     const img = document.getElementById('viewImg');
     if (img) { img.style.width = ''; img.style.maxWidth = '100%'; }
@@ -804,8 +982,69 @@ function openSetup() {
   document.getElementById('extInput').value = settings.exts || DEFAULTS.exts;
   document.getElementById('depthInput').value = settings.depth || DEFAULTS.depth;
   document.getElementById('checkOut').innerHTML = '';
+  document.getElementById('browser').classList.remove('show');
   document.getElementById('setup').classList.add('show');
   document.querySelector('.setup-body').scrollTop = 0;
+}
+
+/* Folder browser.
+   Nextcloud's own search opens a hit by file ID, so the containing path is
+   never shown and there is no way to read it off the URL. Clicking down the
+   tree here sidesteps that entirely: every folder is listed with how many
+   indexable files it holds, so the right root announces itself. */
+let browsePath = '';
+
+async function browseTo(path) {
+  browsePath = stripSlashes(path);
+  const list = document.getElementById('browserList');
+  const crumb = document.getElementById('browserCrumb');
+  document.getElementById('browser').classList.add('show');
+  document.getElementById('browserHere').textContent = browsePath || '(root)';
+  list.innerHTML = '<div class="browser-row">Loading…</div>';
+
+  // Breadcrumb: root plus one link per path segment.
+  const parts = browsePath ? browsePath.split('/') : [];
+  let acc = '';
+  const links = ['<a data-go="">root</a>'];
+  for (const part of parts) {
+    acc = acc ? acc + '/' + part : part;
+    links.push(`<a data-go="${esc(acc)}">${esc(part)}</a>`);
+  }
+  crumb.innerHTML = links.join(' / ');
+  crumb.querySelectorAll('a').forEach(a =>
+    a.addEventListener('click', () => browseTo(a.dataset.go)));
+
+  let entries;
+  try {
+    entries = await listFolder(browsePath);
+  } catch (e) {
+    list.innerHTML = `<div class="browser-row">Could not read that folder (${esc(e.message)})</div>`;
+    return;
+  }
+
+  const wanted = splitList(document.getElementById('extInput').value || DEFAULTS.exts)
+    .map(x => x.replace(/^\./, '').toLowerCase());
+  const folders = entries.filter(e => e.kind === 'folder');
+  const hits = entries.filter(e => e.kind === 'file' && wanted.includes(extOf(e.path))).length;
+
+  const rows = folders.map(f =>
+    `<div class="browser-row" data-path="${esc(f.path)}"><span>📁 ${esc(f.filename)}</span></div>`).join('');
+  const self = `<div class="browser-row" style="cursor:default;background:var(--gold-light)">
+      <span>${hits} matching file${hits === 1 ? '' : 's'} in this folder</span>
+      <span class="cnt">${entries.length - folders.length} total</span></div>`;
+
+  list.innerHTML = self + (rows || '<div class="browser-row" style="cursor:default;color:var(--muted)">No subfolders</div>');
+  list.querySelectorAll('.browser-row[data-path]').forEach(el =>
+    el.addEventListener('click', () => browseTo(el.dataset.path)));
+}
+
+function useBrowsedFolder() {
+  if (!browsePath) { showToast('Pick a folder first'); return; }
+  const input = document.getElementById('rootsInput');
+  const cur = splitList(input.value);
+  if (!cur.includes(browsePath)) cur.push(browsePath);
+  input.value = cur.join(', ');
+  showToast('Added to folders to scan');
 }
 
 /* Answers "is this path real, and is anything in it?" without leaving the
@@ -850,6 +1089,14 @@ function wire() {
   document.getElementById('refreshBtn').addEventListener('click', rebuildIndex);
   document.getElementById('setupBtn').addEventListener('click', openSetup);
   document.getElementById('checkBtn').addEventListener('click', checkRoots);
+  document.getElementById('browseBtn').addEventListener('click', () => {
+    const b = document.getElementById('browser');
+    if (b.classList.contains('show')) { b.classList.remove('show'); return; }
+    // Start from whatever is already typed, so refining a near-miss path is
+    // a couple of clicks rather than a walk from the root.
+    browseTo(splitList(document.getElementById('rootsInput').value)[0] || '');
+  });
+  document.getElementById('useFolderBtn').addEventListener('click', useBrowsedFolder);
   document.getElementById('closeSetupBtn').addEventListener('click', () => {
     document.getElementById('setup').classList.remove('show');
   });
@@ -873,6 +1120,7 @@ function wire() {
     showToast(followSelection ? 'Following the selected recipe' : 'Selection ignored');
   });
 
+  document.getElementById('copyBtn').addEventListener('click', () => copyPath(activePath));
   document.getElementById('prevBtn').addEventListener('click', () => goPage(-1));
   document.getElementById('nextBtn').addEventListener('click', () => goPage(1));
   document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(1.25));
