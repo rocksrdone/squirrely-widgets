@@ -22,7 +22,21 @@
   --muted: #8B7D72;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* This widget is painted light on purpose. Without the declaration, a browser
+   in dark mode restyles form controls from its own stylesheet: a field that
+   sets a white background but no text colour gets near-white text, and the
+   value is invisible until you select it. */
+:root { color-scheme: light; }
 html, body { height: 100%; }
+
+/* Every control states both colours, so nothing depends on UA defaults. */
+input, textarea, select, button {
+  color: var(--ink);
+  caret-color: var(--accent);
+  color-scheme: light;
+}
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+input, textarea { background: white; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -42,7 +56,8 @@ button { font-family: 'Inter', sans-serif; }
 .search-input {
   flex: 1 1 auto; min-width: 80px;
   padding: 7px 9px; border: 1.5px solid var(--rule); border-radius: 6px;
-  font-size: 13px; font-family: 'Inter', sans-serif; outline: none; background: white;
+  font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  background: white; color: var(--ink);
 }
 .search-input:focus { border-color: var(--accent); }
 .icon-btn {
@@ -132,6 +147,7 @@ button { font-family: 'Inter', sans-serif; }
 .find-input {
   flex: 1 1 100px; min-width: 70px; padding: 5px 7px; border: 1px solid var(--rule);
   border-radius: 4px; font-size: 12px; outline: none;
+  background: white; color: var(--ink);
 }
 .hit-chip {
   font-size: 10px; padding: 2px 6px; border-radius: 3px; cursor: pointer;
@@ -162,7 +178,8 @@ button { font-family: 'Inter', sans-serif; }
   font-weight: 600; color: #6B5E52; margin: 9px 0 3px; }
 .setup input[type=text] {
   width: 100%; padding: 6px 9px; border: 1px solid var(--rule); border-radius: 5px;
-  font-size: 12px; font-family: 'DM Mono', monospace; outline: none; background: white;
+  font-size: 12px; font-family: 'DM Mono', monospace; outline: none;
+  background: white; color: var(--ink);
 }
 .setup input[type=text]:focus { border-color: var(--accent); }
 .setup .help { font-size: 10px; color: var(--muted); margin-top: 3px; }
