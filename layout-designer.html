@@ -130,6 +130,7 @@
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
     opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+    max-width: min(90vw, 460px); line-height: 1.4;
   }
   .toast.show { opacity: 1; }
 </style>
@@ -430,11 +431,14 @@ function searchDyeSuggestions(boxId, query, onPick) {
   box.style.display = 'block';
 }
 
-function showToast(msg) {
+let toastTimer = null;
+function showToast(msg, ms = 2200) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
+  // Clear the previous timer, or an earlier short toast hides a later long one.
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 // ── GEOMETRY ──
@@ -1217,6 +1221,8 @@ function applyRepeat() {
         dyeName: seg.dyeName,
         type: seg.type,
         notes: seg.notes,
+        dilution: seg.dilution || '',
+        blendRatio: seg.blendRatio ?? 50,
         startPct: rep * (100 / factor) + seg.startPct / factor,
         endPct: rep * (100 / factor) + seg.endPct / factor,
       });
@@ -1296,6 +1302,41 @@ function renderOverlayList() {
   `).join('');
 }
 
+// Grist rejects the WHOLE applyUserActions bundle if any single action is bad —
+// one missing column, one formula column, or one row that was deleted elsewhere
+// and the entire save fails. So read the table's current shape first and only
+// send what it will accept.
+async function getSegmentSchema() {
+  const T = 'Recipe_Layout_Segments';
+  const table = await grist.docApi.fetchTable(T);   // throws if the table is gone — that's a real failure
+  const existingIds = new Set(table.id || []);
+  const columns = new Set(Object.keys(table).filter(k => k !== 'id'));
+
+  // Formula columns show up in fetchTable but can't be written to. Metadata is
+  // optional: if it can't be read, fall back to "exists = writable".
+  const formulaCols = new Set();
+  try {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const tIdx = (tables.tableId || []).indexOf(T);
+    const tableRef = tIdx >= 0 ? tables.id[tIdx] : null;
+    if (tableRef) {
+      const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+      const n = (cols.id || []).length;
+      for (let i = 0; i < n; i++) {
+        if (cols.parentId[i] !== tableRef) continue;
+        // An empty formula column (added but never filled) converts to data on
+        // first write, so only a column with an actual formula is off-limits.
+        if (cols.isFormula[i] && String(cols.formula[i] || '').trim()) formulaCols.add(cols.colId[i]);
+      }
+    }
+  } catch (e) {
+    console.warn('Could not read column metadata; assuming existing columns are writable:', e);
+  }
+
+  const writable = new Set([...columns].filter(c => !formulaCols.has(c)));
+  return { existingIds, columns, writable, formulaCols };
+}
+
 async function saveLayout() {
   if (!currentRecipeId) return;
   const btn = document.getElementById('saveBtn');
@@ -1303,8 +1344,41 @@ async function saveLayout() {
   btn.textContent = 'Saving...';
 
   try {
+    const T = 'Recipe_Layout_Segments';
+    const schema = await getSegmentSchema();
+
+    const required = ['Recipe', 'Start_Pct', 'End_Pct'];
+    const badRequired = required.filter(c => !schema.writable.has(c));
+    if (badRequired.length) {
+      throw new Error(`${T} is missing (or has formulas in) required column(s): ${badRequired.join(', ')}`);
+    }
+
+    const skipped = new Set();
+    const clean = (fields) => {
+      const out = {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (schema.writable.has(k)) out[k] = v;
+        else skipped.add(k);
+      }
+      return out;
+    };
+
     const actions = [];
     const pending = [];   // new rows whose rowId must be written back
+    let staleRows = 0;
+
+    // Update if the row still exists; otherwise it was deleted outside this
+    // widget, so add it fresh instead of sending an UpdateRecord Grist will reject.
+    const queue = (target, fields) => {
+      const f = clean(fields);
+      if (target.rowId && schema.existingIds.has(target.rowId)) {
+        actions.push(['UpdateRecord', T, target.rowId, f]);
+      } else {
+        if (target.rowId) { staleRows++; target.rowId = null; }
+        pending.push({ target, actionIndex: actions.length });
+        actions.push(['AddRecord', T, null, f]);
+      }
+    };
 
     baseSegments.forEach((seg, i) => {
       const fields = {
@@ -1319,12 +1393,7 @@ async function saveLayout() {
         Dilution: seg.dilution || '',
         Blend_Ratio: Number(seg.blendRatio) || 50,
       };
-      if (seg.rowId) {
-        actions.push(['UpdateRecord', 'Recipe_Layout_Segments', seg.rowId, fields]);
-      } else {
-        pending.push({ target: seg, actionIndex: actions.length });
-        actions.push(['AddRecord', 'Recipe_Layout_Segments', null, fields]);
-      }
+      queue(seg, fields);
     });
 
     overlayMarks.forEach((mark, i) => {
@@ -1339,15 +1408,13 @@ async function saveLayout() {
         Notes: mark.notes || '',
         Application_Type: mark.applicationType || 'Dye',
       };
-      if (mark.rowId) {
-        actions.push(['UpdateRecord', 'Recipe_Layout_Segments', mark.rowId, fields]);
-      } else {
-        pending.push({ target: mark, actionIndex: actions.length });
-        actions.push(['AddRecord', 'Recipe_Layout_Segments', null, fields]);
-      }
+      queue(mark, fields);
     });
 
-    deletedIds.forEach(id => actions.push(['RemoveRecord', 'Recipe_Layout_Segments', id]));
+    // De-dupe, and skip rows already gone — removing a missing row fails the bundle.
+    [...new Set(deletedIds)]
+      .filter(id => schema.existingIds.has(id))
+      .forEach(id => actions.push(['RemoveRecord', T, id]));
 
     // Write the new row IDs back, or a second save re-adds every new segment.
     // applyUserActions() returns {actionNum, retValues, ...}, not a bare array.
@@ -1362,10 +1429,24 @@ async function saveLayout() {
 
     deletedIds = [];
     clearUnsaved();
-    showToast('Layout saved ✓');
+
+    const notes = [];
+    if (skipped.size) {
+      const list = [...skipped].map(c => schema.formulaCols.has(c) ? `${c} (formula column)` : c);
+      notes.push(`not stored — ${T} has no writable ${list.join(', ')}`);
+    }
+    if (staleRows) notes.push(`${staleRows} segment row(s) had been deleted elsewhere and were re-added`);
+    if (notes.length) {
+      console.warn('Layout saved with warnings:', notes);
+      showToast(`Layout saved ✓ — ${notes.join('; ')}`, 7000);
+    } else {
+      showToast('Layout saved ✓');
+    }
   } catch (e) {
     console.error('Failed to save layout:', e);
-    showToast('Save failed — check the Recipe_Layout_Segments table exists with the right columns');
+    // Show Grist's actual reason instead of guessing at it.
+    const reason = String((e && e.message) || e || 'unknown error').replace(/\s+/g, ' ').slice(0, 220);
+    showToast(`Save failed: ${reason}`, 9000);
   } finally {
     btn.disabled = false;
     btn.textContent = '💾 Save';
