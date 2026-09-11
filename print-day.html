@@ -209,15 +209,22 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .mf-back.none { border-style: dotted; color: #666; }
 .mf-back.new { background: #000; color: #fff; }
 .pl-pa { display: flex; flex-wrap: wrap; gap: .12in; }
-.pa-blk { width: 2.45in; border: 1.5px solid #000; border-radius: 3px; padding: 5px 8px 6px;
+.pa-blk { width: 3.55in; border: 1.5px solid #000; border-radius: 3px; padding: 5px 8px 6px;
   break-inside: avoid; }
-.pa-blk.new { border-style: dashed; width: 100%; }
-.pa-bin { font-family: 'DM Mono', monospace; font-size: 17px; font-weight: bold; letter-spacing: .5px;
+.pa-hd { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   border-bottom: 1.5px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+.pa-cw { font-size: 14px; font-weight: bold; }
+.pa-code { font-family: 'DM Mono', monospace; font-size: 10px; }
 .pa-list { list-style: none; margin: 0; padding: 0; }
-.pa-list li { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 0; }
-.pa-list li i { width: 12px; height: 12px; border: 1.5px solid #000; display: inline-block; flex: none; }
-.pa-blk.new .pa-list { display: flex; flex-wrap: wrap; gap: 0 .22in; }
+.pa-list li { display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 2.5px 0;
+  border-top: 1px dotted #CCC; }
+.pa-list li:first-child { border-top: none; }
+.pa-nm { flex: 1; min-width: 0; }
+.pa-box { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: bold; text-align: center;
+  min-width: .5in; border: 1.5px solid #000; border-radius: 2px; padding: 0 3px; flex: none; }
+.pa-box.write { min-width: .62in; height: .2in; border-color: #000; }
+.pa-box.none { border-style: dotted; color: #666; font-weight: normal; }
+.pa-note { font-size: 9px; color: #555; width: .72in; flex: none; }
 .pl-mfb li em { margin-left: 6px; }
 .pl-brand { font-size: 9px; font-weight: bold; letter-spacing: .4px; border: 1px solid #000;
   border-radius: 2px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
@@ -1295,36 +1302,41 @@ function dyeWithBrand(d) {
   return d && d.brand ? `${n} <span class="pl-brand">${esc(d.brand)}</span>` : n;
 }
 
-/* End-of-day put-away, grouped by the bin each jar goes home to.
-   Every other view here is organised by pot, because that is how dyes get
-   gathered. Putting them back is the reverse journey: one person, one walk down
-   the rack, filling one bin at a time. A jar shared by three pots is still one
-   jar and appears once. */
+/* End-of-day put-away, one block per pot, EVERY dye listed.
+   Grouping by destination bin looked tidier but dropped the dyes that most
+   need attention: a jar mixed fresh today has no bin, so it fell into an
+   afterthought at the bottom, and powders vanished entirely. Listing a recipe's
+   full set means the person holding the block can see everything that came off
+   that pot and account for all of it.
+
+   The bin is printed where it is known and left as a box where it is not, so
+   whoever is at the screen can fill it in as control assigns one. */
 function pl_putaway(B) {
-  const byBin = {}, newJars = [];
-  const seen = new Set();
-  B.active.forEach(b => (b.manifest || []).forEach(m => {
-    if (m.kind !== 'liquid' || !m.dye) return;
-    const key = m.dye.id != null ? 'd' + m.dye.id : 'n' + normalize(m.dye.name || '');
-    if (seen.has(key)) return;        // one jar, however many pots wanted it
-    seen.add(key);
-    const cl = m.claim;
-    if (!cl || !cl.jar) { newJars.push(m.dye); return; }
-    const code = cl.jar.bin ? cl.jar.bin.code : 'no bin recorded';
-    (byBin[code] = byBin[code] || []).push(m.dye);
-  }));
+  return B.active.map(b => {
+    const rows = (b.manifest || []).map(m => {
+      if (m.kind === 'orphan') {
+        return `<li><span class="pa-nm">${esc(m.comp.rawName || m.comp.full || '?')}</span>
+          <span class="pa-box none">?</span><span class="pa-note">no dye record</span></li>`;
+      }
+      if (m.kind === 'powder') {
+        // Never had a jar, so there is nothing to put back in a bin.
+        return `<li><span class="pa-nm">${dyeWithBrand(m.dye)}</span>
+          <span class="pa-box none">&mdash;</span><span class="pa-note">powder shelf</span></li>`;
+      }
+      const cl = m.claim;
+      const bin = cl && cl.jar && cl.jar.bin ? cl.jar.bin.code : '';
+      return `<li><span class="pa-nm">${dyeWithBrand(m.dye)}</span>` +
+        (bin ? `<span class="pa-box">${esc(bin)}</span>`
+             : `<span class="pa-box write"></span><span class="pa-note">new jar</span>`) +
+        `</li>`;
+    }).join('');
 
-  const codes = Object.keys(byBin).sort();
-  if (!codes.length && !newJars.length) return '';
-
-  const block = (code, dyes, isNew) => `<div class="pa-blk${isNew ? ' new' : ''}">
-    <div class="pa-bin">${esc(code)}</div>
-    <ul class="pa-list">${dyes
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-      .map(d => `<li><i></i>${dyeWithBrand(d)}</li>`).join('')}</ul></div>`;
-
-  return codes.map(c => block(c, byBin[c], false)).join('')
-    + (newJars.length ? block('New jars \u2014 give each a bin', newJars, true) : '');
+    return `<div class="pa-blk">
+      <div class="pa-hd"><span class="pa-cw">${esc(b.colorway)}</span>
+        <span class="pa-code">${esc(b.code || '')}</span></div>
+      <ul class="pa-list">${rows || '<li><span class="pa-note">no dye components recorded</span></li>'}</ul>
+    </div>`;
+  }).join('');
 }
 
 function pl_manifest(b) {
@@ -1400,11 +1412,11 @@ function renderPull(printable, leadBreak) {
     </div>
     <div class="pl-doc pl-brk">
       ${head('Put the dyes away')}
-      <div class="pl-lede"><b>Hand this page over with the jars.</b> One block per bin &mdash; walk the rack,
-        fill one bin, tick it off. A jar shared by several pots appears once. New jars were mixed today and
-        have no bin yet; control gives them one.</div>
+      <div class="pl-lede"><b>Hand this page over with the jars.</b> One block per pot, every dye it used.
+        The bin is printed where the jar came from one; an empty box means a new jar &mdash; write the bin
+        in as control assigns it.</div>
       <div class="pl-pa">${pl_putaway(B) || '<div class="pl-lede">No jars to put back.</div>'}</div>
-      <div class="pl-foot">Anything left over at the end of this list did not come from a bin &mdash; tell control.</div>
+      <div class="pl-foot">Every line needs a bin written or printed before the jars go back on the shelf.</div>
     </div>`;
 
   const warn = [];
