@@ -33,7 +33,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .page:last-child { page-break-after: auto; }
 
 /* ---------- kettle tag : 4 x 3.5in, 6 per page ---------- */
-.tag { width: 4in; height: 3.5in; padding: .15in .17in; outline: 1px dashed #B9B9B9;
+.tag { width: 4in; height: 2.55in; padding: .12in .15in; outline: 1px dashed #B9B9B9;
        outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden; }
 .tag > * { flex: none; }
 .tag .r1 { display: flex; justify-content: space-between; align-items: flex-start; }
@@ -49,11 +49,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
                  font-size: 17px; font-weight: bold; line-height: .32in; overflow: hidden;
                  white-space: nowrap; }
 .tag .cap { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .8px; margin-top: 1px; }
-.tag .meta { display: flex; margin-top: 4px; }
 .tag .meta div + div { margin-left: .13in; }
-.tag .meta div { border-bottom: 1.5px solid #000; height: .27in; font-size: 12.5px; font-weight: bold;
-                 line-height: .27in; overflow: hidden; white-space: nowrap; }
-.tag .mcap { display: flex; font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: .7px; }
 .tag .mcap span + span { margin-left: .13in; }
 .tag .photo { display: flex; margin-top: 4px; border: 2px solid #000; padding: 2px 7px; }
 .tag .photo span + span { margin-left: .28in; }
@@ -71,19 +67,14 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .who tr.bs td { font-style: italic; }
 .tag .who td.q { width: .58in; font-weight: bold; text-align: right; padding-right: 3px; }
 .tag .who i { width: 13px; height: 13px; }
-.tag .flags { display: flex; align-items: center; margin-top: 6px; }
 .tag .flags > * + * { margin-left: .12in; }
-.tag .flags span { flex: none; font-size: 11px; font-weight: bold; letter-spacing: .3px;
-                   border: 2px solid #000; padding: 2px 6px; white-space: nowrap; }
-.tag .flags i { width: 12px; height: 12px; margin-right: 4px; }
-.tag .note { flex: none; border-bottom: 1.5px solid #000; height: .34in; margin-top: auto; }
 
 /* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
-.sh { width: 8in; height: 5.25in; padding: .16in .2in; outline: 1px dashed #B9B9B9;
+.sh { width: 8in; height: 3.42in; padding: .12in .2in; outline: 1px dashed #B9B9B9;
       outline-offset: -.5px; display: flex; flex-direction: column; }
 .sh .head { display: flex; justify-content: space-between; align-items: flex-start;
             border-bottom: 2.5px solid #000; padding-bottom: 5px; }
-.sh .ttl.cw { font-size: 21px; line-height: 1.1; letter-spacing: 0; text-transform: none;
+.sh .ttl.cw { font-size: 18px; line-height: 1.1; letter-spacing: 0; text-transform: none;
   font-weight: 700; overflow-wrap: anywhere; }
 .sh .ttl { font-size: 17px; font-weight: bold; letter-spacing: .5px; text-transform: uppercase; }
 .sh .sub { font-size: 10px; color: #555; }
@@ -135,20 +126,15 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
                height: .2in; text-decoration: none; }
 .sh .nl { border-bottom: 1.5px solid #000; height: .28in; margin-top: 6px; }
 .sh .ncap { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: .7px; }
-.sh .gate { border: 2px solid #000; padding: 5px 9px; margin-top: auto; }
-.sh .gcap { font-size: 8.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
-  margin-bottom: 4px; }
-.sh .nl { border-bottom: 1.5px solid #000; height: .34in; margin-top: 7px; }
+.sh .nl { border-bottom: 1.5px solid #000; height: .26in; margin-top: 5px; }
 .sh .g { display: flex; align-items: center; }
 .sh .g > * + * { margin-left: .22in; }
 .sh .g + .g { margin-top: 5px; }
 .sh .g span { flex: none; white-space: nowrap; font-size: 10.5px; text-transform: uppercase; }
 .sh .g .gt { font-weight: bold; letter-spacing: .7px; }
 .sh .g .gn { font-size: 9.5px; color: #555; font-style: italic; text-transform: none; }
-.sh .back { display: flex; align-items: center; margin-top: 6px; border-top: 1.5px dashed #000; padding-top: 6px; }
 .sh .back > * + * { margin-left: 9px; }
 .sh .back b { flex: none; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
-.sh .back u { flex: 1; border-bottom: 1.5px solid #000; height: .22in; text-decoration: none; }
 .sh i, .sh .cb { display: inline-block; border: 2px solid #000; vertical-align: -2px; }
 .sh .pbar i { width: 13px; height: 13px; margin-right: 5px; }
 .sh .pbar i.on { background: #000; }
@@ -679,13 +665,7 @@ function tag(b, n) {
         <div class="bin binto"><div class="l">bag to</div><div class="b">${esc(binForBatch(b))}</div></div>
       </div>
     </div>
-    <div class="meta"><div style="flex:1">${esc(b.sku)}</div>
-      <div style="flex:0 0 .6in">${esc(b.fiber)}</div><div style="flex:0 0 .7in">${b.spools || ''}</div></div>
-    <div class="mcap"><span style="flex:1">SKU</span>
-      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
-    <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
-    <div class="note"></div>
+    <div class="who"><div class="cap">tick what this pot covers</div><table>${rows}</table></div>
   </div>`;
 }
 
@@ -705,13 +685,7 @@ function blankTag(n) {
       </div>
       <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
     </div>
-    <div class="meta"><div style="flex:1"></div>
-      <div style="flex:0 0 .6in"></div><div style="flex:0 0 .7in"></div></div>
-    <div class="mcap"><span style="flex:1">SKU</span>
-      <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
-    <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
-    <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
-    <div class="note"></div>
+    <div class="who"><div class="cap">tick what this pot covers</div><table>${rows}</table></div>
   </div>`;
 }
 
@@ -821,15 +795,7 @@ function sheetOrder(b, n, o, idx, total) {
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
      </div>
      <div class="nl"></div>
-     <div class="ncap">winding</div>
-     <div class="nl"></div>
-     <div class="ncap">labelling</div>
-     <div class="gate">
-       <div class="gcap">Problems &rarr; back to control</div>
-       <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
-         <span><i></i>lots do not match</span></div>
-       <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
-     </div>`);
+     <div class="ncap">notes</div>`);
 }
 
 function sheetStock(b, n, spare) {
@@ -871,15 +837,7 @@ function sheetSpare(n) {
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to</b><em>write the order bin</em><u></u></div>
      <div class="nl"></div>
-     <div class="ncap">winding</div>
-     <div class="nl"></div>
-     <div class="ncap">labelling</div>
-     <div class="gate">
-       <div class="gcap">Problems &rarr; back to control</div>
-       <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
-         <span><i></i>lots do not match</span></div>
-       <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
-     </div>`);
+     <div class="ncap">notes</div>`);
 }
 
 // Flattens the day into the sheets that will actually be printed: one per order
@@ -1463,7 +1421,7 @@ function render() {
   const nSpareSheets = Math.max(0, Number((document.getElementById('spareSheets') || {}).value) || 0);
   const SHEETS = sheetList(printable, nSpareSheets);
   if (SHEETS.length && document.getElementById('wSheets').checked)
-    impose(SHEETS.length, 2).forEach(p => {
+    impose(SHEETS.length, 3).forEach(p => {
       html += '<div class="page">' + p.map(i => sheetFor(i === null ? null : SHEETS[i])).join('') + '</div>';
     });
   // Pull pages go last so the tag and sheet pages stay one contiguous stack to
