@@ -203,6 +203,11 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
         text-transform: uppercase; letter-spacing: .6px; padding: 0 4px; margin-right: 4px;
         vertical-align: 1px; }
 .pl-flag.hot { background: #000; color: #fff; }
+.mf-back { display: inline-block; min-width: .42in; font-family: 'DM Mono', monospace;
+  font-size: 10px; font-weight: bold; text-align: center; border: 1.5px solid #000;
+  border-radius: 2px; padding: 0 2px; margin-right: 6px; }
+.mf-back.none { border-style: dotted; color: #666; }
+.mf-back.new { background: #000; color: #fff; }
 .pl-brand { font-size: 9px; font-weight: bold; letter-spacing: .4px; border: 1px solid #000;
   border-radius: 2px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
 .pl-need { display: inline-flex; align-items: center; gap: 3px; border: 1.5px solid #000;
@@ -798,11 +803,11 @@ function sheetOrder(b, n, o, idx, total) {
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
      </div>
      <div class="nl"></div>
-     <div class="ncap">for winding &mdash; from the dye bench</div>
+     <div class="ncap">winding</div>
      <div class="nl"></div>
-     <div class="ncap">for labelling &mdash; from the dye bench or the winder</div>
+     <div class="ncap">labelling</div>
      <div class="gate">
-       <div class="gcap">Only tick if something is wrong &mdash; then it goes back to control</div>
+       <div class="gcap">Problems &rarr; back to control</div>
        <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
          <span><i></i>lots do not match</span></div>
        <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
@@ -848,11 +853,11 @@ function sheetSpare(n) {
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to</b><em>write the order bin</em><u></u></div>
      <div class="nl"></div>
-     <div class="ncap">for winding &mdash; from the dye bench</div>
+     <div class="ncap">winding</div>
      <div class="nl"></div>
-     <div class="ncap">for labelling &mdash; from the dye bench or the winder</div>
+     <div class="ncap">labelling</div>
      <div class="gate">
-       <div class="gcap">Only tick if something is wrong &mdash; then it goes back to control</div>
+       <div class="gcap">Problems &rarr; back to control</div>
        <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
          <span><i></i>lots do not match</span></div>
        <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
@@ -1283,18 +1288,20 @@ function pl_manifest(b) {
   const items = b.manifest.map(m => {
     // Powder BY DESIGN — no jar has ever existed for this dye, so nobody should
     // go looking in a bin for one.
-    if (m.kind === 'powder') return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 powder dye \u2014 always dry, no jar exists</em></li>`;
-    if (m.kind === 'orphan') return `<li class="fyi"><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>\u2014 no dye record, ask control</em></li>`;
+    if (m.kind === 'powder') return `<li><span class="mf-back none">\u2014</span><b>${dyeWithBrand(m.dye)}</b> <em>powder dye \u2014 always dry, no jar exists</em></li>`;
+    if (m.kind === 'orphan') return `<li class="fyi"><span class="mf-back none">?</span><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>\u2014 no dye record, ask control</em></li>`;
     const cl = m.claim;
     // A LIQUID dye whose jar is missing. Reads almost identically to the line
     // above unless it says so — and the difference decides whether someone
     // pulls a bin out looking for a jar that was never there.
-    if (!cl.jar) return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 <strong>jar missing</strong> \u2014 mix this one from powder</em></li>`;
-    if (cl.owner !== b) return `<li class="fyi"><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
+    // Mixed fresh today, so it has no home bin yet — control gives it one when
+    // the new jar is put away. Saying so beats printing a blank.
+    if (!cl.jar) return `<li><span class="mf-back new">NEW</span><b>${dyeWithBrand(m.dye)}</b> <em><strong>jar missing</strong> \u2014 mix from powder; control bins the new jar</em></li>`;
+    if (cl.owner !== b) return `<li class="fyi"><span class="mf-back">${esc((cl.jar && cl.jar.bin && cl.jar.bin.code) || '\u2014')}</span><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
       : 'no bin recorded';
-    return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 jar from ${esc(from)}${
+    return `<li><span class="mf-back">${esc(from)}</span><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 jar from ${esc(from)}${
       cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
   }).join('');
   return `<div class="pl-mfb">
