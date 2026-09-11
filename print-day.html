@@ -76,15 +76,6 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .flags span { flex: none; font-size: 11px; font-weight: bold; letter-spacing: .3px;
                    border: 2px solid #000; padding: 2px 6px; white-space: nowrap; }
 .tag .flags i { width: 12px; height: 12px; margin-right: 4px; }
-.tag .dyeclean { display: flex; align-items: center; gap: 7px; margin-top: 4px;
-  border: 1.5px solid #000; border-radius: 2px; padding: 2px 5px; }
-.tag .dc-cap { font-size: 7.5px; letter-spacing: .6px; text-transform: uppercase; font-weight: bold; }
-.tag .dc-opt { display: flex; align-items: center; gap: 3px; font-size: 9.5px; white-space: nowrap; }
-.tag .dc-opt i { width: 11px; height: 11px; border: 1.5px solid #000; display: inline-block; flex: none; }
-/* Write-in for the staging slot or M bin. The rule sits BELOW the space rather
-   than through it — the sheet version used a <u>, which struck through whatever
-   was written on it. */
-.tag .dc-w { flex: 1; min-width: .5in; border-bottom: 1px solid #000; height: .16in; }
 .tag .note { flex: none; border-bottom: 1.5px solid #000; height: .34in; margin-top: auto; }
 
 /* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
@@ -387,8 +378,12 @@ async function load() {
     // orders
     // Short customer codes, for the O-CODE-ORDER bin on each sheet. Optional:
     // without a Customers table the bin simply prints blank rather than failing.
-    const custCode = {};
+    const custCode = {}, custWantsPhotos = {};
     if (custT) {
+      const cWants = findColumn(custT, ['Wants_Product_Photos', 'Wants_Photos']);
+      if (cWants) (custT.id || []).forEach((id, i) => {
+        custWantsPhotos[id] = !!columnAsArray(custT, cWants)[i];
+      });
       const cCode = findColumn(custT, ['Code', 'Customer_Code', 'Vendor_Code']);
       if (cCode) (custT.id || []).forEach((id, i) => { custCode[id] = columnAsArray(custT, cCode)[i] || ''; });
     }
@@ -402,6 +397,7 @@ async function load() {
         customer: WO.customerName ? columnAsArray(woT, WO.customerName)[i] : '',
         code: WO.customer ? (custCode[getRefId(columnAsArray(woT, WO.customer)[i])] || '') : '',
         custId: WO.customer ? getRefId(columnAsArray(woT, WO.customer)[i]) : null,
+        wantsPhotos: WO.customer ? custWantsPhotos[getRefId(columnAsArray(woT, WO.customer)[i])] : undefined,
         number: WO.orderNumber ? columnAsArray(woT, WO.orderNumber)[i] : '',
         due: effectiveDue(WO.orderDate ? columnAsArray(woT, WO.orderDate)[i] : null,
                           WO.dueDate   ? columnAsArray(woT, WO.dueDate)[i]   : null),
@@ -447,6 +443,7 @@ async function load() {
       if (rem <= 0) return;
       (demand[rid] = demand[rid] || []).push({
         customer: info.customer || '(no name)', code: info.code || '', custId: info.custId || null,
+        wantsPhotos: info.wantsPhotos,
         number: info.number || '', qty: rem, due: info.due,
       });
     });
@@ -665,13 +662,6 @@ function tag(b, n) {
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
     <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
-    <div class="dyeclean">
-      <span class="dc-cap">leftover dye</span>
-      <span class="dc-opt"><i></i>staging</span>
-      <span class="dc-opt"><i></i>M rack</span>
-      <span class="dc-opt"><i></i>dump</span>
-      <span class="dc-w"></span>
-    </div>
     <div class="note"></div>
   </div>`;
 }
@@ -698,13 +688,6 @@ function blankTag(n) {
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
     <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
-    <div class="dyeclean">
-      <span class="dc-cap">leftover dye</span>
-      <span class="dc-opt"><i></i>staging</span>
-      <span class="dc-opt"><i></i>M rack</span>
-      <span class="dc-opt"><i></i>dump</span>
-      <span class="dc-w"></span>
-    </div>
     <div class="note"></div>
   </div>`;
 }
@@ -778,7 +761,11 @@ function idFields(b, extra) {
 // a customer order bin, so a code never has to be guessed at.
 function orderBin(o) {
   const code = (o.code || '').toUpperCase();
-  return code && o.number ? `O-${code}-${o.number}` : '';
+  // Leading # stripped to match wind-routing.html's orderBinCode(). Order
+  // numbers are entered both ways, and a bin called O-RDG-#D61 on paper but
+  // O-RDG-D61 on screen is two bins as far as anyone reading them is concerned.
+  const num = String(o.number || '').trim().replace(/^#/, '');
+  return code && num ? `O-${code}-${num}` : '';
 }
 
 function sheetOrder(b, n, o, idx, total) {
@@ -838,24 +825,38 @@ function sheetStock(b, n, spare) {
 // Blank sheet for a redo. A bad batch needs paper immediately or the rework
 // waits on a reprint, so a few go out with every day's stack.
 function sheetSpare(n) {
+  // Kept in step with sheetOrder: same bands, same order, same wording. It had
+  // drifted — still asking for a label stock code and a "sorted to" tick long
+  // after both were removed from the real sheet, so a redo followed different
+  // instructions from everything around it.
   return sheetShell(n == null ? '' : code(n),
     '<span class="ttl cw">&nbsp;</span>',
     'spare &mdash; write the colourway above',
-    idFields({ colorway: '', fiber: '' }, `<div class="f s"><div class="ln"></div><div class="cp">spools</div></div>`)
-      .replace('<div class="ln"></div><div class="cp">colorway</div>', '<div class="ln"></div><div class="cp">colorway</div>'),
-    `
+    idFields({ sku: '', fiber: '' }, `<div class="f s"><div class="ln"></div><div class="cp">spools</div></div>`),
+    `<div class="pbar"><b>Photo</b><span><i></i>needed</span>
+       <span><i></i>taken</span><span><i></i>shared to order</span></div>
      <table>
-       <tr><th style="width:2.4in">customer</th><th style="width:1in">order #</th>
+       <tr><th style="width:3.2in">customer</th><th style="width:1.1in">order #</th>
            <th style="width:.8in">spools</th><th style="width:1.6in;text-align:center">order bin</th></tr>
        <tr><td></td><td></td><td></td><td></td></tr>
      </table>
-     <div class="lbl"><div class="lbl-cap">Label</div><div class="lbl-stock">&nbsp;</div>
-       <div class="lbl-desc"><em>write the stock code once the customer is known</em></div>
-       <div class="lbl-done"><i></i>labelled</div></div>
+     <div class="lbl">
+       <div class="lbl-cap">Front logo</div>
+       <div class="lbl-stock">&nbsp;</div>
+       <div class="lbl-desc"><em>SS logo or the customer&rsquo;s own &mdash; ring the one that applies</em></div>
+     </div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
-       <div class="sep"></div><b>Sorted to</b><em>write the order bin</em><u></u></div>
+       <div class="sep"></div><b>Goes to</b><em>write the order bin</em><u></u></div>
      <div class="nl"></div>
-     <div class="ncap">notes</div>`);
+     <div class="ncap">for winding &mdash; from the dye bench</div>
+     <div class="nl"></div>
+     <div class="ncap">for labelling &mdash; from the dye bench or the winder</div>
+     <div class="gate">
+       <div class="gcap">Only tick if something is wrong &mdash; then it goes back to control</div>
+       <div class="g"><span><i></i>short count</span><span><i></i>spools missing</span>
+         <span><i></i>lots do not match</span></div>
+       <div class="back"><i></i><b>Other &mdash; say what</b><u></u></div>
+     </div>`);
 }
 
 // Flattens the day into the sheets that will actually be printed: one per order
@@ -1293,7 +1294,7 @@ function pl_manifest(b) {
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
       : 'no bin recorded';
-    return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 jar from ${esc(from)}${
+    return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 jar from ${esc(from)}${
       cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
   }).join('');
   return `<div class="pl-mfb">
