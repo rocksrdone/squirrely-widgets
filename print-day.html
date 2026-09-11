@@ -76,6 +76,15 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .flags span { flex: none; font-size: 11px; font-weight: bold; letter-spacing: .3px;
                    border: 2px solid #000; padding: 2px 6px; white-space: nowrap; }
 .tag .flags i { width: 12px; height: 12px; margin-right: 4px; }
+.tag .dyeclean { display: flex; align-items: center; gap: 7px; margin-top: 4px;
+  border: 1.5px solid #000; border-radius: 2px; padding: 2px 5px; }
+.tag .dc-cap { font-size: 7.5px; letter-spacing: .6px; text-transform: uppercase; font-weight: bold; }
+.tag .dc-opt { display: flex; align-items: center; gap: 3px; font-size: 9.5px; white-space: nowrap; }
+.tag .dc-opt i { width: 11px; height: 11px; border: 1.5px solid #000; display: inline-block; flex: none; }
+/* Write-in for the staging slot or M bin. The rule sits BELOW the space rather
+   than through it — the sheet version used a <u>, which struck through whatever
+   was written on it. */
+.tag .dc-w { flex: 1; min-width: .5in; border-bottom: 1px solid #000; height: .16in; }
 .tag .note { flex: none; border-bottom: 1.5px solid #000; height: .34in; margin-top: auto; }
 
 /* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
@@ -111,13 +120,6 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
          border-bottom: 2px solid #000; padding: 0 4px 3px; text-align: left; font-weight: normal; }
 .sh td { border-bottom: 1.5px solid #000; height: .3in; padding: 0 4px; font-size: 12px;
          overflow: hidden; white-space: nowrap; }
-.sh .dyeclean { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  border: 1.5px solid #000; border-radius: 3px; padding: 4px 8px; margin-top: 5px; }
-.sh .dc-cap { font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; }
-.sh .dc-opt { display: flex; align-items: center; gap: 4px; font-size: 10.5px; }
-.sh .dc-opt i { width: 13px; height: 13px; border: 1.5px solid #000; display: inline-block; flex: none; }
-.sh .dc-opt em { color: #555; font-size: 9px; }
-.sh .dc-opt u { display: inline-block; width: .7in; border-bottom: 1px solid #000; text-decoration: none; }
 .sh .lbl { display: flex; align-items: center; gap: 10px; border: 2px solid #000;
   border-radius: 3px; padding: 5px 8px; margin-top: 5px; }
 .sh .lbl-cap { font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; }
@@ -663,6 +665,13 @@ function tag(b, n) {
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
     <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
+    <div class="dyeclean">
+      <span class="dc-cap">leftover dye</span>
+      <span class="dc-opt"><i></i>staging</span>
+      <span class="dc-opt"><i></i>M rack</span>
+      <span class="dc-opt"><i></i>dump</span>
+      <span class="dc-w"></span>
+    </div>
     <div class="note"></div>
   </div>`;
 }
@@ -689,6 +698,13 @@ function blankTag(n) {
       <span style="flex:0 0 .6in">fiber</span><span style="flex:0 0 .7in">spools planned</span></div>
     <div class="who"><div class="cap">tick what this pot actually covers</div><table>${rows}</table></div>
     <div class="flags"><span><i></i>combining lots</span><span><i></i>short</span></div>
+    <div class="dyeclean">
+      <span class="dc-cap">leftover dye</span>
+      <span class="dc-opt"><i></i>staging</span>
+      <span class="dc-opt"><i></i>M rack</span>
+      <span class="dc-opt"><i></i>dump</span>
+      <span class="dc-w"></span>
+    </div>
     <div class="note"></div>
   </div>`;
 }
@@ -772,9 +788,13 @@ function sheetOrder(b, n, o, idx, total) {
     `<span class="ttl cw">${esc(b.colorway)}</span>`,
     total > 1 ? `one of ${total} orders from this lot` : '',
     idFields(b, `<div class="f s"><div class="ln">${o.qty}</div><div class="cp">spools for this order</div></div>`),
-    `<div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
-       <span><i></i>taken</span><span><i></i>shared to order</span>
-       <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>
+    `${o.wantsPhotos === false
+       // Some customers shoot their own and will never use ours, so asking for a
+       // photo is noise that trains people to ignore the row.
+       ? `<div class="pbar off"><b>Photo</b><span>not needed \u2014 ${esc(o.customer)} uses their own</span></div>`
+       : `<div class="pbar"><b>Photo</b><span><i class="${b.photo ? 'on' : ''}"></i>needed</span>
+            <span><i></i>taken</span><span><i></i>shared to order</span>
+            <em>${b.photo ? 'no photo on file for this colorway' : 'a good photo on file still needs the share'}</em></div>`}
      <table>
        <tr><th style="width:3.2in">customer</th><th style="width:1.1in">order #</th>
            <th style="width:.8in">spools</th><th style="width:1.6in;text-align:center">order bin</th></tr>
@@ -789,13 +809,6 @@ function sheetOrder(b, n, o, idx, total) {
      </div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
-     <div class="dyeclean">
-       <div class="dc-cap">Leftover dye</div>
-       ${b.stage
-         ? `<div class="dc-opt"><i></i><b>${esc(b.stage)}</b> <em>staging &mdash; needed again today</em></div>`
-         : `<div class="dc-opt"><i></i><b>staging</b> <em>write the slot</em><u></u></div>`}
-       <div class="dc-opt"><i></i><b>M rack</b> <em>put away &mdash; bin on the dye sheet</em></div>
-       <div class="dc-opt"><i></i><b>Dump</b></div>
      </div>
      <div class="nl"></div>
      <div class="ncap">for winding &mdash; from the dye bench</div>
