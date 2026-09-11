@@ -111,6 +111,13 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
          border-bottom: 2px solid #000; padding: 0 4px 3px; text-align: left; font-weight: normal; }
 .sh td { border-bottom: 1.5px solid #000; height: .3in; padding: 0 4px; font-size: 12px;
          overflow: hidden; white-space: nowrap; }
+.sh .dyeclean { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1.5px solid #000; border-radius: 3px; padding: 4px 8px; margin-top: 5px; }
+.sh .dc-cap { font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; }
+.sh .dc-opt { display: flex; align-items: center; gap: 4px; font-size: 10.5px; }
+.sh .dc-opt i { width: 13px; height: 13px; border: 1.5px solid #000; display: inline-block; flex: none; }
+.sh .dc-opt em { color: #555; font-size: 9px; }
+.sh .dc-opt u { display: inline-block; width: .7in; border-bottom: 1px solid #000; text-decoration: none; }
 .sh .lbl { display: flex; align-items: center; gap: 10px; border: 2px solid #000;
   border-radius: 3px; padding: 5px 8px; margin-top: 5px; }
 .sh .lbl-cap { font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; }
@@ -203,6 +210,8 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
         text-transform: uppercase; letter-spacing: .6px; padding: 0 4px; margin-right: 4px;
         vertical-align: 1px; }
 .pl-flag.hot { background: #000; color: #fff; }
+.pl-brand { font-size: 9px; font-weight: bold; letter-spacing: .4px; border: 1px solid #000;
+  border-radius: 2px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
 .pl-need { display: inline-flex; align-items: center; gap: 3px; border: 1.5px solid #000;
   font-size: 9px; font-weight: bold; padding: 1px 5px 1px 4px; border-radius: 3px;
   margin-left: 5px; white-space: nowrap; vertical-align: middle; }
@@ -780,6 +789,14 @@ function sheetOrder(b, n, o, idx, total) {
      </div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
+     <div class="dyeclean">
+       <div class="dc-cap">Leftover dye</div>
+       ${b.stage
+         ? `<div class="dc-opt"><i></i><b>${esc(b.stage)}</b> <em>staging &mdash; needed again today</em></div>`
+         : `<div class="dc-opt"><i></i><b>staging</b> <em>write the slot</em><u></u></div>`}
+       <div class="dc-opt"><i></i><b>M rack</b> <em>put away &mdash; bin on the dye sheet</em></div>
+       <div class="dc-opt"><i></i><b>Dump</b></div>
+     </div>
      <div class="nl"></div>
      <div class="ncap">for winding &mdash; from the dye bench</div>
      <div class="nl"></div>
@@ -1151,7 +1168,7 @@ function pl_jar(p) {
   const need = cl.need > 0 ? `need ~${Math.round(cl.need)} mL` : 'no rate set';
   return `<div class="pl-ln"><div class="cb"></div>
     <div class="body">
-      <div class="nm">${esc(d.name)}${needTag(jar.expired || cl.short ? 'both' : 'dye')}${flags.length ? ' ' + flags.join('') : ''}</div>
+      <div class="nm">${dyeWithBrand(d)}${needTag(jar.expired || cl.short ? 'both' : 'dye')}${flags.length ? ' ' + flags.join('') : ''}</div>
       ${pl_idLine(d, cl.comp)}
       ${d.blend ? `<div class="sub2">${esc(d.blend)}</div>` : ''}
       ${pl_also(cl)}
@@ -1202,7 +1219,7 @@ function pl_remake(r) {
   if (d.water !== '' && d.water != null) spec.push(`per ${esc(d.water)} mL`);
   if (d.dryWt) spec.push(`${esc(d.dryWt)} g std`);
   return `<div class="pl-ln"><div class="cb"></div>
-    <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag hot">remake</span></div>
+    <div class="body"><div class="nm">${dyeWithBrand(d)} <span class="pl-flag hot">remake</span></div>
       ${pl_idLine(d, r.comp)}
       <div class="sub2"><b>Bring the powder as well as the jar.</b> The jar is
         ${r.jar.ageDays} days old, past its ${d.shelf}-day shelf life — mix fresh, dump the old.</div>
@@ -1240,13 +1257,26 @@ function pl_group(title, sub, count, lines, alt) {
       ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
       <div class="ct">${count} to pull</div></div>${lines}</div>`;
 }
+// Dye name with its brand. Six brands are in use (Pro, CC, Dh, J, X, PF) and
+// names repeat across them, so a manifest line without a brand sends someone
+// to the shelf with half an instruction.
+function dyeWithBrand(d) {
+  const n = esc(d && d.name ? d.name : '?');
+  return d && d.brand ? `${n} <span class="pl-brand">${esc(d.brand)}</span>` : n;
+}
+
 function pl_manifest(b) {
   const items = b.manifest.map(m => {
-    if (m.kind === 'powder') return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 dry powder, from the shelf</em></li>`;
+    // Powder BY DESIGN — no jar has ever existed for this dye, so nobody should
+    // go looking in a bin for one.
+    if (m.kind === 'powder') return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 powder dye \u2014 always dry, no jar exists</em></li>`;
     if (m.kind === 'orphan') return `<li class="fyi"><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>\u2014 no dye record, ask control</em></li>`;
     const cl = m.claim;
-    if (!cl.jar) return `<li><b>${esc(m.dye.name)}</b> <em>\u2014 no premade, use powder</em></li>`;
-    if (cl.owner !== b) return `<li class="fyi"><b>${esc(m.dye.name)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
+    // A LIQUID dye whose jar is missing. Reads almost identically to the line
+    // above unless it says so — and the difference decides whether someone
+    // pulls a bin out looking for a jar that was never there.
+    if (!cl.jar) return `<li><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 <strong>jar missing</strong> \u2014 mix this one from powder</em></li>`;
+    if (cl.owner !== b) return `<li class="fyi"><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
       : 'no bin recorded';
@@ -1278,7 +1308,7 @@ function renderPull(printable, leadBreak) {
       g.legacy ? 'labelled ' + g.legacy : (g.offGrid && !g.unbinned ? 'off the grid' : ''),
       g.lines.length, g.lines.map(pl_jar).join(''));
   });
-  if (B.noStock.length) body += pl_group('No premade jar', 'grab dry powder', B.noStock.length, B.noStock.map(pl_noStock).join(''), true);
+  if (B.noStock.length) body += pl_group('Liquid dyes with no jar', 'these normally have one \u2014 mix from powder today', B.noStock.length, B.noStock.map(pl_noStock).join(''), true);
   if (B.remakes.length) body += pl_group('Past shelf life', 'jar comes out, powder comes with it', B.remakes.length, B.remakes.map(pl_remake).join(''), true);
   if (B.powders.length) body += pl_group('Dry powder shelf', 'recipe calls for powder', B.powders.length, B.powders.map(pl_powder).join(''), true);
   if (B.orphans.length) body += pl_group('Nothing to pull', 'flag these to control', B.orphans.length, B.orphans.map(pl_orphan).join(''), true);

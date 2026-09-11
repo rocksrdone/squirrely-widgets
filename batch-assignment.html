@@ -496,6 +496,7 @@ async function loadForRecipe(record) {
     }, missing);
     const COMP = resolveCols(compTable, 'Recipe_Dye_Components', {
       recipe: ['Recipe'], dye: ['Dye_Name'], powder: opt(['Is_Powder', 'Powder']),
+      measure: opt(['Measure_Mode']),
     }, missing);
     const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
       workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
@@ -576,6 +577,7 @@ async function loadForRecipe(record) {
       const dyeRef = getRefId(columnAsArray(compTable, COMP.dye)[i]);
       if (!recipeRef || !dyeRef) return;
       if (COMP.powder && columnAsArray(compTable, COMP.powder)[i]) return;
+      if (COMP.measure && /powder/i.test(String(columnAsArray(compTable, COMP.measure)[i] || ''))) return;
       if (!dyesByRecipeId[recipeRef]) dyesByRecipeId[recipeRef] = [];
       if (!dyesByRecipeId[recipeRef].includes(dyeRef)) dyesByRecipeId[recipeRef].push(dyeRef);
     });
@@ -634,6 +636,7 @@ async function loadForRecipe(record) {
       stockEntries.push({
         dyeRef: getRefId(columnAsArray(stockTableUpfront, STOCK.dye)[i]),
         bin: columnAsArray(stockTableUpfront, STOCK.bin)[i] || '',
+        mixed: STOCK.mixedDate ? columnAsArray(stockTableUpfront, STOCK.mixedDate)[i] : null,
       });
     });
     function isTrueOneOff(dyeId) {
@@ -784,6 +787,16 @@ async function loadForRecipe(record) {
         others,
         suggestedBin: binSuggestion.bin,
         suggestedBinNote: binSuggestion.note,
+        // A jar already on the shelf for this dye, and how old it is. Shelf life
+        // runs from Mixed_Date, so whether today's put-away resets that clock is
+        // the one thing worth knowing — and it is a two-button question, not the
+        // dropdown it used to be.
+        existingJar: (() => {
+          const hit = stockEntries.find(x => x.dyeRef === dyeId);
+          if (!hit) return null;
+          const days = hit.mixed ? Math.floor((Date.now() / 1000 - Number(hit.mixed)) / 86400) : null;
+          return { bin: hit.bin, days };
+        })(),
         staging: stagingFor(dyeId),
       };
     });
@@ -910,9 +923,18 @@ function render() {
     const stageBtn = c.staging
       ? `<button class="act-btn stage-btn" onclick="stageDye(${idx})">→ ${esc(c.staging.slot)}</button>`
       : '';
-    const binBtn = c.suggestedBin
-      ? `<button class="act-btn bin" onclick="putAwayDye(${idx})">→ ${esc(c.suggestedBin)}</button>`
-      : `<button class="act-btn" onclick="holdDye(${idx})">Hold — shelf full</button>`;
+    const jar = c.existingJar;
+    const binBtn = !c.suggestedBin
+      ? `<button class="act-btn" onclick="holdDye(${idx})">Hold — shelf full</button>`
+      : jar
+        // A jar is already on the shelf. Whether today's put-away is a fresh mix
+        // or the same dye going back decides if the shelf-life clock resets, and
+        // that is the whole of the old dropdown reduced to a gloved choice.
+        ? `<button class="act-btn bin" onclick="putAwayDye(${idx}, 'fresh')"
+             title="Newly mixed today — shelf life starts now">→ ${esc(c.suggestedBin)} · new</button>
+           <button class="act-btn" onclick="putAwayDye(${idx}, 'same')"
+             title="Same dye going back — keep its original date">→ ${esc(c.suggestedBin)} · same${jar.days != null ? ` (${jar.days}d)` : ''}</button>`
+        : `<button class="act-btn bin" onclick="putAwayDye(${idx})">→ ${esc(c.suggestedBin)}</button>`;
 
     return `
       <div class="dye-block ${cls}">
@@ -1161,7 +1183,7 @@ async function stageDye(idx) {
   render();
 }
 
-async function putAwayDye(idx) {
+async function putAwayDye(idx, mode) {
   const c = currentEntry.cleanupInfo[idx];
   if (!c.dyeId) { showToast(`${c.dyeName} isn't linked to a Dyes row — can't log stock`); return; }
   const qty = Number(document.getElementById(`qty-${idx}`).value) || 0;
@@ -1201,11 +1223,14 @@ async function putAwayDye(idx) {
       const originalQty = columnAsArray(stockTable, stockCol('quantity','Quantity_mL'))[rowIdx];
       const originalBin = columnAsArray(stockTable, stockCol('bin','Bin_Location'))[rowIdx];
       const originalDate = columnAsArray(stockTable, stockCol('mixedDate','Mixed_Date'))[rowIdx];
-      await grist.docApi.applyUserActions([
-        ['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin, [stockCol('mixedDate','Mixed_Date')]: Math.floor(Date.now() / 1000) }]
-      ]);
+      // 'same' keeps the original Mixed_Date: the dye did not get younger by
+      // going back on the shelf, and resetting it would quietly extend a shelf
+      // life that has already been running.
+      const upd = { [stockCol('quantity','Quantity_mL')]: qty, [stockCol('bin','Bin_Location')]: bin };
+      if (mode !== 'same') upd[stockCol('mixedDate','Mixed_Date')] = Math.floor(Date.now() / 1000);
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', existingId, upd]]);
       completedActions[idx] = {
-        label: `${qty}mL → ${bin}`,
+        label: `${qty}mL → ${bin}${mode === 'same' ? ' (same jar)' : ''}`,
         board: { where: bin, muted: false },
         undo: async () => {
           await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Stock', existingId, { [stockCol('quantity','Quantity_mL')]: originalQty, [stockCol('bin','Bin_Location')]: originalBin, [stockCol('mixedDate','Mixed_Date')]: originalDate }]]);
@@ -1297,7 +1322,6 @@ async function dumpDye(idx) {
   }
 
   const totalQty = existing.reduce((s, e) => s + (Number(e.qty) || 0), 0);
-  if (!confirm(`This will remove ${totalQty}mL of recorded premade stock for ${c.dyeName}. Continue?`)) return;
 
   try {
     await grist.docApi.applyUserActions(existing.map(e => ['RemoveRecord', 'Dye_Stock', e.id]));
