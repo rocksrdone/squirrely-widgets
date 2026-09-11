@@ -208,6 +208,7 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
   border-radius: 2px; padding: 0 2px; margin-right: 6px; }
 .mf-back.none { border-style: dotted; color: #666; }
 .mf-back.new { background: #000; color: #fff; }
+.pl-mfb li em { margin-left: 6px; }
 .pl-brand { font-size: 9px; font-weight: bold; letter-spacing: .4px; border: 1px solid #000;
   border-radius: 2px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
 .pl-need { display: inline-flex; align-items: center; gap: 3px; border: 1.5px solid #000;
@@ -1288,21 +1289,21 @@ function pl_manifest(b) {
   const items = b.manifest.map(m => {
     // Powder BY DESIGN — no jar has ever existed for this dye, so nobody should
     // go looking in a bin for one.
-    if (m.kind === 'powder') return `<li><span class="mf-back none">\u2014</span><b>${dyeWithBrand(m.dye)}</b> <em>powder dye \u2014 always dry, no jar exists</em></li>`;
-    if (m.kind === 'orphan') return `<li class="fyi"><span class="mf-back none">?</span><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>\u2014 no dye record, ask control</em></li>`;
+    if (m.kind === 'powder') return `<li><span class="mf-back none">\u2014</span><b>${dyeWithBrand(m.dye)}</b> <em>powder \u2014 no jar</em></li>`;
+    if (m.kind === 'orphan') return `<li class="fyi"><span class="mf-back none">?</span><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>no dye record \u2014 ask control</em></li>`;
     const cl = m.claim;
     // A LIQUID dye whose jar is missing. Reads almost identically to the line
     // above unless it says so — and the difference decides whether someone
     // pulls a bin out looking for a jar that was never there.
     // Mixed fresh today, so it has no home bin yet — control gives it one when
     // the new jar is put away. Saying so beats printing a blank.
-    if (!cl.jar) return `<li><span class="mf-back new">NEW</span><b>${dyeWithBrand(m.dye)}</b> <em><strong>jar missing</strong> \u2014 mix from powder; control bins the new jar</em></li>`;
-    if (cl.owner !== b) return `<li class="fyi"><span class="mf-back">${esc((cl.jar && cl.jar.bin && cl.jar.bin.code) || '\u2014')}</span><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 already sorted into ${esc(cl.owner.stage || '?')} (${esc(cl.owner.colorway)}) \u2014 fetch it from there</em></li>`;
+    if (!cl.jar) return `<li><span class="mf-back new">NEW</span><b>${dyeWithBrand(m.dye)}</b><em>mix from powder</em></li>`;
+    if (cl.owner !== b) return `<li class="fyi"><span class="mf-back">${esc((cl.jar && cl.jar.bin && cl.jar.bin.code) || '\u2014')}</span><b>${dyeWithBrand(m.dye)}</b> <em>shared \u2014 sits in ${esc(cl.owner.stage || '?')}</em></li>`;
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
       : 'no bin recorded';
-    return `<li><span class="mf-back">${esc(from)}</span><b>${dyeWithBrand(m.dye)}</b> <em>\u2014 jar from ${esc(from)}${
-      cl.jar.expired ? ', plus powder to remake' : ''}</em></li>`;
+    return `<li><span class="mf-back">${esc(from)}</span><b>${dyeWithBrand(m.dye)}</b><em>${
+      cl.jar.expired ? 'plus powder \u2014 remake' : ''}</em></li>`;
   }).join('');
   return `<div class="pl-mfb">
     <div class="h"><div class="s">${esc(b.stage || '\u2014')}</div>
@@ -1347,11 +1348,11 @@ function renderPull(printable, leadBreak) {
     </div>
     <div class="pl-doc pl-brk">
       ${head('Staging bins \u2014 what should be in each')}
-      <div class="pl-lede">One block per staging bin, in pot order. <b>Already sorted</b> means the jar is
-        shared and sits in another bin \u2014 nothing to pull, just know where it is.</div>
+      <div class="pl-lede">One block per staging bin, in pot order. <b>Hand this page over with the dyes:</b>
+        the code on the left of each line is the bin that jar goes back to. <b>NEW</b> means it was mixed
+        today and control gives it a bin.</div>
       <div class="pl-mf">${B.active.map(pl_manifest).join('')}</div>
-      <div class="pl-foot"><b>End of day:</b> read this list backwards \u2014 each jar goes back to the mixed
-        bin shown on the pull page.</div>
+      <div class="pl-foot"><b>Put-back:</b> every jar goes back to the bin printed beside it.</div>
     </div>`;
 
   const warn = [];
