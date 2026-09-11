@@ -208,6 +208,16 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
   border-radius: 2px; padding: 0 2px; margin-right: 6px; }
 .mf-back.none { border-style: dotted; color: #666; }
 .mf-back.new { background: #000; color: #fff; }
+.pl-pa { display: flex; flex-wrap: wrap; gap: .12in; }
+.pa-blk { width: 2.45in; border: 1.5px solid #000; border-radius: 3px; padding: 5px 8px 6px;
+  break-inside: avoid; }
+.pa-blk.new { border-style: dashed; width: 100%; }
+.pa-bin { font-family: 'DM Mono', monospace; font-size: 17px; font-weight: bold; letter-spacing: .5px;
+  border-bottom: 1.5px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+.pa-list { list-style: none; margin: 0; padding: 0; }
+.pa-list li { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 0; }
+.pa-list li i { width: 12px; height: 12px; border: 1.5px solid #000; display: inline-block; flex: none; }
+.pa-blk.new .pa-list { display: flex; flex-wrap: wrap; gap: 0 .22in; }
 .pl-mfb li em { margin-left: 6px; }
 .pl-brand { font-size: 9px; font-weight: bold; letter-spacing: .4px; border: 1px solid #000;
   border-radius: 2px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
@@ -1285,6 +1295,38 @@ function dyeWithBrand(d) {
   return d && d.brand ? `${n} <span class="pl-brand">${esc(d.brand)}</span>` : n;
 }
 
+/* End-of-day put-away, grouped by the bin each jar goes home to.
+   Every other view here is organised by pot, because that is how dyes get
+   gathered. Putting them back is the reverse journey: one person, one walk down
+   the rack, filling one bin at a time. A jar shared by three pots is still one
+   jar and appears once. */
+function pl_putaway(B) {
+  const byBin = {}, newJars = [];
+  const seen = new Set();
+  B.active.forEach(b => (b.manifest || []).forEach(m => {
+    if (m.kind !== 'liquid' || !m.dye) return;
+    const key = m.dye.id != null ? 'd' + m.dye.id : 'n' + normalize(m.dye.name || '');
+    if (seen.has(key)) return;        // one jar, however many pots wanted it
+    seen.add(key);
+    const cl = m.claim;
+    if (!cl || !cl.jar) { newJars.push(m.dye); return; }
+    const code = cl.jar.bin ? cl.jar.bin.code : 'no bin recorded';
+    (byBin[code] = byBin[code] || []).push(m.dye);
+  }));
+
+  const codes = Object.keys(byBin).sort();
+  if (!codes.length && !newJars.length) return '';
+
+  const block = (code, dyes, isNew) => `<div class="pa-blk${isNew ? ' new' : ''}">
+    <div class="pa-bin">${esc(code)}</div>
+    <ul class="pa-list">${dyes
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+      .map(d => `<li><i></i>${dyeWithBrand(d)}</li>`).join('')}</ul></div>`;
+
+  return codes.map(c => block(c, byBin[c], false)).join('')
+    + (newJars.length ? block('New jars \u2014 give each a bin', newJars, true) : '');
+}
+
 function pl_manifest(b) {
   const items = b.manifest.map(m => {
     // Powder BY DESIGN — no jar has ever existed for this dye, so nobody should
@@ -1302,7 +1344,10 @@ function pl_manifest(b) {
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
       : 'no bin recorded';
-    return `<li><span class="mf-back">${esc(from)}</span><b>${dyeWithBrand(m.dye)}</b><em>${
+    // Chip carries the grid code only — the legacy bin number is on the pull
+    // page, and a variable-width chip threw every name out of alignment.
+    const backTo = cl.jar.bin ? cl.jar.bin.code : '\u2014';
+    return `<li><span class="mf-back">${esc(backTo)}</span><b>${dyeWithBrand(m.dye)}</b><em>${
       cl.jar.expired ? 'plus powder \u2014 remake' : ''}</em></li>`;
   }).join('');
   return `<div class="pl-mfb">
@@ -1352,7 +1397,14 @@ function renderPull(printable, leadBreak) {
         the code on the left of each line is the bin that jar goes back to. <b>NEW</b> means it was mixed
         today and control gives it a bin.</div>
       <div class="pl-mf">${B.active.map(pl_manifest).join('')}</div>
-      <div class="pl-foot"><b>Put-back:</b> every jar goes back to the bin printed beside it.</div>
+    </div>
+    <div class="pl-doc pl-brk">
+      ${head('Put the dyes away')}
+      <div class="pl-lede"><b>Hand this page over with the jars.</b> One block per bin &mdash; walk the rack,
+        fill one bin, tick it off. A jar shared by several pots appears once. New jars were mixed today and
+        have no bin yet; control gives them one.</div>
+      <div class="pl-pa">${pl_putaway(B) || '<div class="pl-lede">No jars to put back.</div>'}</div>
+      <div class="pl-foot">Anything left over at the end of this list did not come from a bin &mdash; tell control.</div>
     </div>`;
 
   const warn = [];
