@@ -1078,23 +1078,41 @@ function scopeKind(scope) {
   return 'other';
 }
 
-/* Next unused LE number.
-   Deliberately its own sequence rather than the store's "LE #5" listing slot:
-   those slots get reused as photos are swapped, so two colourways a year apart
-   would collide on one SKU and the older one would become unfindable — exactly
-   the research record this scope exists to preserve. */
-function nextLeNumber() {
-  let max = 0;
-  (allOtherSkus || []).forEach(r => {
-    const m = /_LE_(\d+)/i.exec(String(r.sku || ''));
-    if (m) max = Math.max(max, parseInt(m[1], 10) || 0);
-  });
-  return String(max + 1).padStart(4, '0');
+/* LE codes are dated: YYMM then a sequence within that month.
+   FFN_SUNSET_LE_2609_01 is the first limited edition of September 2026.
+
+   Dated rather than a running count, for two reasons. A photo found later
+   carries its own date, which is the whole difficulty with a pile of colours
+   nobody can identify. And it cannot collide with the loose 1-34 already in
+   use, so that scheme can simply be abandoned rather than migrated.
+
+   Deliberately NOT the store's "LE #5" listing slot either: those get reused as
+   photos are swapped, so two colourways a year apart would land on one SKU and
+   the older one would become unfindable — exactly the research record this
+   scope exists to keep. */
+function leYearMonth(d) {
+  const t = d || new Date();
+  return String(t.getFullYear()).slice(2) + String(t.getMonth() + 1).padStart(2, '0');
 }
 
+function nextLeCode() {
+  const ym = leYearMonth();
+  let max = 0;
+  (allOtherSkus || []).forEach(r => {
+    const m = new RegExp('_LE_' + ym + '_(\\d+)', 'i').exec(String(r.sku || ''));
+    if (m) max = Math.max(max, parseInt(m[1], 10) || 0);
+  });
+  return `${ym}_${String(max + 1).padStart(2, '0')}`;
+}
+
+// Reads a code already on the recipe. Accepts the old flat form too, so an
+// existing LE keeps its number instead of being silently renumbered.
 function currentLeNumber() {
-  const m = /_LE_(\d+)/i.exec(document.getElementById('skuBase').value || '');
-  return m ? m[1] : '';
+  const sku = document.getElementById('skuBase').value || '';
+  const dated = /_LE_(\d{4}_\d+)/i.exec(sku);
+  if (dated) return dated[1];
+  const flat = /_LE_(\d+)/i.exec(sku);
+  return flat ? flat[1] : '';
 }
 
 /* Promoting a Limited Edition to General.
@@ -1151,7 +1169,7 @@ function renderScopeHint() {
   el.innerHTML =
       kind === 'reserved' ? 'Held for one vendor &mdash; SKU gains their code, e.g. <code>FFN_SUNSET_MMI</code>'
     : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_RC</code> plus their initials, e.g. <code>FFN_SUNSET_RCJS</code>'
-    : kind === 'le'       ? 'Cannot be remade &mdash; kept for research and hidden from general lists. SKU gains <code>_LE_</code> plus a number, e.g. <code>FFN_SUNSET_LE_0472</code>'
+    : kind === 'le'       ? `Cannot be remade &mdash; kept for research and hidden from general lists. SKU is dated, e.g. <code>FFN_SUNSET_LE_${leYearMonth()}_01</code>`
     : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
     : '';
 }
@@ -1264,7 +1282,7 @@ function computeSuggestedSku() {
     if (initials) sku += `_RC${initials}`;
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
-    sku += `_LE_${currentLeNumber() || nextLeNumber()}`;
+    sku += `_LE_${currentLeNumber() || nextLeCode()}`;
   }
   return sku;
 }
