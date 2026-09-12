@@ -135,6 +135,11 @@
     <div id="b-clock"><div class="empty">Loading…</div></div>
   </div>
 
+  <div class="panel" id="p-floor">
+    <div class="panel-head"><span class="panel-title">Back from the floor</span><span class="count" id="c-floor">—</span></div>
+    <div id="b-floor"><div class="empty">Loading…</div></div>
+  </div>
+
   <div class="panel" id="p-alerts">
     <div class="panel-head"><span class="panel-title">Needs attention</span><span class="count" id="c-alerts">—</span></div>
     <div id="b-alerts"><div class="empty">Loading…</div></div>
@@ -316,6 +321,7 @@ const S = {
   orders: [],
   dyeStock: [],
   reorder: [],
+  floor: [],          // recipes flagged at the bench + order lines sent back short
   busyWorker: null,
 };
 
@@ -369,6 +375,14 @@ async function loadAll() {
   } catch (e) {
     alertsT = null; // panel will render its own setup instructions
   }
+
+  let recipesT = null;
+  try {
+    recipesT = await grist.docApi.fetchTable('Recipes');
+  } catch (e) {
+    recipesT = null;
+  }
+  buildFloor(recipesT, wolT, woT);
 
   const missing = [];
   const opt = cands => ({ cands, required: false });
@@ -816,8 +830,92 @@ function renderReorder() {
     + '</div>').join('');
 }
 
+/* ---------- back from the floor ---------- */
+/* Two things the bench sends inward, gathered in one place because they arrive
+   the same way and need the same response — someone at control deciding what
+   to do before tomorrow's plan is built:
+
+     · a recipe flagged as wrong at the winding station
+     · an order line that could not be filled and was sent back to be re-dyed
+
+   Both were previously only visible by opening the record they were written to,
+   which means finding them required already knowing they existed. */
+function buildFloor(recipesT, wolT, woT) {
+  const out = [];
+
+  if (recipesT) {
+    const flagCol = findColumn(recipesT, ['Needs_Review', 'Flagged', 'Needs_Fix']);
+    const noteCol = findColumn(recipesT, ['Review_Note', 'Review_Notes', 'Flag_Note']);
+    const nameCol = findColumn(recipesT, ['Recipe_Name']);
+    if (flagCol && nameCol) {
+      (recipesT.id || []).forEach((id, i) => {
+        if (!columnAsArray(recipesT, flagCol)[i]) return;
+        const note = noteCol ? String(columnAsArray(recipesT, noteCol)[i] || '') : '';
+        const lines = note.split('\n').filter(Boolean);
+        out.push({
+          kind: 'recipe',
+          title: columnAsArray(recipesT, nameCol)[i] || `Recipe #${id}`,
+          sub: lines.length ? lines[lines.length - 1] : 'No detail recorded.',
+          extra: lines.length > 1 ? `+${lines.length - 1} earlier` : '',
+        });
+      });
+    }
+  }
+
+  // Lines sent back short keep Queue_Status Open on purpose, so they stay in the
+  // planners; Urgent is what marks them.
+  const P = findColumn(wolT, ['Production_Priority', 'Priority']);
+  const N = findColumn(wolT, ['Notes']);
+  const R = findColumn(wolT, ['Recipe']);
+  const W = findColumn(wolT, ['Work_Order']);
+  if (P) {
+    const woName = {};
+    const wn = findColumn(woT, ['Customer_Name']);
+    const wnum = findColumn(woT, ['Order_Number']);
+    (woT.id || []).forEach((id, i) => {
+      woName[id] = [wn ? columnAsArray(woT, wn)[i] : '', wnum ? columnAsArray(woT, wnum)[i] : '']
+        .filter(Boolean).join(' · ');
+    });
+    (wolT.id || []).forEach((id, i) => {
+      if (!/urgent/i.test(String(columnAsArray(wolT, P)[i] || ''))) return;
+      const note = N ? String(columnAsArray(wolT, N)[i] || '') : '';
+      const last = note.split('\n').filter(Boolean).pop() || 'Sent back — no detail.';
+      out.push({
+        kind: 'order',
+        title: woName[getRefId(columnAsArray(wolT, W)[i])] || `Line #${id}`,
+        sub: last,
+        extra: 'urgent',
+      });
+    });
+  }
+
+  S.floor = out;
+}
+
+function renderFloor() {
+  const box = document.getElementById('b-floor');
+  if (!box) return;
+  const list = S.floor || [];
+  setCount('c-floor', list.length ? String(list.length) : 'clear', list.length ? 'warn' : 'ok');
+  if (!list.length) {
+    box.innerHTML = '<div class="setup-hint">Nothing sent back. Flagged recipes need '
+      + '<code>Needs_Review</code> and <code>Review_Note</code> on <code>Recipes</code>; '
+      + 'short orders show when a line is set <code>Urgent</code> at winding.</div>';
+    return;
+  }
+  box.innerHTML = list.map(r =>
+    '<div class="row"><div class="row-top">'
+    + '<span class="row-main">' + esc(r.title) + '</span>'
+    + '<span class="tag ' + (r.kind === 'order' ? 't-red' : 't-amber') + '">'
+    + (r.kind === 'order' ? 'short' : 'recipe') + '</span>'
+    + '</div><div class="row-sub">' + esc(r.sub.slice(0, 150))
+    + (r.extra && r.kind !== 'order' ? ' <span class="row-side">' + esc(r.extra) + '</span>' : '')
+    + '</div></div>').join('');
+}
+
 /* ---------- render ---------- */
 function renderAll() {
+  renderFloor();
   paintHeader();
   renderClock();
   renderAlerts();
