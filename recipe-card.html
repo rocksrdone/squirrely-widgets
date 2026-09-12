@@ -764,7 +764,15 @@ function ringDescribeAnnulusSector(cx, cy, rOuter, rInner, startPct, endPct) {
    the builder. 34 of the 50 layouts in the document are uneven, which makes it
    the common case rather than an exception, but it still has to be noticed.
 
-   Only the uneven case says anything. An even repeat needs no comment. */
+   Only the uneven case says anything. An even repeat needs no comment.
+
+   Judged on the SEQUENCE of dyes, not their widths. Widths were compared at
+   first and it was wrong twice over: boundaries are dragged by hand so the same
+   band differs by a percent or two between passes, and the last segment wraps
+   through zero, giving it a negative width that no comparison survives. Acadia
+   tiles cleanly three times and was being called uneven on both counts.
+   "Uneven" here means the counts or the order differ \u2014 which is what it means
+   at the bench. */
 function normRepeatName(v) {
   return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -773,20 +781,16 @@ function isUnevenRepeat(segs) {
   if (!segs || segs.length < 2) return false;
   const names = segs.map(x => normRepeatName(x.dyeName));
   if (new Set(names).size === names.length) return false;   // nothing repeats
-  for (let n = 2; n <= segs.length; n++) {
-    if (segs.length % n) continue;
-    const per = segs.length / n;
+  for (let n = 2; n <= names.length; n++) {
+    if (names.length % n) continue;
+    const per = names.length / n;
     let ok = true;
     for (let r = 1; r < n && ok; r++) {
       for (let k = 0; k < per; k++) {
-        const a = segs[k], b = segs[r * per + k];
-        if (normRepeatName(a.dyeName) !== normRepeatName(b.dyeName)) { ok = false; break; }
-        // Widths drift a little through dragging; three-quarters of a percent
-        // of the circle is well inside "the same band".
-        if (Math.abs((a.endPct - a.startPct) - (b.endPct - b.startPct)) > 0.75) { ok = false; break; }
+        if (names[k] !== names[r * per + k]) { ok = false; break; }
       }
     }
-    if (ok) return false;   // tiles cleanly
+    if (ok) return false;   // the sequence tiles
   }
   return true;
 }

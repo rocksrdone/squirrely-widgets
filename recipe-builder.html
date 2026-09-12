@@ -1221,17 +1221,16 @@ function repeatShape(segs) {
   const names = segs.map(x => normalize(x.dye));
   if (new Set(names).size === names.length) return { kind: 'norepeat', n: segs.length };
 
-  for (let n = 2; n <= segs.length; n++) {
-    if (segs.length % n) continue;
-    const per = segs.length / n;
+  // Sequence only. Widths drift by a percent or two between hand-dragged passes,
+  // and the closing band wraps through zero with a negative width — comparing
+  // them called cleanly tiling layouts uneven.
+  for (let n = 2; n <= names.length; n++) {
+    if (names.length % n) continue;
+    const per = names.length / n;
     let ok = true;
     for (let r = 1; r < n && ok; r++) {
       for (let k = 0; k < per; k++) {
-        const a = segs[k], b = segs[r * per + k];
-        if (normalize(a.dye) !== normalize(b.dye)) { ok = false; break; }
-        // Widths drift a little through dragging; three-quarters of a percent
-        // of the circle is well inside "the same band".
-        if (Math.abs((a.end - a.start) - (b.end - b.start)) > 0.75) { ok = false; break; }
+        if (names[k] !== names[r * per + k]) { ok = false; break; }
       }
     }
     if (ok) return { kind: 'even', factor: n, per };
