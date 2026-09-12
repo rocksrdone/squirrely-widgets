@@ -224,7 +224,7 @@
     <div class="top-actions">
       <span id="createdDateLabel" style="font-size:10px; color:#8B7D72; white-space:nowrap;"></span>
       <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
-      <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Mark as Active">✓ Finalize</button>
+      <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -262,6 +262,7 @@
         </select>
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
+      <div class="field-wrap wide"><div class="linked-state" id="finalizeNote"></div></div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
         <span class="field-label">Reserved For</span>
         <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor(); renderLinkedCustomerState();">
@@ -1319,6 +1320,10 @@ function pickDyeSuggestion(clientKey, dye) {
 }
 
 function renderDyeRows() {
+  // The finalize gate counts dyes, so every path that changes the list has to
+  // re-evaluate it. Hooking the renderer covers add, remove, reorder and load
+  // without chasing each caller.
+  setTimeout(updateFinalizeGate, 0);
   const wrap = document.getElementById('dyeRowsWrap');
   if (!dyeRows.length) {
     wrap.innerHTML = `<div class="no-dyes">No dye steps yet — click "+ Add dye step" below.</div>`;
@@ -1451,36 +1456,82 @@ function syncLinkedCustomerFromVendor() {
   }
 }
 
+/* What has to be true before a recipe goes Active.
+   Active means the rest of the system will act on it: it shows up in the day
+   planner, generates pull sheets, gets ordered against. The old gate checked
+   name, fibre and SKU — enough to be a tidy record, not enough to be dyeable.
+   A recipe with no dye components passed, and then produced a pull sheet with
+   nothing on it. A duplicate SKU passed too, which quietly breaks matching
+   everywhere SKU is the key. */
+function finalizeIssues() {
+  const name = document.getElementById('nameInput').value.trim();
+  const fiber = document.getElementById('fiberType').value;
+  const sku = document.getElementById('skuBase').value.trim();
+  const scope = (document.getElementById('recipeScope') || {}).value || '';
+  const vendor = (document.getElementById('reservedFor') || {}).value || '';
+  const linked = (document.getElementById('linkedCustomer') || {}).value || '';
+  const out = [];
+
+  if (!name || name === 'Untitled Draft') out.push('a real recipe name');
+  if (!fiber) out.push('fiber type');
+  if (!sku) out.push('SKU base');
+
+  // Without components there is nothing to pull, mix or cost.
+  if (!dyeRows.length) out.push('at least one dye');
+  else if (dyeRows.every(r => !(r.Dye_Name || '').trim())) out.push('a dye name on at least one step');
+
+  // SKU is the join key across Shopify, photos, orders and lots.
+  if (sku) {
+    const clash = (allOtherSkus || []).find(r =>
+      r.id !== currentRecipeId && normalize(r.sku || '') === normalize(sku));
+    if (clash) out.push(`a unique SKU \u2014 ${clash.recipeName || 'another recipe'} already uses ${sku}`);
+  }
+
+  // Scope decides part of the SKU, so an incomplete scope means a wrong SKU.
+  if (/reserv/i.test(scope) && !vendor) out.push('a vendor in Reserved For');
+  if (scope === 'Retail Custom' && !linked) out.push('a linked customer (Retail Custom uses their initials)');
+
+  return out;
+}
+
 function updateFinalizeGate() {
   const btn = document.getElementById('finalizeTopBtn');
   if (!btn) return;
+  const missing = finalizeIssues();
+  const note = document.getElementById('finalizeNote');
 
-  const missing = [];
-  if (!document.getElementById('nameInput').value.trim() || document.getElementById('nameInput').value.trim() === 'Untitled Draft') missing.push('a real recipe name');
-  if (!document.getElementById('fiberType').value) missing.push('fiber type');
-  if (!document.getElementById('skuBase').value.trim()) missing.push('SKU base');
-
-  if (missing.length) {
-    btn.disabled = true;
-    btn.title = `Still needed before finalizing: ${missing.join(', ')}`;
-  } else {
-    btn.disabled = false;
-    btn.title = 'Mark as Active';
+  btn.disabled = missing.length > 0;
+  btn.title = missing.length ? `Still needed: ${missing.join(', ')}` : 'Save and mark Active';
+  if (note) {
+    // Spelled out on screen, not just in a tooltip nobody hovers.
+    note.className = 'linked-state' + (missing.length ? ' warn' : ' on');
+    note.innerHTML = missing.length
+      ? `Before finalizing: ${missing.map(esc).join(' &middot; ')}`
+      : 'Ready to finalize';
   }
 }
 
 async function finalizeRecipe() {
   if (!currentRecipeId) return;
+  const missing = finalizeIssues();
+  if (missing.length) { showToast('Not ready: ' + missing[0]); updateFinalizeGate(); return; }
+
   try {
+    // Save FIRST. Finalize only ever wrote Status, so editing a field and then
+    // clicking Finalize flipped the recipe to Active and threw the edit away —
+    // the one moment a recipe is declared finished is the worst moment to lose
+    // the last thing typed.
+    await saveRecipe();
     await grist.docApi.applyUserActions([
       ['UpdateRecord', 'Recipes', currentRecipeId, { Status: 'Active' }]
     ]);
     document.getElementById('draftBadge').style.display = 'none';
     document.getElementById('finalizeTopBtn').style.display = 'none';
-    showToast('Finalized — now Active ✓');
+    showToast('Saved and finalized \u2014 now Active');
+    updateFinalizeGate();
   } catch (e) {
     console.error('Failed to finalize:', e);
-    showToast('Failed to finalize — check the Status column');
+    showToast('Failed to finalize \u2014 nothing was changed');
   }
 }
 
