@@ -121,6 +121,37 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/* ── Recipe scope — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   Four kinds of recipe. The scope decides the SKU, and whether the colourway
+   turns up when someone goes browsing:
+
+     General            open stock, anyone can order it
+     Customer Reserved  held for one vendor
+     One-off            made for one person, not offered again unless they ask
+     Limited Edition    cannot be remade — wrong, unrepeatable, or unidentified
+
+   Limited editions are kept as a research record and hidden by default. They
+   are hidden at the point of BROWSING only. Anything that resolves a recipe by
+   id — an order line, a lot, a pull sheet — must still render it, or a colourway
+   would disappear halfway through being made.
+
+   Matched loosely because the stored values are not consistent: 12 recipes say
+   "Custom Retail", 2 say "Retail Custom", and one says "College/University". */
+function scopeKind(scope) {
+  const t = String(scope == null ? '' : scope).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!t) return '';
+  if (t.includes('reserv')) return 'reserved';
+  if (t.includes('limited') || t === 'le') return 'le';
+  if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
+  if (t.includes('general')) return 'general';
+  return 'other';
+}
+
+// True when a recipe belongs in a browsable list. showLE opts the hidden ones in.
+function isBrowsable(scope, showLE) {
+  return showLE ? true : scopeKind(scope) !== 'le';
+}
+
 let allRecipes = [];
 let currentPhoto = null; // {id, Colorway_Name, Source_Filename, Nextcloud_URL, Recipe}
 
@@ -249,7 +280,13 @@ function searchRecipes(query) {
   const q = normalize(query);
   if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
-  const matches = allRecipes.filter(r => normalize(r.Recipe_Name).includes(q)).slice(0, 10);
+  // Limited editions are excluded from the typeahead: linking a photo to one is
+  // rare, and having them surface on every search is the clutter this scope
+  // exists to avoid. Typing "LE" brings them back for the rare case.
+  const wantLE = /\ble\b|limited/i.test(q);
+  const matches = allRecipes
+    .filter(r => isBrowsable(r.Recipe_Scope, wantLE))
+    .filter(r => normalize(r.Recipe_Name).includes(q)).slice(0, 10);
 
   if (!matches.length) {
     box.innerHTML = `<div class="suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`;

@@ -22,7 +22,8 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   margin: -10px -10px 8px; padding: 10px 10px 8px; border-bottom: 1px solid var(--rule);
 }
 .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.search-input { flex: 1 1 100%; min-width: 120px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.le-note { flex-basis: 100%; font-size: 11px; color: #8B7D72; }
+  .search-input { flex: 1 1 100%; min-width: 120px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
 .sel { flex: 1 1 auto; min-width: 92px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; background: white; color: var(--ink); }
 
 .recipe-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
@@ -66,6 +67,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
     <select class="sel" id="scopeSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="fiberSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="statusSelect" onchange="onFilterChange()"></select>
+    <div class="le-note" id="leNote"></div>
     <select class="sel" id="sortSelect" onchange="onFilterChange()">
       <option value="name">Sort: Name A–Z</option>
       <option value="created">Sort: Created (newest)</option>
@@ -80,6 +82,37 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 </div>
 
 <script>
+/* ── Recipe scope — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   Four kinds of recipe. The scope decides the SKU, and whether the colourway
+   turns up when someone goes browsing:
+
+     General            open stock, anyone can order it
+     Customer Reserved  held for one vendor
+     One-off            made for one person, not offered again unless they ask
+     Limited Edition    cannot be remade — wrong, unrepeatable, or unidentified
+
+   Limited editions are kept as a research record and hidden by default. They
+   are hidden at the point of BROWSING only. Anything that resolves a recipe by
+   id — an order line, a lot, a pull sheet — must still render it, or a colourway
+   would disappear halfway through being made.
+
+   Matched loosely because the stored values are not consistent: 12 recipes say
+   "Custom Retail", 2 say "Retail Custom", and one says "College/University". */
+function scopeKind(scope) {
+  const t = String(scope == null ? '' : scope).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!t) return '';
+  if (t.includes('reserv')) return 'reserved';
+  if (t.includes('limited') || t === 'le') return 'le';
+  if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
+  if (t.includes('general')) return 'general';
+  return 'other';
+}
+
+// True when a recipe belongs in a browsable list. showLE opts the hidden ones in.
+function isBrowsable(scope, showLE) {
+  return showLE ? true : scopeKind(scope) !== 'le';
+}
+
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -239,7 +272,13 @@ function onFilterChange() {
   const fiberFilter = document.getElementById('fiberSelect').value;
   const statusFilter = document.getElementById('statusSelect').value;
 
+  // Limited editions stay out unless the scope filter asks for them by name.
+  // Reusing the existing control rather than adding a toggle: "show me the
+  // hidden ones" and "show me only the hidden ones" are the same intent here.
+  const wantLE = scopeKind(scopeFilter) === 'le';
+
   let list = allRecipes.filter(r => {
+    if (!isBrowsable(r.scope, wantLE)) return false;
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
     if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
     if (statusFilter === '__NONE__') { if (r.status) return false; }
@@ -262,6 +301,13 @@ function onFilterChange() {
   });
 
   filteredCache = list;
+  const hidden = wantLE ? 0 : allRecipes.filter(r => scopeKind(r.scope) === 'le').length;
+  const note = document.getElementById('leNote');
+  if (note) {
+    note.textContent = hidden
+      ? `${hidden} limited edition${hidden === 1 ? '' : 's'} hidden \u2014 pick Limited Edition in Scope to see them`
+      : '';
+  }
   renderList();
 }
 
