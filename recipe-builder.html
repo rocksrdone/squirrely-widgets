@@ -273,6 +273,7 @@
         </select>
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
+      <div class="field-wrap wide"><div class="linked-state" id="layoutShape"></div></div>
       <div class="field-wrap wide"><div class="linked-state" id="finalizeNote"></div></div>
       <div class="field-wrap wide"><div id="reviewBanner"></div></div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
@@ -1194,6 +1195,91 @@ function renderPromoteButton() {
   btn.style.display = kind === 'le' ? 'inline-block' : 'none';
 }
 
+/* Repeat shape of the ring layout.
+   Whether a colourway tiles evenly changes how it is wound and how a photo has
+   to be framed, and it is currently only discoverable by opening the layout
+   designer and looking. 34 of the 50 layouts in the document are uneven, so it
+   is the common case rather than an oddity — worth stating on the recipe.
+
+   "Even x3" means the segment list divides into three identical passes: same
+   dyes in the same order at the same widths. Anything that repeats a dye
+   without tiling is uneven, which is a description, not a fault. */
+let layoutShape = null;
+
+function repeatShape(segs) {
+  if (!segs.length) return { kind: 'none' };
+  if (segs.length < 2) return { kind: 'single' };
+  const names = segs.map(x => normalize(x.dye));
+  if (new Set(names).size === names.length) return { kind: 'norepeat', n: segs.length };
+
+  for (let n = 2; n <= segs.length; n++) {
+    if (segs.length % n) continue;
+    const per = segs.length / n;
+    let ok = true;
+    for (let r = 1; r < n && ok; r++) {
+      for (let k = 0; k < per; k++) {
+        const a = segs[k], b = segs[r * per + k];
+        if (normalize(a.dye) !== normalize(b.dye)) { ok = false; break; }
+        // Widths drift a little through dragging; three-quarters of a percent
+        // of the circle is well inside "the same band".
+        if (Math.abs((a.end - a.start) - (b.end - b.start)) > 0.75) { ok = false; break; }
+      }
+    }
+    if (ok) return { kind: 'even', factor: n, per };
+  }
+  return { kind: 'uneven', n: segs.length };
+}
+
+async function loadLayoutShape(recipeId) {
+  layoutShape = null;
+  try {
+    const t = await grist.docApi.fetchTable('Recipe_Layout_Segments');
+    const C = {
+      recipe: findColumn(t, ['Recipe']), dye: findColumn(t, ['Dye_Name']),
+      start: findColumn(t, ['Start_Pct']), end: findColumn(t, ['End_Pct']),
+      layer: findColumn(t, ['Layer']),
+    };
+    if (!C.recipe || !C.start) return;
+    const segs = [];
+    (t.id || []).forEach((id, i) => {
+      if (getRefId(columnAsArray(t, C.recipe)[i]) !== recipeId) return;
+      // Base layer only — overlay marks sit on top and are not part of the repeat.
+      const layer = C.layer ? String(columnAsArray(t, C.layer)[i] || '') : '';
+      if (layer && !/base/i.test(layer)) return;
+      segs.push({
+        dye: C.dye ? columnAsArray(t, C.dye)[i] || '' : '',
+        start: Number(columnAsArray(t, C.start)[i]) || 0,
+        end: Number(columnAsArray(t, C.end)[i]) || 0,
+      });
+    });
+    segs.sort((a, b) => a.start - b.start);
+    layoutShape = repeatShape(segs);
+  } catch (e) {
+    layoutShape = null;   // no layout table, or unreadable — say nothing
+  }
+  renderLayoutShape();
+}
+
+function renderLayoutShape() {
+  const el = document.getElementById('layoutShape');
+  if (!el) return;
+  const s = layoutShape;
+  if (!s || s.kind === 'none') { el.innerHTML = ''; return; }
+  if (s.kind === 'uneven') {
+    el.className = 'linked-state warn';
+    el.innerHTML = `<strong>Uneven repeat</strong> &mdash; ${s.n} bands that do not tile. Wind and photograph it as one pass, not a pattern.`;
+  } else if (s.kind === 'even') {
+    el.className = 'linked-state on';
+    el.innerHTML = `Even repeat &times;${s.factor} &mdash; ${s.per} band${s.per === 1 ? '' : 's'} per pass`;
+  } else if (s.kind === 'norepeat') {
+    el.className = 'linked-state';
+    el.innerHTML = `${s.n} bands, none repeated`;
+  } else {
+    el.className = 'linked-state';
+    el.innerHTML = 'Single band';
+  }
+}
+
 function renderScopeHint() {
   const el = document.getElementById('scopeHint');
   if (!el) return;
@@ -1461,6 +1547,7 @@ async function loadRecipe(record) {
   renderScopeHint();
   renderPromoteButton();
   renderReviewBanner();
+  loadLayoutShape(currentRecipeId);
   const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();
