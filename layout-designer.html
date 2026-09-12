@@ -111,6 +111,22 @@
   .dye-suggestion-row { padding: 6px 8px; cursor: pointer; font-size: 12px; }
   .dye-suggestion-row:hover { background: var(--warm); }
 
+  .pal { margin-bottom: 10px; }
+  .pal-cap { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72;
+    font-weight: 600; margin-bottom: 5px; }
+  .pal-row { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pal-sw { display: flex; align-items: center; gap: 5px; padding: 4px 8px 4px 5px;
+    border: 1px solid var(--rule); border-radius: 5px; background: #fff; cursor: pointer;
+    font-family: 'Inter', sans-serif; font-size: 11px; min-height: 32px; }
+  .pal-sw:hover { border-color: var(--accent); }
+  .pal-sw.on { border-color: var(--ink); box-shadow: 0 0 0 1.5px rgba(26,22,20,.25); }
+  .pal-chip { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,.22); flex: none; }
+  .pal-nm { white-space: nowrap; }
+  .pal-dil { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 700; color: #6B5E52;
+    background: var(--warm, #E8DFD4); border-radius: 3px; padding: 0 3px; }
+  .split-btn { min-width: 30px; min-height: 30px; border: 1px solid var(--rule); border-radius: 4px;
+    background: #fff; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; }
+  .split-btn:hover { border-color: var(--accent); }
   .repeat-row { display: flex; align-items: center; gap: 5px; }
   .repeat-row input { width: 60px; }
 
@@ -912,6 +928,89 @@ function selectOverlay(key) {
   renderOverlayList();
 }
 
+/* Dye palette for the ring.
+   Every segment needed its dye typed in, which is fine for a four-segment
+   layout and miserable for an uneven repeat — the same six dyes entered twenty
+   times, in a different order each pass. Since a layout only ever uses dyes
+   already on the recipe, those become a row of swatches: select a segment,
+   click a colour, done. The text field stays for anything off-list.
+
+   This is deliberately not a "repeat" feature. Uneven repeats are uneven
+   precisely because they do not tile, so generating them from a pattern would
+   be fighting the thing that makes them interesting. Painting is the honest
+   tool for that job. */
+function palette() {
+  const out = [], seen = new Set();
+  const add = (name, dilution) => {
+    const key = normalize(name || '') + '|' + normalize(dilution || '');
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    out.push({ name, dilution: dilution || '' });
+  };
+  // Recipe order first — that is the order they were dyed in.
+  (currentDyeComponents || []).forEach(c => add(c.dyeName, c.dilution));
+  // Then anything already on the ring that is not a component, so an existing
+  // layout never loses a colour it is using.
+  baseSegments.forEach(s => add(s.dyeName, s.dilution));
+  return out;
+}
+
+function paletteHtml(seg) {
+  const list = palette();
+  if (!list.length) return '';
+  const cur = normalize(seg.dyeName || '') + '|' + normalize(seg.dilution || '');
+  return `<div class="pal">
+    <div class="pal-cap">Recipe dyes &mdash; click to set this segment</div>
+    <div class="pal-row">
+      ${list.map((p, i) => {
+        const key = normalize(p.name) + '|' + normalize(p.dilution);
+        const st = dilutionStrength(p.dilution);
+        const fill = tintForStrength(guessColor(p.name), st);
+        const dil = p.dilution && dilutionChoicesFor(p.name).length
+          ? `<span class="pal-dil">${esc(p.dilution)}</span>` : '';
+        return `<button class="pal-sw${key === cur ? ' on' : ''}" title="${esc(p.name)}${p.dilution ? ' · ' + esc(p.dilution) : ''}"
+          onclick="applyPalette(${seg.clientKey}, ${i})">
+          <span class="pal-chip" style="background:${fill}"></span>
+          <span class="pal-nm">${esc(abbreviateLabel(p.name, 60))}</span>${dil}</button>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function applyPalette(clientKey, idx) {
+  const p = palette()[idx];
+  const seg = baseSegments.find(s => s.clientKey === clientKey);
+  if (!p || !seg) return;
+  seg.dyeName = p.name;
+  seg.dilution = p.dilution || '';
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
+/* Split the selected segment into n equal parts in one go. Building an uneven
+   repeat means making a lot of segments; doing it one bisection at a time is
+   the other half of the tedium. */
+function splitInto(key, n) {
+  const i = baseSegments.findIndex(s => s.clientKey === key);
+  if (i < 0 || n < 2) return;
+  const seg = baseSegments[i];
+  const from = seg.startPct, to = seg.endPct, span = (to - from) / n;
+  const made = [];
+  for (let k = 0; k < n; k++) {
+    made.push(k === 0 ? seg : {
+      rowId: null, clientKey: nextClientKey++, dyeName: seg.dyeName,
+      startPct: from + k * span, endPct: from + (k + 1) * span,
+      type: 'Solid', notes: '', dilution: seg.dilution || '', blendRatio: 50,
+    });
+  }
+  seg.startPct = from; seg.endPct = from + span;
+  baseSegments.splice(i + 1, 0, ...made.slice(1));
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+}
+
 function renderSegmentEditor() {
   const wrap = document.getElementById('segmentEditor');
 
@@ -919,6 +1018,13 @@ function renderSegmentEditor() {
     const seg = baseSegments.find(s => s.clientKey === selectedSegmentKey);
     if (!seg) { wrap.innerHTML = `<div class="no-selection">Click a segment on the ring to edit it.</div>`; return; }
     wrap.innerHTML = `
+      ${paletteHtml(seg)}
+      <div class="field-row">
+        <span class="field-label">Split into</span>
+        <div class="btn-row">
+          ${[2, 3, 4, 5, 6].map(n => `<button class="split-btn" onclick="splitInto(${seg.clientKey}, ${n})">${n}</button>`).join('')}
+        </div>
+      </div>
       <div class="field-row">
         <span class="field-label">Dye Name</span>
         <div class="dye-input-wrap">
