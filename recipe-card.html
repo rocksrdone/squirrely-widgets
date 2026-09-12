@@ -220,6 +220,18 @@
   .dil { font-size: 10px; color: #8B7D72; font-style: italic; }
 
   /* ── COLOR LAYOUT ── */
+  /* A badge, not another line of text — it sits directly above the ring it is
+     describing and has to survive being glanced at while both hands are busy. */
+  .repeat-warn {
+    display: inline-flex; align-items: center; gap: 7px;
+    margin: 0 0 7px; padding: 5px 11px 5px 8px;
+    background: #F5EDD8; color: #7A5518;
+    border: 1px solid #B07D2A; border-left: 4px solid #B07D2A;
+    border-radius: 4px;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  }
+  .rw-mark { font-size: 9px; line-height: 1; color: #B07D2A; }
+  body.big-mode .repeat-warn { font-size: 15px; padding: 7px 14px 7px 11px; }
   .layout-ring-wrap { display: flex; justify-content: center; margin-bottom: 8px; }
   .layout-wrap { background: var(--warm); border-radius: 5px; padding: 10px 12px; border: 1px solid var(--rule); margin-bottom: 14px; }
   .skein-row { margin-bottom: 6px; }
@@ -746,6 +758,39 @@ function ringDescribeAnnulusSector(cx, cy, rOuter, rInner, startPct, endPct) {
   ].join(' ');
 }
 
+/* Uneven repeat warning — KEEP IN STEP WITH recipe-builder.html.
+   Whether a colourway tiles changes how it is wound, and this card is what gets
+   looked at while making the product — so the warning matters more here than in
+   the builder. 34 of the 50 layouts in the document are uneven, which makes it
+   the common case rather than an exception, but it still has to be noticed.
+
+   Only the uneven case says anything. An even repeat needs no comment. */
+function normRepeatName(v) {
+  return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isUnevenRepeat(segs) {
+  if (!segs || segs.length < 2) return false;
+  const names = segs.map(x => normRepeatName(x.dyeName));
+  if (new Set(names).size === names.length) return false;   // nothing repeats
+  for (let n = 2; n <= segs.length; n++) {
+    if (segs.length % n) continue;
+    const per = segs.length / n;
+    let ok = true;
+    for (let r = 1; r < n && ok; r++) {
+      for (let k = 0; k < per; k++) {
+        const a = segs[k], b = segs[r * per + k];
+        if (normRepeatName(a.dyeName) !== normRepeatName(b.dyeName)) { ok = false; break; }
+        // Widths drift a little through dragging; three-quarters of a percent
+        // of the circle is well inside "the same band".
+        if (Math.abs((a.endPct - a.startPct) - (b.endPct - b.startPct)) > 0.75) { ok = false; break; }
+      }
+    }
+    if (ok) return false;   // tiles cleanly
+  }
+  return true;
+}
+
 function buildLayoutRingSvg(baseSegs, overlays) {
   const CX = 200, CY = 200;
   const BASE_R_OUT = 160, BASE_R_IN = 100;
@@ -963,6 +1008,8 @@ function renderRight() {
   document.getElementById('rightPanel').innerHTML = `
     ${currentBaseSegments.length ? `
     <div class="slabel">Color layout</div>
+    ${isUnevenRepeat(currentBaseSegments)
+      ? '<div class="repeat-warn"><span class="rw-mark">&#9650;</span>Uneven repeat</div>' : ''}
     <div class="layout-ring-wrap">${buildLayoutRingSvg(currentBaseSegments, currentOverlayMarks)}</div>
     ${r.Layout_Description ? `<div class="layout-note">${r.Layout_Description}</div>` : ''}
     ` : colors.length ? `
