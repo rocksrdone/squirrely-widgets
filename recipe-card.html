@@ -1236,6 +1236,23 @@ grist.onRecord(async (record) => {
     localOverlayMarks = [];
   }
 
+  // Columns the record may not carry yet. Read straight from the table rather
+  // than trusted to arrive; cheap, and it fails to an empty object.
+  let localExtraFields = {};
+  try {
+    const recs = await grist.docApi.fetchTable('Recipes');
+    const idx = (recs.id || []).indexOf(record.id);
+    if (idx !== -1) {
+      ['Year_Made', 'Needs_Review', 'Review_Note'].forEach(name => {
+        const key = Object.keys(recs).find(k =>
+          k.toLowerCase().replace(/[^a-z0-9]/g, '') === name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        if (key && record[name] === undefined) localExtraFields[name] = recs[key][idx];
+      });
+    }
+  } catch (e) {
+    localExtraFields = {};
+  }
+
   let localSpoolStats = { needed: 0, made: 0, perOrder: [] };
   try {
     const recipeSku = (rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '').toString().trim().toUpperCase();
@@ -1324,7 +1341,11 @@ grist.onRecord(async (record) => {
   // display for whatever recipe is actually selected now.
   if (myGeneration !== loadGeneration) return;
 
-  currentRecipe = record;
+  // Grist caches the widget's view of the schema, so onRecord does not always
+  // carry a recently added column — the field saves correctly and then reads
+  // back missing until the whole page is reloaded. Merged in from the table so
+  // a new column shows up straight away.
+  currentRecipe = Object.assign({}, record, localExtraFields);
   currentPhotoIndex = 0;
   previewPickerOpen = false;
   currentComponents = localComponents;
