@@ -1265,18 +1265,16 @@ function renderLayoutShape() {
   if (!el) return;
   const s = layoutShape;
   if (!s || s.kind === 'none') { el.innerHTML = ''; return; }
+  // Only the uneven case says anything. An even repeat needs no comment, and
+  // narrating band counts was describing the ring rather than warning about it —
+  // the detail that matters goes in the notes, by hand, where it can say what
+  // is actually different about this one.
   if (s.kind === 'uneven') {
     el.className = 'linked-state warn';
-    el.innerHTML = `<strong>Uneven repeat</strong> &mdash; ${s.n} bands that do not tile. Wind and photograph it as one pass, not a pattern.`;
-  } else if (s.kind === 'even') {
-    el.className = 'linked-state on';
-    el.innerHTML = `Even repeat &times;${s.factor} &mdash; ${s.per} band${s.per === 1 ? '' : 's'} per pass`;
-  } else if (s.kind === 'norepeat') {
-    el.className = 'linked-state';
-    el.innerHTML = `${s.n} bands, none repeated`;
+    el.innerHTML = '<strong>Uneven repeat</strong>';
   } else {
     el.className = 'linked-state';
-    el.innerHTML = 'Single band';
+    el.innerHTML = '';
   }
 }
 
