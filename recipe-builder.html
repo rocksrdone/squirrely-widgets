@@ -234,6 +234,7 @@
       <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
+      <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Turn this limited edition into a regular item">↑ Make General</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -263,11 +264,12 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Recipe Scope</span>
-        <select class="field-select" id="recipeScope" onchange="markUnsaved(); onScopeChange(); renderSkuSuggestion(); renderScopeHint();">
+        <select class="field-select" id="recipeScope" onchange="markUnsaved(); onScopeChange(); renderSkuSuggestion(); renderScopeHint(); renderPromoteButton();">
           <option value="">—</option>
           <option>General</option>
           <option>Customer Reserved</option>
-          <option>Retail Custom</option>
+          <option>One-off</option>
+          <option>Limited Edition</option>
         </select>
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
@@ -1053,18 +1055,105 @@ function renderReviewBanner() {
   </div>`;
 }
 
+/* Scope vocabulary.
+   Four kinds of recipe, and the scope decides both the SKU and whether the
+   colourway shows up when someone goes looking:
+
+     General          open stock, anyone can order it
+     Customer Reserved  held for one vendor
+     One-off          made for one person, not offered again unless they ask
+     Limited Edition  cannot be remade — wrong, unrepeatable, or unidentified.
+                      Kept for research and deliberately out of general lists.
+
+   Matched loosely because the existing data is not consistent: 12 recipes say
+   "Custom Retail", 2 say "Retail Custom", and the dropdown only ever offered
+   one of them — so those 12 have been silently missing their SKU suffix. */
+function scopeKind(scope) {
+  const t = normalize(scope || '');
+  if (!t) return '';
+  if (t.includes('reserv')) return 'reserved';
+  if (t.includes('limited') || t === 'le') return 'le';
+  if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
+  if (t.includes('general')) return 'general';
+  return 'other';
+}
+
+/* Next unused LE number.
+   Deliberately its own sequence rather than the store's "LE #5" listing slot:
+   those slots get reused as photos are swapped, so two colourways a year apart
+   would collide on one SKU and the older one would become unfindable — exactly
+   the research record this scope exists to preserve. */
+function nextLeNumber() {
+  let max = 0;
+  (allOtherSkus || []).forEach(r => {
+    const m = /_LE_(\d+)/i.exec(String(r.sku || ''));
+    if (m) max = Math.max(max, parseInt(m[1], 10) || 0);
+  });
+  return String(max + 1).padStart(4, '0');
+}
+
+function currentLeNumber() {
+  const m = /_LE_(\d+)/i.exec(document.getElementById('skuBase').value || '');
+  return m ? m[1] : '';
+}
+
+/* Promoting a Limited Edition to General.
+   Rare but real: a colour that came out wrong turns out to be worth selling.
+   Changing the scope alone would leave the LE SKU in place, so the widget
+   generates the plain one — and records the old code in the notes, because
+   spools already on the shelf are labelled with it and reusing the number
+   elsewhere would make them unfindable. */
+async function promoteFromLE() {
+  if (!currentRecipeId) return;
+  const oldSku = document.getElementById('skuBase').value.trim();
+  const name = document.getElementById('nameInput').value.trim();
+  const fiber = document.getElementById('fiberType').value;
+  if (!name || !fiber) { showToast('Needs a name and fiber first'); return; }
+
+  // Plain SKU, built as if it had always been General.
+  const fc = FIBER_NAME_TO_CODE[fiber] || 'GEN';
+  const newSku = `${fc}_${slugifyForSku(name) || 'UNNAMED'}`;
+  const clash = (allOtherSkus || []).find(r => r.id !== currentRecipeId && normalize(r.sku || '') === normalize(newSku));
+  if (clash) { showToast(`${newSku} is already used by ${clash.recipeName || 'another recipe'}`); return; }
+
+  if (!window.confirm(`Make this a General item?\n\n${oldSku}  \u2192  ${newSku}\n\nThe old LE code is kept in the notes: stock already labelled with it still has to be findable.`)) return;
+
+  const notesEl = document.getElementById('generalNotes');
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (oldSku) {
+    notesEl.value = `${notesEl.value ? notesEl.value + '\n' : ''}[${stamp}] Promoted from limited edition ${oldSku}`;
+  }
+  document.getElementById('recipeScope').value = 'General';
+  document.getElementById('skuBase').value = newSku;
+  markUnsaved();
+  onScopeChange();
+  renderScopeHint();
+  renderSkuSuggestion();
+  updateFinalizeGate();
+  renderPromoteButton();
+  showToast('Now General \u2014 save to keep it');
+}
+
+function renderPromoteButton() {
+  const btn = document.getElementById('promoteBtn');
+  if (!btn) return;
+  const kind = scopeKind((document.getElementById('recipeScope') || {}).value || '');
+  btn.style.display = kind === 'le' ? 'inline-block' : 'none';
+}
+
 function renderScopeHint() {
   const el = document.getElementById('scopeHint');
   if (!el) return;
   const scope = (document.getElementById('recipeScope') || {}).value || '';
   el.className = 'linked-state';
-  el.innerHTML = scope === 'Customer Reserved'
-      ? 'Wholesale line held for one vendor &mdash; SKU gains their code, e.g. <code>FFN_SUNSET_MMI</code>'
-    : scope === 'Retail Custom'
-      ? 'One-off for an individual &mdash; SKU gains <code>_RC</code> plus their initials, e.g. <code>FFN_SUNSET_RCJS</code>'
-    : scope === 'General'
-      ? 'Open stock, anyone can order it &mdash; SKU stays plain'
-      : '';
+  const kind = scopeKind(scope);
+  el.className = 'linked-state';
+  el.innerHTML =
+      kind === 'reserved' ? 'Held for one vendor &mdash; SKU gains their code, e.g. <code>FFN_SUNSET_MMI</code>'
+    : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_RC</code> plus their initials, e.g. <code>FFN_SUNSET_RCJS</code>'
+    : kind === 'le'       ? 'Cannot be remade &mdash; kept for research and hidden from general lists. SKU gains <code>_LE_</code> plus a number, e.g. <code>FFN_SUNSET_LE_0472</code>'
+    : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
+    : '';
 }
 
 function renderLinkedCustomerState() {
@@ -1167,11 +1256,15 @@ function computeSuggestedSku() {
   const fc = FIBER_NAME_TO_CODE[fiberType] || 'GEN';
   const namePart = slugifyForSku(name) || 'UNNAMED';
   let sku = `${fc}_${namePart}`;
-  if (/reserv/i.test(scope) && vendor) {
-  sku += `_${vendor}`;
-  } else if (scope === 'Retail Custom') {
-  const initials = getLinkedCustomerInitials();
-  if (initials) sku += `_RC${initials}`;
+  const kind = scopeKind(scope);
+  if (kind === 'reserved' && vendor) {
+    sku += `_${vendor}`;
+  } else if (kind === 'oneoff') {
+    const initials = getLinkedCustomerInitials();
+    if (initials) sku += `_RC${initials}`;
+  } else if (kind === 'le') {
+    // Keep the number already on the recipe; only invent one for a new LE.
+    sku += `_LE_${currentLeNumber() || nextLeNumber()}`;
   }
   return sku;
 }
@@ -1308,6 +1401,7 @@ async function loadRecipe(record) {
   onScopeChange();
   renderLinkedCustomerState();
   renderScopeHint();
+  renderPromoteButton();
   renderReviewBanner();
   const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
@@ -1599,7 +1693,7 @@ function finalizeIssues() {
 
   // Scope decides part of the SKU, so an incomplete scope means a wrong SKU.
   if (/reserv/i.test(scope) && !vendor) out.push('a vendor in Reserved For');
-  if (scope === 'Retail Custom' && !linked) out.push('a linked customer (Retail Custom uses their initials)');
+  if (scopeKind(scope) === 'oneoff' && !linked) out.push('a linked customer (a one-off uses their initials)');
 
   return out;
 }
