@@ -78,6 +78,11 @@
 
   .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 9px; }
   .field-wrap { display: flex; flex-direction: column; gap: 4px; }
+  .linked-state { font-size: 10.5px; color: #8B7D72; margin-top: 3px; }
+  .linked-state.on { color: var(--teal); }
+  .linked-state.warn { color: var(--accent); }
+  .linked-state code { font-family: 'DM Mono', monospace; font-size: 10px;
+    background: var(--warm); border-radius: 3px; padding: 0 3px; }
   .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .field-input, .field-select, .field-textarea {
     padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
@@ -249,16 +254,17 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Recipe Scope</span>
-        <select class="field-select" id="recipeScope" onchange="markUnsaved(); onScopeChange(); renderSkuSuggestion();">
+        <select class="field-select" id="recipeScope" onchange="markUnsaved(); onScopeChange(); renderSkuSuggestion(); renderScopeHint();">
           <option value="">—</option>
           <option>General</option>
           <option>Customer Reserved</option>
           <option>Retail Custom</option>
         </select>
       </div>
+      <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
         <span class="field-label">Reserved For</span>
-        <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor();">
+        <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor(); renderLinkedCustomerState();">
           <option value="">— pick vendor —</option>
         </select>
       </div>
@@ -273,9 +279,10 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Linked Customer (optional)</span>
-        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner(); renderSkuSuggestion();">
+        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner(); renderSkuSuggestion(); renderLinkedCustomerState();">
           <option value="">— none —</option>
         </select>
+        <div class="linked-state" id="linkedCustomerState"></div>
       </div>
       <div class="field-wrap wide" style="position:relative;">
         <span class="field-label">Linked Invoice Item (optional — for one-off customs)</span>
@@ -427,7 +434,7 @@ let dilutionLabelOverride = new Map();   // clientKey -> true | false
 // part in four. Anything unparseable returns null and is left at full strength
 // rather than guessed at.
 function dilutionStrength(raw) {
-  const s = foldAccents(String(raw || '')).trim().toLowerCase();
+  const s = String(raw || '').trim().toLowerCase();
   if (!s) return null;
   if (/^(full|stock|neat|undiluted|straight)$/.test(s)) return 1;
   if (/^half$/.test(s)) return 0.5;
@@ -651,24 +658,8 @@ function toggleSection(id) {
   chevron.classList.toggle('collapsed');
 }
 
-/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
-   normalize() strips anything outside a-z0-9, which DELETES accented letters
-   rather than folding them: "Pathétique" became "pathtique" while the file
-   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
-   reported nothing found. NFD splits a letter from its diacritic so the
-   diacritic can be dropped and the base letter kept; the map handles the
-   characters that have no decomposition (ß, ø, æ and friends).
-   Display is untouched — this only ever builds comparison keys. */
-const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
-  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
-function foldAccents(s) {
-  return String(s == null ? '' : s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
-}
-
 function normalize(s) {
-  return foldAccents((s || '').toString()).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function showToast(msg) {
@@ -947,6 +938,48 @@ function unlinkOrderLine() {
   markUnsaved();
 }
 
+/* What the recipe is actually linked to, stated in words.
+   The select showed it, but a disabled greyed select is easy to read as empty —
+   and it IS disabled whenever scope is Customer Reserved, because the link then
+   follows the vendor rather than being set directly. Without a read-out there
+   was no way to tell "no customer" from "a customer you cannot change here". */
+// Scope only ever shows its effect in the generated SKU, which is easy to miss.
+function renderScopeHint() {
+  const el = document.getElementById('scopeHint');
+  if (!el) return;
+  const scope = (document.getElementById('recipeScope') || {}).value || '';
+  el.className = 'linked-state';
+  el.innerHTML = scope === 'Customer Reserved'
+      ? 'Wholesale line held for one vendor &mdash; SKU gains their code, e.g. <code>FFN_SUNSET_MMI</code>'
+    : scope === 'Retail Custom'
+      ? 'One-off for an individual &mdash; SKU gains <code>_RC</code> plus their initials, e.g. <code>FFN_SUNSET_RCJS</code>'
+    : scope === 'General'
+      ? 'Open stock, anyone can order it &mdash; SKU stays plain'
+      : '';
+}
+
+function renderLinkedCustomerState() {
+  const el = document.getElementById('linkedCustomerState');
+  if (!el) return;
+  const sel = document.getElementById('linkedCustomer');
+  const scope = (document.getElementById('recipeScope') || {}).value || '';
+  const isReserved = /reserv/i.test(scope);
+  const opt = sel.options[sel.selectedIndex];
+  const name = (opt && opt.value) ? opt.textContent : '';
+
+  if (name) {
+    el.className = 'linked-state on';
+    el.innerHTML = `Linked to <strong>${esc(name)}</strong>`
+      + (isReserved ? ' &mdash; set by <em>Reserved For</em>, change it there' : '');
+  } else if (isReserved) {
+    el.className = 'linked-state warn';
+    el.textContent = 'No customer yet \u2014 pick a vendor in Reserved For';
+  } else {
+    el.className = 'linked-state';
+    el.textContent = 'Not linked to a customer';
+  }
+}
+
 function renderLinkedOrderBanner() {
   const wrap = document.getElementById('linkedOrderLineBanner');
   if (!selectedOrderLine) { wrap.innerHTML = ''; return; }
@@ -998,6 +1031,7 @@ function onScopeChange() {
   const linkedSelect = document.getElementById('linkedCustomer');
   linkedSelect.disabled = isReserved;
   linkedSelect.title = isReserved ? 'Following the vendor picked in Reserved For — change that instead' : '';
+  renderLinkedCustomerState();
 }
 
 function slugifyForSku(name) {
@@ -1162,6 +1196,8 @@ async function loadRecipe(record) {
   const linkedCustomerId = await resolveLinkedCustomerId(record);
   setLinkedCustomerValue(linkedCustomerId);
   onScopeChange();
+  renderLinkedCustomerState();
+  renderScopeHint();
   const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();
