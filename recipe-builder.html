@@ -1107,12 +1107,30 @@ const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneof
    rather than quietly asserting something nobody checked.
 
    Needs a Year_Made column (Text) on Recipes. */
+/* A year out of whatever Grist hands over.
+   The same column arrives three ways: a Date object from onRecord, epoch
+   seconds from fetchTable, and occasionally milliseconds. Multiplying a Date by
+   1000 put the placeholder in the year 58501, which is the kind of wrong that
+   is only obvious once someone sees it. Anything outside a plausible range is
+   treated as unreadable rather than displayed. */
+function yearFromAnything(v) {
+  if (!v) return '';
+  if (v instanceof Date) {
+    const y = v.getFullYear();
+    return (y > 1990 && y < 2100) ? String(y) : '';
+  }
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return '';
+  const ms = n > 1e11 ? n : n * 1000;     // already milliseconds, or seconds
+  const y = new Date(ms).getFullYear();
+  return (y > 1990 && y < 2100) ? String(y) : '';
+}
+
 async function setYearMade(record) {
   const el = document.getElementById('yearMade');
   if (!el) return;
 
-  const created = Number(rowField(record, ['Created_Date'])) || 0;
-  el.placeholder = created ? String(new Date(created * 1000).getFullYear()) : '';
+  el.placeholder = yearFromAnything(rowField(record, ['Created_Date']));
 
   let stored = rowField(record, ['Year_Made', 'Year']);
 
@@ -1121,7 +1139,11 @@ async function setYearMade(record) {
   // correctly and then reads back empty until the whole page is reloaded. Same
   // problem resolveLinkedCustomerId() already works around. Read it straight
   // from the table when the record does not have it.
-  if (stored === undefined || stored === null) {
+  // Falls back on ANY empty value, not just a missing key. Grist hands the
+  // column over with a stale empty string once it knows the column exists but
+  // has not refreshed its contents — which passed an undefined/null test and
+  // wrote the blank straight into the box.
+  if (!stored) {
     try {
       const recs = await grist.docApi.fetchTable('Recipes');
       const col = findColumn(recs, ['Year_Made', 'Year']);
