@@ -81,6 +81,14 @@
   .linked-state { font-size: 10.5px; color: #8B7D72; margin-top: 3px; }
   .linked-state.on { color: var(--teal); }
   .linked-state.warn { color: var(--accent); }
+  .review-banner { border: 1px solid var(--accent); background: var(--accent-light);
+    border-radius: 6px; padding: 7px 10px; margin-top: 4px; }
+  .review-hd { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 700;
+    color: var(--accent); margin-bottom: 4px; }
+  .review-clear { margin-left: auto; font-size: 10.5px; padding: 3px 9px; border-radius: 4px;
+    border: 1px solid var(--accent); background: #fff; color: var(--accent); cursor: pointer; }
+  .review-line { font-size: 11px; color: var(--ink); padding: 1px 0; }
+  #flagBtn.flagged { background: var(--accent); color: #fff; border-color: var(--accent); }
   .linked-state code { font-family: 'DM Mono', monospace; font-size: 10px;
     background: var(--warm); border-radius: 3px; padding: 0 3px; }
   .field-label { font-size: 10px; color: #8B7D72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
@@ -225,6 +233,7 @@
       <span id="createdDateLabel" style="font-size:10px; color:#8B7D72; white-space:nowrap;"></span>
       <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
+      <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -263,6 +272,7 @@
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
       <div class="field-wrap wide"><div class="linked-state" id="finalizeNote"></div></div>
+      <div class="field-wrap wide"><div id="reviewBanner"></div></div>
       <div class="field-wrap" id="reservedForWrap" style="display:none">
         <span class="field-label">Reserved For</span>
         <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor(); renderLinkedCustomerState();">
@@ -695,6 +705,9 @@ function vendorCodeFromExistingSku(skuBase) {
 }
 
 let currentRecipeId = null;
+// The record as Grist last handed it over. Kept so the review banner can read
+// its own fields back without a refetch.
+let currentRecord = null;
 let allVendors = [];   // {name, code}
 let customerNameById = {};   // id -> name, for the Linked Customer select + record load
 let customerIdByName = {};   // name -> id, fallback when a ref arrives as a display name
@@ -945,6 +958,101 @@ function unlinkOrderLine() {
    follows the vendor rather than being set directly. Without a read-out there
    was no way to tell "no customer" from "a customer you cannot change here". */
 // Scope only ever shows its effect in the generated SKU, which is easy to miss.
+/* Flagging a recipe for correction.
+   Kept separate from Status on purpose. Status is a lifecycle — Researching,
+   Working, Active — and an Active recipe can be wrong without ceasing to be the
+   one in use: it is still what orders reference and what the pull sheet prints.
+   Folding "needs a fix" into Status would mean either pulling a live recipe out
+   of production to report a typo, or losing the report.
+
+   So: a flag alongside Status, and an appended log rather than a single field,
+   because the second person to notice something should not overwrite the first.
+
+   Needs two columns on Recipes: Needs_Review (Toggle) and Review_Note (Text).
+   Without them the button says so instead of failing silently. */
+function reviewCols(record) {
+  return {
+    flag: findRecordField(record, ['Needs_Review', 'Flagged', 'Needs_Fix']),
+    note: findRecordField(record, ['Review_Note', 'Review_Notes', 'Flag_Note']),
+  };
+}
+
+// rowField() reads values; this reports which NAME matched, so writes go to the
+// column that actually exists rather than a guessed one.
+function findRecordField(record, names) {
+  const keys = Object.keys(record || {});
+  for (const n of names) {
+    const hit = keys.find(k => normalize(k) === normalize(n));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function flagForReview() {
+  if (!currentRecipeId) { showToast('Open a recipe first'); return; }
+  const cols = reviewCols(currentRecord || {});
+  if (!cols.flag && !cols.note) {
+    showToast('Add Needs_Review (Toggle) and Review_Note (Text) to Recipes first');
+    return;
+  }
+  const what = (window.prompt('What is wrong? (include your initials)', '') || '').trim();
+  if (!what) return;
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const prev = cols.note ? (rowField(currentRecord, [cols.note]) || '') : '';
+  const fields = {};
+  if (cols.flag) fields[cols.flag] = true;
+  // Appended, never replaced — two people can flag the same recipe a week apart
+  // and both reports survive.
+  if (cols.note) fields[cols.note] = `${prev ? prev + '\n' : ''}[${stamp}] ${what}`;
+
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId, fields]]);
+    if (currentRecord) {
+      if (cols.flag) currentRecord[cols.flag] = true;
+      if (cols.note) currentRecord[cols.note] = fields[cols.note];
+    }
+    renderReviewBanner();
+    showToast('Flagged for review');
+  } catch (e) {
+    console.error('Could not flag:', e);
+    showToast('Could not flag \u2014 see console');
+  }
+}
+
+async function clearReviewFlag() {
+  if (!currentRecipeId) return;
+  const cols = reviewCols(currentRecord || {});
+  if (!cols.flag) return;
+  if (!window.confirm('Mark this recipe as fixed?\n\nThe notes stay as a record; only the flag clears.')) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId, { [cols.flag]: false }]]);
+    if (currentRecord) currentRecord[cols.flag] = false;
+    renderReviewBanner();
+    showToast('Flag cleared');
+  } catch (e) {
+    console.error('Could not clear flag:', e);
+  }
+}
+
+function renderReviewBanner() {
+  const el = document.getElementById('reviewBanner');
+  if (!el) return;
+  const cols = reviewCols(currentRecord || {});
+  const flagged = cols.flag ? !!rowField(currentRecord, [cols.flag]) : false;
+  const notes = cols.note ? (rowField(currentRecord, [cols.note]) || '') : '';
+  const btn = document.getElementById('flagBtn');
+  if (btn) btn.classList.toggle('flagged', flagged);
+
+  if (!flagged) { el.innerHTML = ''; return; }
+  const lines = String(notes).split('\n').filter(Boolean).slice(-4).reverse();
+  el.innerHTML = `<div class="review-banner">
+    <div class="review-hd">&#9873; Flagged for review
+      <button class="review-clear" onclick="clearReviewFlag()">Mark fixed</button></div>
+    ${lines.map(l => `<div class="review-line">${esc(l)}</div>`).join('') || '<div class="review-line">No detail recorded.</div>'}
+  </div>`;
+}
+
 function renderScopeHint() {
   const el = document.getElementById('scopeHint');
   if (!el) return;
@@ -1141,6 +1249,7 @@ async function loadDyesList() {
 }
 
 async function loadRecipe(record) {
+  currentRecord = record;
   currentRecipeId = record.id;
 
   document.getElementById('emptyState').style.display = 'none';
@@ -1199,6 +1308,7 @@ async function loadRecipe(record) {
   onScopeChange();
   renderLinkedCustomerState();
   renderScopeHint();
+  renderReviewBanner();
   const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
   renderSkuSuggestion();

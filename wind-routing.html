@@ -162,6 +162,23 @@
   .lot-line input { width:56px; padding:4px 6px; border:1px solid var(--rule); border-radius:4px; font-size:13px; text-align:center; }
   .mix-warn { background:#FBECC9; color:#8B5A2A; font-size:10px; border-radius:4px; padding:5px 7px; margin-top:6px; }
   .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
+  /* Flagging sits below the confirm button on purpose — it is the exception,
+     and putting it above would make the ordinary action feel conditional. */
+  .flag-open { margin-top:8px; background:none; border:1px dashed var(--rule); border-radius:6px;
+    padding:7px 11px; font-size:11.5px; color:#8B7D72; cursor:pointer; width:100%; }
+  .flag-open:hover { border-color:var(--accent, #8B3A2A); color:var(--accent, #8B3A2A); }
+  .flag-panel { margin-top:8px; border:1px solid var(--warn-text); border-radius:6px;
+    background:var(--warn-bg); padding:8px 10px; }
+  .flag-cap { font-size:12px; font-weight:700; color:var(--warn-text); margin-bottom:6px; }
+  .flag-chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
+  .flag-chip { min-height:34px; padding:5px 10px; border:1px solid var(--rule); border-radius:16px;
+    background:#fff; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
+  .flag-chip.on { background:var(--warn-text); border-color:var(--warn-text); color:#fff; font-weight:600; }
+  .flag-more, .flag-who { padding:7px 9px; border:1px solid var(--rule); border-radius:5px;
+    font-size:12px; font-family:'Inter',sans-serif; }
+  .flag-more { width:100%; margin-bottom:7px; }
+  .flag-foot { display:flex; gap:6px; align-items:center; }
+  .flag-who { flex:1; min-width:0; }
   .st-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:7px 9px;
     margin-bottom:8px; border:1px dashed var(--warn-text); border-radius:6px;
     background:var(--warn-bg); font-size:12px; color:var(--warn-text); }
@@ -1201,6 +1218,108 @@ function render() {
   if (S.selected != null) updateTally();
 }
 
+/* ── Flagging a recipe from the floor ─────────────────────────────────
+   The bench is where a recipe is proved wrong: the colour is off the standard,
+   two lots that should match do not, the thread keeps breaking. None of that
+   reaches the person who can fix it unless there is somewhere to put it while
+   the evidence is still in your hands.
+
+   Preset reasons rather than a text box. A blank field at a bench, in gloves,
+   mid-run, gets skipped — and when it does get filled in it says "weird", which
+   nobody can act on a week later. Tapping two chips takes a second and produces
+   something sortable. Free text stays available for the case the presets miss.
+
+   The flag goes on the RECIPE, because "this recipe seems off" recurs on every
+   future lot, but the lot number goes in the note so a one-off bad batch can
+   still be told apart from a bad recipe.
+
+   Needs Needs_Review (Toggle) and Review_Note (Text) on Recipes — the same two
+   columns recipe-builder.html uses. */
+const FLAG_REASONS = [
+  'colour off standard',
+  'lots do not match',
+  'thread breaking',
+  'amounts look wrong',
+  'label / SKU wrong',
+  'takes far longer than stated',
+];
+
+let flagState = null;   // { lineId, reasons:Set, who }
+
+function openFlag(lineId) {
+  flagState = { lineId, reasons: new Set(), who: '' };
+  render();
+}
+function closeFlag() { flagState = null; render(); }
+
+function toggleFlagReason(r) {
+  if (!flagState) return;
+  if (flagState.reasons.has(r)) flagState.reasons.delete(r); else flagState.reasons.add(r);
+  render();
+}
+
+function flagPanelHtml(l) {
+  if (!flagState || flagState.lineId !== l.lineId) {
+    return `<button class="flag-open" onclick="openFlag(${l.lineId})" title="Something is wrong with this recipe">&#9873; Flag recipe</button>`;
+  }
+  return `<div class="flag-panel">
+    <div class="flag-cap">What is wrong with ${esc(l.recipeName)}?</div>
+    <div class="flag-chips">
+      ${FLAG_REASONS.map(r => `<button class="flag-chip${flagState.reasons.has(r) ? ' on' : ''}"
+        onclick="toggleFlagReason('${esc(r)}')">${esc(r)}</button>`).join('')}
+    </div>
+    <input class="flag-more" id="flagMore" placeholder="anything else (optional)" value="${esc(flagState.more || '')}"
+      oninput="flagState.more = this.value">
+    <div class="flag-foot">
+      <input class="flag-who" id="flagWho" placeholder="your initials" value="${esc(flagState.who || '')}"
+        oninput="flagState.who = this.value">
+      <button class="glove ghost" onclick="closeFlag()">Cancel</button>
+      <button class="glove sort" onclick="sendFlag(${l.lineId})">Send to control</button>
+    </div>
+  </div>`;
+}
+
+async function sendFlag(lineId) {
+  const l = S.lines.find(x => x.lineId === lineId);
+  if (!l || !flagState) return;
+  const reasons = Array.from(flagState.reasons);
+  const more = (flagState.more || '').trim();
+  const who = (flagState.who || '').trim();
+  if (!reasons.length && !more) { showToast('Pick a reason, or type one'); return; }
+  if (!who) { showToast('Add your initials'); return; }
+
+  try {
+    const recT = await grist.docApi.fetchTable('Recipes');
+    const flagCol = findColumn(recT, ['Needs_Review', 'Flagged', 'Needs_Fix']);
+    const noteCol = findColumn(recT, ['Review_Note', 'Review_Notes', 'Flag_Note']);
+    if (!flagCol && !noteCol) {
+      showToast('Add Needs_Review and Review_Note to Recipes first');
+      return;
+    }
+    const idx = (recT.id || []).indexOf(l.recipeId);
+    const prev = (noteCol && idx !== -1) ? (columnAsArray(recT, noteCol)[idx] || '') : '';
+
+    // Lot numbers drawn from today, so control can tell a bad batch from a bad
+    // recipe without asking.
+    const lots = l.lots.filter(x => (S.draw[x.lotId] || 0) > 0).map(x => x.lotNumber);
+    const bits = [reasons.join(', '), more, lots.length ? `lots: ${lots.join(', ')}` : '']
+      .filter(Boolean).join(' \u2014 ');
+    const stamp = new Date().toISOString().slice(0, 10);
+    const line = `[${stamp}] winding: ${bits} \u2014 ${who}`;
+
+    const fields = {};
+    if (flagCol) fields[flagCol] = true;
+    if (noteCol) fields[noteCol] = `${prev ? prev + '\n' : ''}${line}`;
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', l.recipeId, fields]]);
+    flagState = null;
+    showToast('Flagged \u2014 control will see it on the recipe');
+    await loadEverything();
+  } catch (e) {
+    console.error('Could not flag recipe:', e);
+    showToast('Could not flag \u2014 see console');
+  }
+}
+
 function fillPanel(l) {
   const isHand = /hand/i.test(l.method);
   const lotsWithSpools = l.lots.filter(lot => (lot.freshDry + lot.stock) > 0);
@@ -1239,6 +1358,7 @@ function fillPanel(l) {
       ${stockHtml}
       <div id="tally" class="tally ok"></div>
       <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; bag for ${esc(l.customerName || 'order')}</button>
+      ${flagPanelHtml(l)}
     </div>`;
 }
 
