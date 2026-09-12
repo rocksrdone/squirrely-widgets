@@ -1068,6 +1068,40 @@ function renderReviewBanner() {
    Matched loosely because the existing data is not consistent: 12 recipes say
    "Custom Retail", 2 say "Retail Custom", and the dropdown only ever offered
    one of them — so those 12 have been silently missing their SKU suffix. */
+/* Putting a stored scope into the dropdown.
+   Assigning a value the <select> does not contain fails silently and leaves it
+   blank — which is what happened to the 12 recipes stored as "Custom Retail"
+   after the options were renamed. A blank scope then produced a SKU with no
+   suffix at all, so the widget looked like it had stopped applying the new
+   scheme when it had simply lost the scope.
+
+   Legacy spellings are mapped onto the option that means the same thing.
+   Anything genuinely unrecognised — "College/University" — is added as an
+   option rather than discarded, because silently reassigning someone's data is
+   worse than showing a value the list did not expect. */
+const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off', le: 'Limited Edition' };
+
+function setScopeValue(raw) {
+  const sel = document.getElementById('recipeScope');
+  if (!sel) return;
+  const stored = String(raw || '').trim();
+  if (!stored) { sel.value = ''; return; }
+
+  const canonical = SCOPE_OPTIONS[scopeKind(stored)];
+  if (canonical) {
+    sel.value = canonical;
+    // A legacy spelling is migrated on the next save rather than left to rot.
+    if (canonical !== stored) markUnsaved();
+    return;
+  }
+  if (!Array.from(sel.options).some(o => o.value === stored)) {
+    const opt = document.createElement('option');
+    opt.value = stored; opt.textContent = stored;
+    sel.appendChild(opt);
+  }
+  sel.value = stored;
+}
+
 function scopeKind(scope) {
   const t = normalize(scope || '');
   if (!t) return '';
@@ -1399,7 +1433,7 @@ async function loadRecipe(record) {
 
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
-  document.getElementById('recipeScope').value = rowField(record, ['Recipe_Scope']) || '';
+  setScopeValue(rowField(record, ['Recipe_Scope']) || '');
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
   document.getElementById('layoutDescription').value = rowField(record, ['Layout_Description']) || '';
