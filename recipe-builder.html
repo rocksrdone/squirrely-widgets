@@ -1141,15 +1141,6 @@ function nextLeCode() {
 
 // Reads a code already on the recipe. Accepts the old flat form too, so an
 // existing LE keeps its number instead of being silently renumbered.
-// An initials tag already on the SKU, in either form. Kept so an existing
-// one-off is not silently renamed when the recipe is reopened.
-function currentOneOffTag() {
-  const sku = document.getElementById('skuBase').value || '';
-  const sep = /_CU_([A-Z]{1,4})\b/i.exec(sku);
-  if (sep) return `_CU_${sep[1].toUpperCase()}`;
-  const old = /_RC([A-Z]{2,4})\b/i.exec(sku);
-  return old ? `_RC${old[1].toUpperCase()}` : '';
-}
 
 function currentLeNumber() {
   const sku = document.getElementById('skuBase').value || '';
@@ -1212,7 +1203,7 @@ function renderScopeHint() {
   el.className = 'linked-state';
   el.innerHTML =
       kind === 'reserved' ? 'Held for one vendor &mdash; SKU gains their code, e.g. <code>FFN_SUNSET_MMI</code>'
-    : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_CU_</code> plus their initials, e.g. <code>FFN_SUNSET_CU_JS</code>'
+    : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_CU_</code> plus their initials, e.g. <code>FFN_SUNSET_CU_KL</code>'
     : kind === 'le'       ? `Cannot be remade &mdash; kept for research and hidden from general lists. SKU is dated, e.g. <code>FFN_SUNSET_LE_${leYearMonth()}_01</code>`
     : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
     : '';
@@ -1322,17 +1313,13 @@ function computeSuggestedSku() {
   if (kind === 'reserved' && vendor) {
     sku += `_${vendor}`;
   } else if (kind === 'oneoff') {
-    // _CU_JS, not _RCJS. The old form ran the tag into the initials so neither
+    // _CU_KL, not _RCKL. The old form ran the tag into the initials so neither
     // could be read back out, and "RC" stood for Retail Custom — a scope name
     // that no longer exists. Underscore-separated to match _LE_, and a distinct
-    // tag so a one-off can never be mistaken for a vendor code: _MMI is a
-    // reseller, _CU_JS is a person.
-    const existing = currentOneOffTag();
-    if (existing) { sku += existing; }
-    else {
-      const initials = getLinkedCustomerInitials();
-      if (initials) sku += `_CU_${initials}`;
-    }
+    // tag so a one-off is never mistaken for a vendor code: _MMI is a reseller,
+    // _CU_KL is a person. Initials come from the linked customer's name.
+    const initials = getLinkedCustomerInitials();
+    if (initials) sku += `_CU_${initials}`;
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
     sku += `_LE_${currentLeNumber() || nextLeCode()}`;
