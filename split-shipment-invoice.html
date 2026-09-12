@@ -402,6 +402,8 @@ tr.fully-shipped td { opacity: .5; }
   <div class="lookup-row">
     <input id="orderNumberInput" placeholder="Order number — SV#1083, 1083, or a draft like D14">
     <button class="btn" onclick="lookupOrder()" id="lookupBtn">Look Up Order</button>
+    <button class="btn secondary" onclick="mergeAnotherOrder()" id="mergeBtn" style="display:none;"
+      title="Add a second order from the same customer to this invoice">+ Merge another order</button>
     <button class="btn secondary" onclick="browseRecentOrders()" id="browseBtn">Browse Recent Orders</button>
   </div>
   <div class="hint">Draft orders are numbered separately from real orders. A draft shows as <strong>#D14</strong> in Shopify even when your storefront orders read SV#1083 — type the D number.</div>
@@ -428,6 +430,7 @@ tr.fully-shipped td { opacity: .5; }
       <button class="btn secondary" onclick="resetShipmentHistory()">Reset shipment history</button>
     </div>
     <div class="remaining-note" id="remainingNote"></div>
+    <div id="mergedNote"></div>
     <div id="discountNotice"></div>
   </div>
 </div>
@@ -807,6 +810,112 @@ function selectBrowsedOrder(orderNumber) {
   lookupOrder();
 }
 
+/* ------------------------------------------------- merging orders */
+/* Two orders from one customer, shipped together and split across boxes.
+   The widget was built around a single order, so merging happens by appending
+   the second order's lines to the first rather than by loading a combined
+   record — there is no such record in Shopify, and inventing one here would
+   put this widget's idea of the order out of step with everything else.
+
+   Every line keeps the order it came from. That matters at three points: the
+   invoice has to name both orders, the packing side has to know which order a
+   spool belongs to, and recording shipments writes back per order.
+
+   Guarded to one customer. Merging two different consignees would produce an
+   invoice whose ship-to matches neither. */
+let mergedOrders = [];   // [{ number, customer }]
+
+function customerKeyOf(st) {
+  return normalize([(st || {}).company, (st || {}).name].filter(Boolean).join(' '));
+}
+
+async function mergeAnotherOrder() {
+  const raw = (window.prompt('Order number to merge in (same customer):', '') || '').trim();
+  if (!raw) return;
+  const statusEl = document.getElementById('statusMsg');
+  const btn = document.getElementById('mergeBtn');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`${LOOKUP_WEBHOOK_URL}?order_number=${encodeURIComponent(raw)}`);
+    const data = await res.json();
+    if (!data.found) {
+      statusEl.textContent = `No order matching "${raw}".`;
+      statusEl.className = 'status-msg error';
+      return;
+    }
+
+    const incoming = customerKeyOf(data.ship_to);
+    const current = customerKeyOf(shipTo);
+    if (incoming && current && incoming !== current) {
+      statusEl.textContent = `That order is for ${(data.ship_to || {}).company || (data.ship_to || {}).name || 'someone else'} — only orders from the same customer can be merged.`;
+      statusEl.className = 'status-msg error';
+      return;
+    }
+
+    const num = String(data.order_number || raw).replace(/^#/, '');
+    if (mergedOrders.some(o => o.number === num)) {
+      statusEl.textContent = `Order ${num} is already on this invoice.`;
+      statusEl.className = 'status-msg error';
+      return;
+    }
+
+    const added = (data.line_items || []).map(li => ({
+      id: li.id,
+      sku: li.sku || '',
+      name: li.name || '',
+      orderedQty: Number(li.quantity) || 0,
+      unitPrice: parseFloat(li.price) || 0,
+      hs: document.getElementById('bulkHs') ? document.getElementById('bulkHs').value.trim() : '',
+      srcOrder: num,
+    }));
+    if (!added.length) {
+      statusEl.textContent = `Order ${num} has no line items.`;
+      statusEl.className = 'status-msg error';
+      return;
+    }
+
+    shopifyLines = shopifyLines.concat(added);
+    mergedOrders.push({ number: num, customer: (data.ship_to || {}).company || (data.ship_to || {}).name || '' });
+    renderMergedNote();
+    renderSourceOrders();
+    renderLines();
+    recalcTotals();
+    statusEl.textContent = `Merged order ${num} — ${added.length} line${added.length === 1 ? '' : 's'} added.`;
+    statusEl.className = 'status-msg ok';
+  } catch (e) {
+    console.error('Merge failed:', e);
+    statusEl.textContent = 'Could not load that order.';
+    statusEl.className = 'status-msg error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderMergedNote() {
+  const el = document.getElementById('mergedNote');
+  if (!el) return;
+  if (mergedOrders.length < 2) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="merged-bar">Invoicing <strong>${mergedOrders.length} orders</strong> together: `
+    + mergedOrders.map(o => esc(o.number)).join(' + ')
+    + ` <button class="merge-undo" onclick="unmergeLast()">remove ${esc(mergedOrders[mergedOrders.length - 1].number)}</button></div>`;
+}
+
+function renderSourceOrders() {
+  const el = document.getElementById('sourceOrderNumber');
+  if (el) el.value = mergedOrders.map(o => o.number).join(' + ');
+}
+
+function unmergeLast() {
+  if (mergedOrders.length < 2) return;
+  const last = mergedOrders.pop();
+  shopifyLines = shopifyLines.filter(li => li.srcOrder !== last.number);
+  renderMergedNote();
+  renderSourceOrders();
+  renderItems();
+  recalcTotals();
+}
+
 /* ------------------------------------------------------------------ lookup */
 
 async function lookupOrder() {
@@ -851,6 +960,12 @@ async function lookupOrder() {
     detectedShipments = data.shipments || [];
 
     baseInvoiceNumber = String(data.order_number || raw).replace(/^#/, '');
+    // Looking up an order starts a fresh invoice, so any previous merge goes
+    // with it — otherwise the last customer's lines ride along.
+    mergedOrders = [{ number: baseInvoiceNumber, customer: (data.ship_to || {}).company || (data.ship_to || {}).name || '' }];
+    shopifyLines.forEach(li => { li.srcOrder = baseInvoiceNumber; });
+    renderMergedNote();
+    document.getElementById('mergeBtn').style.display = '';
     document.getElementById('sourceOrderNumber').value = data.order_number || '';
     document.getElementById('currency').value = data.currency || 'USD';
     setInvoiceNumber(takeInvoiceNumber());
@@ -1071,6 +1186,10 @@ function renderDiscountNotice(data, appliedFields) {
 }
 
 function clearOrderScopedFields() {
+  mergedOrders = [];
+  const mb = document.getElementById('mergeBtn');
+  if (mb) mb.style.display = 'none';
+  renderMergedNote();
   ['toTaxId', 'toTaxId2', 'toPhone', 'grossWeight', 'netWeight', 'bulkHs'].forEach(id => {
     document.getElementById(id).value = '';
   });
@@ -1666,7 +1785,8 @@ function renderItems() {
     return `
     <tr class="zero-qty${remaining === 0 ? ' fully-shipped' : ''}" data-kind="shopify" data-idx="${i}">
       <td class="col-check"><input type="checkbox" aria-label="Include ${esc(li.name)}" ${remaining === 0 ? 'disabled' : ''}></td>
-      <td>${esc(li.name)}${li.sku ? ` <span style="color:#8B7D72">(${esc(li.sku)})</span>` : ''}</td>
+      <td>${esc(li.name)}${li.sku ? ` <span style="color:#8B7D72">(${esc(li.sku)})</span>` : ''}${
+        mergedOrders.length > 1 && li.srcOrder ? ` <span class="src-tag">${esc(li.srcOrder)}</span>` : ''}</td>
       <td class="col-hs"><input type="text" class="hs-input" value="${esc(li.hs)}" placeholder="—"></td>
       <td class="col-qty-ordered">${li.orderedQty}</td>
       <td class="col-qty-shipped">${already || '—'}</td>
