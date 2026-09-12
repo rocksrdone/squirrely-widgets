@@ -1107,14 +1107,31 @@ const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneof
    rather than quietly asserting something nobody checked.
 
    Needs a Year_Made column (Text) on Recipes. */
-function setYearMade(record) {
+async function setYearMade(record) {
   const el = document.getElementById('yearMade');
   if (!el) return;
-  const stored = rowField(record, ['Year_Made', 'Year']);
-  el.value = stored ? String(stored).trim() : '';
 
   const created = Number(rowField(record, ['Created_Date'])) || 0;
   el.placeholder = created ? String(new Date(created * 1000).getFullYear()) : '';
+
+  let stored = rowField(record, ['Year_Made', 'Year']);
+
+  // The record handed over by onRecord does not always carry a recently added
+  // column — Grist caches the widget's view of the schema, so a field saves
+  // correctly and then reads back empty until the whole page is reloaded. Same
+  // problem resolveLinkedCustomerId() already works around. Read it straight
+  // from the table when the record does not have it.
+  if (stored === undefined || stored === null) {
+    try {
+      const recs = await grist.docApi.fetchTable('Recipes');
+      const col = findColumn(recs, ['Year_Made', 'Year']);
+      const idx = (recs.id || []).indexOf(record.id);
+      if (col && idx !== -1) stored = columnAsArray(recs, col)[idx];
+    } catch (e) {
+      console.error('Year lookup fallback failed:', e);
+    }
+  }
+  el.value = stored ? String(stored).trim() : '';
 }
 
 function setScopeValue(raw) {
@@ -1542,7 +1559,7 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
-  setYearMade(record);
+  await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
   document.getElementById('layoutDescription').value = rowField(record, ['Layout_Description']) || '';
