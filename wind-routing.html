@@ -164,18 +164,20 @@
   .extra-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:7px; padding:5px 7px; background:var(--broken-bg); border-radius:5px; font-size:11px; color:var(--broken-text); }
   /* Flagging sits below the confirm button on purpose — it is the exception,
      and putting it above would make the ordinary action feel conditional. */
-  .flag-open { margin-top:8px; background:none; border:1px dashed var(--rule); border-radius:6px;
-    padding:7px 11px; font-size:11.5px; color:#8B7D72; cursor:pointer; width:100%; }
+  .flag-open { margin-top:8px; background:#fff; border:1px dashed var(--rule); border-radius:6px;
+    padding:7px 11px; font-size:11.5px; color:#6B5E52; cursor:pointer; width:100%; }
   .flag-open:hover { border-color:var(--accent, #8B3A2A); color:var(--accent, #8B3A2A); }
   .flag-panel { margin-top:8px; border:1px solid var(--warn-text); border-radius:6px;
     background:var(--warn-bg); padding:8px 10px; }
   .flag-cap { font-size:12px; font-weight:700; color:var(--warn-text); margin-bottom:6px; }
+  .flag-chips button { -webkit-appearance:none; appearance:none; }
   .flag-chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
   .flag-chip { min-height:34px; padding:5px 10px; border:1px solid var(--rule); border-radius:16px;
-    background:#fff; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif; }
+    background:#fff; color:var(--ink); font-size:11.5px; cursor:pointer;
+    font-family:'Inter',sans-serif; }
   .flag-chip.on { background:var(--warn-text); border-color:var(--warn-text); color:#fff; font-weight:600; }
   .flag-more, .flag-who { padding:7px 9px; border:1px solid var(--rule); border-radius:5px;
-    font-size:12px; font-family:'Inter',sans-serif; }
+    background:#fff; color:var(--ink); font-size:12px; font-family:'Inter',sans-serif; }
   .flag-more { width:100%; margin-bottom:7px; }
   .flag-foot { display:flex; gap:6px; align-items:center; }
   .flag-who { flex:1; min-width:0; }
@@ -1238,10 +1240,8 @@ function render() {
 const FLAG_REASONS = [
   'colour off standard',
   'lots do not match',
-  'thread breaking',
   'amounts look wrong',
   'label / SKU wrong',
-  'takes far longer than stated',
 ];
 
 let flagState = null;   // { lineId, reasons:Set, who }
