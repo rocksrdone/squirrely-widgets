@@ -222,6 +222,7 @@
   /* ── COLOR LAYOUT ── */
   /* A badge, not another line of text — it sits directly above the ring it is
      describing and has to survive being glanced at while both hands are busy. */
+  .meta-tag.tag-year { background: transparent; border: 1px solid var(--rule, #D4C9BC); color: #8B7D72; }
   .repeat-warn {
     display: inline-flex; align-items: center; gap: 7px;
     margin: 0 0 7px; padding: 5px 11px 5px 8px;
@@ -866,6 +867,9 @@ function renderLeft() {
     r.Dye_Method ? `<span class="meta-tag tag-method">${esc(r.Dye_Method)}</span>` : '',
     r.Fiber_Type ? `<span class="meta-tag tag-fiber">${r.Fiber_Type}</span>` : '',
     r.Recipe_Scope ? `<span class="meta-tag tag-scope">${esc(r.Recipe_Scope)}</span>` : '',
+    // Year the colourway was made. Reference rather than something to act on,
+    // so it sits quietly at the end of the meta row.
+    r.Year_Made ? `<span class="meta-tag tag-year">${esc(String(r.Year_Made).trim())}</span>` : '',
   ].join('');
 
   const dyeRows = comps.map(c => {

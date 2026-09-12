@@ -89,6 +89,7 @@
     border: 1px solid var(--accent); background: #fff; color: var(--accent); cursor: pointer; }
   .review-line { font-size: 11px; color: var(--ink); padding: 1px 0; }
   #flagBtn.flagged { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .year-wrap { max-width: 110px; }
   .repeat-warn {
     display: inline-flex; align-items: center; gap: 7px;
     margin-top: 4px; padding: 5px 11px 5px 8px;
@@ -270,6 +271,11 @@
           <option>Hand-Dye</option>
           <option>Kettle Dye</option>
         </select>
+      </div>
+      <div class="field-wrap year-wrap">
+        <span class="field-label">Year made</span>
+        <input class="field-input" id="yearMade" inputmode="numeric" maxlength="4"
+               placeholder="" oninput="markUnsaved()">
       </div>
       <div class="field-wrap">
         <span class="field-label">Recipe Scope</span>
@@ -1091,6 +1097,26 @@ function renderReviewBanner() {
    worse than showing a value the list did not expect. */
 const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off', le: 'Limited Edition' };
 
+/* Year the colourway was made.
+   Not derived from Created_Date: that records when the row appeared in Grist,
+   it is empty on 150 of 368 recipes, and a back-entered recipe would claim the
+   wrong year outright. Stored as text so Grist cannot render it "2,026".
+
+   The Created_Date year is offered as a PLACEHOLDER only — visible as a
+   suggestion, never saved unless typed, so an unanswered field stays empty
+   rather than quietly asserting something nobody checked.
+
+   Needs a Year_Made column (Text) on Recipes. */
+function setYearMade(record) {
+  const el = document.getElementById('yearMade');
+  if (!el) return;
+  const stored = rowField(record, ['Year_Made', 'Year']);
+  el.value = stored ? String(stored).trim() : '';
+
+  const created = Number(rowField(record, ['Created_Date'])) || 0;
+  el.placeholder = created ? String(new Date(created * 1000).getFullYear()) : '';
+}
+
 function setScopeValue(raw) {
   const sel = document.getElementById('recipeScope');
   if (!sel) return;
@@ -1516,6 +1542,7 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
+  setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
   document.getElementById('layoutDescription').value = rowField(record, ['Layout_Description']) || '';
@@ -1922,6 +1949,7 @@ async function saveRecipe() {
       Fiber_Type: document.getElementById('fiberType').value,
       Dye_Method: document.getElementById('dyeMethod').value,
       Recipe_Scope: document.getElementById('recipeScope').value,
+      Year_Made: document.getElementById('yearMade').value.trim(),
       SKU_Base: document.getElementById('skuBase').value,
       Shopify_URL: document.getElementById('shopifyProductUrl').value.trim(),
       Notes: document.getElementById('generalNotes').value,
