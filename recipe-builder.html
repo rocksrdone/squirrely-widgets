@@ -245,6 +245,7 @@
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
       <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Turn this limited edition into a regular item">↑ Make General</button>
+      <button class="btn" id="duplicateBtn" onclick="duplicateRecipe()" title="Copy this recipe, its dyes and its layout into a new draft">⧉ Duplicate</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -1975,6 +1976,188 @@ async function createNewRecipe() {
   }
 }
 
+// If we don't already know the exact Dye row (e.g. the name was typed by hand
+// rather than picked from the suggestion list), resolve it — matching an
+// existing Dye if the name matches one, or creating a catalog entry if it is
+// genuinely new. Writing raw text into this field doesn't work since Dye_Name
+// on Recipe_Dye_Components is a reference, not text. The row ID is what gets
+// stored; the name is never the key.
+async function resolveDyeIdForRow(row) {
+  if (row.dyeId) return row.dyeId;
+  const typedName = (row.Dye_Name || '').trim();
+  if (!typedName) return null;
+
+  const existing = allDyes.find(d => normalize(d.name) === normalize(typedName));
+  if (existing) return existing.id;
+
+  try {
+    const result = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Dyes', null, { Dye_Name: typedName }]
+    ]);
+    const newId = result.retValues[0];
+    allDyes.push({ id: newId, name: typedName, brand: '', powder: '', water: '' });
+    return newId;
+  } catch (e) {
+    console.error('Failed to auto-create new dye:', typedName, e);
+    return null;
+  }
+}
+
+/* Duplicating a recipe.
+   The usual reason is a kettle run that came out wrong and is worth keeping as
+   a limited edition: the dyes, the wind layout and the notes are all still
+   right, only the colour is different. Retyping a nine-dye component list to
+   record that is how LEs stop getting recorded at all.
+
+   Copies the recipe fields, every dye component and the ring layout. Does NOT
+   copy: SKU_Base and Shopify_URL (the copy needs its own — and for an LE the
+   suggestion builds a fresh dated code), the linked order line (the copy was
+   not what that order asked for), the process and finished photos (they are of
+   the batch that actually ran), or any review flag. Status starts at
+   Researching so the finalize gate applies to it like any other new draft. */
+async function duplicateRecipe() {
+  if (!currentRecipeId) return;
+
+  if (unsavedChanges && !confirm(
+    'You have unsaved edits.\n\nThe copy will include them, but this recipe itself still won\'t be saved. Continue?'
+  )) return;
+
+  const sourceId = currentRecipeId;
+  const sourceName = document.getElementById('nameInput').value.trim() || 'Untitled Draft';
+  const newName = (window.prompt('Name for the copy', `${sourceName} LE`) || '').trim();
+  if (!newName) return;
+
+  const btn = document.getElementById('duplicateBtn');
+  btn.disabled = true;
+  btn.textContent = 'Copying...';
+
+  try {
+    const fields = {
+      Recipe_Name: newName,
+      Status: 'Researching',
+      Created_Date: Math.floor(Date.now() / 1000),
+      Year_Made: String(new Date().getFullYear()),
+      Fiber_Type: document.getElementById('fiberType').value,
+      Dye_Method: document.getElementById('dyeMethod').value,
+      Recipe_Scope: document.getElementById('recipeScope').value,
+      Linked_Customer: document.getElementById('linkedCustomer').value
+        ? Number(document.getElementById('linkedCustomer').value) : null,
+      Notes: document.getElementById('generalNotes').value,
+      Draft_Notes: document.getElementById('draftNotes').value,
+      Layout_Description: document.getElementById('layoutDescription').value,
+      Photo_Inspiration: document.getElementById('photoInsp').value,
+      Photo_Inspiration_Note: document.getElementById('noteInsp').value,
+      Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
+    };
+
+    const result = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Recipes', null, fields]
+    ]);
+    const newId = result && result.retValues && result.retValues[0];
+    if (!newId) throw new Error('No row ID came back from AddRecord');
+
+    // Dye components come from what is on screen, so unsaved edits carry over.
+    const dyeActions = [];
+    for (let i = 0; i < dyeRows.length; i++) {
+      const row = dyeRows[i];
+      const resolvedDyeId = await resolveDyeIdForRow(row);
+      dyeActions.push(['AddRecord', 'Recipe_Dye_Components', null, {
+        Recipe: newId,
+        Dye_Name: resolvedDyeId,
+        Dye_Full: row.Dye_Full || row.Dye_Name,
+        'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
+        'Std_Water_mL_': row.water === '' ? null : Number(row.water),
+        Dilution: row.dilution,
+        Is_Powder: !!row.isPowder,
+        Technique: row.technique,
+        Application_Notes: row.notes,
+        Step_Number: i + 1,
+      }]);
+    }
+    if (dyeActions.length) await grist.docApi.applyUserActions(dyeActions);
+
+    const segCount = await copyLayoutSegments(sourceId, newId);
+
+    // Provenance, best effort — an LE is far easier to trace a year later if
+    // the copy says where it came from.
+    try {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Recipe_Change_Log', null, {
+          Recipe: newId,
+          Change_Date: Math.floor(Date.now() / 1000),
+          Change_Note: `Duplicated from "${sourceName}" (recipe #${sourceId}).`,
+        }]
+      ]);
+    } catch (e) {
+      console.error('Could not log duplicate provenance:', e);
+    }
+
+    const parts = [`${dyeActions.length} dye${dyeActions.length === 1 ? '' : 's'}`];
+    if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
+    if (segCount === -1) parts.push('layout NOT copied');
+    showToast(`Copied ${parts.join(', ')} \u2713 \u2014 set the scope and SKU`);
+    try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
+  } catch (e) {
+    console.error('Failed to duplicate recipe:', e);
+    showToast('Duplicate failed \u2014 see console');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '\u29c9 Duplicate';
+  }
+}
+
+/* Copying the ring layout.
+   Column-by-column rather than a fixed field list, so a column added in the
+   layout designer later comes across without this needing an edit. Formula
+   columns are skipped: Grist rejects the whole action if one is written to,
+   which is the same trap getSegmentSchema() exists for over there.
+   Returns the number of segments copied, 0 for none, -1 if it failed. */
+async function copyLayoutSegments(sourceId, newId) {
+  const T = 'Recipe_Layout_Segments';
+  try {
+    const table = await grist.docApi.fetchTable(T);
+    const recipeCol = findColumn(table, ['Recipe']);
+    if (!recipeCol) return 0;
+
+    const writable = new Set(Object.keys(table).filter(k => k !== 'id' && k !== 'manualSort'));
+    try {
+      const tables = await grist.docApi.fetchTable('_grist_Tables');
+      const tIdx = (tables.tableId || []).indexOf(T);
+      const tableRef = tIdx >= 0 ? tables.id[tIdx] : null;
+      if (tableRef) {
+        const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+        for (let i = 0; i < (cols.id || []).length; i++) {
+          if (cols.parentId[i] !== tableRef) continue;
+          // An empty formula column converts to data on first write, so only a
+          // column with a real formula is off-limits.
+          if (cols.isFormula[i] && String(cols.formula[i] || '').trim()) writable.delete(cols.colId[i]);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read column metadata; assuming existing columns are writable:', e);
+    }
+
+    const refs = columnAsArray(table, recipeCol) || [];
+    const actions = [];
+    (table.id || []).forEach((id, i) => {
+      if (getRefId(refs[i]) !== sourceId) return;
+      const fields = {};
+      writable.forEach(col => {
+        const v = columnAsArray(table, col)[i];
+        fields[col] = (col === recipeCol) ? newId : (v === undefined ? null : v);
+      });
+      fields[recipeCol] = newId;
+      actions.push(['AddRecord', T, null, fields]);
+    });
+
+    if (actions.length) await grist.docApi.applyUserActions(actions);
+    return actions.length;
+  } catch (e) {
+    console.error('Could not copy layout segments:', e);
+    return -1;
+  }
+}
+
 async function saveRecipe() {
   if (!currentRecipeId) return;
   isSaving = true;
@@ -2014,34 +2197,7 @@ async function saveRecipe() {
     const dyeActions = [];
     for (let i = 0; i < dyeRows.length; i++) {
       const row = dyeRows[i];
-      let resolvedDyeId = row.dyeId || null;
-
-      // If we don't already know the exact Dye row (e.g. the name was typed
-      // by hand rather than picked from the suggestion list), resolve it —
-      // matching an existing Dye if the name matches one, or creating a new
-      // catalog entry if it's genuinely new. Writing raw text into this field
-      // doesn't work since Dye_Name on Recipe_Dye_Components is a reference,
-      // not text.
-      if (!resolvedDyeId) {
-        const typedName = (row.Dye_Name || '').trim();
-        if (typedName) {
-          const existing = allDyes.find(d => normalize(d.name) === normalize(typedName));
-          if (existing) {
-            resolvedDyeId = existing.id;
-          } else {
-            try {
-              const result = await grist.docApi.applyUserActions([
-                ['AddRecord', 'Dyes', null, { Dye_Name: typedName }]
-              ]);
-              resolvedDyeId = result.retValues[0];
-              allDyes.push({ id: resolvedDyeId, name: typedName, brand: '', powder: '', water: '' });
-            } catch (e) {
-              console.error('Failed to auto-create new dye:', typedName, e);
-              resolvedDyeId = null;
-            }
-          }
-        }
-      }
+      const resolvedDyeId = await resolveDyeIdForRow(row);
 
       const fields = {
         Recipe: currentRecipeId,
