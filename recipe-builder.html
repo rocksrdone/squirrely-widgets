@@ -244,7 +244,7 @@
       <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
-      <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Turn this limited edition into a regular item">↑ Make General</button>
+      <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Create a new general listing from this limited edition — the LE record stays as it is">↑ New Listing</button>
       <button class="btn" id="duplicateBtn" onclick="duplicateRecipe()" title="Copy this recipe, its dyes and its layout into a new limited edition draft">⧉ Duplicate as LE</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
@@ -1232,38 +1232,97 @@ function currentLeNumber() {
    generates the plain one — and records the old code in the notes, because
    spools already on the shelf are labelled with it and reusing the number
    elsewhere would make them unfindable. */
+/* Promoting a limited edition.
+   A copy forward, not a rename. The LE row stays exactly as it is: it is the
+   research record, spools on the shelf are labelled with its code, and its
+   photos sit in a folder named after that code. Rewriting scope and SKU in
+   place left all of that pointing at a recipe that no longer described itself
+   — new photos filed after the rename went to a second folder under the new
+   name, so one colourway's record lived in two places.
+
+   So a promote creates a NEW General recipe with its own name, SKU, folder and
+   listing, carrying the dyes and the layout across. Both rows name each other
+   in the notes. Nothing moves; nothing is renamed.
+
+   Photo FILES are not copied — the widget cannot, they live in Nextcloud and
+   only n8n can reach them. They stay with the LE until a copy-photos workflow
+   exists, and the note says so rather than leaving it to be discovered. */
 async function promoteFromLE() {
   if (!currentRecipeId) return;
-  const oldSku = document.getElementById('skuBase').value.trim();
-  const name = document.getElementById('nameInput').value.trim();
-  const fiber = document.getElementById('fiberType').value;
-  if (!name || !fiber) { showToast('Needs a name and fiber first'); return; }
-  // A coded LE has no colourway name to build a General SKU from: promoting as
-  // "LE 2609_01" would produce FFN_LE260901. Rename it first.
-  if (isBareLeName(name)) { showToast('Give it a real colourway name first'); return; }
 
-  // Plain SKU, built as if it had always been General.
+  if (unsavedChanges && !confirm(
+    'You have unsaved edits.\n\nThe new listing will include them, but this LE still won\'t be saved. Continue?'
+  )) return;
+
+  const leId = currentRecipeId;
+  const leSku = document.getElementById('skuBase').value.trim();
+  const fiber = document.getElementById('fiberType').value;
+  if (!fiber) { showToast('Needs a fiber type first'); return; }
+
+  const name = (window.prompt('Colourway name for the new listing', '') || '').trim();
+  if (!name) return;
+  if (isBareLeName(name)) { showToast('That is an LE code, not a colourway name'); return; }
+
   const fc = FIBER_NAME_TO_CODE[fiber] || 'GEN';
   const newSku = `${fc}_${slugifyForSku(name) || 'UNNAMED'}`;
-  const clash = (allOtherSkus || []).find(r => r.id !== currentRecipeId && normalize(r.sku || '') === normalize(newSku));
+  const clash = (allOtherSkus || []).find(r => normalize(r.sku || '') === normalize(newSku));
   if (clash) { showToast(`${newSku} is already used by ${clash.recipeName || 'another recipe'}`); return; }
 
-  if (!window.confirm(`Make this a General item?\n\n${oldSku}  \u2192  ${newSku}\n\nThe old LE code is kept in the notes: stock already labelled with it still has to be findable.`)) return;
+  const btn = document.getElementById('promoteBtn');
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
 
-  const notesEl = document.getElementById('generalNotes');
-  const stamp = new Date().toISOString().slice(0, 10);
-  if (oldSku) {
-    notesEl.value = `${notesEl.value ? notesEl.value + '\n' : ''}[${stamp}] Promoted from limited edition ${oldSku}`;
+  try {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const fields = {
+      Recipe_Name: name,
+      Status: 'Researching',
+      Created_Date: Math.floor(Date.now() / 1000),
+      Year_Made: String(new Date().getFullYear()),
+      Fiber_Type: fiber,
+      Dye_Method: document.getElementById('dyeMethod').value,
+      Recipe_Scope: 'General',
+      SKU_Base: newSku,
+      Notes: `[${stamp}] Listed from limited edition ${leSku || `#${leId}`}. Photos are still filed under the LE.\n${document.getElementById('generalNotes').value}`,
+      Layout_Description: document.getElementById('layoutDescription').value,
+      Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
+    };
+
+    const result = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
+    const newId = result && result.retValues && result.retValues[0];
+    if (!newId) throw new Error('No row ID came back from AddRecord');
+
+    const dyeCount = await copyDyeComponents(newId);
+    const segCount = await copyLayoutSegments(leId, newId);
+
+    // Both directions, so neither row is the only one that knows.
+    try {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Recipe_Change_Log', null, {
+          Recipe: newId, Change_Date: Math.floor(Date.now() / 1000),
+          Change_Note: `Listed from limited edition ${leSku || `#${leId}`} (recipe #${leId}).`,
+        }],
+        ['AddRecord', 'Recipe_Change_Log', null, {
+          Recipe: leId, Change_Date: Math.floor(Date.now() / 1000),
+          Change_Note: `Became the general colourway "${name}" (recipe #${newId}). This LE record stays as-is.`,
+        }],
+      ]);
+    } catch (e) {
+      console.error('Could not log the promotion:', e);
+    }
+
+    const parts = [`${dyeCount} dye${dyeCount === 1 ? '' : 's'}`];
+    if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
+    if (segCount === -1) parts.push('layout NOT copied');
+    showToast(`${newSku} \u2713 \u2014 ${parts.join(', ')}, photos stay with the LE`);
+    try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
+  } catch (e) {
+    console.error('Failed to create the new listing:', e);
+    showToast('Could not create the listing \u2014 see console');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '\u2191 New Listing';
   }
-  document.getElementById('recipeScope').value = 'General';
-  document.getElementById('skuBase').value = newSku;
-  markUnsaved();
-  onScopeChange();
-  renderScopeHint();
-  renderSkuSuggestion();
-  updateFinalizeGate();
-  renderPromoteButton();
-  showToast('Now General \u2014 save to keep it');
 }
 
 function renderPromoteButton() {
@@ -2022,6 +2081,29 @@ async function resolveDyeIdForRow(row) {
   }
 }
 
+// Dye components come from what is on screen, so unsaved edits carry over.
+async function copyDyeComponents(newId) {
+  const actions = [];
+  for (let i = 0; i < dyeRows.length; i++) {
+    const row = dyeRows[i];
+    const resolvedDyeId = await resolveDyeIdForRow(row);
+    actions.push(['AddRecord', 'Recipe_Dye_Components', null, {
+      Recipe: newId,
+      Dye_Name: resolvedDyeId,
+      Dye_Full: row.Dye_Full || row.Dye_Name,
+      'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
+      'Std_Water_mL_': row.water === '' ? null : Number(row.water),
+      Dilution: row.dilution,
+      Is_Powder: !!row.isPowder,
+      Technique: row.technique,
+      Application_Notes: row.notes,
+      Step_Number: i + 1,
+    }]);
+  }
+  if (actions.length) await grist.docApi.applyUserActions(actions);
+  return actions.length;
+}
+
 /* Duplicating a recipe.
    There are only two reasons to press this, and both start the same way: a
    kettle run came out wrong. Either it is worth keeping as a limited edition,
@@ -2105,26 +2187,7 @@ async function duplicateRecipe() {
     const newId = result && result.retValues && result.retValues[0];
     if (!newId) throw new Error('No row ID came back from AddRecord');
 
-    // Dye components come from what is on screen, so unsaved edits carry over.
-    const dyeActions = [];
-    for (let i = 0; i < dyeRows.length; i++) {
-      const row = dyeRows[i];
-      const resolvedDyeId = await resolveDyeIdForRow(row);
-      dyeActions.push(['AddRecord', 'Recipe_Dye_Components', null, {
-        Recipe: newId,
-        Dye_Name: resolvedDyeId,
-        Dye_Full: row.Dye_Full || row.Dye_Name,
-        'Std_Powder_tsp_': row.powder === '' ? null : Number(row.powder),
-        'Std_Water_mL_': row.water === '' ? null : Number(row.water),
-        Dilution: row.dilution,
-        Is_Powder: !!row.isPowder,
-        Technique: row.technique,
-        Application_Notes: row.notes,
-        Step_Number: i + 1,
-      }]);
-    }
-    if (dyeActions.length) await grist.docApi.applyUserActions(dyeActions);
-
+    const dyeCount = await copyDyeComponents(newId);
     const segCount = await copyLayoutSegments(sourceId, newId);
 
     // Provenance, best effort — an LE is far easier to trace a year later if
@@ -2141,7 +2204,7 @@ async function duplicateRecipe() {
       console.error('Could not log duplicate provenance:', e);
     }
 
-    const parts = [`${dyeActions.length} dye${dyeActions.length === 1 ? '' : 's'}`];
+    const parts = [`${dyeCount} dye${dyeCount === 1 ? '' : 's'}`];
     if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
     if (segCount === -1) parts.push('layout NOT copied');
     showToast(`${leSku} \u2713 \u2014 ${parts.join(', ')}`);
