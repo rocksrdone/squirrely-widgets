@@ -2012,9 +2012,17 @@ async function resolveDyeIdForRow(row) {
    Copies the recipe fields, every dye component and the ring layout. Does NOT
    copy: SKU_Base and Shopify_URL (the copy needs its own — and for an LE the
    suggestion builds a fresh dated code), the linked order line (the copy was
-   not what that order asked for), the process and finished photos (they are of
-   the batch that actually ran), or any review flag. Status starts at
-   Researching so the finalize gate applies to it like any other new draft. */
+   not what that order asked for), or any review flag. Status starts at
+   Researching so the finalize gate applies to it like any other new draft.
+
+   No photo fields are copied, inspiration included. Those fields hold a
+   photo2 proxy URL pointing at one real file in the parent's Nextcloud
+   folder, and nothing reference-counts it: unfile-photo MOVES the file to
+   the review inbox and clears the field on the one recipe_id it was called
+   with. A shared URL means unfiling on either recipe silently breaks the
+   other. Re-file a copy of the photo from the inbox instead. The hex codes
+   do carry over — they are text, and on an LE they are the part that says
+   what was being aimed at. */
 async function duplicateRecipe() {
   if (!currentRecipeId) return;
 
@@ -2045,8 +2053,6 @@ async function duplicateRecipe() {
       Notes: document.getElementById('generalNotes').value,
       Draft_Notes: document.getElementById('draftNotes').value,
       Layout_Description: document.getElementById('layoutDescription').value,
-      Photo_Inspiration: document.getElementById('photoInsp').value,
-      Photo_Inspiration_Note: document.getElementById('noteInsp').value,
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
 
@@ -2085,7 +2091,7 @@ async function duplicateRecipe() {
         ['AddRecord', 'Recipe_Change_Log', null, {
           Recipe: newId,
           Change_Date: Math.floor(Date.now() / 1000),
-          Change_Note: `Duplicated from "${sourceName}" (recipe #${sourceId}).`,
+          Change_Note: `Duplicated from "${sourceName}" (recipe #${sourceId}). Photos not copied — see the parent.`,
         }]
       ]);
     } catch (e) {
