@@ -129,6 +129,7 @@
 <div class="tabs" role="tablist">
   <button class="tab" id="tab-convert" role="tab" aria-selected="true" aria-controls="panel-convert">Convert</button>
   <button class="tab" id="tab-working" role="tab" aria-selected="false" aria-controls="panel-working">Working ratio</button>
+  <button class="tab" id="tab-dose"    role="tab" aria-selected="false" aria-controls="panel-dose">Dose</button>
   <button class="tab" id="tab-matrix"  role="tab" aria-selected="false" aria-controls="panel-matrix">Grid</button>
   <button class="tab" id="tab-setup"   role="tab" aria-selected="false" aria-controls="panel-setup">Setup</button>
 </div>
@@ -182,6 +183,53 @@
   <div class="result" id="wr-result"></div>
 
   <div class="hint" id="wr-anchor"></div>
+</div>
+
+<!-- ============================= DOSE ============================= -->
+<div class="panel" id="panel-dose" role="tabpanel" aria-labelledby="tab-dose" hidden>
+  <h2>Old recipe says "use this much liquid"</h2>
+  <div class="row">
+    <div class="field" style="flex:0 1 84px;">
+      <label for="ds-amt">Old dose</label>
+      <input type="number" id="ds-amt" min="0" step="0.25" value="1" inputmode="decimal">
+    </div>
+    <div class="field" style="flex:0 1 84px;">
+      <label for="ds-unit">Measured in</label>
+      <select id="ds-unit">
+        <option value="tbsp">Tbsp</option>
+        <option value="tsp">tsp</option>
+        <option value="ml">mL</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="ds-old">Old stock (mL)</label>
+      <input type="number" id="ds-old" min="1" step="1" value="80" inputmode="numeric">
+    </div>
+    <div class="field" style="flex:0 1 96px;">
+      <label for="ds-oldratio">thinned 1 :</label>
+      <input type="number" id="ds-oldratio" min="0" step="0.5" value="0" inputmode="decimal">
+    </div>
+  </div>
+  <div class="row" style="margin-top:7px;">
+    <div class="field">
+      <label for="ds-new">New stock (mL)</label>
+      <input type="number" id="ds-new" min="1" step="1" value="80" inputmode="numeric">
+    </div>
+    <div class="field" style="flex:0 1 96px;">
+      <label for="ds-newratio">thinned 1 :</label>
+      <input type="number" id="ds-newratio" min="0" step="0.5" value="2" inputmode="decimal">
+    </div>
+    <div class="field" style="flex:2 1 160px;"></div>
+  </div>
+  <div class="hint" id="ds-read"></div>
+
+  <div class="result" id="ds-result"></div>
+
+  <div class="hint" id="ds-note"></div>
+
+  <h2 style="margin-top:14px;">If the old ratio is a guess, here is the spread</h2>
+  <div id="ds-spread"></div>
+  <div class="hint">Each row assumes the old solution had been thinned that much <b>before</b> the dose was measured. Click a row to load it above.</div>
 </div>
 
 <!-- ============================= MATRIX ============================= -->
@@ -238,7 +286,13 @@
     wrOld: 160,
     wrRatio: 6,
     wrNew: 80,
-    wrBatch: 250
+    wrBatch: 250,
+    dsAmt: 1,
+    dsUnit: "tbsp",
+    dsOld: 80,
+    dsOldRatio: 0,
+    dsNew: 80,
+    dsNewRatio: 2
   };
   var inGrist = false;
 
@@ -417,6 +471,114 @@
       (whole ? "" : " The ratio does not land on a whole number, so measure by the mL above.");
   }
 
+  /* ---------------- render: dose ---------------- */
+
+  var ML_PER     = { tbsp: 14.7868, tsp: 4.9289, ml: 1 };
+  var UNIT_LABEL = { tbsp: "Tbsp",  tsp: "tsp",  ml: "mL" };
+
+  // Stock fraction that tolerates 0 / blank as "undiluted".
+  function fractionFor(n){
+    if (!(n > 0)) return 1;
+    if (state.ratioMode === "total" && n < 1) return 1;
+    return stockFraction(n);
+  }
+
+  // Render a mL figure back into kitchen measures, to the nearest quarter tsp.
+  function spoonText(ml){
+    if (!(ml > 0)) return "–";
+    var tb = Math.floor(ml / ML_PER.tbsp);
+    var ts = Math.round(((ml - tb * ML_PER.tbsp) / ML_PER.tsp) * 4) / 4;
+    if (ts >= 3){ tb += 1; ts -= 3; }
+    var parts = [];
+    if (tb) parts.push(tb + " Tbsp");
+    if (ts) parts.push(fmt(ts, 2) + " tsp");
+    return parts.length ? parts.join(" + ") : "under ¼ tsp";
+  }
+
+  function doseMath(oldRatio){
+    var doseMl    = state.dsAmt * ML_PER[state.dsUnit];
+    var anchorOld = state.dsOld / fractionFor(oldRatio);
+    var anchorNew = state.dsNew / fractionFor(state.dsNewRatio);
+    var powder    = doseMl / anchorOld;
+    return {
+      doseMl: doseMl,
+      anchorOld: anchorOld,
+      anchorNew: anchorNew,
+      powder: powder,
+      newMl: powder * anchorNew,
+      scale: anchorNew / anchorOld
+    };
+  }
+
+  function renderDose(){
+    var u  = state.unit;
+    var el = $("ds-result");
+    el.className = "result";
+
+    $("ds-read").textContent =
+      'Reading "1 : n" as ' +
+      (state.ratioMode === "total" ? "1 part stock in n parts total volume" : "1 part stock + n parts water") +
+      '. Enter 0 for stock used neat.';
+
+    if (!(state.dsAmt > 0) || !(state.dsOld > 0) || !(state.dsNew > 0)){
+      el.innerHTML = '<div class="result-head"><span class="ratio-note">Enter the old dose and both stock strengths.</span></div>';
+      $("ds-note").textContent = "";
+      $("ds-spread").innerHTML = "";
+      return;
+    }
+
+    var r = doseMath(state.dsOldRatio);
+
+    el.innerHTML =
+      '<div class="result-head">' +
+        '<span class="ratio">' + fmt(r.newMl, 1) + ' mL</span>' +
+        '<span class="ratio-note">of the new working solution replaces ' +
+          fmt(state.dsAmt, 2) + ' ' + UNIT_LABEL[state.dsUnit] + ' of the old' +
+          ' &nbsp;·&nbsp; ×' + fmt(r.scale, 2) + ' the volume</span>' +
+      '</div>' +
+      '<div class="measures">' +
+        '<div class="measure"><div class="k">Same as</div><div class="v">' + spoonText(r.newMl) + '</div></div>' +
+        '<div class="measure"><div class="k">Powder delivered</div><div class="v">' + fmt(r.powder, 3) + ' ' + u + '</div></div>' +
+        '<div class="measure"><div class="k">Old dose was</div><div class="v">' + fmt(r.doseMl, 1) + ' mL</div></div>' +
+      '</div>';
+
+    $("ds-note").innerHTML =
+      "Old liquid ran <b>1 " + u + " : " + fmt(r.anchorOld) + " mL</b> of finished bath; the new working solution runs " +
+      "<b>1 " + u + " : " + fmt(r.anchorNew) + " mL</b>. The powder figure is the part that is stock-independent — " +
+      "record it on the recipe and the next standard change costs nothing.";
+
+    renderSpread();
+  }
+
+  function renderSpread(){
+    var cands = [0, 1, 2, 3, 4, 6];
+    if (cands.indexOf(state.dsOldRatio) === -1 && state.dsOldRatio > 0) {
+      cands.push(state.dsOldRatio);
+      cands.sort(function(a,b){ return a - b; });
+    }
+    var u = state.unit;
+    var h = '<table><thead><tr><th class="corner"></th><th>New dose</th><th>In spoons</th><th>Powder</th></tr></thead><tbody>';
+    cands.forEach(function(n){
+      var r   = doseMath(n);
+      var cur = (n === state.dsOldRatio);
+      h += '<tr><th>' + (n > 0 ? "1 : " + fmt(n, 2) : "neat") + '</th>' +
+           '<td class="cell' + (cur ? ' same' : '') + '" data-n="' + n + '">' +
+             '<span class="r">' + fmt(r.newMl, 1) + ' mL</span></td>' +
+           '<td class="cell' + (cur ? ' same' : '') + '" data-n="' + n + '">' + spoonText(r.newMl) + '</td>' +
+           '<td class="cell' + (cur ? ' same' : '') + '" data-n="' + n + '">' + fmt(r.powder, 3) + ' ' + u + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    $("ds-spread").innerHTML = h;
+
+    Array.prototype.forEach.call($("ds-spread").querySelectorAll("td.cell"), function(td){
+      td.addEventListener("click", function(){
+        state.dsOldRatio = Number(td.getAttribute("data-n"));
+        $("ds-oldratio").value = state.dsOldRatio;
+        renderDose(); save();
+      });
+    });
+  }
+
   /* ---------------- render: matrix ---------------- */
   function renderMatrix(){
     var L = state.list, u = state.unit;
@@ -467,10 +629,10 @@
     }).join("");
   }
 
-  function renderAll(){ renderResult(); renderWorking(); renderMatrix(); renderStdOptions(); }
+  function renderAll(){ renderResult(); renderWorking(); renderDose(); renderMatrix(); renderStdOptions(); }
 
   /* ---------------- tabs ---------------- */
-  var TABS = ["convert","working","matrix","setup"];
+  var TABS = ["convert","working","dose","matrix","setup"];
   function showTab(name){
     TABS.forEach(function(n){
       $("tab-" + n).setAttribute("aria-selected", String(n === name));
@@ -503,13 +665,28 @@
   bindWr("wr-old","wrOld"); bindWr("wr-ratio","wrRatio");
   bindWr("wr-new","wrNew"); bindWr("wr-batch","wrBatch");
 
+  function bindDs(id, key){
+    $(id).addEventListener("input", function(){
+      var v = Number($(id).value);
+      state[key] = (v >= 0 && isFinite(v)) ? v : 0;
+      renderDose(); save();
+    });
+  }
+  bindDs("ds-amt","dsAmt"); bindDs("ds-old","dsOld"); bindDs("ds-oldratio","dsOldRatio");
+  bindDs("ds-new","dsNew"); bindDs("ds-newratio","dsNewRatio");
+
+  $("ds-unit").addEventListener("change", function(){
+    state.dsUnit = $("ds-unit").value;
+    renderDose(); save();
+  });
+
   Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(b){
     b.addEventListener("click", function(){
       state.ratioMode = b.getAttribute("data-mode");
       Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(x){
         x.setAttribute("aria-pressed", String(x === b));
       });
-      renderWorking(); save();
+      renderWorking(); renderDose(); save();
     });
   });
 
@@ -535,6 +712,7 @@
     state.std = Number($("std").value);
     state.to = state.std; $("to").value = state.to;
     state.wrNew = state.std; $("wr-new").value = state.wrNew;
+    state.dsNew = state.std; $("ds-new").value = state.dsNew;
     renderAll(); save();
   });
 
@@ -558,7 +736,9 @@
         grist.widgetApi.setOption("dilution", {
           list: state.list, std: state.std, unit: state.unit, batch: state.batch,
           ratioMode: state.ratioMode, wrOld: state.wrOld, wrRatio: state.wrRatio,
-          wrNew: state.wrNew, wrBatch: state.wrBatch
+          wrNew: state.wrNew, wrBatch: state.wrBatch,
+          dsAmt: state.dsAmt, dsUnit: state.dsUnit, dsOld: state.dsOld,
+          dsOldRatio: state.dsOldRatio, dsNew: state.dsNew, dsNewRatio: state.dsNewRatio
         });
       } catch(e){ /* options unavailable — keep running */ }
     }, 400);
@@ -575,6 +755,12 @@
     if (o.wrRatio >= 0) state.wrRatio = o.wrRatio;
     if (o.wrBatch > 0) state.wrBatch = o.wrBatch;
     state.wrNew = (o.wrNew > 0) ? o.wrNew : state.std;
+    if (o.dsAmt > 0) state.dsAmt = o.dsAmt;
+    if (ML_PER[o.dsUnit]) state.dsUnit = o.dsUnit;
+    if (o.dsOld > 0) state.dsOld = o.dsOld;
+    if (o.dsOldRatio >= 0) state.dsOldRatio = o.dsOldRatio;
+    if (o.dsNewRatio >= 0) state.dsNewRatio = o.dsNewRatio;
+    state.dsNew = (o.dsNew > 0) ? o.dsNew : state.std;
 
     state.to = state.std;
     $("list").value = state.list.join(", ");
@@ -584,6 +770,12 @@
     $("wr-ratio").value = state.wrRatio;
     $("wr-new").value = state.wrNew;
     $("wr-batch").value = state.wrBatch;
+    $("ds-amt").value = state.dsAmt;
+    $("ds-unit").value = state.dsUnit;
+    $("ds-old").value = state.dsOld;
+    $("ds-oldratio").value = state.dsOldRatio;
+    $("ds-new").value = state.dsNew;
+    $("ds-newratio").value = state.dsNewRatio;
     Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(x){
       x.setAttribute("aria-pressed", String(x.getAttribute("data-mode") === state.ratioMode));
     });
@@ -618,8 +810,11 @@
             $("from").value = v;
             state.wrOld = v;
             $("wr-old").value = v;
+            state.dsOld = v;
+            $("ds-old").value = v;
             renderResult();
             renderWorking();
+            renderDose();
           }
         } catch(e){ /* no mapping set — converter still works by hand */ }
       });
