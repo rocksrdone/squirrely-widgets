@@ -245,7 +245,7 @@
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
       <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Turn this limited edition into a regular item">↑ Make General</button>
-      <button class="btn" id="duplicateBtn" onclick="duplicateRecipe()" title="Copy this recipe, its dyes and its layout into a new draft">⧉ Duplicate</button>
+      <button class="btn" id="duplicateBtn" onclick="duplicateRecipe()" title="Copy this recipe, its dyes and its layout into a new limited edition draft">⧉ Duplicate as LE</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
       <button class="btn btn-primary" id="saveBtn" onclick="saveRecipe()">💾 Save</button>
     </div>
@@ -1238,6 +1238,9 @@ async function promoteFromLE() {
   const name = document.getElementById('nameInput').value.trim();
   const fiber = document.getElementById('fiberType').value;
   if (!name || !fiber) { showToast('Needs a name and fiber first'); return; }
+  // A coded LE has no colourway name to build a General SKU from: promoting as
+  // "LE 2609_01" would produce FFN_LE260901. Rename it first.
+  if (isBareLeName(name)) { showToast('Give it a real colourway name first'); return; }
 
   // Plain SKU, built as if it had always been General.
   const fc = FIBER_NAME_TO_CODE[fiber] || 'GEN';
@@ -1462,6 +1465,19 @@ function getLinkedCustomerInitials() {
   return (first + last).toUpperCase().replace(/[^A-Z]/g, '');
 }
 
+/* An LE named as a bare code rather than a colourway.
+   Deliberate: every picker in the stack — recipe-picker, recipes-missing-photo,
+   product-photo-recipe-link, the photo inbox — matches on a Recipe_Name
+   substring and none of them filter on scope. So an LE called "Sunset" turns up
+   every time anyone searches Sunset, which is the clutter. Called "LE 2609_01"
+   it is invisible to a colourway search and only found by looking for LEs. The
+   parent goes in the notes instead, where it can be searched on purpose.
+   Accepts the old flat form too, so the loose 1-34 still read as LE names. */
+function isBareLeName(name) {
+  return /^le[\s_-]*\d{4}[_-]\d+$/i.test(String(name || '').trim())
+      || /^le[\s_-]*\d{1,3}$/i.test(String(name || '').trim());
+}
+
 function computeSuggestedSku() {
   const fiberType = document.getElementById('fiberType').value;
   const name = document.getElementById('nameInput').value;
@@ -1483,7 +1499,10 @@ function computeSuggestedSku() {
     if (initials) sku += `_CU_${initials}`;
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
-    sku += `_LE_${currentLeNumber() || nextLeCode()}`;
+    // A code-named LE gets FFN_LE_2609_01, not FFN_LE260901_LE_2609_01 —
+    // folding the name back in would say the code twice.
+    const code = currentLeNumber() || nextLeCode();
+    return isBareLeName(name) ? `${fc}_LE_${code}` : `${sku}_LE_${code}`;
   }
   return sku;
 }
@@ -2004,25 +2023,34 @@ async function resolveDyeIdForRow(row) {
 }
 
 /* Duplicating a recipe.
-   The usual reason is a kettle run that came out wrong and is worth keeping as
-   a limited edition: the dyes, the wind layout and the notes are all still
-   right, only the colour is different. Retyping a nine-dye component list to
-   record that is how LEs stop getting recorded at all.
+   There are only two reasons to press this, and both start the same way: a
+   kettle run came out wrong. Either it is worth keeping as a limited edition,
+   or it is the start of a different colourway. So the copy is built as a
+   finished LE — scope set, dated SKU already on it — and the rarer case is
+   handled by changing those two fields afterwards. Nothing to type either way.
+
+   The copy is named as a bare code — LE 2609_01 — not after the colourway.
+   That is what keeps it out of everything else: every picker in the stack
+   matches on a Recipe_Name substring and none filter on scope, so an LE
+   sharing its parent's name turns up in every search for that colourway. A
+   coded name is invisible to those searches, gives the photo folder a name of
+   its own (le-2609-01_FFN, and all LE folders sort together), and cannot
+   collide with a second LE of the same parent. The parent is recorded in the
+   notes and the change log instead, so it stays findable on purpose rather
+   than by accident.
 
    Copies the recipe fields, every dye component and the ring layout. Does NOT
-   copy: SKU_Base and Shopify_URL (the copy needs its own — and for an LE the
-   suggestion builds a fresh dated code), the linked order line (the copy was
-   not what that order asked for), or any review flag. Status starts at
-   Researching so the finalize gate applies to it like any other new draft.
+   copy: Shopify_URL, the linked order line (the copy was not what that order
+   asked for), or any review flag. Status starts at Researching so the finalize
+   gate applies to it like any other new draft.
 
-   No photo fields are copied, inspiration included. Those fields hold a
-   photo2 proxy URL pointing at one real file in the parent's Nextcloud
-   folder, and nothing reference-counts it: unfile-photo MOVES the file to
-   the review inbox and clears the field on the one recipe_id it was called
-   with. A shared URL means unfiling on either recipe silently breaks the
-   other. Re-file a copy of the photo from the inbox instead. The hex codes
-   do carry over — they are text, and on an LE they are the part that says
-   what was being aimed at. */
+   No photo fields are copied either. Those fields hold a photo2 proxy URL
+   pointing at one real file in the parent's Nextcloud folder, and nothing
+   reference-counts it: unfile-photo MOVES the file to the review inbox and
+   clears the field on the one recipe_id it was called with. A shared URL means
+   unfiling on either recipe silently breaks the other. Re-file a copy from the
+   inbox instead. The hex codes do carry over — they are text, and on an LE
+   they are the part that says what was being aimed at. */
 async function duplicateRecipe() {
   if (!currentRecipeId) return;
 
@@ -2032,8 +2060,22 @@ async function duplicateRecipe() {
 
   const sourceId = currentRecipeId;
   const sourceName = document.getElementById('nameInput').value.trim() || 'Untitled Draft';
-  const newName = (window.prompt('Name for the copy', `${sourceName} LE`) || '').trim();
-  if (!newName) return;
+  const fiber = document.getElementById('fiberType').value;
+
+  // Always a fresh code. currentLeNumber() would hand back the parent's when
+  // an LE is itself duplicated, putting two colourways on one number — the
+  // exact thing the dated scheme exists to prevent.
+  const fc = FIBER_NAME_TO_CODE[fiber] || 'GEN';
+  const leCode = nextLeCode();
+  const leName = `LE ${leCode}`;
+  const leSku = `${fc}_LE_${leCode}`;
+
+  // The name no longer says where this came from, so the notes have to. Same
+  // stamped-line form promoteFromLE() uses, and searchable when it is the LE
+  // you are actually looking for.
+  const stamp = new Date().toISOString().slice(0, 10);
+  const parentLine = `[${stamp}] Limited edition from "${sourceName}" (recipe #${sourceId})`;
+  const sourceNotes = document.getElementById('generalNotes').value;
 
   const btn = document.getElementById('duplicateBtn');
   btn.disabled = true;
@@ -2041,16 +2083,17 @@ async function duplicateRecipe() {
 
   try {
     const fields = {
-      Recipe_Name: newName,
+      Recipe_Name: leName,
       Status: 'Researching',
       Created_Date: Math.floor(Date.now() / 1000),
       Year_Made: String(new Date().getFullYear()),
-      Fiber_Type: document.getElementById('fiberType').value,
+      Fiber_Type: fiber,
       Dye_Method: document.getElementById('dyeMethod').value,
-      Recipe_Scope: document.getElementById('recipeScope').value,
+      Recipe_Scope: 'Limited Edition',
+      SKU_Base: leSku,
       Linked_Customer: document.getElementById('linkedCustomer').value
         ? Number(document.getElementById('linkedCustomer').value) : null,
-      Notes: document.getElementById('generalNotes').value,
+      Notes: `${parentLine}${sourceNotes ? '\n' + sourceNotes : ''}`,
       Draft_Notes: document.getElementById('draftNotes').value,
       Layout_Description: document.getElementById('layoutDescription').value,
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
@@ -2091,7 +2134,7 @@ async function duplicateRecipe() {
         ['AddRecord', 'Recipe_Change_Log', null, {
           Recipe: newId,
           Change_Date: Math.floor(Date.now() / 1000),
-          Change_Note: `Duplicated from "${sourceName}" (recipe #${sourceId}). Photos not copied — see the parent.`,
+          Change_Note: `Duplicated from "${sourceName}" (recipe #${sourceId}) as a limited edition. Photos not copied — see the parent.`,
         }]
       ]);
     } catch (e) {
@@ -2101,14 +2144,14 @@ async function duplicateRecipe() {
     const parts = [`${dyeActions.length} dye${dyeActions.length === 1 ? '' : 's'}`];
     if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
     if (segCount === -1) parts.push('layout NOT copied');
-    showToast(`Copied ${parts.join(', ')} \u2713 \u2014 set the scope and SKU`);
+    showToast(`${leSku} \u2713 \u2014 ${parts.join(', ')}`);
     try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
   } catch (e) {
     console.error('Failed to duplicate recipe:', e);
     showToast('Duplicate failed \u2014 see console');
   } finally {
     btn.disabled = false;
-    btn.textContent = '\u29c9 Duplicate';
+    btn.textContent = '\u29c9 Duplicate as LE';
   }
 }
 
