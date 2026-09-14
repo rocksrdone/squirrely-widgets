@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dilution Ratio Converter</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f6f7f9; --surface-2:#eef0f3;
+    --ink:#16181d; --muted:#697080; --line:#dde0e6; --line-soft:#e9ebef;
+    --accent:#b3005e; --accent-soft:#fbe9f2;
+    --warn-bg:#fff8e8; --warn-line:#e8d4a0; --warn-ink:#7a5a12;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", "DejaVu Sans Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius:6px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#22252a; --surface:#2a2e35; --surface-2:#32363e; --ink:#e9ebef;
+      --muted:#98a0ae; --line:#3d424b; --line-soft:#343941;
+      --accent:#ff5fa2; --accent-soft:#3a1f2e;
+      --warn-bg:#3a3222; --warn-line:#5c4d2b; --warn-ink:#e5c98a;
+    }
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:10px; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  h2{font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--muted);
+     font-weight:700; margin:0 0 7px;}
+
+  .row{display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;}
+  .field{flex:1 1 104px; min-width:90px;}
+  label{display:block; font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--muted); font-weight:700; margin-bottom:3px;}
+  input[type=number], select{
+    width:100%; font:inherit; font-family:var(--mono); font-size:14px;
+    padding:7px 8px; border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--bg); color:var(--ink);
+  }
+  input:focus, select:focus{outline:2px solid var(--accent); outline-offset:-1px; border-color:var(--accent);}
+
+  .result{margin-top:12px; border:1px solid var(--line); border-radius:var(--radius);
+          background:var(--surface); overflow:hidden;}
+  .result-head{padding:11px 12px; border-bottom:1px solid var(--line-soft);
+               display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
+  .ratio{font-family:var(--mono); font-size:30px; font-weight:700; letter-spacing:-.01em; color:var(--accent);}
+  .ratio-note{font-size:11px; color:var(--muted);}
+  .measures{display:flex; flex-wrap:wrap;}
+  .measure{flex:1 1 110px; padding:9px 12px; border-right:1px solid var(--line-soft);}
+  .measure:last-child{border-right:0;}
+  .measure .k{font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700;}
+  .measure .v{font-family:var(--mono); font-size:16px; font-weight:700; margin-top:1px;}
+  .result.warn{border-color:var(--warn-line); background:var(--warn-bg); color:var(--warn-ink);}
+  .result.warn .ratio{color:var(--warn-ink); font-size:19px;}
+  .result.warn .ratio-note{color:var(--warn-ink); opacity:.85;}
+  .result.warn .result-head{border-bottom:0;}
+
+  .line{margin-top:10px; display:flex; gap:8px; align-items:center;}
+  .line input{
+    flex:1 1 auto; font-family:var(--mono); font-size:13px; padding:8px 9px;
+    border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--surface-2); color:var(--ink);
+  }
+  .line button{
+    appearance:none; border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    border-radius:var(--radius); padding:8px 11px; cursor:pointer; font:inherit; font-weight:600;
+  }
+  .line button:hover{color:var(--ink); border-color:var(--accent);}
+
+  .hint{font-size:11px; color:var(--muted); margin-top:9px; line-height:1.5;}
+  .status{font-size:11px; color:var(--muted); margin-top:11px; padding-top:9px; border-top:1px solid var(--line-soft);}
+  b{font-weight:700;}
+</style>
+</head>
+<body>
+
+<h2>Old recipe, as written</h2>
+<div class="row">
+  <div class="field" style="flex:0 1 72px;">
+    <label for="amt">Take</label>
+    <input type="number" id="amt" min="0" step="0.25" value="1" inputmode="decimal">
+  </div>
+  <div class="field" style="flex:0 1 72px;">
+    <label for="unit">&nbsp;</label>
+    <select id="unit">
+      <option value="tbsp">Tbsp</option>
+      <option value="tsp">tsp</option>
+      <option value="ml">mL</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="old">of stock 1 : __ mL</label>
+    <input type="number" id="old" min="1" step="1" value="80" inputmode="numeric">
+  </div>
+  <div class="field">
+    <label for="water">add water (mL)</label>
+    <input type="number" id="water" min="0" step="10" value="240" inputmode="numeric">
+  </div>
+</div>
+
+<h2 style="margin-top:12px;">Write it against</h2>
+<div class="row">
+  <div class="field">
+    <label for="std">Stock 1 : __ mL</label>
+    <input type="number" id="std" min="1" step="1" value="80" inputmode="numeric">
+  </div>
+  <div class="field" style="flex:0 1 110px;">
+    <label for="batch">Mix up (mL)</label>
+    <input type="number" id="batch" min="1" step="10" value="250" inputmode="numeric">
+  </div>
+  <div class="field" style="flex:2 1 150px;"></div>
+</div>
+
+<div class="result" id="result"></div>
+
+<div class="line">
+  <input type="text" id="recipe" readonly>
+  <button id="copy">Copy</button>
+</div>
+
+<div class="hint" id="note"></div>
+<div class="status" id="status">Running outside Grist — settings are not saved.</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var ML_PER = { tbsp: 14.7868, tsp: 4.9289, ml: 1 };
+  var LABEL  = { tbsp: "Tbsp", tsp: "tsp", ml: "mL" };
+
+  var state = { amt:1, unit:"tbsp", old:80, water:240, std:80, batch:250 };
+  var inGrist = false;
+  var $ = function(id){ return document.getElementById(id); };
+
+  function fmt(n, dp){
+    if (!isFinite(n)) return "\u2013";
+    dp = (dp === undefined) ? 1 : dp;
+    var s = n.toFixed(dp);
+    if (s.indexOf(".") > -1) s = s.replace(/\.?0+$/, "");
+    return s;
+  }
+
+  function calc(){
+    var dose  = state.amt * ML_PER[state.unit];
+    var total = dose + state.water;
+    // Powder is the invariant. Anchor = mL of finished liquid per 1 tsp of powder.
+    var anchor = total / (dose / state.old);
+    var n      = (anchor / state.std) - 1;      // parts water per 1 part stock
+    var round  = Math.round(n);
+    // Strength penalty of writing the rounded figure instead of the exact one.
+    var drift  = round > 0 ? ((n + 1) / (round + 1) - 1) * 100 : 0;
+    return {
+      dose: dose, total: total, anchor: anchor,
+      n: n, round: round, drift: drift,
+      stockVol: state.batch / (n + 1),
+      waterVol: state.batch - state.batch / (n + 1)
+    };
+  }
+
+  function render(){
+    var r  = calc();
+    var el = $("result");
+    el.className = "result";
+
+    if (!(state.amt > 0) || !(state.old > 0) || !(state.std > 0)){
+      el.innerHTML = '<div class="result-head"><span class="ratio-note">Fill in the dose and both stock strengths.</span></div>';
+      $("recipe").value = ""; $("note").textContent = "";
+      return;
+    }
+
+    if (r.n < 0){
+      el.className = "result warn";
+      el.innerHTML =
+        '<div class="result-head">' +
+          '<span class="ratio">Stock is too weak</span>' +
+          '<span class="ratio-note">The old recipe finishes at 1 tsp : ' + fmt(r.anchor) +
+            ' mL, which is stronger than a 1 tsp : ' + fmt(state.std) +
+            ' mL stock. Water cannot get you there \u2014 use a stronger stock.</span>' +
+        '</div>';
+      $("recipe").value = ""; $("note").textContent = "";
+      return;
+    }
+
+    var exact = (Math.abs(r.n - r.round) < 0.005);
+
+    el.innerHTML =
+      '<div class="result-head">' +
+        '<span class="ratio">1 : ' + r.round + '</span>' +
+        '<span class="ratio-note">parts stock : parts water' +
+          (exact ? '' : ' &nbsp;\u00b7&nbsp; exactly 1 : ' + fmt(r.n, 2) +
+                        ', so rounding runs ' + fmt(Math.abs(r.drift), 1) + '% ' +
+                        (r.drift > 0 ? 'strong' : 'weak')) +
+        '</span>' +
+      '</div>' +
+      '<div class="measures">' +
+        '<div class="measure"><div class="k">Stock</div><div class="v">' + fmt(r.stockVol, 1) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Water</div><div class="v">' + fmt(r.waterVol, 1) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Makes</div><div class="v">' + fmt(state.batch) + ' mL</div></div>' +
+      '</div>';
+
+    $("recipe").value = "Stock 1 tsp : " + fmt(state.std) + " mL, diluted 1 : " + r.round;
+
+    var moved = (state.old !== state.std);
+    $("note").innerHTML =
+      "Old recipe: " + fmt(state.amt, 2) + " " + LABEL[state.unit] + " (" + fmt(r.dose, 1) +
+      " mL) of 1 tsp : " + fmt(state.old) + " mL stock in " + fmt(r.total, 1) +
+      " mL total \u2014 that is <b>1 tsp : " + fmt(r.anchor) + " mL</b> of finished solution." +
+      (moved ? " Old and new stocks differ, so the ratio was rebased: " + fmt(state.old) +
+               " \u00f7 " + fmt(state.std) + " = \u00d7" + fmt(state.old / state.std, 2) +
+               " on the dye carried per mL." : "");
+  }
+
+  /* ---------------- inputs ---------------- */
+  function bind(id, key){
+    $(id).addEventListener("input", function(){
+      var v = Number($(id).value);
+      state[key] = (v >= 0 && isFinite(v)) ? v : 0;
+      render(); save();
+    });
+  }
+  bind("amt","amt"); bind("old","old"); bind("water","water");
+  bind("std","std"); bind("batch","batch");
+
+  $("unit").addEventListener("change", function(){
+    state.unit = $("unit").value;
+    render(); save();
+  });
+
+  $("copy").addEventListener("click", function(){
+    var el = $("recipe");
+    if (!el.value) return;
+    el.select();
+    try { document.execCommand("copy"); } catch(e){ /* clipboard blocked — text is selected */ }
+    $("copy").textContent = "Copied";
+    setTimeout(function(){ $("copy").textContent = "Copy"; }, 1200);
+  });
+
+  /* ---------------- Grist ---------------- */
+  var saveTimer = null;
+  function save(){
+    if (!inGrist) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function(){
+      try { grist.widgetApi.setOption("ratioConv", state); }
+      catch(e){ /* options unavailable — keep running */ }
+    }, 400);
+  }
+
+  function applySaved(o){
+    if (!o) return;
+    if (o.amt   > 0) state.amt   = o.amt;
+    if (ML_PER[o.unit]) state.unit = o.unit;
+    if (o.old   > 0) state.old   = o.old;
+    if (o.water >= 0) state.water = o.water;
+    if (o.std   > 0) state.std   = o.std;
+    if (o.batch > 0) state.batch = o.batch;
+    $("amt").value = state.amt;
+    $("unit").value = state.unit;
+    $("old").value = state.old;
+    $("water").value = state.water;
+    $("std").value = state.std;
+    $("batch").value = state.batch;
+  }
+
+  render();
+
+  try {
+    if (typeof grist !== "undefined"){
+      inGrist = true;
+      grist.ready({
+        requiredAccess: "read table",
+        columns: [
+          { name: "Dilution", title: "Old stock dilution (mL per tsp)", type: "Numeric,Int", optional: true },
+          { name: "Water",    title: "Water added (mL)",               type: "Numeric,Int", optional: true }
+        ]
+      });
+
+      $("status").textContent = "Connected to Grist. Settings save with this widget.";
+
+      grist.widgetApi.getOption("ratioConv")
+        .then(function(o){ applySaved(o); render(); })
+        .catch(function(){ render(); });
+
+      grist.onRecord(function(record, mappings){
+        try {
+          var m = grist.mapColumnNames(record, mappings);
+          if (!m) return;
+          var d = Number(m.Dilution), w = Number(m.Water);
+          if (d > 0){ state.old = d; $("old").value = d; }
+          if (w >= 0 && isFinite(w)){ state.water = w; $("water").value = w; }
+          render();
+        } catch(e){ /* no mapping set — converter still works by hand */ }
+      });
+    }
+  } catch(e){
+    inGrist = false;
+  }
+})();
+</script>
+</body>
+</html>
