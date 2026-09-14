@@ -187,13 +187,13 @@
 
 <!-- ============================= DOSE ============================= -->
 <div class="panel" id="panel-dose" role="tabpanel" aria-labelledby="tab-dose" hidden>
-  <h2>The old recipe</h2>
+  <h2>The old recipe, as written</h2>
   <div class="row">
-    <div class="field" style="flex:0 1 78px;">
+    <div class="field" style="flex:0 1 74px;">
       <label for="ds-amt">Take</label>
       <input type="number" id="ds-amt" min="0" step="0.25" value="1" inputmode="decimal">
     </div>
-    <div class="field" style="flex:0 1 78px;">
+    <div class="field" style="flex:0 1 74px;">
       <label for="ds-unit">&nbsp;</label>
       <select id="ds-unit">
         <option value="tbsp">Tbsp</option>
@@ -211,17 +211,20 @@
     </div>
   </div>
 
-  <h2 style="margin-top:12px;">Today's working solution</h2>
+  <h2 style="margin-top:12px;">Express it against</h2>
   <div class="row">
     <div class="field">
-      <label for="ds-new">New stock (mL)</label>
+      <label for="ds-new">Stock 1 : __ mL</label>
       <input type="number" id="ds-new" min="1" step="1" value="80" inputmode="numeric">
     </div>
-    <div class="field" style="flex:0 1 110px;">
-      <label for="ds-newratio">diluted 1 :</label>
-      <input type="number" id="ds-newratio" min="0" step="0.5" value="2" inputmode="decimal">
+    <div class="field" style="flex:0 1 120px;">
+      <label for="ds-newratio">pre-diluted 1 :</label>
+      <input type="number" id="ds-newratio" min="0" step="0.5" value="0" inputmode="decimal">
     </div>
-    <div class="field" style="flex:2 1 160px;"></div>
+    <div class="field" style="flex:0 1 110px;">
+      <label for="ds-batch">Scale to (mL)</label>
+      <input type="number" id="ds-batch" min="1" step="10" value="250" inputmode="numeric">
+    </div>
   </div>
   <div class="hint" id="ds-read"></div>
 
@@ -231,7 +234,7 @@
 
   <h2 style="margin-top:14px;">If the old stock ratio is a guess</h2>
   <div id="ds-spread"></div>
-  <div class="hint">Same old recipe read against each possible stock strength. Click a row to load it above.</div>
+  <div class="hint">The same old recipe read against each possible stock strength. Click a row to load it above.</div>
 </div>
 
 <!-- ============================= MATRIX ============================= -->
@@ -294,7 +297,8 @@
     dsOld: 80,
     dsWater: 240,
     dsNew: 80,
-    dsNewRatio: 2
+    dsNewRatio: 0,
+    dsBatch: 250
   };
   var inGrist = false;
 
@@ -478,42 +482,37 @@
   var ML_PER     = { tbsp: 14.7868, tsp: 4.9289, ml: 1 };
   var UNIT_LABEL = { tbsp: "Tbsp",  tsp: "tsp",  ml: "mL" };
 
-  // Stock fraction that tolerates 0 / blank as "undiluted".
   function fractionFor(n){
     if (!(n > 0)) return 1;
     if (state.ratioMode === "total" && n < 1) return 1;
     return stockFraction(n);
   }
 
-  // Render a mL figure back into kitchen measures, to the nearest quarter tsp.
-  function spoonText(ml){
-    if (!(ml > 0)) return "\u2013";
-    var tb = Math.floor(ml / ML_PER.tbsp);
-    var ts = Math.round(((ml - tb * ML_PER.tbsp) / ML_PER.tsp) * 4) / 4;
-    if (ts >= 3){ tb += 1; ts -= 3; }
-    var parts = [];
-    if (tb) parts.push(tb + " Tbsp");
-    if (ts) parts.push(fmt(ts, 2) + " tsp");
-    return parts.length ? parts.join(" + ") : "under \u00bc tsp";
-  }
-
-  // Old recipe = a neat dose of stock plus a stated volume of water.
-  // Conversion holds two things constant: the powder, and the finished volume.
+  // An old recipe written as "a dose of stock plus a stated volume of water"
+  // restated as a scale-free ratio against whatever stock you keep now.
   function doseMath(oldStock){
-    var doseMl    = state.dsAmt * ML_PER[state.dsUnit];
-    var powder    = doseMl / oldStock;
-    var total     = doseMl + state.dsWater;
-    var anchorNew = state.dsNew / fractionFor(state.dsNewRatio);
-    var solMl     = powder * anchorNew;
+    var doseMl = state.dsAmt * ML_PER[state.dsUnit];
+    var powder = doseMl / oldStock;
+    var total  = doseMl + state.dsWater;
+    var anchor = total / powder;                              // mL of liquid per unit of powder
+    var source = state.dsNew / fractionFor(state.dsNewRatio); // strength of what you are pouring
+    var frac   = source / anchor;                             // how much of the mix is that liquid
     return {
       doseMl: doseMl,
       powder: powder,
       total: total,
-      bath: total / powder,
-      anchorNew: anchorNew,
-      solMl: solMl,
-      waterMl: total - solMl
+      anchor: anchor,
+      source: source,
+      frac: frac,
+      n: ratioFromFraction(frac),
+      srcVol: state.dsBatch * frac,
+      watVol: state.dsBatch * (1 - frac)
     };
+  }
+
+  function ratioText(n){
+    if (Math.abs(n - Math.round(n)) < 0.005) return "1 : " + Math.round(n);
+    return "1 : " + fmt(n, 2);
   }
 
   function renderDose(){
@@ -521,13 +520,14 @@
     var el = $("ds-result");
     el.className = "result";
 
+    var srcName = (state.dsNewRatio > 0) ? "working solution" : "stock";
+
     $("ds-read").textContent =
-      'Reading "1 : n" as ' +
-      (state.ratioMode === "total" ? "1 part stock in n parts total volume" : "1 part stock + n parts water") +
-      '. Enter 0 to use the new stock neat.';
+      'Leave pre-diluted at 0 if you pour from the stock jar. Ratios read as ' +
+      (state.ratioMode === "total" ? "1 part in n parts total volume" : "1 part + n parts water") + '.';
 
     if (!(state.dsAmt > 0) || !(state.dsOld > 0) || !(state.dsNew > 0)){
-      el.innerHTML = '<div class="result-head"><span class="ratio-note">Enter the dose, the old stock strength and the new stock.</span></div>';
+      el.innerHTML = '<div class="result-head"><span class="ratio-note">Enter the dose, the old stock strength and the stock you keep now.</span></div>';
       $("ds-note").textContent = "";
       $("ds-spread").innerHTML = "";
       return;
@@ -535,42 +535,38 @@
 
     var r = doseMath(state.dsOld);
 
-    if (r.waterMl < 0){
+    if (r.frac > 1){
       el.className = "result warn";
       el.innerHTML =
         '<div class="result-head">' +
-          '<span class="ratio">Will not fit the bath</span>' +
-          '<span class="ratio-note">' + fmt(r.solMl, 1) + ' mL of working solution already exceeds the ' +
-            fmt(r.total, 1) + ' mL the old recipe finished at. Dilute the new stock less, or accept a bigger bath.</span>' +
-        '</div>' +
-        '<div class="measures">' +
-          '<div class="measure"><div class="k">Working solution</div><div class="v">' + fmt(r.solMl, 1) + ' mL</div></div>' +
-          '<div class="measure"><div class="k">Old bath was</div><div class="v">' + fmt(r.total, 1) + ' mL</div></div>' +
-          '<div class="measure"><div class="k">Powder</div><div class="v">' + fmt(r.powder, 3) + ' ' + u + '</div></div>' +
+          '<span class="ratio">Too weak to express as a ratio</span>' +
+          '<span class="ratio-note">The old recipe runs at 1 ' + u + ' : ' + fmt(r.anchor) +
+            ' mL. Your ' + srcName + ' is only 1 ' + u + ' : ' + fmt(r.source) +
+            ' mL, so no amount of water gets there.</span>' +
         '</div>';
-      $("ds-note").innerHTML =
-        "Adding no water at all still overshoots by " + fmt(-r.waterMl, 1) + " mL.";
+      $("ds-note").textContent = "";
       renderSpread();
       return;
     }
 
     el.innerHTML =
       '<div class="result-head">' +
-        '<span class="ratio">' + fmt(r.solMl, 1) + ' mL</span>' +
-        '<span class="ratio-note">working solution &nbsp;\u00b7&nbsp; ' + spoonText(r.solMl) +
-          ' &nbsp;\u00b7&nbsp; then top up to ' + fmt(r.total, 1) + ' mL</span>' +
+        '<span class="ratio">' + ratioText(r.n) + '</span>' +
+        '<span class="ratio-note">parts ' + srcName + ' : parts water &nbsp;\u00b7&nbsp; from 1 ' + u + ' : ' +
+          fmt(state.dsNew) + ' mL' + (state.dsNewRatio > 0 ? " pre-diluted 1 : " + fmt(state.dsNewRatio, 2) : "") +
+        '</span>' +
       '</div>' +
       '<div class="measures">' +
-        '<div class="measure"><div class="k">Working solution</div><div class="v">' + fmt(r.solMl, 1) + ' mL</div></div>' +
-        '<div class="measure"><div class="k">Add water</div><div class="v">' + fmt(r.waterMl, 1) + ' mL</div></div>' +
-        '<div class="measure"><div class="k">Finished bath</div><div class="v">' + fmt(r.total, 1) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">' + (state.dsNewRatio > 0 ? "Solution" : "Stock") + '</div><div class="v">' + fmt(r.srcVol, 1) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Water</div><div class="v">' + fmt(r.watVol, 1) + ' mL</div></div>' +
+        '<div class="measure"><div class="k">Makes</div><div class="v">' + fmt(state.dsBatch) + ' mL</div></div>' +
       '</div>';
 
     $("ds-note").innerHTML =
-      "Carries <b>" + fmt(r.powder, 3) + " " + u + "</b> of powder into <b>" + fmt(r.total, 1) +
-      " mL</b> of bath \u2014 the same two numbers the old recipe hit, so depth and liquor ratio both hold. " +
-      "As a bath strength that is 1 " + u + " : " + fmt(r.bath) + " mL. Record the powder figure on the recipe; " +
-      "it is the only part that survives the next standard change.";
+      "The old recipe worked out to <b>1 " + u + " : " + fmt(r.anchor) + " mL</b> of finished liquid \u2014 " +
+      fmt(r.doseMl, 1) + " mL of stock carrying " + fmt(r.powder, 3) + " " + u +
+      ", spread through " + fmt(r.total, 1) + " mL. That figure is stock-independent, so the ratio above " +
+      "is just the same strength rewritten for the jar you pour from today.";
 
     renderSpread();
   }
@@ -582,15 +578,15 @@
       cands.sort(function(a,b){ return a - b; });
     }
     var u = state.unit;
-    var h = '<table><thead><tr><th class="corner"></th><th>Powder</th><th>Solution</th><th>+ water</th></tr></thead><tbody>';
+    var h = '<table><thead><tr><th class="corner"></th><th>Ratio</th><th>Bath strength</th><th>Powder</th></tr></thead><tbody>';
     cands.forEach(function(d){
       var r   = doseMath(d);
       var cur = (d === state.dsOld);
       var cls = 'class="cell' + (cur ? ' same' : '') + '" data-d="' + d + '"';
       h += '<tr><th>1 : ' + d + '</th>' +
-           '<td ' + cls + '><span class="r">' + fmt(r.powder, 3) + '</span><span class="sub">' + u + '</span></td>' +
-           '<td ' + cls + '><span class="r">' + fmt(r.solMl, 1) + '</span><span class="sub">mL</span></td>' +
-           '<td ' + cls + '><span class="r">' + (r.waterMl < 0 ? "\u2013" : fmt(r.waterMl, 1)) + '</span><span class="sub">mL</span></td></tr>';
+           '<td ' + cls + '><span class="r">' + (r.frac > 1 ? "\u2013" : ratioText(r.n)) + '</span></td>' +
+           '<td ' + cls + '><span class="r">1 : ' + fmt(r.anchor) + '</span><span class="sub">mL per ' + u + '</span></td>' +
+           '<td ' + cls + '><span class="r">' + fmt(r.powder, 3) + '</span><span class="sub">' + u + '</span></td></tr>';
     });
     h += '</tbody></table>';
     $("ds-spread").innerHTML = h;
@@ -698,7 +694,7 @@
     });
   }
   bindDs("ds-amt","dsAmt"); bindDs("ds-old","dsOld"); bindDs("ds-water","dsWater");
-  bindDs("ds-new","dsNew"); bindDs("ds-newratio","dsNewRatio");
+  bindDs("ds-new","dsNew"); bindDs("ds-newratio","dsNewRatio"); bindDs("ds-batch","dsBatch");
 
   $("ds-unit").addEventListener("change", function(){
     state.dsUnit = $("ds-unit").value;
@@ -763,7 +759,7 @@
           ratioMode: state.ratioMode, wrOld: state.wrOld, wrRatio: state.wrRatio,
           wrNew: state.wrNew, wrBatch: state.wrBatch,
           dsAmt: state.dsAmt, dsUnit: state.dsUnit, dsOld: state.dsOld,
-          dsWater: state.dsWater, dsNew: state.dsNew, dsNewRatio: state.dsNewRatio
+          dsWater: state.dsWater, dsNew: state.dsNew, dsNewRatio: state.dsNewRatio, dsBatch: state.dsBatch
         });
       } catch(e){ /* options unavailable — keep running */ }
     }, 400);
@@ -785,6 +781,7 @@
     if (o.dsOld > 0) state.dsOld = o.dsOld;
     if (o.dsWater >= 0) state.dsWater = o.dsWater;
     if (o.dsNewRatio >= 0) state.dsNewRatio = o.dsNewRatio;
+    if (o.dsBatch > 0) state.dsBatch = o.dsBatch;
     state.dsNew = (o.dsNew > 0) ? o.dsNew : state.std;
 
     state.to = state.std;
@@ -801,6 +798,7 @@
     $("ds-water").value = state.dsWater;
     $("ds-new").value = state.dsNew;
     $("ds-newratio").value = state.dsNewRatio;
+    $("ds-batch").value = state.dsBatch;
     Array.prototype.forEach.call($("mode-seg").querySelectorAll("button"), function(x){
       x.setAttribute("aria-pressed", String(x.getAttribute("data-mode") === state.ratioMode));
     });
