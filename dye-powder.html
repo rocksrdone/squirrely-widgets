@@ -198,7 +198,7 @@ const DEFAULT_BOXES = [
   'DP-UV','DP-WXYZ'
 ];
 const BOX_STORE = 'ss.dyePowder.boxes.v1';
-const SIZE_STORE = 'ss.dyePowder.sizes.v1';
+const SIZE_STORE = 'ss.dyePowder.sizes.v3';
 const NO_LETTER = '#';
 
 /* Back stock lives behind the letter box it belongs to, so a jar's address is
@@ -269,13 +269,29 @@ function lsGet(key, dflt) {
 function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
 
 /* ── Box codes ─────────────────────────────────────────────────── */
+/* DP- is the acid shelf, DR- the fibre-reactive rack. Same table, same logic —
+   the prefix says which rack you are standing at. They are kept apart on purpose:
+   there is a Dharma Turquoise MX and a Pro 478 Turquoise WF, and in one
+   alphabetical run they sit side by side looking like alternatives. */
+const RACKS = { DP: 'Acid shelf', DR: 'Procion box' };
+/* The Procion lives in a single box, not an alphabetical run, so it gets one
+   code and no letter filing. If it ever outgrows the box, adding DR-2 works
+   without changing anything here. */
+const DR_BOX = 'DR-1';
+const BOX_NAMES = { 'DR-1': 'Procion box' };
+function boxRack(code) {
+  const m = /^(DP|DR)-/.exec(String(code || '').trim().toUpperCase());
+  return m ? m[1] : '';
+}
 function boxLetters(code) {
-  const m = /^DP-([A-Z]+)(\d*)$/.exec(String(code || '').trim().toUpperCase());
-  return m ? m[1].split('') : [];
+  const m = /^(?:DP|DR)-([A-Z]*)(\d*)$/.exec(String(code || '').trim().toUpperCase());
+  return m && m[1] ? m[1].split('') : [];
 }
 function boxLabel(code) {
   // What is painted on the box: DP-B1 reads as B-1, DP-HIJ reads as H-I-J.
-  const m = /^DP-([A-Z]+)(\d*)$/.exec(String(code || '').trim().toUpperCase());
+  const named = BOX_NAMES[String(code || '').trim().toUpperCase()];
+  if (named) return named;
+  const m = /^(?:DP|DR)-([A-Z]+)(\d*)$/.exec(String(code || '').trim().toUpperCase());
   if (!m) return String(code || '');
   const letters = m[1].split('').join('-');
   return m[2] ? letters + '-' + m[2] : letters;
@@ -285,8 +301,22 @@ function boxSort(a, b) {
   if (la !== lb) return la.localeCompare(lb);
   return String(a).localeCompare(String(b), undefined, { numeric: true });
 }
-function boxesForLetter(letter) {
-  return BOXES.filter(b => boxLetters(b).includes(letter)).sort(boxSort);
+function boxesForLetter(letter, rack) {
+  const r = rack || 'DP';
+  if (r === 'DR') {
+    // Not filed alphabetically — every reactive dye is in the same box.
+    const drs = BOXES.filter(b => boxRack(b) === 'DR').sort(boxSort);
+    return drs.length ? drs : [DR_BOX];
+  }
+  return BOXES.filter(b => boxRack(b) === r && boxLetters(b).includes(letter)).sort(boxSort);
+}
+/* Class comes off whatever column carries it. Until a reactive row exists every
+   dye reads as acid and nothing below changes behaviour. */
+const REACTIVE_RE = /reactive|procion|vinyl\s*s|(^|[^a-z])mx([^a-z]|$)/i;
+function rackOf(d) {
+  const hay = [d && d.Dye_Type, d && d.Dye_Family, d && d.Technique, d && d.Dye_Source_Type]
+    .filter(Boolean).join(' ');
+  return REACTIVE_RE.test(hay) ? 'DR' : 'DP';
 }
 
 /* Shelf letter comes from the COLOUR name. If Dye_Name still carries the brand
@@ -299,6 +329,80 @@ function dyeLetter(name) {
   const c = s.charAt(0).toUpperCase();
   return /[A-Z]/.test(c) ? c : NO_LETTER;
 }
+
+/* ── Jar sizes ──────────────────────────────────────────────────
+   Size_g always holds GRAMS. Only Paradise Fibers prints grams on the jar;
+   every other brand sells by the ounce or the pound, so what gets shown is
+   converted back to the brand's own unit at display time. Storing the printed
+   number instead would make an 8 oz Dharma jar and a 100 g PF jar look like
+   comparable figures when one is more than twice the other. */
+const OZ_G = 28.3495, LB_G = 453.592;
+const oz = n => Math.round(n * OZ_G * 10) / 10;
+const lb = n => Math.round(n * LB_G * 10) / 10;
+const ozSizes = list => list.map(n => ({ g: oz(n), label: n + ' oz' }));
+const lbSizes = list => list.map(n => ({ g: lb(n), label: n + ' lb' }));
+
+const BRAND_SIZES = {
+  pro: ozSizes([1, 2, 3, 8]).concat(lbSizes([1, 2, 5, 10])),
+  cc:  ozSizes([1, 2, 3, 8]).concat(lbSizes([1, 2, 5, 10])),
+  dh:  ozSizes([2, 8]).concat(lbSizes([1, 5, 10])),
+  j:   ozSizes([0.5, 8]).concat(lbSizes([1])),
+  pf:  [{ g: 10, label: '10 g' }, { g: 100, label: '100 g' }],
+  x:   [{ g: 10, label: '10 g' }, { g: 50, label: '50 g' }, { g: 100, label: '100 g' }]
+};
+/* The reactive rack sells in its own sizes, so the ladder keys on brand AND
+   rack. Dharma Procion MX is the only reactive line in use and only 2 oz and
+   8 oz are stocked; anything else goes through 'other…'. */
+const RACK_SIZES = { 'dr:dh': ozSizes([2, 8]) };
+const BRAND_LABEL = {
+  pro: 'PRO Chem', cc: 'Country Classics', dh: 'Dharma', j: 'Jacquard',
+  pf: 'Paradise Fibers', x: 'In-house', 'dr:dh': 'Dharma MX'
+};
+const SEED_DEFAULT = { pro: oz(8), cc: oz(8), dh: oz(8), j: oz(8), pf: 100, x: 100, 'dr:dh': oz(8) };
+const SIZE_KEY_ORDER = ['pro', 'cc', 'dh', 'j', 'pf', 'x', 'dr:dh'];
+const BRAND_ALIASES = {
+  pro: ['pro', 'prochem', 'prochemical', 'prochemicaldye', 'prochemicalanddye'],
+  cc:  ['cc', 'countryclassics', 'countryclassic', 'gk', 'gkcraft', 'gandkcraft'],
+  dh:  ['dh', 'dharma', 'dharmatrading', 'dharmatradingco'],
+  j:   ['j', 'jacquard'],
+  pf:  ['pf', 'paradisefibers', 'paradisefiber', 'paradise'],
+  x:   ['x', 'inhouse', 'inhouseblend', 'house', 'blend']
+};
+/* Exact code first. A loose substring test would let the single letter 'j'
+   claim every brand whose name happens to contain one. */
+function brandKey(brand) {
+  const b = norm(brand);
+  if (!b) return '';
+  for (const [k, list] of Object.entries(BRAND_ALIASES)) if (list.includes(b)) return k;
+  for (const [k, list] of Object.entries(BRAND_ALIASES))
+    if (list.some(a => a.length > 2 && b.includes(a))) return k;
+  return '';
+}
+function sizeKey(brand, rack) {
+  const k = brandKey(brand) || 'x';
+  return rack === 'DR' ? 'dr:' + k : k;
+}
+/* A reactive dye from a brand with no reactive ladder falls back to that
+   brand's own sizes rather than to the in-house list. */
+function ladderForKey(key) {
+  return RACK_SIZES[key] || BRAND_SIZES[key] ||
+         BRAND_SIZES[String(key).replace(/^dr:/, '')] || BRAND_SIZES.x;
+}
+function ladderFor(brand, rack) { return ladderForKey(sizeKey(brand, rack)); }
+/* Snap grams back to the printed label. The tolerance covers a hand-typed 227
+   or 454 landing on the same rung as the exact conversion. */
+function sizeLabel(g, brand, rack) {
+  const v = Number(g) || 0;
+  if (!v) return '?';
+  const tryLadder = l => { const h = l.find(sz => Math.abs(sz.g - v) < 0.7); return h ? h.label : null; };
+  const own = tryLadder(ladderFor(brand, rack));
+  if (own) return own;
+  for (const l of Object.values(RACK_SIZES)) { const h = tryLadder(l); if (h) return h; }
+  for (const l of Object.values(BRAND_SIZES)) { const h = tryLadder(l); if (h) return h; }
+  if (v >= OZ_G && Math.abs(v / OZ_G - Math.round(v / OZ_G)) < 0.03) return Math.round(v / OZ_G) + ' oz';
+  return (Math.round(v * 10) / 10) + ' g';
+}
+function brandOf(dyeId) { const d = dyeFor(dyeId); return d ? d.Brand : ''; }
 
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
@@ -327,7 +431,9 @@ function dyeColor(d) { return hexOf(d.Swatch_Hex) || guessColor(d.Dye_Name); }
 
 /* ── State ─────────────────────────────────────────────────────── */
 let BOXES = lsGet(BOX_STORE, DEFAULT_BOXES.slice());
-let SIZES = lsGet(SIZE_STORE, { list: [10, 50, 100, 227, 454], current: 100, byBrand: {} });
+let SIZES = lsGet(SIZE_STORE, { byBrand: Object.assign({}, SEED_DEFAULT) });
+let sizeBarOpen = false;
+let activeRack = 'DP', hasReactive = false;
 let allDyes = [];       // {id, Dye_Name, Brand, Serial, Swatch_Hex, Status, letter, counted}
 let jars = [];          // {id, dyeId, Box, Location, Size_g, State, Low, Lot_Code, Received}
 let jarsByDye = {};     // dyeId -> [jar]
@@ -340,25 +446,38 @@ let findQuery = '', findFilter = 'all', activeBox = null;
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 function dyeFor(id) { return allDyes.find(d => d.id === id) || null; }
-function dyesInLetter(letter) {
-  return allDyes.filter(d => d.letter === letter)
+function dyesInLetter(letter, rack) {
+  const r = rack || activeRack;
+  return allDyes.filter(d => d.letter === letter && d.rack === r)
     .sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name)));
 }
 function shelfJars(dyeId) { return (jarsByDye[dyeId] || []).filter(j => j.Location !== BACK); }
 function backJars(dyeId) { return (jarsByDye[dyeId] || []).filter(j => j.Location === BACK); }
-function openJar(dyeId) { return shelfJars(dyeId).find(j => j.State === 'Open') || null; }
-function isLow(dyeId) { const j = openJar(dyeId); return !!(j && j.Low); }
+function openJars(dyeId) { return shelfJars(dyeId).filter(j => j.State === 'Open'); }
+function openJar(dyeId) { return openJars(dyeId)[0] || null; }
+/* A spare is anything unopened, whether it is behind the box or has already been
+   moved forward onto the shelf. Counting only the ones behind it called a dye
+   critical while a sealed jar sat in plain sight. */
+function spares(dyeId) {
+  return (jarsByDye[dyeId] || []).filter(j => j.Location === BACK || j.State !== 'Open');
+}
+/* Low only means low when every jar you have open is low. A nearly-empty 10g
+   next to a fresh 100g is not a reorder signal. */
+function isLow(dyeId) {
+  const o = openJars(dyeId);
+  return o.length > 0 && o.every(j => j.Low);
+}
 function defaultBoxFor(dyeId) {
   const d = dyeFor(dyeId);
   if (!d) return '';
   const mine = (jarsByDye[dyeId] || []).find(j => j.Box);
   if (mine) return mine.Box;
-  const boxes = boxesForLetter(d.letter);
+  const boxes = boxesForLetter(d.letter, d.rack);
   if (!boxes.length) return '';
   // Where the rest of this letter already lives, so a split letter keeps
   // its two boxes instead of dumping everything into the first one.
   const tally = {};
-  dyesInLetter(d.letter).forEach(o => (jarsByDye[o.id] || []).forEach(j => {
+  dyesInLetter(d.letter, d.rack).forEach(o => (jarsByDye[o.id] || []).forEach(j => {
     if (j.Box) tally[j.Box] = (tally[j.Box] || 0) + 1;
   }));
   const best = boxes.slice().sort((a, b) => (tally[b] || 0) - (tally[a] || 0))[0];
@@ -366,8 +485,10 @@ function defaultBoxFor(dyeId) {
 }
 function sizeFor(dyeId) {
   const d = dyeFor(dyeId);
-  const byBrand = d && d.Brand ? SIZES.byBrand[norm(d.Brand)] : null;
-  return Number(byBrand || SIZES.current || 100);
+  const k = sizeKey(d ? d.Brand : '', d ? d.rack : 'DP');
+  const set = Number(SIZES.byBrand[k]);
+  if (set > 0) return set;
+  return Number(SEED_DEFAULT[k] || 100);
 }
 
 /* ── Load ──────────────────────────────────────────────────────── */
@@ -381,6 +502,10 @@ async function loadAll() {
       serial:  { cands: ['Serial', 'SKU_Base'], required: false },
       hex:     { cands: ['Swatch_Hex', 'Hex_Color', 'Manual_Hex'], required: false },
       status:  { cands: ['Status'], required: false },
+      dtype:   { cands: ['Dye_Type'], required: false },
+      dfam:    { cands: ['Dye_Family'], required: false },
+      tech:    { cands: ['Technique'], required: false },
+      dsrc:    { cands: ['Dye_Source_Type'], required: false },
       counted: { cands: ['Powder_Counted'], required: false }
     }, setupMissing);
     hasCountedCol = !!dc.counted;
@@ -394,10 +519,17 @@ async function loadAll() {
         Serial: rowField(dyesT, dc.serial, i, ''),
         Swatch_Hex: rowField(dyesT, dc.hex, i, ''),
         Status: rowField(dyesT, dc.status, i, ''),
+        Dye_Type: rowField(dyesT, dc.dtype, i, ''),
+        Dye_Family: rowField(dyesT, dc.dfam, i, ''),
+        Technique: rowField(dyesT, dc.tech, i, ''),
+        Dye_Source_Type: rowField(dyesT, dc.dsrc, i, ''),
         counted: hasCountedCol ? (rowField(dyesT, dc.counted, i, null) || null) : null,
         letter: dyeLetter(nm)
       };
     }).filter(d => d.Dye_Name);
+    allDyes.forEach(d => { d.rack = rackOf(d); });
+    hasReactive = allDyes.some(d => d.rack === 'DR');
+    if (!hasReactive) activeRack = 'DP';
 
     // Powder table is the one thing this widget cannot do without.
     let powT = null;
@@ -459,6 +591,7 @@ async function loadAll() {
     // Boxes actually in use win over the stored guess, so a box typed in at the
     // shelf shows up in the rail without anyone editing a setting.
     const used = [...new Set(jars.map(j => j.Box).filter(Boolean))];
+    if (hasReactive) used.push(DR_BOX);
     const merged = [...new Set(BOXES.concat(used))].sort(boxSort);
     if (merged.length !== BOXES.length) { BOXES = merged; lsSet(BOX_STORE, BOXES); }
 
@@ -507,11 +640,15 @@ async function removeJar(jarId) {
 /* Used up is the everyday action: the working jar goes in the bin and, if there
    is a spare behind the box, it comes forward in the same breath. Doing both at
    once is the only way the shelf and the record stay in step. */
-async function useUp(dyeId) {
-  const open = openJar(dyeId);
+async function useUp(jarId) {
+  const open = jars.find(j => j.id === jarId);
   if (!open) return;
   const actions = [['RemoveRecord', 'Dye_Powder', open.id]];
-  const spare = backJars(dyeId).slice().sort((a, b) => (a.Received || 0) - (b.Received || 0))[0];
+  // Oldest spare comes forward first, and one behind the box beats one already
+  // on the shelf so the deep row keeps draining.
+  const spare = spares(open.dyeId).filter(j => j.id !== open.id)
+    .sort((a, b) => (b.Location === BACK ? 1 : 0) - (a.Location === BACK ? 1 : 0) ||
+                    (a.Received || 0) - (b.Received || 0))[0];
   if (spare) {
     const f = {};
     if (COLS.loc) f[COLS.loc] = SHELF;
@@ -553,8 +690,15 @@ async function addToPicked() {
    Stamping every dye rather than the letter means a dye added next year comes
    back as uncounted instead of silently reading as out of stock. */
 async function setLetterCounted(letter, on) {
+  const rows = letter === null ? reactiveDyes() : dyesInLetter(letter, activeRack);
+  return stampCounted(rows, on, letter === null ? 'The Procion box' : letter);
+}
+function reactiveDyes() {
+  return allDyes.filter(d => d.rack === 'DR')
+    .sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name)));
+}
+async function stampCounted(rows, on, what) {
   if (!hasCountedCol) { showToast('Add a Powder_Counted date column to Dyes first'); return; }
-  const rows = dyesInLetter(letter);
   if (!rows.length) return;
   const stamp = on ? todayEpoch() : null;
   const dyesT = await grist.docApi.fetchTable('Dyes');
@@ -564,41 +708,50 @@ async function setLetterCounted(letter, on) {
       ['BulkUpdateRecord', 'Dyes', rows.map(r => r.id), { [col]: rows.map(() => stamp) }]
     ]);
     await loadAll();
-    showToast(on ? letter + ' marked counted' : letter + ' reopened');
+    showToast(on ? what + ' marked counted' : what + ' reopened');
   } catch (e) { showToast('Could not save: ' + (e.message || e)); }
 }
 function letterDone(letter) {
-  const rows = dyesInLetter(letter);
+  const rows = dyesInLetter(letter, activeRack);
   return rows.length > 0 && rows.every(r => r.counted);
 }
 
 /* ── UI plumbing ───────────────────────────────────────────────── */
 function setTab(t) { tab = t; openDetail = null; render(); }
 function pickLetter(l) { activeLetter = l; openDetail = null; picked.clear(); render(); }
+function pickRack(r) {
+  activeRack = r; openDetail = null; picked.clear();
+  if (r !== 'DR' && !dyesInLetter(activeLetter, r).length) {
+    activeLetter = LETTERS.find(l => dyesInLetter(l, r).length) || activeLetter;
+  }
+  render();
+}
 function toggleDetail(id) { openDetail = openDetail === id ? null : id; render(); }
 function togglePick(id) {
   if (picked.has(id)) picked.delete(id); else picked.add(id);
   render();
 }
 function pickAllBlank() {
-  dyesInLetter(activeLetter).forEach(d => { if (!(jarsByDye[d.id] || []).length) picked.add(d.id); });
+  const list = activeRack === 'DR' ? reactiveDyes() : dyesInLetter(activeLetter, activeRack);
+  list.forEach(d => { if (!(jarsByDye[d.id] || []).length) picked.add(d.id); });
   render();
 }
 function clearPicked() { picked.clear(); render(); }
-function setSize(v) {
-  const n = Number(v);
-  if (!n || n <= 0) return;
-  SIZES.current = n;
-  if (!SIZES.list.includes(n)) { SIZES.list.push(n); SIZES.list.sort((a, b) => a - b); }
+function setBrandDefault(key, grams) {
+  const g = Number(grams);
+  if (!key || !(g > 0)) return;
+  SIZES.byBrand[key] = g;
   lsSet(SIZE_STORE, SIZES);
   render();
 }
-function setBrandSize(brand, v) {
-  const n = Number(v);
-  if (!brand) return;
-  if (n > 0) SIZES.byBrand[norm(brand)] = n; else delete SIZES.byBrand[norm(brand)];
-  lsSet(SIZE_STORE, SIZES);
-  render();
+function toggleSizeBar() { sizeBarOpen = !sizeBarOpen; render(); }
+async function promptSize(jarId) {
+  const j = jars.find(x => x.id === jarId);
+  const v = prompt('Size of this jar in grams', j ? String(j.Size_g || '') : '');
+  if (v === null) { render(); return; }
+  const g = Number(v);
+  if (!(g > 0)) { showToast('Enter a number of grams'); render(); return; }
+  await updateJar(jarId, { size: g });
 }
 
 /* ── Render ────────────────────────────────────────────────────── */
@@ -639,7 +792,7 @@ function setupPanel() {
     [['Dye', 'Reference → Dyes', 'Keyed on row ID, never on name'],
      ['Box', 'Text', 'DP-A, DP-B1, DP-HIJ'],
      ['Location', 'Choice', 'Shelf · Back stock'],
-     ['Size_g', 'Numeric', 'Grams the jar held when full'],
+     ['Size_g', 'Numeric', 'Always grams — the widget shows oz/lb per brand'],
      ['State', 'Choice', 'Sealed · Open'],
      ['Low', 'Toggle', 'Only meaningful on the open jar'],
      ['Lot_Code', 'Text', 'Vendor dye lot, when you care'],
@@ -654,11 +807,11 @@ function setupPanel() {
 
 function letterRail() {
   const rows = LETTERS.map(l => {
-    const dyes = dyesInLetter(l);
+    const dyes = dyesInLetter(l, activeRack);
     if (!dyes.length) return '';
     const logged = dyes.filter(d => (jarsByDye[d.id] || []).length).length;
     const done = letterDone(l);
-    const boxes = boxesForLetter(l);
+    const boxes = boxesForLetter(l, activeRack);
     return '<div class="letter-row' + (l === activeLetter ? ' active' : '') + '" ' +
       'role="button" tabindex="0" onclick="pickLetter(\'' + l + '\')" ' +
       'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();pickLetter(\'' + l + '\')}">' +
@@ -666,7 +819,7 @@ function letterRail() {
       '<span class="lr-meta' + (done ? ' lr-done' : '') + '">' +
       (done ? '✓ ' : '') + logged + '/' + dyes.length + '</span></div>';
   }).join('');
-  const orphan = dyesInLetter(NO_LETTER);
+  const orphan = dyesInLetter(NO_LETTER, activeRack);
   return '<div class="letter-rail">' + rows +
     (orphan.length ? '<div class="letter-row' + (activeLetter === NO_LETTER ? ' active' : '') +
       '" role="button" tabindex="0" onclick="pickLetter(\'' + NO_LETTER + '\')">' +
@@ -674,14 +827,34 @@ function letterRail() {
     '</div>';
 }
 
-function sizeBar() {
-  const opts = SIZES.list.map(n =>
-    '<button class="size-opt' + (n === Number(SIZES.current) ? ' on' : '') + '" onclick="setSize(' + n + ')">' + n + 'g</button>'
-  ).join('');
-  return '<div class="size-bar"><span class="lbl">New jars are</span>' + opts +
-    '<input class="size-custom" type="number" min="1" placeholder="other" ' +
-    'onchange="setSize(this.value); this.value=\'\'">' +
-    '<span class="lbl" style="margin-left:auto">Brands remember their own size once you set one below.</span></div>';
+/* One default per brand rather than one for the shelf, because a letter mixes
+   brands and each sells in a different unit. Collapsed to a summary line until
+   you need to change one. */
+function sizeBar(dyes) {
+  const keys = [...new Set((dyes || []).map(d => sizeKey(d.Brand, d.rack)))]
+    .sort((a, b) => SIZE_KEY_ORDER.indexOf(a) - SIZE_KEY_ORDER.indexOf(b));
+  if (!keys.length) return '';
+  const summary = keys.map(k =>
+    esc(BRAND_LABEL[k] || k) + ' <strong>' +
+    esc(sizeLabel(Number(SIZES.byBrand[k]) || SEED_DEFAULT[k] || 100, k.replace(/^dr:/, ''), k.startsWith('dr:') ? 'DR' : 'DP')) + '</strong>'
+  ).join(' &nbsp;·&nbsp; ');
+  if (!sizeBarOpen) {
+    return '<div class="size-bar"><span class="lbl">New jars</span><span>' + summary + '</span>' +
+      '<button class="btn btn-small" style="margin-left:auto" onclick="toggleSizeBar()">Change</button></div>';
+  }
+  const rows = keys.map(k => {
+    const cur = Number(SIZES.byBrand[k]) || SEED_DEFAULT[k] || 100;
+    const btns = ladderForKey(k).map(sz =>
+      '<button class="size-opt' + (Math.abs(sz.g - cur) < 0.7 ? ' on' : '') + '" ' +
+      'onclick="setBrandDefault(\'' + k + '\', ' + sz.g + ')">' + esc(sz.label) + '</button>'
+    ).join('');
+    return '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; width:100%">' +
+      '<span class="lbl" style="min-width:112px">' + esc(BRAND_LABEL[k] || k) + '</span>' + btns + '</div>';
+  }).join('');
+  return '<div class="size-bar" style="flex-direction:column; align-items:stretch; gap:7px">' +
+    '<div style="display:flex; align-items:center; width:100%"><span class="lbl">Size a new jar defaults to, per brand</span>' +
+    '<button class="btn btn-small" style="margin-left:auto" onclick="toggleSizeBar()">Done</button></div>' +
+    rows + '</div>';
 }
 
 function holdingLine(d) {
@@ -693,19 +866,23 @@ function holdingLine(d) {
   }
   const parts = [];
   if (sh.length) {
-    const op = sh.find(j => j.State === 'Open');
+    const op = sh.filter(j => j.State === 'Open');
     const sealed = sh.filter(j => j.State !== 'Open').length;
-    let t = 'Shelf: ' + (op ? '1 open ' + (op.Size_g || '?') + 'g' : sh.length + ' sealed');
-    if (op && sealed) t += ' + ' + sealed + ' sealed';
+    let t;
+    if (!op.length) t = 'Shelf: ' + sealed + ' sealed';
+    else if (op.length === 1) t = 'Shelf: 1 open ' + sizeLabel(op[0].Size_g, d.Brand, d.rack);
+    else t = 'Shelf: ' + op.length + ' open (' + op.map(j => sizeLabel(j.Size_g, d.Brand, d.rack)).join(', ') + ')';
+    if (op.length && sealed) t += ' + ' + sealed + ' sealed';
     parts.push('<span class="hold-shelf">' + esc(t) + '</span>');
-    if (op && op.Low) parts.push('<span class="hold-low">running low</span>');
+    if (isLow(d.id)) parts.push('<span class="hold-low">running low</span>');
+    else if (op.some(j => j.Low)) parts.push('<span class="hold-low">one jar low</span>');
   }
   if (bk.length) {
     const g = {};
     bk.forEach(j => { g[j.Size_g || 0] = (g[j.Size_g || 0] || 0) + 1; });
-    const t = Object.entries(g).map(([s, n]) => n + ' × ' + (Number(s) || '?') + 'g').join(', ');
+    const t = Object.entries(g).map(([s, n]) => n + ' × ' + sizeLabel(s, d.Brand, d.rack)).join(', ');
     parts.push('<span class="hold-back">Behind: ' + esc(t) + '</span>');
-  } else if (sh.length) {
+  } else if (sh.length && !sh.some(j => j.State !== 'Open')) {
     parts.push('<span class="hold-none">nothing behind it</span>');
   }
   return '<div class="holding">' + parts.join('') + '</div>';
@@ -719,11 +896,16 @@ function dyeRow(d, opts) {
   if (hasPowderTable) {
     a.push('<button class="btn btn-small" onclick="addJar(' + d.id + ',\'' + SHELF + '\',\'Open\')">+ shelf</button>');
     a.push('<button class="btn btn-small" onclick="addJar(' + d.id + ',\'' + BACK + '\',\'Sealed\')">+ behind</button>');
-    if (op) {
-      a.push('<button class="btn btn-small' + (op.Low ? ' btn-ink' : '') + '" ' +
-        'onclick="updateJar(' + op.id + ', {low: ' + (op.Low ? 'false' : 'true') + '})">' +
-        (op.Low ? 'low ✓' : 'low') + '</button>');
-      a.push('<button class="btn btn-small btn-warn" onclick="useUp(' + d.id + ')">used up</button>');
+    const openList = openJars(d.id);
+    if (openList.length === 1) {
+      const o = openList[0];
+      a.push('<button class="btn btn-small' + (o.Low ? ' btn-ink' : '') + '" ' +
+        'onclick="updateJar(' + o.id + ', {low: ' + (o.Low ? 'false' : 'true') + '})">' +
+        (o.Low ? 'low ✓' : 'low') + '</button>');
+      a.push('<button class="btn btn-small btn-warn" onclick="useUp(' + o.id + ')">used up</button>');
+    } else if (openList.length > 1) {
+      // Which jar do you mean? Don't guess — send it to the per-jar panel.
+      a.push('<span class="dye-sub">' + openList.length + ' open</span>');
     }
     if (has) a.push('<button class="btn btn-small" onclick="toggleDetail(' + d.id + ')" ' +
       'aria-expanded="' + (openDetail === d.id ? 'true' : 'false') + '">jars</button>');
@@ -733,10 +915,11 @@ function dyeRow(d, opts) {
       ' onchange="togglePick(' + d.id + ')" aria-label="Select ' + esc(d.Dye_Name) + '">'
     : '<span></span>';
   const sub = [d.Brand, d.Serial].filter(Boolean).join(' ');
+  const rtag = d.rack === 'DR' ? ' <span class="jar-tag back">reactive</span>' : '';
   return '<div class="dye-row' + (picked.has(d.id) ? ' picked' : '') + (has ? '' : ' blank') + '">' +
     tick +
     '<span class="swatch-dot" style="background:' + esc(dyeColor(d)) + '"></span>' +
-    '<div><div class="dye-name">' + esc(d.Dye_Name) +
+    '<div><div class="dye-name">' + esc(d.Dye_Name) + rtag +
       (sub ? ' <span class="dye-sub">' + esc(sub) + '</span>' : '') + '</div>' +
       holdingLine(d) + '</div>' +
     '<div class="row-actions">' + a.join('') + '</div>' +
@@ -747,14 +930,21 @@ function dyeRow(d, opts) {
 function detailPanel(d) {
   const list = (jarsByDye[d.id] || []).slice().sort((a, b) =>
     (a.Location === BACK ? 1 : 0) - (b.Location === BACK ? 1 : 0) || (a.Received || 0) - (b.Received || 0));
-  const boxOpts = boxesForLetter(d.letter).concat(BOXES.filter(b => !boxesForLetter(d.letter).includes(b)));
+  const own = boxesForLetter(d.letter, d.rack);
+  const boxOpts = own.concat(BOXES.filter(b => boxRack(b) === d.rack && !own.includes(b)));
   const rows = list.map(j => {
     const tag = j.Location === BACK
       ? '<span class="jar-tag back">behind</span>'
       : '<span class="jar-tag ' + (j.State === 'Open' ? 'open' : '') + '">' + esc(j.State === 'Open' ? 'open' : 'sealed') + '</span>';
     return '<div class="jar-line">' + tag +
-      '<input class="mini mono" style="width:64px" type="number" min="1" value="' + esc(j.Size_g || '') +
-        '" onchange="updateJar(' + j.id + ', {size: Number(this.value)})" aria-label="Size in grams"> g' +
+      '<select class="mini mono" style="width:86px" aria-label="Jar size" ' +
+        'onchange="this.value===\'other\' ? promptSize(' + j.id + ') : updateJar(' + j.id + ', {size: Number(this.value)})">' +
+        ladderFor(d.Brand, d.rack).map(sz => '<option value="' + sz.g + '"' +
+          (Math.abs(sz.g - j.Size_g) < 0.7 ? ' selected' : '') + '>' + esc(sz.label) + '</option>').join('') +
+        (ladderFor(d.Brand, d.rack).some(sz => Math.abs(sz.g - j.Size_g) < 0.7) ? '' :
+          '<option value="' + esc(j.Size_g) + '" selected>' + esc(sizeLabel(j.Size_g, d.Brand, d.rack)) + '</option>') +
+        '<option value="other">other…</option>' +
+      '</select>' +
       '<select class="mini mono w-box" onchange="updateJar(' + j.id + ', {box: this.value})" aria-label="Box">' +
         boxOpts.map(b => '<option value="' + esc(b) + '"' + (b === j.Box ? ' selected' : '') + '>' + esc(boxLabel(b)) + '</option>').join('') +
         (j.Box && !boxOpts.includes(j.Box) ? '<option selected>' + esc(j.Box) + '</option>' : '') +
@@ -770,43 +960,57 @@ function detailPanel(d) {
       '<input class="mini mono w-lot" placeholder="lot" value="' + esc(j.Lot_Code || '') +
         '" onchange="updateJar(' + j.id + ', {lot: this.value})" aria-label="Lot code">' +
       (j.Received ? '<span class="dye-sub">' + esc(shortDate(j.Received)) + '</span>' : '') +
+      (j.State === 'Open'
+        ? '<button class="btn btn-small' + (j.Low ? ' btn-ink' : '') + '" onclick="updateJar(' + j.id +
+          ', {low: ' + (j.Low ? 'false' : 'true') + '})">' + (j.Low ? 'low ✓' : 'low') + '</button>' +
+          '<button class="btn btn-small btn-warn" onclick="useUp(' + j.id + ')">used up</button>'
+        : '') +
       '<button class="btn btn-small btn-warn" style="margin-left:auto" onclick="removeJar(' + j.id + ')">remove</button>' +
       '</div>';
   }).join('');
-  const brandSize = d.Brand ? SIZES.byBrand[norm(d.Brand)] || '' : '';
-  const brandBit = d.Brand
-    ? '<div class="jar-line" style="border-top:1px solid var(--rule); margin-top:6px; padding-top:8px">' +
-      '<span class="dye-sub">Default jar size for ' + esc(d.Brand) + '</span>' +
-      '<input class="mini mono" style="width:64px" type="number" min="1" value="' + esc(brandSize) +
-      '" onchange="setBrandSize(\'' + esc(String(d.Brand).replace(/\\/g, '\\\\').replace(/'/g, "\\'")) + '\', this.value)" aria-label="Brand default size"> g' +
-      '</div>' : '';
+  const brandBit = '';
   return '<div class="detail">' + (rows || '<div class="dye-sub">No jars recorded.</div>') + brandBit + '</div>';
 }
 
 function renderCount() {
-  const dyes = dyesInLetter(activeLetter);
-  const boxes = boxesForLetter(activeLetter);
+  const oneBox = activeRack === 'DR';
+  const dyes = oneBox ? reactiveDyes() : dyesInLetter(activeLetter, activeRack);
+  const boxes = boxesForLetter(oneBox ? '' : activeLetter, activeRack);
   const logged = dyes.filter(d => (jarsByDye[d.id] || []).length).length;
-  const done = letterDone(activeLetter);
-  const head = '<div class="letter-head"><h2>' + esc(activeLetter === NO_LETTER ? 'Unfiled' : activeLetter) + '</h2>' +
+  const done = oneBox
+    ? (dyes.length > 0 && dyes.every(d => d.counted))
+    : letterDone(activeLetter);
+  const rackTabs = hasReactive
+    ? '<div class="tabs" style="margin-bottom:12px">' + Object.entries(RACKS).map(([k, lbl]) =>
+        '<button class="tab-btn' + (activeRack === k ? ' active' : '') + '" onclick="pickRack(\'' + k + '\')">' +
+        esc(lbl) + '<span class="pip">' + allDyes.filter(d => d.rack === k).length + '</span></button>').join('') +
+      '</div>'
+    : '';
+  const title = oneBox ? 'Procion' : esc(activeLetter === NO_LETTER ? 'Unfiled' : activeLetter);
+  const arg = oneBox ? 'null' : "'" + activeLetter + "'";
+  const noun = oneBox ? 'the box' : activeLetter;
+  const head = '<div class="letter-head"><h2>' + title + '</h2>' +
     boxes.map(b => '<span class="box-chip">' + esc(boxLabel(b)) + '</span>').join('') +
     '<span class="dye-sub">' + logged + ' of ' + dyes.length + ' logged</span>' +
     '<span class="head-spacer"></span>' +
     (hasCountedCol
-      ? '<button class="btn btn-small ' + (done ? '' : 'btn-teal') + '" onclick="setLetterCounted(\'' + activeLetter + '\', ' + (done ? 'false' : 'true') + ')">' +
-        (done ? 'Reopen ' + activeLetter : 'Mark ' + activeLetter + ' counted') + '</button>'
+      ? '<button class="btn btn-small ' + (done ? '' : 'btn-teal') + '" onclick="setLetterCounted(' + arg + ', ' + (done ? 'false' : 'true') + ')">' +
+        (done ? 'Reopen ' + noun : 'Mark ' + noun + ' counted') + '</button>'
       : '') +
     '</div>';
   const body = dyes.length
     ? dyes.map(d => dyeRow(d, { tick: true })).join('')
-    : '<div class="empty-state">No dyes file under this letter.</div>';
+    : '<div class="empty-state">' + (oneBox ? 'No reactive dyes in the catalog yet.' : 'No dyes file under this letter.') + '</div>';
   const bulk = picked.size
     ? '<div class="bulk-bar"><span>' + picked.size + ' selected</span>' +
       '<button class="btn btn-small" onclick="addToPicked()">Add one open shelf jar to each</button>' +
       '<button class="btn btn-small" onclick="clearPicked()">Clear</button></div>'
     : '<div style="margin-top:10px"><button class="btn btn-small" onclick="pickAllBlank()">Select everything not yet logged</button></div>';
-  return '<div class="panel"><div class="split">' + letterRail() +
-    '<div>' + head + sizeBar() + body + bulk + '</div></div></div>';
+  const inner = '<div>' + rackTabs + head + sizeBar(dyes) + body + bulk + '</div>';
+  // No alphabetical rail for a single box — there is nothing to navigate.
+  return oneBox
+    ? '<div class="panel">' + inner + '</div>'
+    : '<div class="panel"><div class="split">' + letterRail() + inner + '</div></div>';
 }
 
 function renderFind() {
@@ -826,10 +1030,12 @@ function renderFind() {
       '<span class="box-chip" style="margin-top:1px">' + esc(box ? boxLabel(box) : '—') + '</span>' +
       '<span class="swatch-dot" style="background:' + esc(dyeColor(d)) + '"></span>' +
       '<div><div class="dye-name">' + esc(d.Dye_Name) +
+        (d.rack === 'DR' ? ' <span class="jar-tag back">reactive</span>' : '') +
         ' <span class="dye-sub">' + esc([d.Brand, d.Serial].filter(Boolean).join(' ')) + '</span></div>' +
         holdingLine(d) + '</div>' +
       '<div class="row-actions">' +
-        (openJar(d.id) ? '<button class="btn btn-small btn-warn" onclick="useUp(' + d.id + ')">used up</button>' : '') +
+        (openJars(d.id).length === 1
+          ? '<button class="btn btn-small btn-warn" onclick="useUp(' + openJar(d.id).id + ')">used up</button>' : '') +
         ((jarsByDye[d.id] || []).length ? '<button class="btn btn-small" onclick="toggleDetail(' + d.id + ')">jars</button>' : '') +
       '</div>' + (openDetail === d.id ? detailPanel(d) : '') + '</div>';
   }).join('') : '<div class="empty-state">Nothing matches that.</div>';
@@ -871,12 +1077,13 @@ function reorderGroups() {
   const out = [], critical = [], thin = [];
   allDyes.forEach(d => {
     if (!d.counted) return;             // never looked at — not a reorder signal
-    const sh = shelfJars(d.id), bk = backJars(d.id);
+    const held = jarsByDye[d.id] || [];
+    const sp = spares(d.id).filter(j => j.State !== 'Open');
     const uses = recipeUses[d.id] || 0;
     const rec = { d, uses };
-    if (!sh.length && !bk.length) out.push(rec);
-    else if (isLow(d.id) && !bk.length) critical.push(rec);
-    else if (!bk.length && uses > 0) thin.push(rec);
+    if (!held.length) out.push(rec);
+    else if (isLow(d.id) && !sp.length) critical.push(rec);
+    else if (!sp.length && uses > 0) thin.push(rec);
   });
   const bySeen = (a, b) => b.uses - a.uses || fold(a.d.Dye_Name).localeCompare(fold(b.d.Dye_Name));
   return { out: out.sort(bySeen), critical: critical.sort(bySeen), thin: thin.sort(bySeen) };
@@ -898,7 +1105,8 @@ function renderOrder() {
       rows.map(r => {
         const box = (jarsByDye[r.d.id] || []).map(j => j.Box).filter(Boolean)[0] || defaultBoxFor(r.d.id);
         return '<tr><td><span class="swatch-dot" style="background:' + esc(dyeColor(r.d)) +
-          '; width:12px; height:12px; margin-right:6px"></span>' + esc(r.d.Dye_Name) + '</td>' +
+          '; width:12px; height:12px; margin-right:6px"></span>' + esc(r.d.Dye_Name) +
+          (r.d.rack === 'DR' ? ' <span class="jar-tag back">reactive</span>' : '') + '</td>' +
           '<td class="mono">' + esc([r.d.Brand, r.d.Serial].filter(Boolean).join(' ')) + '</td>' +
           '<td class="mono">' + esc(box ? boxLabel(box) : '—') + '</td>' +
           '<td><span class="uses' + (r.uses >= 5 ? ' hot' : '') + '">' + (r.uses || '—') + '</span></td></tr>';
