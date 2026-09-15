@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dye Powder</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --muted: #8B7D72;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif;
+  font-size: 13px; line-height: 1.5; padding: 14px;
+}
+.top-bar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.top-note { font-size: 11px; color: var(--muted); }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab-btn {
+  font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: inherit;
+}
+.tab-btn.active { background: var(--ink); border-color: var(--ink); color: white; }
+.tab-btn .pip { font-size: 10px; color: var(--muted); margin-left: 5px; }
+.tab-btn.active .pip { color: rgba(255,255,255,.7); }
+.btn {
+  font-size: 12px; padding: 6px 11px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: inherit;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .tab-btn:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn[disabled] { opacity: .4; cursor: default; }
+.btn[disabled]:hover { border-color: var(--rule); }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-teal:hover { border-color: var(--teal); }
+.btn-ink { background: var(--ink); border-color: var(--ink); color: white; }
+.btn-small { font-size: 11px; padding: 4px 8px; }
+.btn-warn { color: var(--accent); }
+
+.panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 16px; }
+.split { display: grid; grid-template-columns: 172px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 720px) { .split { grid-template-columns: 1fr; } }
+
+.letter-rail { display: flex; flex-direction: column; gap: 3px; max-height: 620px; overflow-y: auto; padding-right: 4px; }
+.letter-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 6px;
+  cursor: pointer; border: 1px solid transparent; font-size: 12px;
+}
+.letter-row:hover { background: var(--paper); }
+.letter-row.active { background: var(--ink); color: white; border-color: var(--ink); }
+.letter-row.active .lr-meta { color: rgba(255,255,255,.7); }
+.lr-key { font-family: 'DM Mono', monospace; font-weight: 500; min-width: 34px; }
+.lr-meta { font-size: 11px; color: var(--muted); margin-left: auto; }
+.lr-done { color: var(--teal); font-weight: 600; }
+.letter-row.active .lr-done { color: #9FD8CB; }
+
+.letter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+.letter-head h2 { font-family: 'Libre Baskerville', serif; font-size: 17px; font-weight: 700; }
+.box-chip {
+  font-family: 'DM Mono', monospace; font-size: 11px; padding: 3px 8px;
+  border-radius: 5px; background: var(--warm); color: var(--ink);
+}
+.head-spacer { margin-left: auto; }
+
+.size-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 7px;
+  padding: 8px 10px; margin-bottom: 12px; font-size: 12px;
+}
+.size-bar .lbl { color: var(--muted); }
+.size-opt {
+  font-family: 'DM Mono', monospace; font-size: 11px; padding: 4px 9px; border-radius: 5px;
+  border: 1px solid var(--rule); background: white; cursor: pointer; color: var(--ink);
+}
+.size-opt.on { background: var(--ink); border-color: var(--ink); color: white; }
+.size-custom { width: 62px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 5px; font-family: 'DM Mono', monospace; font-size: 11px; }
+
+.dye-row {
+  display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: start;
+  padding: 9px 4px; border-bottom: 1px solid var(--rule);
+}
+.dye-row.picked { background: var(--teal-light); }
+.dye-row.blank .dye-name { color: var(--muted); }
+.swatch-dot { width: 17px; height: 17px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); flex-shrink: 0; margin-top: 2px; }
+.dye-name { font-weight: 500; }
+.dye-sub { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
+.holding { font-size: 11px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.hold-shelf { color: var(--teal); }
+.hold-back { color: var(--gold); }
+.hold-none { color: var(--muted); font-style: italic; }
+.hold-low { color: var(--accent); font-weight: 600; }
+.row-actions { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.tick { width: 15px; height: 15px; margin-top: 3px; cursor: pointer; accent-color: var(--teal); }
+
+.detail {
+  grid-column: 1 / -1; background: var(--paper); border: 1px solid var(--rule);
+  border-radius: 7px; padding: 10px 12px; margin-top: 8px;
+}
+.jar-line { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; flex-wrap: wrap; }
+.jar-line + .jar-line { border-top: 1px dashed var(--rule); }
+.jar-tag {
+  font-family: 'DM Mono', monospace; font-size: 10px; padding: 2px 7px; border-radius: 10px;
+  background: white; border: 1px solid var(--rule);
+}
+.jar-tag.open { background: var(--teal-light); border-color: var(--teal); color: var(--teal); }
+.jar-tag.back { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
+.mini { padding: 3px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 11px; font-family: inherit; background: white; color: var(--ink); }
+.mini.mono { font-family: 'DM Mono', monospace; }
+.mini.w-lot { width: 92px; }
+.mini.w-box { width: 96px; }
+
+.bulk-bar {
+  position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px;
+  background: var(--ink); color: white; padding: 9px 12px; border-radius: 7px;
+  margin-top: 12px; font-size: 12px; z-index: 5;
+}
+.bulk-bar .btn { border-color: rgba(255,255,255,.35); background: transparent; color: white; }
+.bulk-bar .btn:hover { border-color: white; }
+
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid thead th {
+  text-align: left; font-size: 11px; font-weight: 600; color: white; background: var(--ink); padding: 8px 10px;
+}
+table.grid tbody tr:nth-child(even) { background: var(--paper); }
+table.grid td { padding: 7px 10px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
+td.mono, th.mono { font-family: 'DM Mono', monospace; }
+
+.search-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.search-bar input[type=search] {
+  flex: 1; min-width: 180px; padding: 7px 10px; border: 1px solid var(--rule);
+  border-radius: 6px; font-size: 12px; font-family: inherit;
+}
+.pill-group { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.urgency-head {
+  font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700;
+  margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--rule);
+}
+.urgency-head:first-child { margin-top: 0; }
+.urgency-why { font-size: 11px; color: var(--muted); font-weight: 400; font-family: 'Inter', sans-serif; display: block; margin-top: 2px; }
+.uses { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+.uses.hot { color: var(--accent); font-weight: 500; }
+
+.setup-note { background: var(--gold-light); border: 1px solid var(--gold); border-radius: 7px; padding: 12px 14px; margin-bottom: 14px; font-size: 12px; }
+.setup-note h3 { font-family: 'Libre Baskerville', serif; font-size: 14px; margin-bottom: 6px; }
+.setup-note code { font-family: 'DM Mono', monospace; background: white; padding: 1px 4px; border-radius: 3px; }
+.warn-banner { background: var(--accent-light); border: 1px solid var(--accent); border-radius: 7px; padding: 11px 13px; margin-bottom: 14px; font-size: 12px; }
+.empty-state { color: var(--muted); font-style: italic; padding: 28px; text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Dye Powder</div>
+  <div class="top-note" id="topNote"></div>
+</div>
+<div class="tabs">
+  <button class="tab-btn active" id="tab-count" onclick="setTab('count')">Count the shelf<span class="pip" id="pip-count"></span></button>
+  <button class="tab-btn" id="tab-find" onclick="setTab('find')">Find a dye</button>
+  <button class="tab-btn" id="tab-boxes" onclick="setTab('boxes')">By box</button>
+  <button class="tab-btn" id="tab-order" onclick="setTab('order')">Reorder<span class="pip" id="pip-order"></span></button>
+</div>
+
+<div id="content"><div class="empty-state">Loading…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Powder box codes — THEIR OWN NAMESPACE ────────────────────────
+   Three bin namespaces already exist in this doc and none of them are
+   this one:
+     M-A1..M-D4   made dye (Dye_Stock)      — normBin() in dye-stock.html
+     A1..D7       thread back stock         — Storage_Locations
+     S-A1..S-F5   staging
+   Powder boxes are alphabetical by COLOUR NAME, not a grid, so they are
+   DP- plus the letters the box holds, plus a number only where a letter
+   needed splitting: DP-A, DP-B1, DP-B2, DP-HIJ, DP-WXYZ.
+
+   The DP- prefix is load bearing. Without it 'B-1' normalises to 'B1',
+   which is a real thread back stock bin, and any shared helper would
+   happily merge a dye jar into a spool bin. Never pass these codes to
+   normBin() and never pass made-dye codes through here. */
+const BOX_PREFIX = 'DP-';
+const DEFAULT_BOXES = [
+  'DP-A','DP-B1','DP-B2','DP-C','DP-D','DP-E','DP-F','DP-G','DP-HIJ','DP-KL',
+  'DP-M','DP-N','DP-O','DP-P1','DP-P2','DP-Q','DP-R','DP-S1','DP-S2','DP-T',
+  'DP-UV','DP-WXYZ'
+];
+const BOX_STORE = 'ss.dyePowder.boxes.v1';
+const SIZE_STORE = 'ss.dyePowder.sizes.v1';
+const NO_LETTER = '#';
+
+/* Back stock lives behind the letter box it belongs to, so a jar's address is
+   the box code plus which of the two rows it sits in. One namespace, not two. */
+const SHELF = 'Shelf', BACK = 'Back stock';
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+/* Accent folding, matching the fix applied across the other widgets: a search
+   for "creme" has to find "Crème", and "Écarlate" has to file under E. */
+function fold(s) {
+  return String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function norm(s) { return fold(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function findColumn(t, cands) {
+  const keys = Object.keys(t);
+  for (const c of cands) {
+    const hit = keys.find(k => norm(k) === norm(c));
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(tableName + '.' + cands[0]);
+  }
+  return out;
+}
+function colArr(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function rowField(t, col, i, dflt) {
+  if (!col) return dflt;
+  const v = colArr(t, col)[i];
+  return v === undefined || v === null ? dflt : v;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function todayEpoch() {
+  const d = new Date();
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000);
+}
+function shortDate(v) {
+  if (!v) return '';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' });
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+function lsGet(key, dflt) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : dflt; }
+  catch (e) { return dflt; }
+}
+function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+
+/* ── Box codes ─────────────────────────────────────────────────── */
+function boxLetters(code) {
+  const m = /^DP-([A-Z]+)(\d*)$/.exec(String(code || '').trim().toUpperCase());
+  return m ? m[1].split('') : [];
+}
+function boxLabel(code) {
+  // What is painted on the box: DP-B1 reads as B-1, DP-HIJ reads as H-I-J.
+  const m = /^DP-([A-Z]+)(\d*)$/.exec(String(code || '').trim().toUpperCase());
+  if (!m) return String(code || '');
+  const letters = m[1].split('').join('-');
+  return m[2] ? letters + '-' + m[2] : letters;
+}
+function boxSort(a, b) {
+  const la = boxLetters(a)[0] || 'ZZ', lb = boxLetters(b)[0] || 'ZZ';
+  if (la !== lb) return la.localeCompare(lb);
+  return String(a).localeCompare(String(b), undefined, { numeric: true });
+}
+function boxesForLetter(letter) {
+  return BOXES.filter(b => boxLetters(b).includes(letter)).sort(boxSort);
+}
+
+/* Shelf letter comes from the COLOUR name. If Dye_Name still carries the brand
+   token ("Pro 370 Rhodamine Red WF") strip it first, or 144 PRO dyes all file
+   under P and the boxes stop matching the shelf. The \b guards a real word
+   boundary so Jade, Xanadu andPlum keep their own first letters. */
+const BRAND_TOKEN = /^(pro|cc|dh|pf|j|x)\b[\s.\-]*\d*[a-z]?[\s.\-]*/i;
+function dyeLetter(name) {
+  let s = fold(String(name || '')).trim().replace(BRAND_TOKEN, '').replace(/^[^A-Za-z]+/, '');
+  const c = s.charAt(0).toUpperCase();
+  return /[A-Z]/.test(c) ? c : NO_LETTER;
+}
+
+const DYE_COLORS = {
+  red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
+  blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
+  green:'#40A840',yellow:'#E8D020',orange:'#E87020',purple:'#8040C8',
+  black:'#2A2A2A',brown:'#8B5A2B',gold:'#C8A020',coral:'#E05040',
+  mint:'#40C890',lavender:'#A080C8',navy:'#203080',forest:'#2A6040',
+  grey:'#888780',gray:'#888780',white:'#F0EDE8',silver:'#A0A0A8',
+  scarlet:'#C82020',crimson:'#A01830',magenta:'#C030A0',violet:'#6030C0',
+  cerulean:'#2080C0',cobalt:'#2048A8',emerald:'#208050',sage:'#80A870',
+  ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
+};
+function guessColor(name) {
+  if (!name) return '#888780';
+  const l = fold(name).toLowerCase();
+  for (const [k, v] of Object.entries(DYE_COLORS)) if (l.includes(k)) return v;
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xFFFFFF;
+  return '#' + ((h & 0xBFBFBF) | 0x404040).toString(16).padStart(6, '0');
+}
+function hexOf(s) {
+  const v = String(s || '').trim();
+  return /^#?[0-9a-fA-F]{6}$/.test(v) ? (v[0] === '#' ? v : '#' + v) : null;
+}
+function dyeColor(d) { return hexOf(d.Swatch_Hex) || guessColor(d.Dye_Name); }
+
+/* ── State ─────────────────────────────────────────────────────── */
+let BOXES = lsGet(BOX_STORE, DEFAULT_BOXES.slice());
+let SIZES = lsGet(SIZE_STORE, { list: [10, 50, 100, 227, 454], current: 100, byBrand: {} });
+let allDyes = [];       // {id, Dye_Name, Brand, Serial, Swatch_Hex, Status, letter, counted}
+let jars = [];          // {id, dyeId, Box, Location, Size_g, State, Low, Lot_Code, Received}
+let jarsByDye = {};     // dyeId -> [jar]
+let recipeUses = {};    // dyeId -> count of recipes referencing it
+let COLS = null, hasPowderTable = false, hasCountedCol = false;
+let loadError = '', setupMissing = [];
+let tab = 'count', activeLetter = 'A', openDetail = null, picked = new Set();
+let findQuery = '', findFilter = 'all', activeBox = null;
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+function dyeFor(id) { return allDyes.find(d => d.id === id) || null; }
+function dyesInLetter(letter) {
+  return allDyes.filter(d => d.letter === letter)
+    .sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name)));
+}
+function shelfJars(dyeId) { return (jarsByDye[dyeId] || []).filter(j => j.Location !== BACK); }
+function backJars(dyeId) { return (jarsByDye[dyeId] || []).filter(j => j.Location === BACK); }
+function openJar(dyeId) { return shelfJars(dyeId).find(j => j.State === 'Open') || null; }
+function isLow(dyeId) { const j = openJar(dyeId); return !!(j && j.Low); }
+function defaultBoxFor(dyeId) {
+  const d = dyeFor(dyeId);
+  if (!d) return '';
+  const mine = (jarsByDye[dyeId] || []).find(j => j.Box);
+  if (mine) return mine.Box;
+  const boxes = boxesForLetter(d.letter);
+  if (!boxes.length) return '';
+  // Where the rest of this letter already lives, so a split letter keeps
+  // its two boxes instead of dumping everything into the first one.
+  const tally = {};
+  dyesInLetter(d.letter).forEach(o => (jarsByDye[o.id] || []).forEach(j => {
+    if (j.Box) tally[j.Box] = (tally[j.Box] || 0) + 1;
+  }));
+  const best = boxes.slice().sort((a, b) => (tally[b] || 0) - (tally[a] || 0))[0];
+  return best || boxes[0];
+}
+function sizeFor(dyeId) {
+  const d = dyeFor(dyeId);
+  const byBrand = d && d.Brand ? SIZES.byBrand[norm(d.Brand)] : null;
+  return Number(byBrand || SIZES.current || 100);
+}
+
+/* ── Load ──────────────────────────────────────────────────────── */
+async function loadAll() {
+  loadError = ''; setupMissing = [];
+  try {
+    const dyesT = await grist.docApi.fetchTable('Dyes');
+    const dc = resolveCols(dyesT, 'Dyes', {
+      name:    ['Dye_Name'],
+      brand:   { cands: ['Brand', 'Dye_Brand', 'Brand_Name'], required: false },
+      serial:  { cands: ['Serial', 'SKU_Base'], required: false },
+      hex:     { cands: ['Swatch_Hex', 'Hex_Color', 'Manual_Hex'], required: false },
+      status:  { cands: ['Status'], required: false },
+      counted: { cands: ['Powder_Counted'], required: false }
+    }, setupMissing);
+    hasCountedCol = !!dc.counted;
+    const ids = dyesT.id || [];
+    allDyes = ids.map((id, i) => {
+      const nm = rowField(dyesT, dc.name, i, '');
+      return {
+        id,
+        Dye_Name: nm,
+        Brand: rowField(dyesT, dc.brand, i, ''),
+        Serial: rowField(dyesT, dc.serial, i, ''),
+        Swatch_Hex: rowField(dyesT, dc.hex, i, ''),
+        Status: rowField(dyesT, dc.status, i, ''),
+        counted: hasCountedCol ? (rowField(dyesT, dc.counted, i, null) || null) : null,
+        letter: dyeLetter(nm)
+      };
+    }).filter(d => d.Dye_Name);
+
+    // Powder table is the one thing this widget cannot do without.
+    let powT = null;
+    try { powT = await grist.docApi.fetchTable('Dye_Powder'); }
+    catch (e) { powT = null; }
+    hasPowderTable = !!powT;
+    jars = [];
+    if (powT) {
+      const pc = resolveCols(powT, 'Dye_Powder', {
+        dye:   ['Dye'],
+        box:   { cands: ['Box', 'Box_Code', 'Bin'], required: false },
+        loc:   ['Location'],
+        size:  { cands: ['Size_g', 'Size', 'Grams'], required: false },
+        state: ['State'],
+        low:   { cands: ['Low'], required: false },
+        lot:   { cands: ['Lot_Code', 'Lot'], required: false },
+        recd:  { cands: ['Received_Date', 'Received'], required: false },
+        notes: { cands: ['Notes'], required: false }
+      }, setupMissing);
+      COLS = pc;
+      const pids = powT.id || [];
+      jars = pids.map((id, i) => ({
+        id,
+        dyeId: getRefId(colArr(powT, pc.dye)[i]),
+        Box: String(rowField(powT, pc.box, i, '') || '').trim(),
+        Location: rowField(powT, pc.loc, i, SHELF) || SHELF,
+        Size_g: Number(rowField(powT, pc.size, i, 0)) || 0,
+        State: rowField(powT, pc.state, i, 'Sealed') || 'Sealed',
+        Low: !!rowField(powT, pc.low, i, false),
+        Lot_Code: rowField(powT, pc.lot, i, ''),
+        Received: rowField(powT, pc.recd, i, null),
+        Notes: rowField(powT, pc.notes, i, '')
+      })).filter(j => j.dyeId);
+    }
+    jarsByDye = {};
+    jars.forEach(j => { (jarsByDye[j.dyeId] = jarsByDye[j.dyeId] || []).push(j); });
+
+    // Recipe usage ranks the reorder list. Optional: without it the list still
+    // works, it just cannot tell a workhorse from a dye you bought once.
+    recipeUses = {};
+    try {
+      const rc = await grist.docApi.fetchTable('Recipe_Dye_Components');
+      const col = findColumn(rc, ['Dye', 'Dye_Ref']);
+      const rec = findColumn(rc, ['Recipe']);
+      if (col) {
+        const seen = {};
+        (rc.id || []).forEach((_, i) => {
+          const d = getRefId(colArr(rc, col)[i]);
+          const r = rec ? getRefId(colArr(rc, rec)[i]) : i;
+          if (!d) return;
+          const key = d + ':' + r;
+          if (seen[key]) return;
+          seen[key] = 1;
+          recipeUses[d] = (recipeUses[d] || 0) + 1;
+        });
+      }
+    } catch (e) { /* optional */ }
+
+    // Boxes actually in use win over the stored guess, so a box typed in at the
+    // shelf shows up in the rail without anyone editing a setting.
+    const used = [...new Set(jars.map(j => j.Box).filter(Boolean))];
+    const merged = [...new Set(BOXES.concat(used))].sort(boxSort);
+    if (merged.length !== BOXES.length) { BOXES = merged; lsSet(BOX_STORE, BOXES); }
+
+    if (!activeLetter || !dyesInLetter(activeLetter).length) {
+      activeLetter = LETTERS.find(l => dyesInLetter(l).length) || 'A';
+    }
+  } catch (e) {
+    console.error(e);
+    loadError = 'Could not read the Dyes table: ' + (e && e.message ? e.message : e);
+  }
+  render();
+}
+
+/* ── Writes ────────────────────────────────────────────────────── */
+async function addJar(dyeId, location, state) {
+  if (!hasPowderTable) { showToast('Create the Dye_Powder table first'); return; }
+  const fields = {};
+  const put = (col, v) => { if (col) fields[col] = v; };
+  put(COLS.dye, dyeId);
+  put(COLS.box, defaultBoxFor(dyeId));
+  put(COLS.loc, location);
+  put(COLS.size, sizeFor(dyeId));
+  put(COLS.state, state);
+  if (COLS.low) fields[COLS.low] = false;
+  if (COLS.recd) fields[COLS.recd] = todayEpoch();
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', 'Dye_Powder', null, fields]]);
+    await loadAll();
+  } catch (e) { showToast('Could not add the jar: ' + (e.message || e)); }
+}
+async function updateJar(jarId, patch) {
+  const fields = {};
+  for (const [k, v] of Object.entries(patch)) if (COLS[k]) fields[COLS[k]] = v;
+  if (!Object.keys(fields).length) { showToast('That column is not on the table'); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Dye_Powder', jarId, fields]]);
+    await loadAll();
+  } catch (e) { showToast('Could not save: ' + (e.message || e)); }
+}
+async function removeJar(jarId) {
+  try {
+    await grist.docApi.applyUserActions([['RemoveRecord', 'Dye_Powder', jarId]]);
+    await loadAll();
+  } catch (e) { showToast('Could not remove: ' + (e.message || e)); }
+}
+/* Used up is the everyday action: the working jar goes in the bin and, if there
+   is a spare behind the box, it comes forward in the same breath. Doing both at
+   once is the only way the shelf and the record stay in step. */
+async function useUp(dyeId) {
+  const open = openJar(dyeId);
+  if (!open) return;
+  const actions = [['RemoveRecord', 'Dye_Powder', open.id]];
+  const spare = backJars(dyeId).slice().sort((a, b) => (a.Received || 0) - (b.Received || 0))[0];
+  if (spare) {
+    const f = {};
+    if (COLS.loc) f[COLS.loc] = SHELF;
+    if (COLS.state) f[COLS.state] = 'Open';
+    if (COLS.low) f[COLS.low] = false;
+    actions.push(['UpdateRecord', 'Dye_Powder', spare.id, f]);
+  }
+  try {
+    await grist.docApi.applyUserActions(actions);
+    await loadAll();
+    showToast(spare ? 'Spare moved to the shelf' : 'Out of this one — nothing behind it');
+  } catch (e) { showToast('Could not update: ' + (e.message || e)); }
+}
+async function addToPicked() {
+  if (!picked.size) return;
+  if (!hasPowderTable) { showToast('Create the Dye_Powder table first'); return; }
+  const actions = [...picked].map(dyeId => {
+    const fields = {};
+    const put = (c, v) => { if (c) fields[c] = v; };
+    put(COLS.dye, dyeId);
+    put(COLS.box, defaultBoxFor(dyeId));
+    put(COLS.loc, SHELF);
+    put(COLS.size, sizeFor(dyeId));
+    put(COLS.state, 'Open');
+    if (COLS.low) fields[COLS.low] = false;
+    if (COLS.recd) fields[COLS.recd] = todayEpoch();
+    return ['AddRecord', 'Dye_Powder', null, fields];
+  });
+  try {
+    await grist.docApi.applyUserActions(actions);
+    const n = picked.size;
+    picked.clear();
+    await loadAll();
+    showToast(n + ' jar' + (n === 1 ? '' : 's') + ' added to the shelf');
+  } catch (e) { showToast('Could not add: ' + (e.message || e)); }
+}
+/* Marking a letter counted is what makes the reorder list honest. Until a letter
+   is stamped, "no jars recorded" means nobody has looked yet, not zero on hand.
+   Stamping every dye rather than the letter means a dye added next year comes
+   back as uncounted instead of silently reading as out of stock. */
+async function setLetterCounted(letter, on) {
+  if (!hasCountedCol) { showToast('Add a Powder_Counted date column to Dyes first'); return; }
+  const rows = dyesInLetter(letter);
+  if (!rows.length) return;
+  const stamp = on ? todayEpoch() : null;
+  const dyesT = await grist.docApi.fetchTable('Dyes');
+  const col = findColumn(dyesT, ['Powder_Counted']);
+  try {
+    await grist.docApi.applyUserActions([
+      ['BulkUpdateRecord', 'Dyes', rows.map(r => r.id), { [col]: rows.map(() => stamp) }]
+    ]);
+    await loadAll();
+    showToast(on ? letter + ' marked counted' : letter + ' reopened');
+  } catch (e) { showToast('Could not save: ' + (e.message || e)); }
+}
+function letterDone(letter) {
+  const rows = dyesInLetter(letter);
+  return rows.length > 0 && rows.every(r => r.counted);
+}
+
+/* ── UI plumbing ───────────────────────────────────────────────── */
+function setTab(t) { tab = t; openDetail = null; render(); }
+function pickLetter(l) { activeLetter = l; openDetail = null; picked.clear(); render(); }
+function toggleDetail(id) { openDetail = openDetail === id ? null : id; render(); }
+function togglePick(id) {
+  if (picked.has(id)) picked.delete(id); else picked.add(id);
+  render();
+}
+function pickAllBlank() {
+  dyesInLetter(activeLetter).forEach(d => { if (!(jarsByDye[d.id] || []).length) picked.add(d.id); });
+  render();
+}
+function clearPicked() { picked.clear(); render(); }
+function setSize(v) {
+  const n = Number(v);
+  if (!n || n <= 0) return;
+  SIZES.current = n;
+  if (!SIZES.list.includes(n)) { SIZES.list.push(n); SIZES.list.sort((a, b) => a - b); }
+  lsSet(SIZE_STORE, SIZES);
+  render();
+}
+function setBrandSize(brand, v) {
+  const n = Number(v);
+  if (!brand) return;
+  if (n > 0) SIZES.byBrand[norm(brand)] = n; else delete SIZES.byBrand[norm(brand)];
+  lsSet(SIZE_STORE, SIZES);
+  render();
+}
+
+/* ── Render ────────────────────────────────────────────────────── */
+function render() {
+  const el = document.getElementById('content');
+  const counted = allDyes.filter(d => d.counted).length;
+  document.getElementById('topNote').textContent =
+    allDyes.length ? (allDyes.length + ' dyes in the catalog · ' + jars.length + ' jars recorded') : '';
+  const pipC = document.getElementById('pip-count');
+  pipC.textContent = hasCountedCol && allDyes.length ? counted + '/' + allDyes.length : '';
+  const ord = reorderGroups();
+  const urgent = ord.out.length + ord.critical.length;
+  document.getElementById('pip-order').textContent = urgent ? String(urgent) : '';
+  ['count', 'find', 'boxes', 'order'].forEach(t =>
+    document.getElementById('tab-' + t).classList.toggle('active', tab === t));
+
+  if (loadError) { el.innerHTML = '<div class="warn-banner">' + esc(loadError) + '</div>'; return; }
+  let html = '';
+  if (!hasPowderTable) html += setupPanel();
+  else if (setupMissing.length) html += '<div class="warn-banner">Missing columns: <span class="mono">' +
+    esc(setupMissing.join(', ')) + '</span>. Everything else still works.</div>';
+
+  if (tab === 'count') html += renderCount();
+  else if (tab === 'find') html += renderFind();
+  else if (tab === 'boxes') html += renderBoxes();
+  else html += renderOrder();
+  el.innerHTML = html;
+
+  const s = document.getElementById('findInput');
+  if (s) { s.value = findQuery; s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+}
+
+function setupPanel() {
+  return '<div class="setup-note"><h3>One table to create first</h3>' +
+    '<p>Add a table called <code>Dye_Powder</code> with these columns, then reload. ' +
+    'One row is one physical jar.</p>' +
+    '<table class="grid" style="margin-top:8px"><thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead><tbody>' +
+    [['Dye', 'Reference → Dyes', 'Keyed on row ID, never on name'],
+     ['Box', 'Text', 'DP-A, DP-B1, DP-HIJ'],
+     ['Location', 'Choice', 'Shelf · Back stock'],
+     ['Size_g', 'Numeric', 'Grams the jar held when full'],
+     ['State', 'Choice', 'Sealed · Open'],
+     ['Low', 'Toggle', 'Only meaningful on the open jar'],
+     ['Lot_Code', 'Text', 'Vendor dye lot, when you care'],
+     ['Received_Date', 'Date', ''],
+     ['Notes', 'Text', '']]
+      .map(r => '<tr><td class="mono">' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td><td>' + esc(r[2]) + '</td></tr>').join('') +
+    '</tbody></table>' +
+    '<p style="margin-top:8px">Also add a <code>Powder_Counted</code> date column to <code>Dyes</code>. ' +
+    'It records which letters you have already walked, so the reorder list can tell ' +
+    '“none on hand” apart from “not looked at yet”.</p></div>';
+}
+
+function letterRail() {
+  const rows = LETTERS.map(l => {
+    const dyes = dyesInLetter(l);
+    if (!dyes.length) return '';
+    const logged = dyes.filter(d => (jarsByDye[d.id] || []).length).length;
+    const done = letterDone(l);
+    const boxes = boxesForLetter(l);
+    return '<div class="letter-row' + (l === activeLetter ? ' active' : '') + '" ' +
+      'role="button" tabindex="0" onclick="pickLetter(\'' + l + '\')" ' +
+      'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();pickLetter(\'' + l + '\')}">' +
+      '<span class="lr-key">' + esc(boxes.length ? boxLabel(boxes[0]).split('-')[0] : l) + '</span>' +
+      '<span class="lr-meta' + (done ? ' lr-done' : '') + '">' +
+      (done ? '✓ ' : '') + logged + '/' + dyes.length + '</span></div>';
+  }).join('');
+  const orphan = dyesInLetter(NO_LETTER);
+  return '<div class="letter-rail">' + rows +
+    (orphan.length ? '<div class="letter-row' + (activeLetter === NO_LETTER ? ' active' : '') +
+      '" role="button" tabindex="0" onclick="pickLetter(\'' + NO_LETTER + '\')">' +
+      '<span class="lr-key">?</span><span class="lr-meta">' + orphan.length + '</span></div>' : '') +
+    '</div>';
+}
+
+function sizeBar() {
+  const opts = SIZES.list.map(n =>
+    '<button class="size-opt' + (n === Number(SIZES.current) ? ' on' : '') + '" onclick="setSize(' + n + ')">' + n + 'g</button>'
+  ).join('');
+  return '<div class="size-bar"><span class="lbl">New jars are</span>' + opts +
+    '<input class="size-custom" type="number" min="1" placeholder="other" ' +
+    'onchange="setSize(this.value); this.value=\'\'">' +
+    '<span class="lbl" style="margin-left:auto">Brands remember their own size once you set one below.</span></div>';
+}
+
+function holdingLine(d) {
+  const sh = shelfJars(d.id), bk = backJars(d.id);
+  if (!sh.length && !bk.length) {
+    return d.counted
+      ? '<div class="holding"><span class="hold-none">None on hand</span></div>'
+      : '<div class="holding"><span class="hold-none">Not counted yet</span></div>';
+  }
+  const parts = [];
+  if (sh.length) {
+    const op = sh.find(j => j.State === 'Open');
+    const sealed = sh.filter(j => j.State !== 'Open').length;
+    let t = 'Shelf: ' + (op ? '1 open ' + (op.Size_g || '?') + 'g' : sh.length + ' sealed');
+    if (op && sealed) t += ' + ' + sealed + ' sealed';
+    parts.push('<span class="hold-shelf">' + esc(t) + '</span>');
+    if (op && op.Low) parts.push('<span class="hold-low">running low</span>');
+  }
+  if (bk.length) {
+    const g = {};
+    bk.forEach(j => { g[j.Size_g || 0] = (g[j.Size_g || 0] || 0) + 1; });
+    const t = Object.entries(g).map(([s, n]) => n + ' × ' + (Number(s) || '?') + 'g').join(', ');
+    parts.push('<span class="hold-back">Behind: ' + esc(t) + '</span>');
+  } else if (sh.length) {
+    parts.push('<span class="hold-none">nothing behind it</span>');
+  }
+  return '<div class="holding">' + parts.join('') + '</div>';
+}
+
+function dyeRow(d, opts) {
+  opts = opts || {};
+  const op = openJar(d.id);
+  const has = (jarsByDye[d.id] || []).length;
+  const a = [];
+  if (hasPowderTable) {
+    a.push('<button class="btn btn-small" onclick="addJar(' + d.id + ',\'' + SHELF + '\',\'Open\')">+ shelf</button>');
+    a.push('<button class="btn btn-small" onclick="addJar(' + d.id + ',\'' + BACK + '\',\'Sealed\')">+ behind</button>');
+    if (op) {
+      a.push('<button class="btn btn-small' + (op.Low ? ' btn-ink' : '') + '" ' +
+        'onclick="updateJar(' + op.id + ', {low: ' + (op.Low ? 'false' : 'true') + '})">' +
+        (op.Low ? 'low ✓' : 'low') + '</button>');
+      a.push('<button class="btn btn-small btn-warn" onclick="useUp(' + d.id + ')">used up</button>');
+    }
+    if (has) a.push('<button class="btn btn-small" onclick="toggleDetail(' + d.id + ')" ' +
+      'aria-expanded="' + (openDetail === d.id ? 'true' : 'false') + '">jars</button>');
+  }
+  const tick = opts.tick
+    ? '<input class="tick" type="checkbox" ' + (picked.has(d.id) ? 'checked' : '') +
+      ' onchange="togglePick(' + d.id + ')" aria-label="Select ' + esc(d.Dye_Name) + '">'
+    : '<span></span>';
+  const sub = [d.Brand, d.Serial].filter(Boolean).join(' ');
+  return '<div class="dye-row' + (picked.has(d.id) ? ' picked' : '') + (has ? '' : ' blank') + '">' +
+    tick +
+    '<span class="swatch-dot" style="background:' + esc(dyeColor(d)) + '"></span>' +
+    '<div><div class="dye-name">' + esc(d.Dye_Name) +
+      (sub ? ' <span class="dye-sub">' + esc(sub) + '</span>' : '') + '</div>' +
+      holdingLine(d) + '</div>' +
+    '<div class="row-actions">' + a.join('') + '</div>' +
+    (openDetail === d.id ? detailPanel(d) : '') +
+    '</div>';
+}
+
+function detailPanel(d) {
+  const list = (jarsByDye[d.id] || []).slice().sort((a, b) =>
+    (a.Location === BACK ? 1 : 0) - (b.Location === BACK ? 1 : 0) || (a.Received || 0) - (b.Received || 0));
+  const boxOpts = boxesForLetter(d.letter).concat(BOXES.filter(b => !boxesForLetter(d.letter).includes(b)));
+  const rows = list.map(j => {
+    const tag = j.Location === BACK
+      ? '<span class="jar-tag back">behind</span>'
+      : '<span class="jar-tag ' + (j.State === 'Open' ? 'open' : '') + '">' + esc(j.State === 'Open' ? 'open' : 'sealed') + '</span>';
+    return '<div class="jar-line">' + tag +
+      '<input class="mini mono" style="width:64px" type="number" min="1" value="' + esc(j.Size_g || '') +
+        '" onchange="updateJar(' + j.id + ', {size: Number(this.value)})" aria-label="Size in grams"> g' +
+      '<select class="mini mono w-box" onchange="updateJar(' + j.id + ', {box: this.value})" aria-label="Box">' +
+        boxOpts.map(b => '<option value="' + esc(b) + '"' + (b === j.Box ? ' selected' : '') + '>' + esc(boxLabel(b)) + '</option>').join('') +
+        (j.Box && !boxOpts.includes(j.Box) ? '<option selected>' + esc(j.Box) + '</option>' : '') +
+      '</select>' +
+      '<select class="mini" onchange="updateJar(' + j.id + ', {loc: this.value})" aria-label="Shelf or behind">' +
+        '<option' + (j.Location !== BACK ? ' selected' : '') + '>' + SHELF + '</option>' +
+        '<option' + (j.Location === BACK ? ' selected' : '') + '>' + BACK + '</option>' +
+      '</select>' +
+      '<select class="mini" onchange="updateJar(' + j.id + ', {state: this.value})" aria-label="Sealed or open">' +
+        '<option' + (j.State !== 'Open' ? ' selected' : '') + '>Sealed</option>' +
+        '<option' + (j.State === 'Open' ? ' selected' : '') + '>Open</option>' +
+      '</select>' +
+      '<input class="mini mono w-lot" placeholder="lot" value="' + esc(j.Lot_Code || '') +
+        '" onchange="updateJar(' + j.id + ', {lot: this.value})" aria-label="Lot code">' +
+      (j.Received ? '<span class="dye-sub">' + esc(shortDate(j.Received)) + '</span>' : '') +
+      '<button class="btn btn-small btn-warn" style="margin-left:auto" onclick="removeJar(' + j.id + ')">remove</button>' +
+      '</div>';
+  }).join('');
+  const brandSize = d.Brand ? SIZES.byBrand[norm(d.Brand)] || '' : '';
+  const brandBit = d.Brand
+    ? '<div class="jar-line" style="border-top:1px solid var(--rule); margin-top:6px; padding-top:8px">' +
+      '<span class="dye-sub">Default jar size for ' + esc(d.Brand) + '</span>' +
+      '<input class="mini mono" style="width:64px" type="number" min="1" value="' + esc(brandSize) +
+      '" onchange="setBrandSize(\'' + esc(String(d.Brand).replace(/\\/g, '\\\\').replace(/'/g, "\\'")) + '\', this.value)" aria-label="Brand default size"> g' +
+      '</div>' : '';
+  return '<div class="detail">' + (rows || '<div class="dye-sub">No jars recorded.</div>') + brandBit + '</div>';
+}
+
+function renderCount() {
+  const dyes = dyesInLetter(activeLetter);
+  const boxes = boxesForLetter(activeLetter);
+  const logged = dyes.filter(d => (jarsByDye[d.id] || []).length).length;
+  const done = letterDone(activeLetter);
+  const head = '<div class="letter-head"><h2>' + esc(activeLetter === NO_LETTER ? 'Unfiled' : activeLetter) + '</h2>' +
+    boxes.map(b => '<span class="box-chip">' + esc(boxLabel(b)) + '</span>').join('') +
+    '<span class="dye-sub">' + logged + ' of ' + dyes.length + ' logged</span>' +
+    '<span class="head-spacer"></span>' +
+    (hasCountedCol
+      ? '<button class="btn btn-small ' + (done ? '' : 'btn-teal') + '" onclick="setLetterCounted(\'' + activeLetter + '\', ' + (done ? 'false' : 'true') + ')">' +
+        (done ? 'Reopen ' + activeLetter : 'Mark ' + activeLetter + ' counted') + '</button>'
+      : '') +
+    '</div>';
+  const body = dyes.length
+    ? dyes.map(d => dyeRow(d, { tick: true })).join('')
+    : '<div class="empty-state">No dyes file under this letter.</div>';
+  const bulk = picked.size
+    ? '<div class="bulk-bar"><span>' + picked.size + ' selected</span>' +
+      '<button class="btn btn-small" onclick="addToPicked()">Add one open shelf jar to each</button>' +
+      '<button class="btn btn-small" onclick="clearPicked()">Clear</button></div>'
+    : '<div style="margin-top:10px"><button class="btn btn-small" onclick="pickAllBlank()">Select everything not yet logged</button></div>';
+  return '<div class="panel"><div class="split">' + letterRail() +
+    '<div>' + head + sizeBar() + body + bulk + '</div></div></div>';
+}
+
+function renderFind() {
+  const q = norm(findQuery);
+  let rows = allDyes;
+  if (q) rows = rows.filter(d => norm(d.Dye_Name).includes(q) || norm(d.Brand + d.Serial).includes(q));
+  if (findFilter === 'held') rows = rows.filter(d => (jarsByDye[d.id] || []).length);
+  else if (findFilter === 'low') rows = rows.filter(d => isLow(d.id));
+  else if (findFilter === 'none') rows = rows.filter(d => d.counted && !(jarsByDye[d.id] || []).length);
+  rows = rows.slice().sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name))).slice(0, 300);
+  const pills = [['all', 'Everything'], ['held', 'On hand'], ['low', 'Running low'], ['none', 'None on hand']]
+    .map(([k, l]) => '<button class="btn btn-small' + (findFilter === k ? ' btn-ink' : '') +
+      '" onclick="findFilter=\'' + k + '\'; render()">' + l + '</button>').join('');
+  const body = rows.length ? rows.map(d => {
+    const box = (jarsByDye[d.id] || []).map(j => j.Box).filter(Boolean)[0] || defaultBoxFor(d.id);
+    return '<div class="dye-row">' +
+      '<span class="box-chip" style="margin-top:1px">' + esc(box ? boxLabel(box) : '—') + '</span>' +
+      '<span class="swatch-dot" style="background:' + esc(dyeColor(d)) + '"></span>' +
+      '<div><div class="dye-name">' + esc(d.Dye_Name) +
+        ' <span class="dye-sub">' + esc([d.Brand, d.Serial].filter(Boolean).join(' ')) + '</span></div>' +
+        holdingLine(d) + '</div>' +
+      '<div class="row-actions">' +
+        (openJar(d.id) ? '<button class="btn btn-small btn-warn" onclick="useUp(' + d.id + ')">used up</button>' : '') +
+        ((jarsByDye[d.id] || []).length ? '<button class="btn btn-small" onclick="toggleDetail(' + d.id + ')">jars</button>' : '') +
+      '</div>' + (openDetail === d.id ? detailPanel(d) : '') + '</div>';
+  }).join('') : '<div class="empty-state">Nothing matches that.</div>';
+  return '<div class="panel"><div class="search-bar">' +
+    '<input id="findInput" type="search" placeholder="Search by colour name, brand or number" ' +
+    'oninput="findQuery=this.value; render()">' +
+    '<div class="pill-group">' + pills + '</div></div>' + body + '</div>';
+}
+
+function renderBoxes() {
+  const byBox = {};
+  jars.forEach(j => { const b = j.Box || '(no box)'; (byBox[b] = byBox[b] || []).push(j); });
+  const codes = [...new Set(BOXES.concat(Object.keys(byBox)))].sort(boxSort);
+  const body = codes.map(code => {
+    const list = byBox[code] || [];
+    const shelf = list.filter(j => j.Location !== BACK).length;
+    const back = list.filter(j => j.Location === BACK).length;
+    const names = [...new Set(list.map(j => (dyeFor(j.dyeId) || {}).Dye_Name).filter(Boolean))]
+      .sort((a, b) => fold(a).localeCompare(fold(b)));
+    const open = activeBox === code;
+    return '<div style="border-bottom:1px solid var(--rule); padding:9px 2px">' +
+      '<div style="display:flex; align-items:center; gap:10px; cursor:pointer" ' +
+      'role="button" tabindex="0" onclick="activeBox=(activeBox===\'' + code + '\'?null:\'' + code + '\'); render()">' +
+      '<span class="box-chip">' + esc(boxLabel(code)) + '</span>' +
+      '<span class="dye-sub">' + esc(code) + '</span>' +
+      '<span class="dye-sub" style="margin-left:auto">' + names.length + ' dyes · ' +
+      shelf + ' on the shelf · ' + back + ' behind</span></div>' +
+      (open && names.length
+        ? '<div class="detail">' + names.map(n => esc(n)).join(' · ') + '</div>'
+        : '') + '</div>';
+  }).join('');
+  return '<div class="panel">' +
+    '<p class="dye-sub" style="margin-bottom:10px">Boxes run left to right along the shelf. ' +
+    'Spare jars sit behind the box their colour files under, so one code finds both.</p>' +
+    body + '</div>';
+}
+
+function reorderGroups() {
+  const out = [], critical = [], thin = [];
+  allDyes.forEach(d => {
+    if (!d.counted) return;             // never looked at — not a reorder signal
+    const sh = shelfJars(d.id), bk = backJars(d.id);
+    const uses = recipeUses[d.id] || 0;
+    const rec = { d, uses };
+    if (!sh.length && !bk.length) out.push(rec);
+    else if (isLow(d.id) && !bk.length) critical.push(rec);
+    else if (!bk.length && uses > 0) thin.push(rec);
+  });
+  const bySeen = (a, b) => b.uses - a.uses || fold(a.d.Dye_Name).localeCompare(fold(b.d.Dye_Name));
+  return { out: out.sort(bySeen), critical: critical.sort(bySeen), thin: thin.sort(bySeen) };
+}
+
+function renderOrder() {
+  if (!hasCountedCol) {
+    return '<div class="panel"><div class="empty-state">' +
+      'Add a <span class="mono">Powder_Counted</span> date column to Dyes and mark a letter counted. ' +
+      'Until then this list cannot tell an empty shelf from an uncounted one.</div></div>';
+  }
+  const g = reorderGroups();
+  const uncounted = allDyes.filter(d => !d.counted).length;
+  const sect = (title, why, rows) => {
+    if (!rows.length) return '';
+    return '<div class="urgency-head">' + esc(title) +
+      '<span class="urgency-why">' + esc(why) + '</span></div>' +
+      '<table class="grid"><thead><tr><th>Dye</th><th>Brand</th><th class="mono">Box</th><th>Recipes</th></tr></thead><tbody>' +
+      rows.map(r => {
+        const box = (jarsByDye[r.d.id] || []).map(j => j.Box).filter(Boolean)[0] || defaultBoxFor(r.d.id);
+        return '<tr><td><span class="swatch-dot" style="background:' + esc(dyeColor(r.d)) +
+          '; width:12px; height:12px; margin-right:6px"></span>' + esc(r.d.Dye_Name) + '</td>' +
+          '<td class="mono">' + esc([r.d.Brand, r.d.Serial].filter(Boolean).join(' ')) + '</td>' +
+          '<td class="mono">' + esc(box ? boxLabel(box) : '—') + '</td>' +
+          '<td><span class="uses' + (r.uses >= 5 ? ' hot' : '') + '">' + (r.uses || '—') + '</span></td></tr>';
+      }).join('') + '</tbody></table>';
+  };
+  const body =
+    sect('Out', 'Counted and nothing on the shelf or behind it.', g.out) +
+    sect('Last jar, running low', 'The open jar is marked low and there is no spare behind the box.', g.critical) +
+    sect('No spare behind it', 'Still working through the open jar, but nothing is queued up. Worth adding to the next order for anything you use often.', g.thin);
+  const tail = uncounted
+    ? '<p class="dye-sub" style="margin-top:14px">' + uncounted +
+      ' dyes have not been counted yet and are left out of this list on purpose.</p>' : '';
+  return '<div class="panel">' + (body || '<div class="empty-state">Nothing needs ordering.</div>') + tail + '</div>';
+}
+
+try { grist.ready({ requiredAccess: 'full' }); } catch (e) { console.error(e); }
+loadAll();
+</script>
+</body>
+</html>
