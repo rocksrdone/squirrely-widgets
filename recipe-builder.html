@@ -229,6 +229,25 @@
   .rename-bar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .rename-bar button:disabled { opacity: .45; cursor: default; }
 
+  .pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .pp-card { border: 1px solid var(--rule); border-radius: 8px; padding: 8px; background: var(--paper); position: relative; }
+  .pp-card.display { border-color: #C9A227; box-shadow: 0 0 0 1px #C9A227 inset; }
+  .pp-card.rejected { opacity: .55; }
+  .pp-card .photo-thumb { height: 120px; }
+  .pp-meta { font-size: 10px; color: #6B5E52; margin-bottom: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .pp-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 3px; background: var(--warm); color: #6B5E52; }
+  .pp-tag.display { background: #F6ECC8; color: #8A6D0B; }
+  .pp-toggles { display: flex; gap: 4px; margin-bottom: 6px; }
+  .pp-toggle {
+    flex: 1; font-size: 10px; padding: 4px 2px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--rule); background: none; color: #6B5E52; font-family: 'Inter', sans-serif;
+  }
+  .pp-toggle.on { background: var(--ink); border-color: var(--ink); color: white; }
+  .pp-toggle.star.on { background: #C9A227; border-color: #C9A227; }
+  .pp-toggle:disabled { opacity: .4; cursor: default; }
+  .pp-empty { font-size: 11px; color: #8B7D72; font-style: italic; padding: 6px 0; }
+  .pp-warn { font-size: 11px; color: #B5651D; margin-bottom: 8px; }
+
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
@@ -435,6 +454,21 @@
       <div id="inspirationSwatches" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;"></div>
     </div>
     <div class="photo-hint">Tip: photos are usually easier to attach through the Photo Inbox widget, which files and renames them automatically. These fields are here for direct edits or corrections.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title" onclick="toggleSection('pphotos')"><span>Product Photos <span id="ppCount" style="font-weight:400;color:#8B7D72;"></span></span><span class="section-chevron collapsed" id="chevron-pphotos">▾</span></div>
+    <div class="section-body collapsed" id="body-pphotos">
+      <div class="rename-bar">
+        <button id="ppRenameBtn" onclick="renameProductPhotosToMatch()" title="Rename this recipe's product photo files to the name the recipe now calls for">✎ Rename files to match recipe</button>
+        <span id="ppRenameState"></span>
+        <span style="flex:1"></span>
+        <button onclick="loadProductPhotos()" title="Reload from Grist">↻</button>
+      </div>
+      <div id="ppWarn"></div>
+      <div class="pp-grid" id="ppGrid"><div class="pp-empty">Loading…</div></div>
+      <div class="photo-hint">★ Display is the photo shown for this recipe everywhere (Standard in the Product Photo Manager). Vendor = include on the vendor store listing (as many as you like, to show the range). Retail = the one photo matching what's in stock on the regular store. The store flags are recorded now for a future listing sync — nothing is pushed to Shopify yet.</div>
     </div>
   </div>
 
@@ -1094,6 +1128,408 @@ async function renamePhotosToMatch() {
     setSlotButtonsDisabled(false);
     updatePhotoThumbs();
   }
+}
+
+/* ── Product photos for this recipe ──
+   Rows in Product_Photos, files flat in product-photos/lots/.
+
+   The one thing that shapes everything here: SS - Import Lot Photos runs every
+   15 minutes and creates a row for any file in lots/ whose name isn't already a
+   Source_Filename. So a row must never disappear while its file stays behind,
+   or the file comes back within the quarter hour as a recipe-less duplicate.
+   Hence: file first, row second — and a rename writes the new name to the row
+   BEFORE moving the file, putting it back if the move fails. */
+const MOVE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/move-photo';
+const LOTS_ROOT = 'Squirrely Stash/product-photos/lots/';
+const REVIEW_INBOX = 'Uploads/SS_Camera_Uploads/';
+const STORE_COLS = { vendor: 'On_Vendor_Store', retail: 'On_Retail_Store' };
+
+let productPhotos = [];      // this recipe's rows
+let ppAllFilenames = [];     // {id, filename, recipeId} across the whole table
+let ppCols = {};             // resolved column ids
+let ppBusy = false;
+
+function extOf(name) {
+  const m = /\.[^./]+$/.exec(name || '');
+  return m ? m[0] : '.jpg';
+}
+
+// Same scheme as SS - File Product Photo: Colorway_1_FFN[_VEN].jpg.
+// Slashes are swapped out here only — in the workflow they'd make a subfolder.
+function productNameParts() {
+  const name = document.getElementById('nameInput').value;
+  const base = String(name || 'untitled').trim().replace(/[\/\\]/g, '-').replace(/\s+/g, '_');
+  const fc = fiberCode(document.getElementById('fiberType').value);
+  const vendor = vendorCodeFromSku(document.getElementById('skuBase').value, document.getElementById('recipeScope').value);
+  return { base, fc, suffix: vendor ? `_${vendor}` : '' };
+}
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// null when the file already fits the recipe, otherwise the name it should have.
+function expectedProductName(p) {
+  const { base, fc, suffix } = productNameParts();
+  const ext = extOf(p.filename);
+  const fits = new RegExp(`^${escRe(base)}_(\\d+)_${escRe(fc)}${escRe(suffix)}${escRe(ext)}$`);
+  if (fits.test(p.filename || '')) return null;
+
+  // Keep an existing version number where one can be read, so v3 stays v3.
+  const vm = /[_-](\d+)(?:_[A-Z]{1,4})?(?:_[A-Z]{2,4})?\.[^.]+$/.exec(p.filename || '');
+  let v = vm ? parseInt(vm[1], 10) : 1;
+  const taken = new Set(ppAllFilenames.filter(r => r.id !== p.id).map(r => r.filename));
+  // Names already promised to earlier photos in this same rename pass.
+  (p._reserved || []).forEach(n => taken.add(n));
+  let guard = 0;
+  const nameFor = n => `${base}_${n}_${fc}${suffix}${ext}`;
+  while (taken.has(nameFor(v)) && guard++ < 500) v++;
+  return nameFor(v);
+}
+
+async function loadProductPhotos() {
+  const grid = document.getElementById('ppGrid');
+  if (!grid || !currentRecipeId) return;
+  try {
+    const t = await grist.docApi.fetchTable('Product_Photos');
+    ppCols = {
+      recipe: findColumn(t, ['Recipe']),
+      url: findColumn(t, ['Nextcloud_URL']),
+      filename: findColumn(t, ['Source_Filename']),
+      colorway: findColumn(t, ['Colorway_Name']),
+      fiber: findColumn(t, ['Fiber_Type']),
+      status: findColumn(t, ['Status']),
+      lotDate: findColumn(t, ['Lot_Date']),
+      notes: findColumn(t, ['Notes']),
+      fav: findColumn(t, ['Is_Favorite']),
+      preview: findColumn(t, ['Is_Preview']),
+      vendor: findColumn(t, [STORE_COLS.vendor]),
+      retail: findColumn(t, [STORE_COLS.retail]),
+    };
+    const col = k => ppCols[k] ? columnAsArray(t, ppCols[k]) : [];
+    const ids = t.id || [];
+    const rec = col('recipe'), url = col('url'), fn = col('filename'), st = col('status'),
+      ld = col('lotDate'), nt = col('notes'), fav = col('fav'), pv = col('preview'),
+      vs = col('vendor'), rs = col('retail');
+
+    ppAllFilenames = ids.map((id, i) => ({ id, filename: fn[i] || '', recipeId: getRefId(rec[i]) }));
+    productPhotos = ids.map((id, i) => ({
+      id, recipeId: getRefId(rec[i]), url: url[i] || '', filename: fn[i] || '',
+      status: st[i] || '', lotDate: ld[i], notes: nt[i] || '',
+      display: !!fav[i] || !!pv[i], fav: !!fav[i], preview: !!pv[i],
+      vendor: !!vs[i], retail: !!rs[i],
+    })).filter(p => p.recipeId === currentRecipeId)
+      .sort((a, b) => (b.display - a.display) || ((Number(b.lotDate) || 0) - (Number(a.lotDate) || 0)));
+    renderProductPhotos();
+  } catch (e) {
+    console.error('Product photos load failed:', e);
+    grid.innerHTML = `<div class="pp-empty">Could not load Product_Photos.</div>`;
+  }
+}
+
+function renderProductPhotos() {
+  const grid = document.getElementById('ppGrid');
+  const warn = document.getElementById('ppWarn');
+  document.getElementById('ppCount').textContent = productPhotos.length ? `(${productPhotos.length})` : '';
+  if (!grid) return;
+
+  const notes = [];
+  const haveStores = ppCols.vendor && ppCols.retail;
+  if (!haveStores) {
+    notes.push(`Store flags need two Toggle columns on Product_Photos (${STORE_COLS.vendor}, ${STORE_COLS.retail}). <button class="rot-btn" onclick="addStoreColumns()">Add them</button>`);
+  }
+  if (productPhotos.length && !productPhotos.some(p => p.display)) notes.push('No display photo set.');
+  if (productPhotos.filter(p => p.retail).length > 1) notes.push('More than one photo is marked Retail.');
+  warn.innerHTML = notes.map(n => `<div class="pp-warn">${n}</div>`).join('');
+
+  if (!productPhotos.length) {
+    grid.innerHTML = `<div class="pp-empty">No product photos linked to this recipe.</div>`;
+    refreshProductFileLabels();
+    return;
+  }
+
+  grid.innerHTML = productPhotos.map(p => {
+    const rejected = /reject/i.test(p.status);
+    const date = p.lotDate ? new Date(Number(p.lotDate) * 1000).toLocaleDateString() : '';
+    return `
+    <div class="pp-card ${p.display ? 'display' : ''} ${rejected ? 'rejected' : ''}" id="ppcard-${p.id}">
+      <div class="photo-thumb">${p.url ? `<img src="${esc(p.url)}" loading="lazy" onerror="this.parentElement.innerHTML='<span>Could not load</span>'">` : '<span>No file</span>'}</div>
+      <div class="pp-meta">
+        ${p.display ? '<span class="pp-tag display">Display</span>' : ''}
+        ${p.status ? `<span class="pp-tag">${esc(/approv/i.test(p.status) ? 'Client-ready' : p.status)}</span>` : ''}
+        <span>${esc(date)}</span>
+      </div>
+      <div class="photo-file" data-ppfile="${p.id}"></div>
+      <div class="pp-toggles">
+        <button class="pp-toggle star ${p.display ? 'on' : ''}" onclick="setDisplayProductPhoto(${p.id})" title="Use as this recipe's display photo">★ Display</button>
+        <button class="pp-toggle ${p.vendor ? 'on' : ''}" ${haveStores ? '' : 'disabled'} onclick="toggleStoreFlag(${p.id},'vendor')" title="Include on the vendor store listing">Vendor</button>
+        <button class="pp-toggle ${p.retail ? 'on' : ''}" ${haveStores ? '' : 'disabled'} onclick="toggleStoreFlag(${p.id},'retail')" title="The photo matching retail stock (one per recipe)">Retail</button>
+      </div>
+      <div class="rot-row">
+        <button class="rot-btn" onclick="rotateProductPhoto(${p.id},'ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
+        <button class="rot-btn" onclick="rotateProductPhoto(${p.id},'cw',this)" title="Rotate 90° clockwise">↻</button>
+        <span class="spacer"></span>
+        <button class="rot-btn" onclick="removeProductPhoto(${p.id},'inbox')" title="Unlink and send the file back to the Photo Inbox">↩ Inbox</button>
+        <button class="rot-btn danger" onclick="removeProductPhoto(${p.id},'delete')" title="Permanently delete the file and its row">🗑</button>
+      </div>
+      ${p.notes ? `<div class="photo-hint" style="margin-top:0">${esc(p.notes)}</div>` : ''}
+    </div>`;
+  }).join('');
+  refreshProductFileLabels();
+}
+
+// Filename under each card, amber when the recipe now calls for another name.
+function refreshProductFileLabels() {
+  let off = 0;
+  const hasName = !!document.getElementById('nameInput').value.trim();
+  productPhotos.forEach(p => {
+    const el = document.querySelector(`[data-ppfile="${p.id}"]`);
+    const inLots = !!p.filename && !!p.url && pathFromPhotoUrl(p.url).startsWith(LOTS_ROOT);
+    const want = hasName && inLots ? expectedProductName(p) : null;
+    if (want) off++;
+    if (!el) return;
+    el.textContent = p.filename || '(no filename)';
+    el.classList.toggle('mismatch', !!want);
+    el.title = want ? `Recipe now expects: ${want}` : '';
+  });
+  const btn = document.getElementById('ppRenameBtn');
+  const state = document.getElementById('ppRenameState');
+  if (!btn || !state) return;
+  btn.disabled = !off || ppBusy;
+  state.textContent = !productPhotos.length ? '' : !hasName ? 'Needs a recipe name'
+    : off ? `${off} file${off === 1 ? '' : 's'} named for something else` : 'Files match';
+}
+
+async function ppWrite(actions) {
+  isSaving = true;
+  try { await grist.docApi.applyUserActions(actions); }
+  finally { isSaving = false; }
+}
+
+async function addStoreColumns() {
+  if (!confirm(`Add two Toggle columns to Product_Photos?\n\n${STORE_COLS.vendor}\n${STORE_COLS.retail}`)) return;
+  try {
+    const acts = [];
+    if (!ppCols.vendor) acts.push(['AddColumn', 'Product_Photos', STORE_COLS.vendor, { type: 'Bool', isFormula: false }]);
+    if (!ppCols.retail) acts.push(['AddColumn', 'Product_Photos', STORE_COLS.retail, { type: 'Bool', isFormula: false }]);
+    if (acts.length) await ppWrite(acts);
+    showToast('Store columns added');
+    await loadProductPhotos();
+  } catch (e) {
+    console.error('Add columns failed:', e);
+    showToast('Could not add columns — check widget access level');
+  }
+}
+
+// Same meaning as "Standard" in the Product Photo Manager: favourite + preview
+// on this one, off every sibling. Clicking the current one clears it.
+async function setDisplayProductPhoto(photoId) {
+  const p = productPhotos.find(x => x.id === photoId);
+  if (!p) return;
+  const turningOff = p.display;
+  const actions = [];
+  productPhotos.forEach(s => {
+    const on = !turningOff && s.id === photoId;
+    const f = {};
+    if (ppCols.fav && s.fav !== on) f[ppCols.fav] = on;
+    if (ppCols.preview && s.preview !== on) f[ppCols.preview] = on;
+    if (Object.keys(f).length) actions.push(['UpdateRecord', 'Product_Photos', s.id, f]);
+  });
+  if (!actions.length) return;
+  try {
+    await ppWrite(actions);
+    productPhotos.forEach(s => { const on = !turningOff && s.id === photoId; s.fav = s.preview = s.display = on; });
+    renderProductPhotos();
+    showToast(turningOff ? 'Display photo cleared' : 'Display photo set');
+  } catch (e) {
+    console.error('Set display failed:', e);
+    showToast('Could not set display photo — check widget access level');
+  }
+}
+
+// Vendor: any number. Retail: one per recipe, since it must match stock exactly.
+async function toggleStoreFlag(photoId, which) {
+  const col = ppCols[which];
+  const p = productPhotos.find(x => x.id === photoId);
+  if (!col || !p) return;
+  const turnOn = !p[which];
+  const actions = [['UpdateRecord', 'Product_Photos', photoId, { [col]: turnOn }]];
+  if (which === 'retail' && turnOn) {
+    productPhotos.filter(s => s.id !== photoId && s.retail)
+      .forEach(s => actions.push(['UpdateRecord', 'Product_Photos', s.id, { [col]: false }]));
+  }
+  try {
+    await ppWrite(actions);
+    if (which === 'retail' && turnOn) productPhotos.forEach(s => { s.retail = false; });
+    p[which] = turnOn;
+    renderProductPhotos();
+  } catch (e) {
+    console.error('Store flag failed:', e);
+    showToast('Could not update — check widget access level');
+  }
+}
+
+async function rotateProductPhoto(photoId, direction, btnEl) {
+  const p = productPhotos.find(x => x.id === photoId);
+  if (!p || !p.url) { showToast('No file on this photo'); return; }
+  const card = document.getElementById('ppcard-' + photoId);
+  const btns = card ? card.querySelectorAll('.rot-btn') : [btnEl];
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    const res = await fetch(ROTATE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo_id: photoId, source_filename: p.filename, nextcloud_url: p.url, direction }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    const out = await res.json();
+    if (!out || !out.success) throw new Error('Workflow reported failure');
+    if (out.new_url && ppCols.url) {
+      await ppWrite([['UpdateRecord', 'Product_Photos', photoId, { [ppCols.url]: out.new_url }]]);
+      p.url = out.new_url;
+    }
+    renderProductPhotos();
+    showToast('Rotated');
+  } catch (e) {
+    console.error('Rotate failed:', e);
+    showToast('Rotate failed — is the n8n webhook live?');
+    btns.forEach(b => { b.disabled = false; });
+  }
+}
+
+async function removeProductPhoto(photoId, mode) {
+  const p = productPhotos.find(x => x.id === photoId);
+  if (!p) return;
+  const toInbox = mode === 'inbox';
+  const path = pathFromPhotoUrl(p.url);
+
+  // A row with no file behind it: nothing to move, just drop the row.
+  if (!path) {
+    if (!confirm('This row has no filed photo behind it. Remove the row?')) return;
+    try { await ppWrite([['RemoveRecord', 'Product_Photos', photoId]]); await loadProductPhotos(); showToast('Row removed'); }
+    catch (e) { console.error(e); showToast('Could not remove the row'); }
+    return;
+  }
+  if (!path.startsWith(LOTS_ROOT)) { showToast('That file is outside product-photos/lots — not touching it'); return; }
+
+  // Other rows naming the same file. Leftover duplicates of THIS recipe go with
+  // it; a duplicate belonging to another recipe blocks the whole thing.
+  const fname = path.slice(LOTS_ROOT.length);
+  const twins = ppAllFilenames.filter(r => r.id !== photoId && r.filename === fname);
+  const foreign = twins.filter(r => r.recipeId && r.recipeId !== currentRecipeId);
+  if (foreign.length) {
+    alert(`Not removed — ${fname} is also linked to recipe row${foreign.length === 1 ? '' : 's'} #${foreign.map(r => r.recipeId).join(', #')}. Unlink it there first.`);
+    return;
+  }
+
+  let shareNote = '';
+  try {
+    const shares = await grist.docApi.fetchTable('Photo_Shares');
+    const pc = findColumn(shares, ['Photo']);
+    const n = pc ? columnAsArray(shares, pc).filter(v => getRefId(v) === photoId).length : 0;
+    if (n) shareNote = `\n\nIt was shared with vendors ${n} time${n === 1 ? '' : 's'}. Those copies stay in vendor-share.`;
+  } catch (e) { /* optional table */ }
+
+  const dupNote = twins.length ? `\n\n${twins.length} duplicate row${twins.length === 1 ? '' : 's'} for the same file will be removed too.` : '';
+  const q = toInbox
+    ? `Send ${fname} back to the Photo Inbox and remove it from this recipe?${dupNote}${shareNote}`
+    : `PERMANENTLY delete ${fname} and its Product Photos row?${dupNote}${shareNote}\n\nThis cannot be undone.`;
+  if (!confirm(q)) return;
+
+  const card = document.getElementById('ppcard-' + photoId);
+  if (card) card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+
+  try {
+    const res = toInbox
+      ? await fetch(MOVE_WEBHOOK_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path: path, dest_path: `${REVIEW_INBOX}review_${Date.now()}${extOf(fname)}` }),
+        })
+      : await fetch(DELETE_FILE_WEBHOOK_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+  } catch (e) {
+    console.error('Product photo file step failed:', e);
+    showToast(toInbox ? 'Move failed — is SS - Move Photo imported and active?' : 'Delete failed — is the n8n webhook live?');
+    renderProductPhotos();
+    return;   // file untouched, so the row stays
+  }
+
+  try {
+    await ppWrite([photoId, ...twins.map(t => t.id)].map(id => ['RemoveRecord', 'Product_Photos', id]));
+    showToast(toInbox ? 'Sent back to the inbox' : 'Deleted');
+  } catch (e) {
+    console.error('Row removal failed:', e);
+    alert(`The file was ${toInbox ? 'moved' : 'deleted'}, but the Grist row could not be removed. Delete Product_Photos row #${photoId} by hand.`);
+  }
+  await loadProductPhotos();
+}
+
+async function renameProductPhotosToMatch() {
+  if (!currentRecipeId || ppBusy) return;
+  if (!document.getElementById('nameInput').value.trim()) { showToast('Needs a recipe name first'); return; }
+  if (!(await ensureSavedFirst('rename the product photo files'))) return;
+  await loadProductPhotos();   // fresh filenames before picking new ones
+
+  const reserved = [];
+  const plan = [];
+  productPhotos.forEach(p => {
+    const from = pathFromPhotoUrl(p.url);
+    if (!p.filename || !from.startsWith(LOTS_ROOT)) return;
+    p._reserved = reserved;
+    const to = expectedProductName(p);
+    delete p._reserved;
+    if (!to) return;
+    reserved.push(to);
+    plan.push({ p, from, toName: to, to: LOTS_ROOT + to });
+  });
+  if (!plan.length) { showToast('Files already match'); return; }
+
+  if (!confirm(`Rename ${plan.length} product photo file${plan.length === 1 ? '' : 's'}?\n\n` +
+    plan.map(x => `${x.p.filename}\n  → ${x.toName}`).join('\n\n'))) return;
+
+  ppBusy = true;
+  refreshProductFileLabels();
+  const failed = [];
+  const recipeName = document.getElementById('nameInput').value.trim();
+  const fiber = document.getElementById('fiberType').value;
+
+  for (const x of plan) {
+    const p = x.p;
+    const newUrl = `https://squirrelystash.app.n8n.cloud/webhook/photo2?path=${encodeURIComponent(x.to)}&r=${Date.now()}`;
+    const after = {}, before = {};
+    const put = (k, v, old) => { if (ppCols[k]) { after[ppCols[k]] = v; before[ppCols[k]] = old; } };
+    put('filename', x.toName, p.filename);
+    put('url', newUrl, p.url);
+    put('colorway', recipeName, undefined);
+    put('fiber', fiber, undefined);
+    Object.keys(before).forEach(k => { if (before[k] === undefined) delete before[k]; });
+
+    // Row first, so the importer already knows the new name when the file lands.
+    try {
+      await ppWrite([['UpdateRecord', 'Product_Photos', p.id, after]]);
+    } catch (e) {
+      console.error('Rename row write failed:', e);
+      failed.push(`${p.filename} (Grist)`);
+      continue;
+    }
+    try {
+      const res = await fetch(MOVE_WEBHOOK_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_path: x.from, dest_path: x.to }),
+      });
+      if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    } catch (e) {
+      console.error('Rename move failed:', e);
+      failed.push(p.filename);
+      try { await ppWrite([['UpdateRecord', 'Product_Photos', p.id, before]]); }
+      catch (e2) { console.error('Revert failed:', e2); failed.push(`${p.filename} — row NOT reverted, fix by hand`); }
+    }
+  }
+
+  ppBusy = false;
+  await loadProductPhotos();
+  if (failed.length) alert(`Renamed ${plan.length - failed.length} of ${plan.length}.\n\nFailed:\n${failed.join('\n')}\n\nIs SS - Move Photo imported and active?`);
+  else showToast(`Renamed ${plan.length} file${plan.length === 1 ? '' : 's'} ✓`);
 }
 
 function markUnsaved() {
@@ -1989,6 +2425,7 @@ async function loadRecipe(record) {
   renderInspirationSwatches();
   document.getElementById('draftNotes').value = rowField(record, ['Draft_Notes']) || '';
   updatePhotoThumbs();
+  loadProductPhotos();
 
   const status = rowField(record, ['Status']) || 'Active';
   const badge = document.getElementById('draftBadge');
@@ -2258,6 +2695,7 @@ function refreshPhotoFileLabels() {
     fileEl.title = off ? `Recipe now expects: ${targetPathFor(inputId, path).slice(RECIPE_PHOTO_ROOT.length)}` : '';
   });
   renderRenameState();
+  refreshProductFileLabels();
 }
 
 function parseHexList(raw) {
