@@ -217,6 +217,17 @@
   }
   .rot-btn:hover { border-color: var(--accent); color: var(--accent); }
   .rot-btn:disabled { opacity: .4; cursor: default; }
+  .rot-row .spacer { flex: 1; }
+  .rot-btn.danger:hover { border-color: #B23A2E; color: #B23A2E; }
+  .photo-file { font-family: 'DM Mono', monospace; font-size: 9px; color: #8B7D72; word-break: break-all; margin: -2px 0 6px; min-height: 11px; }
+  .photo-file.mismatch { color: #B5651D; }
+  .rename-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 11px; color: #6B5E52; }
+  .rename-bar button {
+    background: none; border: 1px solid var(--rule); border-radius: 4px; cursor: pointer;
+    font-size: 11px; padding: 4px 10px; color: var(--ink); font-family: 'Inter', sans-serif;
+  }
+  .rename-bar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .rename-bar button:disabled { opacity: .45; cursor: default; }
 
   .toast {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -355,6 +366,10 @@
   <div class="section">
     <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron collapsed" id="chevron-photos">▾</span></div>
     <div class="section-body collapsed" id="body-photos">
+    <div class="rename-bar">
+      <button id="renamePhotosBtn" onclick="renamePhotosToMatch()" title="Move this recipe's photo files into the folder its current name, fiber and scope call for">✎ Rename files to match recipe</button>
+      <span id="renamePhotosState"></span>
+    </div>
     <div class="photo-grid">
       <div class="photo-slot">
         <div class="photo-slot-label">Step 1</div>
@@ -363,7 +378,11 @@
         <div class="rot-row">
           <button class="rot-btn" onclick="rotateSlotPhoto('photoP1','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
           <button class="rot-btn" onclick="rotateSlotPhoto('photoP1','cw',this)" title="Rotate 90° clockwise">↻</button>
+          <span class="spacer"></span>
+          <button class="rot-btn" onclick="removeSlotPhoto('photoP1','inbox',this)" title="Remove from this recipe and send the file back to the Photo Inbox">↩ Inbox</button>
+          <button class="rot-btn danger" onclick="removeSlotPhoto('photoP1','delete',this)" title="Remove from this recipe and permanently delete the file">🗑</button>
         </div>
+        <div class="photo-file" id="fileP1"></div>
         <input class="field-input" id="noteP1" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
@@ -373,7 +392,11 @@
         <div class="rot-row">
           <button class="rot-btn" onclick="rotateSlotPhoto('photoP2','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
           <button class="rot-btn" onclick="rotateSlotPhoto('photoP2','cw',this)" title="Rotate 90° clockwise">↻</button>
+          <span class="spacer"></span>
+          <button class="rot-btn" onclick="removeSlotPhoto('photoP2','inbox',this)" title="Remove from this recipe and send the file back to the Photo Inbox">↩ Inbox</button>
+          <button class="rot-btn danger" onclick="removeSlotPhoto('photoP2','delete',this)" title="Remove from this recipe and permanently delete the file">🗑</button>
         </div>
+        <div class="photo-file" id="fileP2"></div>
         <input class="field-input" id="noteP2" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
@@ -383,7 +406,11 @@
         <div class="rot-row">
           <button class="rot-btn" onclick="rotateSlotPhoto('photoPF','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
           <button class="rot-btn" onclick="rotateSlotPhoto('photoPF','cw',this)" title="Rotate 90° clockwise">↻</button>
+          <span class="spacer"></span>
+          <button class="rot-btn" onclick="removeSlotPhoto('photoPF','inbox',this)" title="Remove from this recipe and send the file back to the Photo Inbox">↩ Inbox</button>
+          <button class="rot-btn danger" onclick="removeSlotPhoto('photoPF','delete',this)" title="Remove from this recipe and permanently delete the file">🗑</button>
         </div>
+        <div class="photo-file" id="filePF"></div>
         <input class="field-input" id="notePF" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
       <div class="photo-slot">
@@ -393,7 +420,11 @@
         <div class="rot-row">
           <button class="rot-btn" onclick="rotateSlotPhoto('photoInsp','ccw',this)" title="Rotate 90° counter-clockwise">↺</button>
           <button class="rot-btn" onclick="rotateSlotPhoto('photoInsp','cw',this)" title="Rotate 90° clockwise">↻</button>
+          <span class="spacer"></span>
+          <button class="rot-btn" onclick="removeSlotPhoto('photoInsp','inbox',this)" title="Remove from this recipe and send the file back to the Photo Inbox">↩ Inbox</button>
+          <button class="rot-btn danger" onclick="removeSlotPhoto('photoInsp','delete',this)" title="Remove from this recipe and permanently delete the file">🗑</button>
         </div>
+        <div class="photo-file" id="fileInsp"></div>
         <input class="field-input" id="noteInsp" placeholder="Note..." oninput="markUnsaved()" style="width:100%;">
       </div>
     </div>
@@ -784,9 +815,291 @@ async function rotateSlotPhoto(inputId, direction, btnEl) {
   }
 }
 
+/* ── Removing and renaming slot photos ──
+   Both actions touch Nextcloud through n8n and write Grist, and any Grist write
+   to this row makes onRecord reload the form — which would throw away unsaved
+   edits. So both insist on a clean save first rather than risk that.
+
+   Folder naming below is copied from photo-inbox.html. KEEP BYTE-IDENTICAL:
+   the rename is only useful if it lands files exactly where the inbox would
+   file the next one. */
+const UNFILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/unfile-photo';
+const DELETE_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
+const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
+const RECIPE_PHOTO_ROOT = 'Squirrely Stash/recipes/photos/';
+
+// inputId -> Grist fields and the filename the inbox gives that slot.
+const PHOTO_SLOTS = {
+  photoP1:   { label: 'Step 1',      photoField: 'Photo_Process_1',   noteField: 'Photo_Process_1_Note',   noteId: 'noteP1',   fileId: 'fileP1',   filenameBase: 'step1' },
+  photoP2:   { label: 'Step 2',      photoField: 'Photo_Process_2',   noteField: 'Photo_Process_2_Note',   noteId: 'noteP2',   fileId: 'fileP2',   filenameBase: 'step2' },
+  photoPF:   { label: 'Finished',    photoField: 'Photo_Finished',    noteField: 'Photo_Finished_Note',    noteId: 'notePF',   fileId: 'filePF',   filenameBase: 'finished' },
+  photoInsp: { label: 'Inspiration', photoField: 'Photo_Inspiration', noteField: 'Photo_Inspiration_Note', noteId: 'noteInsp', fileId: 'fileInsp', filenameBase: 'inspiration' },
+};
+
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+function slugify(name) {
+  return foldAccents(name).toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+function fiberCode(fiberType) {
+  if (FIBER_NAME_TO_CODE[fiberType]) return FIBER_NAME_TO_CODE[fiberType];
+  return (fiberType || '').toString().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'GEN';
+}
+function vendorCodeFromSku(skuBase, recipeScope) {
+  if (!skuBase || !/reserv/i.test(recipeScope || '')) return null;
+  const parts = skuBase.toString().split('_');
+  const last = (parts[parts.length - 1] || '').toUpperCase();
+  return VENDOR_CODES.includes(last) ? last : null;
+}
+function recipeFolderName(recipe) {
+  const slug = slugify(recipe.Recipe_Name);
+  const fc = fiberCode(recipe.Fiber_Type);
+  const vendor = vendorCodeFromSku(recipe.SKU_Base, recipe.Recipe_Scope);
+  return vendor ? `${slug}_${fc}_${vendor}` : `${slug}_${fc}`;
+}
+
+// Folder as the form currently describes the recipe.
+function currentFolderName() {
+  return recipeFolderName({
+    Recipe_Name: document.getElementById('nameInput').value,
+    Fiber_Type: document.getElementById('fiberType').value,
+    SKU_Base: document.getElementById('skuBase').value,
+    Recipe_Scope: document.getElementById('recipeScope').value,
+  });
+}
+
+// The slot holds a photo2 proxy URL; the real file is its ?path= param.
+function pathFromPhotoUrl(url) {
+  try {
+    const p = new URL(String(url || '').trim()).searchParams.get('path');
+    return p ? p.replace(/^\/+/, '') : '';
+  } catch (e) { return ''; }
+}
+
+function targetPathFor(inputId, currentPath) {
+  const slot = PHOTO_SLOTS[inputId];
+  const m = /\.[^./]+$/.exec(currentPath || '');
+  const ext = m ? m[0] : '.jpg';   // case kept, as the inbox does
+  return `${RECIPE_PHOTO_ROOT}${currentFolderName()}/${slot.filenameBase}${ext}`;
+}
+
+// Other recipe rows pointing at the same file. Nothing reference-counts these,
+// so moving or deleting a shared file would silently break the other recipe.
+async function otherRecipesUsingPath(path) {
+  const recs = await grist.docApi.fetchTable('Recipes');
+  const ids = recs.id || [];
+  const names = recs.Recipe_Name || [];
+  const hits = [];
+  Object.values(PHOTO_SLOTS).forEach(slot => {
+    const col = findColumn(recs, [slot.photoField]);
+    if (!col) return;
+    columnAsArray(recs, col).forEach((url, i) => {
+      if (ids[i] !== currentRecipeId && url && pathFromPhotoUrl(url) === path) {
+        hits.push(`${names[i] || 'Untitled'} (#${ids[i]}, ${slot.label})`);
+      }
+    });
+  });
+  return [...new Set(hits)];
+}
+
+// Both actions reload the form via onRecord. Save first so nothing is lost.
+async function ensureSavedFirst(what) {
+  if (!unsavedChanges) return true;
+  if (!confirm(`You have unsaved edits. Save them before you ${what}?`)) return false;
+  await saveRecipe();
+  return !unsavedChanges;
+}
+
+function setSlotButtonsDisabled(disabled) {
+  document.querySelectorAll('#body-photos .rot-btn, #renamePhotosBtn').forEach(b => { b.disabled = disabled; });
+}
+
+async function removeSlotPhoto(inputId, mode, btnEl) {
+  const slot = PHOTO_SLOTS[inputId];
+  const input = document.getElementById(inputId);
+  if (!slot || !input || !currentRecipeId) return;
+  const url = input.value.trim();
+  if (!url) { showToast('No photo in this slot'); return; }
+
+  const path = pathFromPhotoUrl(url);
+  const toInbox = mode === 'inbox';
+
+  // A pasted outside URL has no file of ours behind it — just clear the field.
+  if (!path) {
+    if (!confirm(`This ${slot.label} link isn't a filed Nextcloud photo. Clear the field?`)) return;
+    input.value = '';
+    document.getElementById(slot.noteId).value = '';
+    updatePhotoThumbs();
+    markUnsaved();
+    return;
+  }
+  if (!path.startsWith(RECIPE_PHOTO_ROOT)) {
+    showToast('That file is outside the recipe photo folders — not touching it');
+    return;
+  }
+
+  const question = toInbox
+    ? `Remove the ${slot.label} photo from this recipe and send the file back to the Photo Inbox?\n\n${path}`
+    : `Remove the ${slot.label} photo and PERMANENTLY delete the file?\n\n${path}\n\nThis cannot be undone. Use "↩ Inbox" instead if you might want it back.`;
+  if (!confirm(question)) return;
+  if (!(await ensureSavedFirst('remove this photo'))) return;
+
+  setSlotButtonsDisabled(true);
+  try {
+    const others = await otherRecipesUsingPath(path);
+    if (others.length) {
+      alert(`Not removed — this same file is also used by:\n\n${others.join('\n')}\n\nClear the field here by hand instead (select the URL, delete, save). The file stays put.`);
+      return;
+    }
+
+    const res = await fetch(toInbox ? UNFILE_WEBHOOK_URL : DELETE_FILE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toInbox
+        ? { source_path: path, recipe_id: currentRecipeId, photo_field: slot.photoField, note_field: slot.noteField }
+        : { path }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    // Written here too, even though unfile-photo clears the row itself: the
+    // delete workflow never touches Grist, and doing it in both cases means the
+    // field is cleared no matter which Grist doc the workflow happens to target.
+    isSaving = true;
+    try {
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId,
+        { [slot.photoField]: '', [slot.noteField]: '' }]]);
+    } finally { isSaving = false; }
+
+    input.value = '';
+    document.getElementById(slot.noteId).value = '';
+    updatePhotoThumbs();
+    showToast(toInbox ? `${slot.label} sent back to the inbox` : `${slot.label} deleted`);
+  } catch (e) {
+    console.error('Remove photo failed:', e);
+    showToast(toInbox ? 'Send to inbox failed — is the n8n webhook live?' : 'Delete failed — is the n8n webhook live?');
+  } finally {
+    setSlotButtonsDisabled(false);
+    updatePhotoThumbs();
+  }
+}
+
+// Slots whose file isn't where the current name/fiber/scope says it should be.
+function photoRenamePlan() {
+  const plan = [];
+  Object.keys(PHOTO_SLOTS).forEach(inputId => {
+    const url = document.getElementById(inputId).value.trim();
+    const from = pathFromPhotoUrl(url);
+    if (!from || !from.startsWith(RECIPE_PHOTO_ROOT)) return;
+    const to = targetPathFor(inputId, from);
+    if (from !== to) plan.push({ inputId, from, to });
+  });
+  return plan;
+}
+
+function renderRenameState() {
+  const btn = document.getElementById('renamePhotosBtn');
+  const state = document.getElementById('renamePhotosState');
+  if (!btn || !state) return;
+  const hasName = !!slugify(document.getElementById('nameInput').value);
+  const plan = hasName ? photoRenamePlan() : [];
+  btn.disabled = !plan.length;
+  state.textContent = !hasName
+    ? 'Needs a recipe name'
+    : plan.length
+      ? `${plan.length} file${plan.length === 1 ? '' : 's'} → ${currentFolderName()}/`
+      : `Files match — ${currentFolderName()}/`;
+}
+
+/* Rename = move each file into the folder the recipe now calls for, reusing
+   the inbox's file-photo workflow (create folder, move, point the row at the
+   new proxy URL). The old folder is left behind, empty. */
+async function renamePhotosToMatch() {
+  if (!currentRecipeId) return;
+  if (!slugify(document.getElementById('nameInput').value)) { showToast('Needs a recipe name first'); return; }
+  if (!(await ensureSavedFirst('rename the photo files'))) return;
+
+  const plan = photoRenamePlan();
+  if (!plan.length) { showToast('Files already match'); return; }
+
+  const lines = plan.map(p => `${PHOTO_SLOTS[p.inputId].label}:\n  ${p.from.slice(RECIPE_PHOTO_ROOT.length)}\n  → ${p.to.slice(RECIPE_PHOTO_ROOT.length)}`);
+  if (!confirm(`Rename ${plan.length} photo file${plan.length === 1 ? '' : 's'}?\n\n${lines.join('\n\n')}\n\nAnything already sitting at a new path is overwritten.`)) return;
+
+  setSlotButtonsDisabled(true);
+  const skipped = [];
+  const failed = [];
+  const updates = {};
+  const destFolder = `${RECIPE_PHOTO_ROOT}${currentFolderName()}/`;
+
+  try {
+    for (const step of plan) {
+      const slot = PHOTO_SLOTS[step.inputId];
+      const [usingFrom, usingTo] = await Promise.all([
+        otherRecipesUsingPath(step.from), otherRecipesUsingPath(step.to),
+      ]);
+      if (usingFrom.length || usingTo.length) {
+        skipped.push(`${slot.label} — shared with ${[...usingFrom, ...usingTo].join(', ')}`);
+        continue;
+      }
+      try {
+        const res = await fetch(FILE_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_path: step.from,
+            dest_folder: destFolder,
+            dest_path: step.to,
+            recipe_id: currentRecipeId,
+            photo_field: slot.photoField,
+            note_field: slot.noteField,
+            note_text: '',   // empty = leave the note alone
+          }),
+        });
+        if (!res.ok) throw new Error('Webhook returned ' + res.status);
+        const out = await res.json().catch(() => ({}));
+        const base = (out && out.proxy_url) ||
+          `https://squirrelystash.app.n8n.cloud/webhook/photo2?path=${encodeURIComponent(step.to)}`;
+        // Cache-buster: photo2 serves files immutable, and a path can have held
+        // a different image before.
+        updates[slot.photoField] = `${base}${base.includes('?') ? '&' : '?'}r=${Date.now()}`;
+        document.getElementById(step.inputId).value = updates[slot.photoField];
+      } catch (e) {
+        console.error('Rename failed for', step, e);
+        failed.push(slot.label);
+      }
+    }
+
+    if (Object.keys(updates).length) {
+      isSaving = true;
+      try {
+        await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId, updates]]);
+      } finally { isSaving = false; }
+    }
+
+    const done = Object.keys(updates).length;
+    if (skipped.length || failed.length) {
+      alert(`Renamed ${done} of ${plan.length}.` +
+        (skipped.length ? `\n\nSkipped (file shared with another recipe):\n${skipped.join('\n')}` : '') +
+        (failed.length ? `\n\nFailed: ${failed.join(', ')} — is the n8n webhook live?` : ''));
+    } else {
+      showToast(`Renamed ${done} file${done === 1 ? '' : 's'} ✓`);
+    }
+  } finally {
+    setSlotButtonsDisabled(false);
+    updatePhotoThumbs();
+  }
+}
+
 function markUnsaved() {
   unsavedChanges = true;
   document.getElementById('saveBtn').classList.add('unsaved');
+  refreshPhotoFileLabels();
 }
 
 function clearUnsaved() {
@@ -1919,12 +2232,32 @@ function updatePhotoThumbs() {
     const thumb = document.getElementById(thumbId);
     if (url) {
       thumb.classList.remove('empty');
-      thumb.innerHTML = `<img src="${url}" onerror="this.parentElement.classList.add('empty'); this.parentElement.innerHTML='<span>Could not load image</span>'">`;
+      thumb.innerHTML = `<img src="${esc(url)}" onerror="this.parentElement.classList.add('empty'); this.parentElement.innerHTML='<span>Could not load image</span>'">`;
     } else {
       thumb.classList.add('empty');
       thumb.innerHTML = `<span>No photo</span>`;
     }
   });
+  refreshPhotoFileLabels();
+}
+
+// Filed path under each thumb, amber when it no longer matches the recipe.
+// Cheap — no image reloads — so it can run on every keystroke.
+function refreshPhotoFileLabels() {
+  Object.keys(PHOTO_SLOTS).forEach(inputId => {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const url = input.value.trim();
+    const fileEl = document.getElementById(PHOTO_SLOTS[inputId].fileId);
+    const path = pathFromPhotoUrl(url);
+    if (!fileEl) return;
+    const inRoot = path.startsWith(RECIPE_PHOTO_ROOT);
+    fileEl.textContent = path ? (inRoot ? path.slice(RECIPE_PHOTO_ROOT.length) : path) : '';
+    const off = inRoot && slugify(document.getElementById('nameInput').value) && path !== targetPathFor(inputId, path);
+    fileEl.classList.toggle('mismatch', !!off);
+    fileEl.title = off ? `Recipe now expects: ${targetPathFor(inputId, path).slice(RECIPE_PHOTO_ROOT.length)}` : '';
+  });
+  renderRenameState();
 }
 
 function parseHexList(raw) {
