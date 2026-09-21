@@ -73,6 +73,8 @@
   .comp-low  { color: var(--warn-text); font-weight: 700; }
   .comp-none { color: var(--stop-text); font-weight: 700; }
   .aging { color: var(--warn-text); font-weight: 700; }
+  .bin-tag { color: var(--teal); font-weight: 700; }
+  .bin-none { color: #B0A396; font-style: italic; }
 
   .empty { text-align: center; color: var(--muted); padding: 24px 10px; font-size: 12px; }
   .err { background: var(--stop-bg); color: var(--stop-text); border: 1px solid var(--stop-text); border-radius: 6px; padding: 10px; font-size: 12px; }
@@ -207,15 +209,23 @@ async function load() {
       return byName !== undefined ? byName : null;
     };
 
-    /* mixed stock jars, totalled per dye, with the oldest jar's age kept */
+    /* mixed stock jars, totalled per dye, with the oldest jar's age kept.
+       Bins are collected only from jars that still hold dye — no point
+       sending anyone to an empty jar. */
     const stock = {};
     (stkT.id || []).forEach((id, i) => {
       const did = resolveDye(columnAsArray(stkT, STK.dye)[i]);
       if (!did) return;
       const qty = num(columnAsArray(stkT, STK.qty)[i]);
-      const rec = stock[did] || (stock[did] = { ml: 0, jars: 0, oldestDays: null });
+      const rec = stock[did] || (stock[did] = { ml: 0, jars: 0, oldestDays: null, bins: [] });
       rec.ml += qty;
-      if (qty > 0) rec.jars += 1;
+      if (qty > 0) {
+        rec.jars += 1;
+        if (STK.bin) {
+          const b = String(columnAsArray(stkT, STK.bin)[i] || '').trim();
+          if (b && !rec.bins.includes(b)) rec.bins.push(b);
+        }
+      }
       if (STK.mixed) {
         const d = daysSince(columnAsArray(stkT, STK.mixed)[i]);
         if (d !== null && (rec.oldestDays === null || d > rec.oldestDays)) rec.oldestDays = d;
@@ -227,6 +237,7 @@ async function load() {
     if (powT) {
       const PC = resolveCols(powT, 'Dye_Powder', {
         dye: ['Dye'], state: opt(['State']), low: opt(['Low']),
+        loc: opt(['Location']), box: opt(['Box', 'Box_Code', 'Bin']),
       }, []);
       (powT.id || []).forEach((id, i) => {
         const did = resolveDye(columnAsArray(powT, PC.dye)[i]);
@@ -234,8 +245,16 @@ async function load() {
         const state = PC.state ? normalize(columnAsArray(powT, PC.state)[i]) : '';
         const low = PC.low ? !!columnAsArray(powT, PC.low)[i] : false;
         const gone = /EMPTY|OUT|GONE|USED/.test(state);
-        const rec = powder[did] || (powder[did] = { any: false, low: true });
-        if (!gone) { rec.any = true; if (!low) rec.low = false; }
+        const rec = powder[did] || (powder[did] = { any: false, low: true, bins: [] });
+        if (!gone) {
+          rec.any = true;
+          if (!low) rec.low = false;
+          const where = [
+            PC.loc ? String(columnAsArray(powT, PC.loc)[i] || '').trim() : '',
+            PC.box ? String(columnAsArray(powT, PC.box)[i] || '').trim() : '',
+          ].filter(Boolean).join(' / ');
+          if (where && !rec.bins.includes(where)) rec.bins.push(where);
+        }
       });
     }
 
@@ -314,13 +333,14 @@ function evaluate(rec) {
 
     if (c.isPowder) {
       const p = c.dyeId ? S.powder[c.dyeId] : null;
-      if (!S.hasPowderTable) return { ...c, kind: 'powder', state: 'ok', need, have: null, note: 'powder — not tracked' };
-      if (!p || !p.any) return { ...c, kind: 'powder', state: 'none', need, have: null, note: 'no powder on hand' };
-      return { ...c, kind: 'powder', state: p.low ? 'low' : 'ok', need, have: null, note: p.low ? 'powder low' : 'powder on hand' };
+      if (!S.hasPowderTable) return { ...c, kind: 'powder', state: 'ok', need, have: null, bins: [], note: 'powder — not tracked' };
+      if (!p || !p.any) return { ...c, kind: 'powder', state: 'none', need, have: null, bins: [], note: 'no powder on hand' };
+      return { ...c, kind: 'powder', state: p.low ? 'low' : 'ok', need, have: null, bins: p.bins, note: p.low ? 'powder low' : 'powder on hand' };
     }
 
     const s = c.dyeId ? S.stock[c.dyeId] : null;
     const have = s ? s.ml : 0;
+    const bins = s ? s.bins : [];
     const ageDays = s ? s.oldestDays : null;
     const shelf = d ? d.shelf : 0;
     const expired = shelf > 0 && ageDays !== null && ageDays > shelf;
@@ -331,7 +351,7 @@ function evaluate(rec) {
     else if (need > 0 && have < need) state = 'low';
     else state = 'ok';
 
-    return { ...c, kind: 'liquid', state, need, have, ageDays, shelf, expired, jars: s ? s.jars : 0 };
+    return { ...c, kind: 'liquid', state, need, have, bins, ageDays, shelf, expired, jars: s ? s.jars : 0 };
   });
 
   const total = rows.length;
@@ -480,7 +500,13 @@ function compRow(r) {
     qty = `<span class="${cls}">${Math.round(r.have)} mL<br><span class="comp-sub">no rate set</span></span>`;
   }
 
+  const bins = Array.isArray(r.bins) ? r.bins.filter(Boolean) : [];
+  const binTxt = bins.length
+    ? `<span class="bin-tag">${bins.length > 1 ? 'Bins' : 'Bin'} ${bins.map(esc).join(', ')}</span>`
+    : (r.state === 'none' ? '' : `<span class="bin-none">bin not set</span>`);
+
   const sub = [
+    binTxt,
     r.dilution ? `dilution ${esc(r.dilution)}` : '',
     r.kind === 'liquid' && r.jars ? `${r.jars} jar${r.jars === 1 ? '' : 's'}` : '',
     r.kind === 'liquid' && r.ageDays !== null && r.ageDays !== undefined
