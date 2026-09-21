@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  :root {
+    --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7;
+    --teal: #2A6B6B; --teal-light: #E4F0EF;
+    --done-bg: #E8F3E8; --done-text: #2D6A2D;
+    --warn-bg: #FBF0E4; --warn-text: #8B5A2A;
+    --stop-bg: #F7E8E6; --stop-text: #9A4033;
+    --muted: #8B7D72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px;
+  }
+  .header-title { font-size: 15px; font-weight: 700; }
+  .header-sub { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+
+  .controls { background: var(--teal-light); border: 1px solid var(--teal); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  .ctl-row { display: flex; gap: 6px; align-items: center; }
+  .ctl-row + .ctl-row { margin-top: 6px; }
+  .ctl-label { font-size: 10px; font-weight: 600; color: var(--teal); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  .ctl-input { width: 62px; padding: 6px; border: 1px solid var(--rule); border-radius: 5px; font-size: 13px; text-align: center; }
+  .ctl-select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px; background: white; color: var(--ink); }
+  .ctl-hint { font-size: 10px; color: var(--muted); margin-top: 5px; }
+
+  .search-input { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tab {
+    padding: 5px 10px; border: 1px solid var(--rule); background: white; border-radius: 20px;
+    font-size: 11px; font-weight: 600; cursor: pointer; color: var(--muted); white-space: nowrap;
+  }
+  .tab.active { background: var(--teal); border-color: var(--teal); color: white; }
+
+  .summary-line { font-size: 11px; color: var(--teal); font-weight: 600; margin-bottom: 8px; }
+
+  .rec-card { background: white; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 5px; overflow: hidden; }
+  .rec-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 9px; cursor: pointer; }
+  .rec-head:hover { background: #FAF7F2; }
+  .rec-left { flex: 1; min-width: 0; }
+  .rec-name { font-weight: 700; font-size: 13px; }
+  .rec-meta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .rec-right { text-align: right; white-space: nowrap; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+  .pill-ready { background: var(--done-bg); color: var(--done-text); }
+  .pill-short { background: var(--warn-bg); color: var(--warn-text); }
+  .pill-stop  { background: var(--stop-bg); color: var(--stop-text); }
+
+  .bar { height: 4px; background: #F0EAE1; border-radius: 2px; margin-top: 5px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 2px; }
+  .bar-ready { background: var(--done-text); }
+  .bar-short { background: var(--warn-text); }
+  .bar-stop  { background: var(--stop-text); }
+
+  .stock-note { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .stock-zero { color: var(--stop-text); font-weight: 700; }
+
+  .comp-rows { border-top: 1px solid var(--rule); padding: 4px 9px 8px; }
+  .comp-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #F0EAE1; }
+  .comp-row:last-child { border-bottom: none; }
+  .comp-info { flex: 1; min-width: 0; }
+  .comp-name { font-weight: 600; font-size: 12px; }
+  .comp-sub { font-size: 10px; color: var(--muted); }
+  .comp-qty { font-size: 11px; text-align: right; white-space: nowrap; }
+  .comp-ok   { color: var(--done-text); font-weight: 600; }
+  .comp-low  { color: var(--warn-text); font-weight: 700; }
+  .comp-none { color: var(--stop-text); font-weight: 700; }
+  .aging { color: var(--warn-text); font-weight: 700; }
+
+  .empty { text-align: center; color: var(--muted); padding: 24px 10px; font-size: 12px; }
+  .err { background: var(--stop-bg); color: var(--stop-text); border: 1px solid var(--stop-text); border-radius: 6px; padding: 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app"><div class="empty">Loading…</div></div>
+
+<script>
+/* ── helpers (matching repo conventions) ──────────────────────────────── */
+const opt = names => ({ names, optional: true });
+function getRefId(ref) {
+  if (Array.isArray(ref)) return ref[0] === 'R' ? ref[1] : null;
+  const n = Number(ref);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, cands) {
+  for (const c of cands) if (Object.prototype.hasOwnProperty.call(t, c)) return c;
+  const loose = {};
+  Object.keys(t).forEach(k => { loose[k.toLowerCase().replace(/[^a-z0-9]/g, '')] = k; });
+  for (const c of cands) {
+    const hit = loose[c.toLowerCase().replace(/[^a-z0-9]/g, '')];
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, name, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.names;
+    const optional = !Array.isArray(def) && def.optional;
+    const col = findColumn(table, cands);
+    if (!col && !optional) missing.push(`${name}.${cands[0]}`);
+    out[key] = col;
+  }
+  return out;
+}
+function normalize(s) { return (s == null ? '' : String(s)).trim().toUpperCase(); }
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function fiberCode(f) {
+  const s = normalize(f);
+  if (!s) return '';
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/BLACKWING/.test(s)) return 'BW';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+const DAY = 86400;
+function nowEpoch() { return Math.floor(Date.now() / 1000); }
+function daysSince(epochVal) {
+  const n = Number(epochVal);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor((nowEpoch() - n) / DAY);
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ── state ────────────────────────────────────────────────────────────── */
+let S = {
+  recipes: [], spools: 6, sort: 'available', filter: 'all',
+  search: '', open: {}, hasPowderTable: false, error: null,
+};
+
+/* ── load ─────────────────────────────────────────────────────────────── */
+async function load() {
+  try {
+    const [recT, compT, dyeT, stkT, lotT] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Recipe_Dye_Components'),
+      grist.docApi.fetchTable('Dyes'),
+      grist.docApi.fetchTable('Dye_Stock'),
+      grist.docApi.fetchTable('Production_Lots'),
+    ]);
+
+    // Powder inventory is optional — recipes with powder steps still resolve without it.
+    let powT = null;
+    try { powT = await grist.docApi.fetchTable('Dye_Powder'); } catch (e) { powT = null; }
+    S.hasPowderTable = !!powT;
+
+    const missing = [];
+    const REC = resolveCols(recT, 'Recipes', {
+      name: ['Recipe_Name'], sku: opt(['SKU_Base']),
+      fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']),
+      status: opt(['Status']),
+    }, missing);
+    const CMP = resolveCols(compT, 'Recipe_Dye_Components', {
+      recipe: ['Recipe'], dye: ['Dye_Name'], full: opt(['Dye_Full']),
+      dilution: opt(['Dilution', 'Dilution_Ratio']), isPowder: opt(['Is_Powder']),
+      step: opt(['Step_Number']), mode: opt(['Measure_Mode']),
+      effRate: opt(['Effective_mL_per_100_yd']), defRate: opt(['Default_mL_per_100_yds']),
+    }, missing);
+    const DYE = resolveCols(dyeT, 'Dyes', {
+      name: ['Dye_Name'], brand: opt(['Brand']),
+      defRate: opt(['Default_mL_per_100_yds']), shelf: opt(['Shelf_Life_days_']),
+      status: opt(['Status']),
+    }, missing);
+    const STK = resolveCols(stkT, 'Dye_Stock', {
+      dye: ['Dye'], qty: ['Quantity_mL'], mixed: opt(['Mixed_Date']), bin: opt(['Bin_Location']),
+    }, missing);
+    const LOT = resolveCols(lotT, 'Production_Lots', {
+      recipe: ['Recipe'], back: opt(['General_Stock_Spools']),
+      store: opt(['Store_Stock_Spools']), vendor: opt(['Vendor_Stock_Spools']),
+      dated: opt(['Date_Dyed']),
+    }, missing);
+    if (missing.length) throw new Error('Columns not found: ' + [...new Set(missing)].join(', '));
+
+    /* dyes, indexed by id and by name (name lookup is the fallback for any
+       component row still holding plain text rather than a reference) */
+    const dye = {}, dyeIdByName = {};
+    (dyeT.id || []).forEach((id, i) => {
+      const nm = columnAsArray(dyeT, DYE.name)[i] || '';
+      dye[id] = {
+        id, name: nm,
+        brand: DYE.brand ? columnAsArray(dyeT, DYE.brand)[i] || '' : '',
+        defRate: DYE.defRate ? num(columnAsArray(dyeT, DYE.defRate)[i]) : 0,
+        shelf: DYE.shelf ? num(columnAsArray(dyeT, DYE.shelf)[i]) : 0,
+        status: DYE.status ? columnAsArray(dyeT, DYE.status)[i] || '' : '',
+      };
+      const key = normalize(nm);
+      if (key && dyeIdByName[key] === undefined) dyeIdByName[key] = id;
+    });
+    const resolveDye = raw => {
+      const id = getRefId(raw);
+      if (id && dye[id]) return id;
+      const byName = dyeIdByName[normalize(raw)];
+      return byName !== undefined ? byName : null;
+    };
+
+    /* mixed stock jars, totalled per dye, with the oldest jar's age kept */
+    const stock = {};
+    (stkT.id || []).forEach((id, i) => {
+      const did = resolveDye(columnAsArray(stkT, STK.dye)[i]);
+      if (!did) return;
+      const qty = num(columnAsArray(stkT, STK.qty)[i]);
+      const rec = stock[did] || (stock[did] = { ml: 0, jars: 0, oldestDays: null });
+      rec.ml += qty;
+      if (qty > 0) rec.jars += 1;
+      if (STK.mixed) {
+        const d = daysSince(columnAsArray(stkT, STK.mixed)[i]);
+        if (d !== null && (rec.oldestDays === null || d > rec.oldestDays)) rec.oldestDays = d;
+      }
+    });
+
+    /* powder inventory presence per dye */
+    const powder = {};
+    if (powT) {
+      const PC = resolveCols(powT, 'Dye_Powder', {
+        dye: ['Dye'], state: opt(['State']), low: opt(['Low']),
+      }, []);
+      (powT.id || []).forEach((id, i) => {
+        const did = resolveDye(columnAsArray(powT, PC.dye)[i]);
+        if (!did) return;
+        const state = PC.state ? normalize(columnAsArray(powT, PC.state)[i]) : '';
+        const low = PC.low ? !!columnAsArray(powT, PC.low)[i] : false;
+        const gone = /EMPTY|OUT|GONE|USED/.test(state);
+        const rec = powder[did] || (powder[did] = { any: false, low: true });
+        if (!gone) { rec.any = true; if (!low) rec.low = false; }
+      });
+    }
+
+    /* existing back stock per recipe */
+    const backStock = {};
+    (lotT.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(lotT, LOT.recipe)[i]);
+      if (!rid) return;
+      let n = 0;
+      if (LOT.back)   n += num(columnAsArray(lotT, LOT.back)[i]);
+      if (LOT.store)  n += num(columnAsArray(lotT, LOT.store)[i]);
+      if (LOT.vendor) n += num(columnAsArray(lotT, LOT.vendor)[i]);
+      const rec = backStock[rid] || (backStock[rid] = { spools: 0, newestDays: null });
+      rec.spools += n;
+      if (LOT.dated) {
+        const d = daysSince(columnAsArray(lotT, LOT.dated)[i]);
+        if (d !== null && (rec.newestDays === null || d < rec.newestDays)) rec.newestDays = d;
+      }
+    });
+
+    /* components grouped by recipe */
+    const compsByRecipe = {};
+    (compT.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(compT, CMP.recipe)[i]);
+      if (!rid) return;
+      const did = resolveDye(columnAsArray(compT, CMP.dye)[i]);
+      (compsByRecipe[rid] = compsByRecipe[rid] || []).push({
+        dyeId: did,
+        label: (CMP.full ? columnAsArray(compT, CMP.full)[i] : '') ||
+               (did && dye[did] ? dye[did].name : '') ||
+               String(columnAsArray(compT, CMP.dye)[i] || 'Unknown dye'),
+        dilution: CMP.dilution ? columnAsArray(compT, CMP.dilution)[i] || '' : '',
+        isPowder: CMP.isPowder ? !!columnAsArray(compT, CMP.isPowder)[i] : false,
+        step: CMP.step ? num(columnAsArray(compT, CMP.step)[i]) : 0,
+        effRate: CMP.effRate ? num(columnAsArray(compT, CMP.effRate)[i]) : 0,
+        defRate: CMP.defRate ? num(columnAsArray(compT, CMP.defRate)[i]) : 0,
+      });
+    });
+
+    /* assemble */
+    const out = [];
+    (recT.id || []).forEach((rid, i) => {
+      const status = REC.status ? normalize(columnAsArray(recT, REC.status)[i]) : '';
+      if (/RETIRED|ARCHIV|DISCONT|INACTIVE/.test(status)) return;
+      const comps = compsByRecipe[rid] || [];
+      if (!comps.length) return;
+      out.push({
+        id: rid,
+        name: columnAsArray(recT, REC.name)[i] || `Recipe #${rid}`,
+        sku: REC.sku ? columnAsArray(recT, REC.sku)[i] || '' : '',
+        fiber: REC.fiber ? columnAsArray(recT, REC.fiber)[i] || '' : '',
+        method: REC.method ? columnAsArray(recT, REC.method)[i] || '' : '',
+        comps: comps.sort((a, b) => a.step - b.step),
+        back: backStock[rid] || { spools: 0, newestDays: null },
+      });
+    });
+
+    S.recipes = out;
+    S.dyeIndex = dye;
+    S.stock = stock;
+    S.powder = powder;
+    S.error = null;
+  } catch (e) {
+    S.error = e && e.message ? e.message : String(e);
+  }
+  render();
+}
+
+/* ── evaluation ───────────────────────────────────────────────────────── */
+function evaluate(rec) {
+  const yards = S.spools * yardsPerSpool(rec.fiber);
+  const rows = rec.comps.map(c => {
+    const d = c.dyeId ? S.dyeIndex[c.dyeId] : null;
+    const rate = c.effRate || c.defRate || (d ? d.defRate : 0);
+    const need = rate > 0 ? (rate * yards) / 100 : 0;
+
+    if (c.isPowder) {
+      const p = c.dyeId ? S.powder[c.dyeId] : null;
+      if (!S.hasPowderTable) return { ...c, kind: 'powder', state: 'ok', need, have: null, note: 'powder — not tracked' };
+      if (!p || !p.any) return { ...c, kind: 'powder', state: 'none', need, have: null, note: 'no powder on hand' };
+      return { ...c, kind: 'powder', state: p.low ? 'low' : 'ok', need, have: null, note: p.low ? 'powder low' : 'powder on hand' };
+    }
+
+    const s = c.dyeId ? S.stock[c.dyeId] : null;
+    const have = s ? s.ml : 0;
+    const ageDays = s ? s.oldestDays : null;
+    const shelf = d ? d.shelf : 0;
+    const expired = shelf > 0 && ageDays !== null && ageDays > shelf;
+
+    let state;
+    if (!c.dyeId) state = 'none';
+    else if (have <= 0) state = 'none';
+    else if (need > 0 && have < need) state = 'low';
+    else state = 'ok';
+
+    return { ...c, kind: 'liquid', state, need, have, ageDays, shelf, expired, jars: s ? s.jars : 0 };
+  });
+
+  const total = rows.length;
+  const okCount = rows.filter(r => r.state === 'ok').length;
+  const noneCount = rows.filter(r => r.state === 'none').length;
+  const lowCount = rows.filter(r => r.state === 'low').length;
+  const pct = total ? Math.round((okCount / total) * 100) : 0;
+
+  let status;
+  if (noneCount === 0 && lowCount === 0) status = 'ready';
+  else if (noneCount === 0) status = 'short';
+  else status = 'blocked';
+
+  // Aging pressure: oldest jar this recipe would consume, as a fraction of its shelf life.
+  let agePressure = 0, oldestDays = null;
+  rows.forEach(r => {
+    if (r.kind !== 'liquid' || r.ageDays === null || r.ageDays === undefined) return;
+    if (oldestDays === null || r.ageDays > oldestDays) oldestDays = r.ageDays;
+    if (r.shelf > 0) agePressure = Math.max(agePressure, r.ageDays / r.shelf);
+  });
+
+  return { rows, total, okCount, lowCount, noneCount, pct, status, agePressure, oldestDays };
+}
+
+/* ── sorting / filtering ──────────────────────────────────────────────── */
+function visibleRecipes() {
+  const q = normalize(S.search);
+  let list = S.recipes.map(r => ({ rec: r, ev: evaluate(r) }));
+
+  if (q) list = list.filter(x => normalize(x.rec.name).includes(q) || normalize(x.rec.sku).includes(q));
+
+  if (S.filter === 'ready')   list = list.filter(x => x.ev.status === 'ready');
+  if (S.filter === 'close')   list = list.filter(x => x.ev.status !== 'ready' && x.ev.pct >= 50);
+  if (S.filter === 'nostock') list = list.filter(x => x.rec.back.spools <= 0);
+
+  const byName = (a, b) => a.rec.name.localeCompare(b.rec.name);
+  if (S.sort === 'available') {
+    list.sort((a, b) => (b.ev.pct - a.ev.pct) || (a.ev.noneCount - b.ev.noneCount) || byName(a, b));
+  } else if (S.sort === 'aging') {
+    list.sort((a, b) => (b.ev.agePressure - a.ev.agePressure) ||
+                        ((b.ev.oldestDays || 0) - (a.ev.oldestDays || 0)) ||
+                        (b.ev.pct - a.ev.pct) || byName(a, b));
+  } else if (S.sort === 'restock') {
+    list.sort((a, b) => (a.rec.back.spools - b.rec.back.spools) || (b.ev.pct - a.ev.pct) || byName(a, b));
+  } else {
+    list.sort(byName);
+  }
+  return list;
+}
+
+/* ── render ───────────────────────────────────────────────────────────── */
+function render() {
+  const app = document.getElementById('app');
+  if (S.error) {
+    app.innerHTML = `<div class="err"><b>Could not load.</b><br>${esc(S.error)}</div>`;
+    return;
+  }
+
+  const list = visibleRecipes();
+  const readyCount = S.recipes.map(evaluate).filter(e => e.status === 'ready').length;
+
+  const tab = (id, label) =>
+    `<div class="tab ${S.filter === id ? 'active' : ''}" onclick="setFilter('${id}')">${label}</div>`;
+
+  app.innerHTML = `
+    <div class="header-title">Make Now</div>
+    <div class="header-sub">Recipes you can dye against current stock</div>
+
+    <div class="controls">
+      <div class="ctl-row">
+        <span class="ctl-label">Spools</span>
+        <input class="ctl-input" type="number" min="1" step="1" value="${S.spools}"
+               onchange="setSpools(this.value)" oninput="setSpools(this.value)">
+        <span class="ctl-label">Sort</span>
+        <select class="ctl-select" onchange="setSort(this.value)">
+          <option value="available" ${S.sort === 'available' ? 'selected' : ''}>Most available first</option>
+          <option value="aging"     ${S.sort === 'aging' ? 'selected' : ''}>Use aging stock first</option>
+          <option value="restock"   ${S.sort === 'restock' ? 'selected' : ''}>Lowest back stock first</option>
+          <option value="name"      ${S.sort === 'name' ? 'selected' : ''}>Name</option>
+        </select>
+      </div>
+      <div class="ctl-hint">Volumes checked against ${S.spools} spool${S.spools === 1 ? '' : 's'} at each recipe's own fiber yardage.</div>
+    </div>
+
+    <input class="search-input" placeholder="Search colorway or SKU…" value="${esc(S.search)}"
+           oninput="setSearch(this.value)">
+
+    <div class="tabs">
+      ${tab('all', 'All')}
+      ${tab('ready', 'Ready')}
+      ${tab('close', 'Nearly there')}
+      ${tab('nostock', 'No back stock')}
+    </div>
+
+    <div class="summary-line">${readyCount} of ${S.recipes.length} ready at ${S.spools} spool${S.spools === 1 ? '' : 's'} · showing ${list.length}</div>
+
+    ${list.length ? list.map(card).join('') : '<div class="empty">Nothing matches that filter.</div>'}
+  `;
+}
+
+function card({ rec, ev }) {
+  const pillClass = ev.status === 'ready' ? 'pill-ready' : ev.status === 'short' ? 'pill-short' : 'pill-stop';
+  const pillText = ev.status === 'ready' ? 'Ready'
+    : ev.status === 'short' ? `${ev.lowCount} short`
+    : `${ev.noneCount} missing`;
+  const barClass = ev.status === 'ready' ? 'bar-ready' : ev.status === 'short' ? 'bar-short' : 'bar-stop';
+
+  const meta = [rec.fiber, rec.method, rec.sku].filter(Boolean).join(' · ');
+  const back = rec.back.spools;
+  const backTxt = back > 0
+    ? `${back} in back stock${rec.back.newestDays !== null ? ` · last dyed ${rec.back.newestDays}d ago` : ''}`
+    : `<span class="stock-zero">No back stock</span>`;
+
+  const ageFlag = ev.agePressure >= 0.75
+    ? `<div class="stock-note aging">Uses stock at ${Math.round(ev.agePressure * 100)}% of shelf life</div>` : '';
+
+  const open = !!S.open[rec.id];
+
+  return `
+    <div class="rec-card">
+      <div class="rec-head" onclick="toggle(${rec.id})">
+        <div class="rec-left">
+          <div class="rec-name">${esc(rec.name)}</div>
+          <div class="rec-meta">${esc(meta)}</div>
+          <div class="stock-note">${backTxt}</div>
+          ${ageFlag}
+          <div class="bar"><div class="bar-fill ${barClass}" style="width:${ev.pct}%"></div></div>
+        </div>
+        <div class="rec-right">
+          <span class="pill ${pillClass}">${pillText}</span>
+          <div class="stock-note">${ev.okCount}/${ev.total} dyes</div>
+        </div>
+      </div>
+      ${open ? `<div class="comp-rows">${ev.rows.map(compRow).join('')}</div>` : ''}
+    </div>`;
+}
+
+function compRow(r) {
+  const cls = r.state === 'ok' ? 'comp-ok' : r.state === 'low' ? 'comp-low' : 'comp-none';
+  let qty;
+  if (r.kind === 'powder') {
+    qty = `<span class="${cls}">${esc(r.note)}</span>`;
+  } else if (r.need > 0) {
+    qty = `<span class="${cls}">${Math.round(r.have)} / ${Math.round(r.need)} mL</span>`;
+  } else {
+    qty = `<span class="${cls}">${Math.round(r.have)} mL<br><span class="comp-sub">no rate set</span></span>`;
+  }
+
+  const sub = [
+    r.dilution ? `dilution ${esc(r.dilution)}` : '',
+    r.kind === 'liquid' && r.jars ? `${r.jars} jar${r.jars === 1 ? '' : 's'}` : '',
+    r.kind === 'liquid' && r.ageDays !== null && r.ageDays !== undefined
+      ? `<span class="${r.expired ? 'aging' : ''}">mixed ${r.ageDays}d ago${r.expired ? ' · past shelf life' : ''}</span>` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <div class="comp-row">
+      <div class="comp-info">
+        <div class="comp-name">${esc(r.label)}</div>
+        ${sub ? `<div class="comp-sub">${sub}</div>` : ''}
+      </div>
+      <div class="comp-qty">${qty}</div>
+    </div>`;
+}
+
+/* ── events ───────────────────────────────────────────────────────────── */
+function setSpools(v) { const n = Math.max(1, Math.round(num(v))); if (n !== S.spools) { S.spools = n; render(); } }
+function setSort(v) { S.sort = v; render(); }
+function setFilter(v) { S.filter = v; render(); }
+function setSearch(v) { S.search = v; render(); }
+function toggle(id) { S.open[id] = !S.open[id]; render(); }
+
+grist.ready({ requiredAccess: 'read table' });
+load();
+</script>
+</body>
+</html>
