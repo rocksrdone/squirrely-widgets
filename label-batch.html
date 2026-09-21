@@ -117,6 +117,19 @@ body {
 .pl-summary { margin-top: 9px; font-size: 11.5px; color: var(--mid); }
 .empty-note { font-size: 11px; color: var(--muted); font-style: italic; padding: 10px 0; }
 
+/* Manual names — typed-in labels with no product behind them */
+.man-ta {
+  width: 100%; box-sizing: border-box; margin-top: 10px; min-height: 190px; resize: vertical;
+  padding: 10px 11px; border: 1px solid var(--rule); border-radius: 6px; background: #fff;
+  font-family: 'DM Mono', monospace; font-size: 12.5px; line-height: 1.75; color: var(--ink);
+  outline: none; white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+.man-ta:focus { border-color: var(--accent); }
+.man-help { font-size: 10.5px; color: var(--muted); line-height: 1.7; margin-top: 7px; }
+.man-help code { font-family: 'DM Mono', monospace; background: var(--warm); padding: 1px 4px; border-radius: 3px; color: var(--mid); }
+.man-bad { margin-top: 8px; font-size: 11px; color: var(--accent); line-height: 1.6; }
+.man-bad strong { font-family: 'DM Mono', monospace; }
+
 .profile { margin-top: 12px; background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 11px 13px; display: flex; gap: 22px; flex-wrap: wrap; }
 .profile .pf { min-width: 130px; }
 .profile .pf-label { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
@@ -225,6 +238,7 @@ input[type=checkbox]:disabled { cursor: default; }
   <div class="tab" data-mode="lines">Pick lines</div>
   <div class="tab" data-mode="allorders">All orders</div>
   <div class="tab" data-mode="free">Free print</div>
+  <div class="tab" data-mode="manual">Manual names</div>
   <div class="tab" data-mode="stock">Label stock</div>
   <div class="tab" data-mode="store">Store listings</div>
   <div class="tab" data-mode="front">Front labels</div>
@@ -387,6 +401,11 @@ const S = {
   netOffOnHand: true,   // subtract labels already printed from what gets printed
   freePicked: {},       // recipeId -> true, for the Free print tab
   freeSearch: '', freeQtyDefault: 12,
+  manualText: '',       // typed-in names, one per line — see parseManual()
+  manualFiber: 'FFN',   // fiber for any line that doesn't name its own
+  manualQtyDefault: 12, // quantity for any line that doesn't give one
+  manualSeenQty: {},    // rowKey -> qty last read out of the textarea
+  manualBad: [],        // lines that parsed to nothing, for the warning strip
   stockSearch: '', stockFilter: 'all',
   proof: false,         // draw cut circles for a plain-paper test print
   ready: false,
@@ -896,8 +915,118 @@ function rowFromLine(l) {
     orderNum: o ? o.num : '', custName: cust ? cust.name : (o ? o.custName : ''),
   };
 }
+/* ---------- Manual names ----------
+   Labels for things that don't exist as a product: one-off commissions, a
+   guest dyer's colorways, trade-show samples, a name a customer asked for
+   that never became a recipe. Nothing here touches Recipes, Label_Stock or
+   any order — a manual batch is always printed on its own, never mixed in
+   with rows that came out of Grist.
+
+   One line per name. Everything after the name is optional:
+     Sunset Ridge                 -> default qty, default fiber
+     Sunset Ridge x 24            -> 24
+     Sunset Ridge, 24, EN         -> 24 on E nylon
+     Sunset Ridge | 24 | EN       -> same, pipes if the name has a comma
+     24 x Sunset Ridge            -> leading count also works
+   `#` or `//` starts a comment line.                                        */
+const MANUAL_FIBER_TOKEN = /^(FFN|FFC|EN|BW|CN)$/i;
+
+/* Same name on the same fiber twice is one row with the counts added, so a
+   pasted list with duplicates doesn't print two half-runs. */
+function addManualRow(byKey, out, name, qty, fib) {
+  const key = 'M' + fib + '|' + name.toLowerCase();
+  if (byKey.has(key)) { byKey.get(key).defaultQty += qty; return; }
+  const row = {
+    rowKey: key, recipeId: null, manual: true,
+    name, sku: '', fiber: fib,
+    sheetOnHand: false, matched: true,
+    defaultQty: qty, stock: 0,
+    orderNum: '', custName: '',
+  };
+  byKey.set(key, row);
+  out.push(row);
+}
+
+function parseManual() {
+  const out = [];
+  const byKey = new Map();
+  const bad = [];
+  const defFiber = fiberCode(S.manualFiber) || 'FFN';
+  const defQty = Math.max(0, Number(S.manualQtyDefault) || 0);
+
+  String(S.manualText || '').split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || /^(#|\/\/)/.test(line)) return;
+
+    let name = line, qty = null, fiber = '';
+
+    /* A quoted name is taken verbatim — the escape hatch for a colorway that
+       ends in a number ("Studio 54"), which would otherwise read as a count.
+       Anything after the closing quote is still count and fiber.            */
+    const qm = line.match(/^"([^"]+)"\s*(.*)$/);
+    if (qm) {
+      name = qm[1].trim();
+      qm[2].split(/[\s,|×x*]+/i).forEach(tok => {
+        const t = tok.trim();
+        if (!t) return;
+        if (MANUAL_FIBER_TOKEN.test(t)) fiber = t.toUpperCase();
+        else if (/^\d+$/.test(t)) qty = Number(t);
+      });
+      if (!name) { bad.push({ n: i + 1, text: line }); return; }
+      addManualRow(byKey, out, name, qty === null ? defQty : qty, fiberCode(fiber) || defFiber);
+      return;
+    }
+
+    // Explicit delimiters first: tab, pipe, or comma. Trailing fields that are
+    // a bare number or a known fiber code are metadata; anything else is part
+    // of the name, so "Blue, Green and Gold" survives intact.
+    const parts = line.split(/\t+|\s*\|\s*/);
+    const fields = parts.length > 1 ? parts : line.split(/\s*,\s*/);
+    if (fields.length > 1) {
+      const tail = fields.slice();
+      while (tail.length > 1) {
+        const last = tail[tail.length - 1].trim();
+        if (MANUAL_FIBER_TOKEN.test(last) && !fiber) { fiber = last.toUpperCase(); tail.pop(); continue; }
+        if (/^\d+$/.test(last) && qty === null) { qty = Number(last); tail.pop(); continue; }
+        break;
+      }
+      name = tail.join(fields === parts ? ' | ' : ', ').trim();
+    }
+
+    // No delimiters, or none of them carried a count: look for "name x 24",
+    // "24 x name", or a bare number on the end.
+    if (qty === null) {
+      let m = name.match(/^(.*?)\s*[x×*]\s*(\d+)$/i);
+      if (m && m[1].trim()) { name = m[1].trim(); qty = Number(m[2]); }
+      else if ((m = name.match(/^(\d+)\s*[x×*]\s*(.+)$/i))) { qty = Number(m[1]); name = m[2].trim(); }
+      else if ((m = name.match(/^(.*\S)\s+(\d+)$/))) { name = m[1].trim(); qty = Number(m[2]); }
+    }
+    // A trailing fiber word with no delimiter, e.g. "Sunset Ridge EN".
+    if (!fiber) {
+      const m = name.match(/^(.*\S)\s+(FFN|FFC|EN|BW|CN)$/i);
+      if (m) { name = m[1].trim(); fiber = m[2].toUpperCase(); }
+    }
+
+    if (!name) { bad.push({ n: i + 1, text: line }); return; }
+    addManualRow(byKey, out, name, qty === null ? defQty : qty, fiberCode(fiber) || defFiber);
+  });
+
+  S.manualBad = bad;
+  // The textarea stays the authority on quantity: when a line's number changes
+  // the row's cached state follows it, but an in-table tweak still sticks until
+  // the text itself is edited again.
+  out.forEach(r => {
+    if (S.manualSeenQty[r.rowKey] !== r.defaultQty) {
+      S.manualSeenQty[r.rowKey] = r.defaultQty;
+      if (S.rowState[r.rowKey]) S.rowState[r.rowKey].qty = r.defaultQty;
+    }
+  });
+  return out;
+}
+
 function currentRows() {
   if (S.mode === 'stock') return [];   // inventory view, not a print batch
+  if (S.mode === 'manual') return parseManual();
   if (S.mode === 'order') {
     if (!S.selectedOrderId) return [];
     return S.lines.filter(l => l.woId === S.selectedOrderId && l.qty > 0).map(rowFromLine);
@@ -1003,6 +1132,7 @@ function render() {
     : S.mode === 'lines' ? linesPaneHtml()
     : S.mode === 'allorders' ? allOrdersPaneHtml()
     : S.mode === 'free' ? freePaneHtml()
+    : S.mode === 'manual' ? manualPaneHtml()
     : S.mode === 'stock' ? labelStockPaneHtml()
     : S.mode === 'front' ? frontPaneHtml() : storePaneHtml());
   bindPane();
@@ -1185,6 +1315,43 @@ function freePaneHtml() {
   return box + groupRows(currentRows()).map(g => groupHtml(g)).join('');
 }
 
+/* Typed names, no product behind them. Deliberately has no picker and no
+   on-hand column — nothing on this tab exists in Grist to look up. */
+function manualPaneHtml() {
+  const rows = currentRows();
+  const fiberOpts = [...new Set(Object.keys(RING_SPEC).concat(Object.keys(S.tplByFiber)))].filter(Boolean);
+  const total = rows.reduce((a, r) => a + neededQty(r), 0);
+
+  const box = `<div class="pick-box">
+    <div class="pick-row" style="gap:10px;flex-wrap:wrap;">
+      <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:5px;flex:0 0 auto;">
+        fiber <select id="manFiber">
+          ${fiberOpts.map(f => `<option value="${esc(f)}" ${fiberCode(S.manualFiber) === f ? 'selected' : ''}>${esc(f)}</option>`).join('')}
+        </select></label>
+      <label style="font-size:11px;color:var(--mid);display:flex;align-items:center;gap:5px;flex:0 0 auto;">
+        qty each <input class="qty-input" id="manQty" value="${esc(S.manualQtyDefault)}"></label>
+      <span style="flex:1;"></span>
+      <button class="btn tiny" id="manClear">Clear</button>
+    </div>
+    <textarea id="manText" class="man-ta" spellcheck="false"
+      placeholder="One name per line, for example:&#10;&#10;Sunset Ridge&#10;Blackberry Fool x 24&#10;Marigold, 6, EN&#10;# anything after a hash is a note">${esc(S.manualText)}</textarea>
+    <div class="man-help">
+      One label name per line. The fiber and quantity above apply to every line unless the line says otherwise:
+      <code>Name x 24</code>, <code>Name, 24, EN</code> or <code>Name | 24 | EN</code> — use pipes if a name has a comma in it.
+      A name that ends in a number goes in quotes — <code>"Studio 54" x 12</code> — otherwise the number reads as the count.
+      Lines starting <code>#</code> are ignored. The same name twice on one fiber adds up into a single run.
+    </div>
+    ${S.manualBad.length ? `<div class="man-bad">Skipped ${S.manualBad.length} line${S.manualBad.length === 1 ? '' : 's'} with no name:
+      ${S.manualBad.slice(0, 4).map(b => `<strong>line ${b.n}</strong>`).join(', ')}${S.manualBad.length > 4 ? '…' : ''}</div>` : ''}
+    <div class="pl-summary">${rows.length
+      ? `<strong>${rows.length}</strong> name${rows.length === 1 ? '' : 's'} · <strong>${total}</strong> label${total === 1 ? '' : 's'}`
+      : 'Type names above — none of them need to exist as a product.'}
+      <span style="color:var(--muted);"> · manual names never mix with order or recipe rows</span></div>
+  </div>`;
+  if (!rows.length) return box;
+  return box + groupRows(rows).map(g => groupHtml(g)).join('');
+}
+
 /* ---------- Label stock: the inventory itself ----------
    Everywhere else, on-hand is an inline column that only shows up once you've
    picked an order. This is the standing view: every colorway, what's printed,
@@ -1353,6 +1520,9 @@ function calibHtml(tpl) {
 function groupHtml(g) {
   const tpl = g.tpl;
   const rows = g.rows;
+  // Manual names have no recipe behind them, so the printed-label inventory
+  // has nothing to say about them — drop the column rather than show zeros.
+  const manual = S.mode === 'manual';
   const geom = pdfGeometry(tpl);
   // How many positions the last sheet leaves unused, and which rings could fill them.
   const perSheet = geom.ok ? geom.cols * geom.rows : 0;
@@ -1373,14 +1543,14 @@ function groupHtml(g) {
       <td><div class="colorway">${esc(r.name)}</div><div class="sku">${esc(r.sku || '')}</div></td>
       <td>${r.fiber ? `<span class="fiber-tag">${esc(fiberCode(r.fiber) || r.fiber)}</span>` : ''}</td>
       <td class="col-num"><input class="qty-input" data-qty="${esc(r.rowKey)}" value="${esc(st.qty)}"></td>
-      <td class="col-stock">
+      ${manual ? '' : `<td class="col-stock">
         <div class="onhand-cell">
           <input class="qty-input onhand ${onHand ? 'has' : ''}" data-onhand="${esc(r.rowKey)}"
             value="${onHand}" ${S.hasLabelStock && r.recipeId ? '' : 'disabled'}
             title="${S.hasLabelStock ? 'Printed labels you already have for this colorway' : 'Add a Label_Stock table to track this'}">
           ${fromStock ? `<span class="from-stock">&minus;${fromStock} used</span>` : ''}
         </div>${r.stock ? `<div class="hint-num">${r.stock} spools in stock</div>` : ''}
-      </td>
+      </td>`}
       <td class="col-num num print ${printing ? '' : 'zero'}"
         title="${need ? `needs ${need}, ${fromStock} off the shelf, ${printing} to print` : ''}">${printing}</td>
     </tr>`;
@@ -1416,7 +1586,7 @@ function groupHtml(g) {
   const gNeed = rows.reduce((a, r) => a + neededQty(r), 0);
   const gFromStock = rows.reduce((a, r) => a + fromStockQty(r), 0);
   const coveredAll = gNeed > 0 && gFromStock >= gNeed;
-  const stockLine = (gFromStock || g.total) && S.hasLabelStock ? `<span class="stock-line">
+  const stockLine = !manual && (gFromStock || g.total) && S.hasLabelStock ? `<span class="stock-line">
       ${gFromStock ? `<strong>${gFromStock}</strong> of ${gNeed} already on hand` : `none on hand`}
       ${g.total ? `<button class="btn tiny" data-addstock="${esc(g.key)}"
         title="Add this print run to the on-hand counts. They come back off automatically as the spools get boxed.">Log print run</button>` : ''}
@@ -1443,7 +1613,7 @@ function groupHtml(g) {
     </div>
     ${calibHtml(tpl)}
     <table class="lbl">
-      <thead><tr><th class="col-chk"></th><th>Colorway</th><th>Fiber</th><th class="col-num">Need</th><th class="col-stock">Labels on hand</th><th class="col-num">Print</th></tr></thead>
+      <thead><tr><th class="col-chk"></th><th>${manual ? 'Name' : 'Colorway'}</th><th>Fiber</th><th class="col-num">${manual ? 'Qty' : 'Need'}</th>${manual ? '' : '<th class="col-stock">Labels on hand</th>'}<th class="col-num">Print</th></tr></thead>
       <tbody>${body}</tbody>
     </table>
     ${sheetSummary}
@@ -1656,6 +1826,63 @@ function bindPane() {
     try { await navigator.clipboard.writeText(buildCsv(g)); showToast('Copied ' + (g.code || 'batch') + ' rows.'); }
     catch (e) { showToast('Clipboard blocked here — use Download CSV.', true); }
   }));
+
+  /* Manual names. The textarea is a live source of rows, but re-rendering on
+     every keystroke would yank the caret mid-word, so state updates
+     immediately and the redraw waits for a short pause in typing. */
+  /* The redraw replaces every field in the pane, so whichever one the user is
+     in has to be found again afterwards and handed back its caret — otherwise
+     a redraw landing mid-keystroke drops them out of the box they were typing
+     in, whether that's the names or the quantity beside it. */
+  const redrawManual = () => {
+    const act = document.activeElement;
+    const box = act && act.closest ? act.closest('.pick-box') : null;
+    const id = box && act.id ? act.id : '';
+    let a = null, b = null, top = 0;
+    if (id) { try { a = act.selectionStart; b = act.selectionEnd; } catch (e) {} top = act.scrollTop || 0; }
+    render();
+    const again = id ? document.getElementById(id) : null;
+    if (again) {
+      again.focus();
+      if (a !== null) { try { again.setSelectionRange(a, b); } catch (e) {} }
+      again.scrollTop = top;
+    }
+  };
+  /* Everything below listens on `input`, never `change`. A change event also
+     fires while the pane is being torn down with an uncommitted value in the
+     box — that would re-enter render() from inside render(), which the browser
+     rejects outright. Reading every keystroke keeps the state current and
+     leaves the teardown nothing to report. There is deliberately no redraw on
+     blur either: leaving the box means clicking a control beside it, and
+     rebuilding the pane right then destroys the very field being clicked. */
+  const mt = document.getElementById('manText');
+  if (mt) mt.addEventListener('input', () => {
+    S.manualText = mt.value;
+    clearTimeout(bindPane._manT);
+    bindPane._manT = setTimeout(redrawManual, 450);
+  });
+  const mq = document.getElementById('manQty');
+  if (mq) mq.addEventListener('input', () => {
+    S.manualQtyDefault = Math.max(0, Number(mq.value) || 0);
+    S.manualSeenQty = {};   // let lines with no explicit count pick up the new default
+    clearTimeout(bindPane._manT);
+    bindPane._manT = setTimeout(redrawManual, 450);
+  });
+  // A select commits on pick, not on teardown, so this one is safe to act on now.
+  const mf = document.getElementById('manFiber');
+  if (mf) mf.addEventListener('change', () => {
+    S.manualFiber = mf.value;
+    S.rowState = {}; S.manualSeenQty = {};   // rowKeys carry the fiber, so they all move
+    clearTimeout(bindPane._manT);
+    render();
+  });
+  const mc = document.getElementById('manClear');
+  if (mc) mc.addEventListener('click', () => {
+    if (S.manualText.trim() && !confirm('Clear the typed list?')) return;
+    S.manualText = ''; S.rowState = {}; S.manualSeenQty = {}; S.manualBad = [];
+    clearTimeout(bindPane._manT);
+    render();
+  });
 
   const fc = document.getElementById('fCust');
   if (fc) fc.addEventListener('change', () => {
@@ -2064,6 +2291,7 @@ async function buildPdf(group) {
     : S.mode === 'lines' ? `labels_picked-lines_${stock}`
     : S.mode === 'allorders' ? `labels_all-orders_${stock}`
     : S.mode === 'free' ? `labels_free-print_${stock}`
+    : S.mode === 'manual' ? `labels_manual_${stock}`
     : `labels_store-listings_${stock}`;
   doc.save(`${base}_${stamp}.pdf`);
 
@@ -2336,6 +2564,7 @@ function csvFilename(g, onlyFiber) {
   if (S.mode === 'lines') return `labels_picked-lines_${stock}_${stamp}.csv`;
   if (S.mode === 'allorders') return `labels_all-orders_${stock}_${stamp}.csv`;
   if (S.mode === 'free') return `labels_free-print_${stock}_${stamp}.csv`;
+  if (S.mode === 'manual') return `labels_manual_${stock}_${stamp}.csv`;
   return `labels_store-listings_${stock}_${stamp}.csv`;
 }
 function saveCsvFile(name, csv) {
