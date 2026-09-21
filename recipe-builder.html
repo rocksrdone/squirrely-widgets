@@ -2300,22 +2300,75 @@ function renderSchoolColsWarning() {
     : '';
 }
 
-function setSchoolFields(record) {
+/* Reading the school address back out of a SKU.
+   For recipes saved before School_State/City/Code existed: the SKU already
+   carries the address, so it can be recovered rather than retyped. Only ever a
+   fallback — a stored value always wins.
+
+   The city is slugified in the SKU, so "East Lansing" comes back EASTLANSING.
+   Re-saving keeps the same SKU because it slugifies to the same thing; only the
+   spacing in the field is lost, which is why stored values take precedence.
+
+   Two trailing parts are read as state + code, not state + city: the code is
+   the part that identifies the school, so it is the better guess when the SKU
+   is ambiguous. */
+function schoolFromSku(sku) {
+  const m = /_EDU(?:_([A-Z0-9_]+))?$/.exec(String(sku || '').trim().toUpperCase());
+  if (!m) return null;
+  const parts = (m[1] || '').split('_').filter(Boolean);
+  if (!parts.length) return { state: '', city: '', code: '' };
+  const state = US_STATES.includes(parts[0]) ? parts.shift() : '';
+  if (parts.length >= 2) return { state, city: parts[0], code: parts.slice(1).join('_') };
+  if (parts.length === 1) return { state, city: '', code: parts[0] };
+  return { state, city: '', code: '' };
+}
+
+async function setSchoolFields(record) {
   fillStateOptions();
   const st = document.getElementById('schoolState');
   const ci = document.getElementById('schoolCity');
   const cd = document.getElementById('schoolCode');
   if (!st || !ci || !cd) return;
-  const stored = String(rowField(record, ['School_State']) || '').trim().toUpperCase();
-  if (stored && !US_STATES.includes(stored)) {
+
+  let state = String(rowField(record, ['School_State']) || '').trim().toUpperCase();
+  let city  = String(rowField(record, ['School_City']) || '').trim();
+  let code  = String(rowField(record, ['School_Code']) || '').trim();
+
+  // Same Grist quirk setYearMade works around: a recently added column is not
+  // always on the record onRecord hands over, so it saves fine and then reads
+  // back empty until the page is reloaded. Read it from the table instead.
+  if (!state && !city && !code) {
+    try {
+      const recs = await grist.docApi.fetchTable('Recipes');
+      const idx = (recs.id || []).indexOf(record.id);
+      if (idx !== -1) {
+        const cS = findColumn(recs, ['School_State']);
+        const cC = findColumn(recs, ['School_City']);
+        const cK = findColumn(recs, ['School_Code']);
+        if (cS) state = String(columnAsArray(recs, cS)[idx] || '').trim().toUpperCase();
+        if (cC) city  = String(columnAsArray(recs, cC)[idx] || '').trim();
+        if (cK) code  = String(columnAsArray(recs, cK)[idx] || '').trim();
+      }
+    } catch (e) {
+      console.error('School column lookup fallback failed:', e);
+    }
+  }
+
+  // Still nothing, but the SKU says otherwise — recover it from there.
+  if (!state && !city && !code) {
+    const fromSku = schoolFromSku(rowField(record, ['SKU_Base']) || '');
+    if (fromSku) ({ state, city, code } = fromSku);
+  }
+
+  if (state && !US_STATES.includes(state)) {
     // Never drop a value the list did not expect — same rule as setScopeValue.
     const o = document.createElement('option');
-    o.value = stored; o.textContent = stored;
+    o.value = state; o.textContent = state;
     st.appendChild(o);
   }
-  st.value = stored;
-  ci.value = String(rowField(record, ['School_City']) || '').trim();
-  cd.value = String(rowField(record, ['School_Code']) || '').trim();
+  st.value = state;
+  ci.value = city;
+  cd.value = code;
 }
 
 async function loadAllSkus() {
@@ -2526,7 +2579,7 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
-  setSchoolFields(record);
+  await setSchoolFields(record);
   await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
