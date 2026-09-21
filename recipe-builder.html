@@ -111,6 +111,11 @@
   .field-select:disabled { background: var(--warm); color: #8B7D72; cursor: not-allowed; }
   .field-textarea { resize: vertical; min-height: 60px; }
   .field-wrap.wide { grid-column: 1 / -1; }
+  /* State is fixed-width, code is short, city takes the slack. */
+  .school-row { display: flex; gap: 6px; align-items: center; }
+  .school-row #schoolState { flex: 0 0 132px; }
+  .school-row #schoolCity { flex: 1 1 auto; min-width: 0; }
+  .school-row #schoolCode { flex: 0 0 120px; text-transform: uppercase; }
 
   .sku-suggest-row {
     display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6B5E52;
@@ -316,6 +321,7 @@
           <option>Customer Reserved</option>
           <option>One-off</option>
           <option>Limited Edition</option>
+          <option>College/University</option>
         </select>
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
@@ -327,6 +333,19 @@
         <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor(); renderLinkedCustomerState();">
           <option value="">— pick vendor —</option>
         </select>
+      </div>
+      <div class="field-wrap wide" id="schoolWrap" style="display:none">
+        <span class="field-label">School &mdash; state, city, code</span>
+        <div class="school-row">
+          <select class="field-select" id="schoolState" onchange="markUnsaved(); renderSkuSuggestion();">
+            <option value="">— state —</option>
+          </select>
+          <input class="field-input" id="schoolCity" placeholder="City"
+                 oninput="markUnsaved(); renderSkuSuggestion();">
+          <input class="field-input" id="schoolCode" placeholder="Code (MSU)" maxlength="10"
+                 oninput="markUnsaved(); renderSkuSuggestion();">
+        </div>
+        <div class="linked-state" id="schoolColsWarning"></div>
       </div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
@@ -1845,7 +1864,26 @@ function renderReviewBanner() {
    Anything genuinely unrecognised — "College/University" — is added as an
    option rather than discarded, because silently reassigning someone's data is
    worse than showing a value the list did not expect. */
-const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off', le: 'Limited Edition' };
+const SCOPE_OPTIONS = {
+  general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off',
+  le: 'Limited Edition', edu: 'College/University',
+};
+
+/* US states, for the school address. Two-letter codes because they go into the
+   SKU: acronyms collide constantly across institutions — MSU is Michigan State,
+   Missouri State, Mississippi State and Montana State — so the state is what
+   makes the code readable back. City disambiguates within a state, which is
+   where high schools collide. */
+const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA',
+  'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND',
+  'OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+
+/* School_State / School_City / School_Code on Recipes. Detected rather than
+   assumed: without them the scope still works and still builds its SKU, the
+   values just are not persisted, and the field says so instead of throwing
+   the save away silently. */
+let SCHOOL_COLS = { state: null, city: null, code: null, checked: false };
+function hasSchoolCols() { return !!(SCHOOL_COLS.state && SCHOOL_COLS.city && SCHOOL_COLS.code); }
 
 /* Year the colourway was made.
    Not derived from Created_Date: that records when the row appeared in Grist,
@@ -1932,6 +1970,10 @@ function scopeKind(scope) {
   if (!t) return '';
   if (t.includes('reserv')) return 'reserved';
   if (t.includes('limited') || t === 'le') return 'le';
+  // Before 'oneoff': a school order is a custom make too, and "Custom —
+  // University" would otherwise be filed as a one-off and lose its address.
+  if (t.includes('college') || t.includes('universit') || t.includes('school') ||
+      t === 'edu' || t === 'hs') return 'edu';
   if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
   if (t.includes('general')) return 'general';
   return 'other';
@@ -2036,6 +2078,15 @@ async function promoteFromLE() {
       Layout_Description: document.getElementById('layoutDescription').value,
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
+
+    // Only sent when the columns exist — Grist rejects the whole action for an
+    // unknown column, which would take every other field on this save with it.
+    if (hasSchoolCols()) {
+      const isEdu = scopeKind(document.getElementById('recipeScope').value) === 'edu';
+      recipeFields[SCHOOL_COLS.state] = isEdu ? document.getElementById('schoolState').value : '';
+      recipeFields[SCHOOL_COLS.city]  = isEdu ? document.getElementById('schoolCity').value.trim() : '';
+      recipeFields[SCHOOL_COLS.code]  = isEdu ? document.getElementById('schoolCode').value.trim().toUpperCase() : '';
+    }
 
     const result = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
     const newId = result && result.retValues && result.retValues[0];
@@ -2178,6 +2229,7 @@ function renderScopeHint() {
     : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_CU_</code> plus their initials, e.g. <code>FFN_SUNSET_CU_KL</code>'
     : kind === 'le'       ? `Cannot be remade &mdash; kept for research and hidden from general lists. SKU is dated, e.g. <code>FFN_SUNSET_LE_${leYearMonth()}_01</code>`
     : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
+    : kind === 'edu'      ? 'Backend only &mdash; made on demand for a school, never listed or orderable online. SKU gains state, city and code, e.g. <code>FFN_SPARTAN_EDU_MI_EASTLANSING_MSU</code>'
     : '';
 }
 
@@ -2229,9 +2281,53 @@ function renderLinkedOrderBanner() {
   `;
 }
 
+function fillStateOptions() {
+  const sel = document.getElementById('schoolState');
+  if (!sel || sel.dataset.filled) return;
+  US_STATES.forEach(st => {
+    const o = document.createElement('option');
+    o.value = st; o.textContent = st;
+    sel.appendChild(o);
+  });
+  sel.dataset.filled = '1';
+}
+
+function renderSchoolColsWarning() {
+  const el = document.getElementById('schoolColsWarning');
+  if (!el) return;
+  el.innerHTML = (SCHOOL_COLS.checked && !hasSchoolCols())
+    ? 'Add <code>School_State</code>, <code>School_City</code> and <code>School_Code</code> (Text) to Recipes to store these &mdash; the SKU still builds without them, but the values will not be saved.'
+    : '';
+}
+
+function setSchoolFields(record) {
+  fillStateOptions();
+  const st = document.getElementById('schoolState');
+  const ci = document.getElementById('schoolCity');
+  const cd = document.getElementById('schoolCode');
+  if (!st || !ci || !cd) return;
+  const stored = String(rowField(record, ['School_State']) || '').trim().toUpperCase();
+  if (stored && !US_STATES.includes(stored)) {
+    // Never drop a value the list did not expect — same rule as setScopeValue.
+    const o = document.createElement('option');
+    o.value = stored; o.textContent = stored;
+    st.appendChild(o);
+  }
+  st.value = stored;
+  ci.value = String(rowField(record, ['School_City']) || '').trim();
+  cd.value = String(rowField(record, ['School_Code']) || '').trim();
+}
+
 async function loadAllSkus() {
   try {
     const recipesTable = await grist.docApi.fetchTable('Recipes');
+    SCHOOL_COLS = {
+      state: findColumn(recipesTable, ['School_State']),
+      city: findColumn(recipesTable, ['School_City']),
+      code: findColumn(recipesTable, ['School_Code']),
+      checked: true,
+    };
+    renderSchoolColsWarning();
     const R = resolveCols(recipesTable, 'Recipes', { sku: ['SKU_Base'], name: ['Recipe_Name'] }, null);
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
@@ -2250,6 +2346,15 @@ function onScopeChange() {
   const wrap = document.getElementById('reservedForWrap');
   const isReserved = /reserv/i.test(scope);
   wrap.style.display = isReserved ? 'flex' : 'none';
+
+  const schoolWrap = document.getElementById('schoolWrap');
+  if (schoolWrap) {
+    // Idempotent, and needed here as well as on record load: picking the scope
+    // on a recipe that had no school data still has to offer the states.
+    fillStateOptions();
+    schoolWrap.style.display = scopeKind(scope) === 'edu' ? 'flex' : 'none';
+    renderSchoolColsWarning();
+  }
 
   const linkedSelect = document.getElementById('linkedCustomer');
   linkedSelect.disabled = isReserved;
@@ -2305,6 +2410,18 @@ function computeSuggestedSku() {
     // _CU_KL is a person. Initials come from the linked customer's name.
     const initials = getLinkedCustomerInitials();
     if (initials) sku += `_CU_${initials}`;
+  } else if (kind === 'edu') {
+    // _EDU_MI_EASTLANSING_MSU. State first because it is the part that makes a
+    // reused acronym readable, city next because that is what separates two
+    // high schools in one state, acronym last as the thing actually printed on
+    // the order. City is taken as typed — "E Lansing" stays E LANSING — so the
+    // length is a decision rather than an imposed truncation.
+    const parts = [
+      (document.getElementById('schoolState') || {}).value || '',
+      slugifyForSku((document.getElementById('schoolCity') || {}).value || ''),
+      slugifyForSku((document.getElementById('schoolCode') || {}).value || ''),
+    ].filter(Boolean);
+    sku += '_EDU' + (parts.length ? '_' + parts.join('_') : '');
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
     // A code-named LE gets FFN_LE_2609_01, not FFN_LE260901_LE_2609_01 —
@@ -2409,6 +2526,7 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
+  setSchoolFields(record);
   await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
