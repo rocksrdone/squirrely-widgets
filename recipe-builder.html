@@ -111,11 +111,6 @@
   .field-select:disabled { background: var(--warm); color: #8B7D72; cursor: not-allowed; }
   .field-textarea { resize: vertical; min-height: 60px; }
   .field-wrap.wide { grid-column: 1 / -1; }
-  /* State is fixed-width, code is short, city takes the slack. */
-  .school-row { display: flex; gap: 6px; align-items: center; }
-  .school-row #schoolState { flex: 0 0 132px; }
-  .school-row #schoolCity { flex: 1 1 auto; min-width: 0; }
-  .school-row #schoolCode { flex: 0 0 120px; text-transform: uppercase; }
 
   .sku-suggest-row {
     display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6B5E52;
@@ -213,6 +208,13 @@
   .photo-thumb { width: 100%; height: 110px; border-radius: 6px; background: var(--warm); overflow: hidden; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; }
   .photo-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
   .photo-thumb.empty { color: #8B7D72; font-size: 11px; font-style: italic; }
+  .thumb-load-btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; height: 100%; border: none; background: none; cursor: pointer;
+    font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase; color: #8B7D72;
+  }
+  .thumb-load-btn:hover { color: var(--accent); background: rgba(139,58,42,.05); }
   .photo-hint { font-size: 10px; color: #8B7D72; margin-top: 8px; font-style: italic; }
   .rot-row { display: flex; gap: 4px; margin-bottom: 6px; }
   .rot-btn {
@@ -321,7 +323,6 @@
           <option>Customer Reserved</option>
           <option>One-off</option>
           <option>Limited Edition</option>
-          <option>College/University</option>
         </select>
       </div>
       <div class="field-wrap wide"><div class="linked-state" id="scopeHint"></div></div>
@@ -333,19 +334,6 @@
         <select class="field-select" id="reservedFor" onchange="markUnsaved(); renderSkuSuggestion(); syncLinkedCustomerFromVendor(); renderLinkedCustomerState();">
           <option value="">— pick vendor —</option>
         </select>
-      </div>
-      <div class="field-wrap wide" id="schoolWrap" style="display:none">
-        <span class="field-label">School &mdash; state, city, code</span>
-        <div class="school-row">
-          <select class="field-select" id="schoolState" onchange="markUnsaved(); renderSkuSuggestion();">
-            <option value="">— state —</option>
-          </select>
-          <input class="field-input" id="schoolCity" placeholder="City"
-                 oninput="markUnsaved(); renderSkuSuggestion();">
-          <input class="field-input" id="schoolCode" placeholder="Code (MSU)" maxlength="10"
-                 oninput="markUnsaved(); renderSkuSuggestion();">
-        </div>
-        <div class="linked-state" id="schoolColsWarning"></div>
       </div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
@@ -408,6 +396,7 @@
       <button id="renamePhotosBtn" onclick="renamePhotosToMatch()" title="Move this recipe's photo files into the folder its current name, fiber and scope call for">✎ Rename files to match recipe</button>
       <span id="renamePhotosState"></span>
     </div>
+    <div class="rename-bar" id="slotPhotoBar"></div>
     <div class="photo-grid">
       <div class="photo-slot">
         <div class="photo-slot-label">Step 1</div>
@@ -854,6 +843,8 @@ async function rotateSlotPhoto(inputId, direction, btnEl) {
 
     if (out.new_url) {
       input.value = out.new_url;
+      // After a rotation the point is to see the new orientation.
+      shownSlotPhotos.add(inputId);
       updatePhotoThumbs();
       markUnsaved();
       showToast('Rotated — save to keep the refreshed link');
@@ -893,7 +884,7 @@ const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':
   'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
 function foldAccents(s) {
   return String(s == null ? '' : s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
 }
 function slugify(name) {
@@ -1168,6 +1159,14 @@ let ppAllFilenames = [];     // {id, filename, recipeId} across the whole table
 let ppCols = {};             // resolved column ids
 let ppBusy = false;
 
+/* Photos are not fetched on render. Each thumbnail is one n8n execution
+   against the photo2 proxy, and both photo sections are collapsed by default —
+   but display:none does not stop a browser fetching an <img src>, so four slot
+   thumbs plus every product photo used to load for every recipe clicked,
+   unseen. Both sets are cleared when a different recipe loads. */
+let shownSlotPhotos = new Set();      // slot input ids: 'photoP1' etc.
+let shownProductPhotos = new Set();   // Product_Photos row ids
+
 function extOf(name) {
   const m = /\.[^./]+$/.exec(name || '');
   return m ? m[0] : '.jpg';
@@ -1258,6 +1257,8 @@ function renderProductPhotos() {
   if (productPhotos.filter(p => p.retail).length > 1) notes.push('More than one photo is marked Retail.');
   warn.innerHTML = notes.map(n => `<div class="pp-warn">${n}</div>`).join('');
 
+  renderProductPhotoBar();
+
   if (!productPhotos.length) {
     grid.innerHTML = `<div class="pp-empty">No product photos linked to this recipe.</div>`;
     refreshProductFileLabels();
@@ -1269,7 +1270,10 @@ function renderProductPhotos() {
     const date = p.lotDate ? new Date(Number(p.lotDate) * 1000).toLocaleDateString() : '';
     return `
     <div class="pp-card ${p.display ? 'display' : ''} ${rejected ? 'rejected' : ''}" id="ppcard-${p.id}">
-      <div class="photo-thumb">${p.url ? `<img src="${esc(p.url)}" loading="lazy" onerror="this.parentElement.innerHTML='<span>Could not load</span>'">` : '<span>No file</span>'}</div>
+      <div class="photo-thumb">${!p.url ? '<span>No file</span>'
+        : shownProductPhotos.has(p.id)
+          ? `<img src="${esc(p.url)}" loading="lazy" onerror="this.parentElement.innerHTML='<span>Could not load</span>'">`
+          : `<button type="button" class="thumb-load-btn" onclick="showProductPhoto(${p.id})" title="Load this photo">🖼 Show photo</button>`}</div>
       <div class="pp-meta">
         ${p.display ? '<span class="pp-tag display">Display</span>' : ''}
         ${p.status ? `<span class="pp-tag">${esc(/approv/i.test(p.status) ? 'Client-ready' : p.status)}</span>` : ''}
@@ -1292,6 +1296,38 @@ function renderProductPhotos() {
     </div>`;
   }).join('');
   refreshProductFileLabels();
+}
+
+function showProductPhoto(id) { shownProductPhotos.add(id); renderProductPhotos(); }
+function showAllProductPhotos() { productPhotos.forEach(p => { if (p.url) shownProductPhotos.add(p.id); }); renderProductPhotos(); }
+function hideAllProductPhotos() { shownProductPhotos.clear(); renderProductPhotos(); }
+
+// The bar sits above the grid and is made here rather than in the markup, so
+// the section's existing rename-bar is left exactly as it was.
+function ppPhotoBarEl() {
+  let el = document.getElementById('ppPhotoBar');
+  if (!el) {
+    const grid = document.getElementById('ppGrid');
+    if (!grid || !grid.parentElement) return null;
+    el = document.createElement('div');
+    el.className = 'rename-bar';
+    el.id = 'ppPhotoBar';
+    grid.parentElement.insertBefore(el, grid);
+  }
+  return el;
+}
+
+function renderProductPhotoBar() {
+  const bar = ppPhotoBarEl();
+  if (!bar) return;
+  const withUrl = productPhotos.filter(p => p.url);
+  if (!withUrl.length) { bar.innerHTML = ''; return; }
+  const pending = withUrl.filter(p => !shownProductPhotos.has(p.id)).length;
+  const shown = withUrl.length - pending;
+  bar.innerHTML =
+    (pending ? `<button onclick="showAllProductPhotos()" title="Each photo loaded is one n8n execution">🖼 Load all ${pending} photo${pending === 1 ? '' : 's'}</button>` : '') +
+    (shown ? `<button onclick="hideAllProductPhotos()" title="Stop showing the loaded photos">Hide photos</button>` : '') +
+    `<span>${pending ? `${pending} photo${pending === 1 ? '' : 's'} not loaded` : 'All photos loaded'}</span>`;
 }
 
 // Filename under each card, amber when the recipe now calls for another name.
@@ -1404,6 +1440,8 @@ async function rotateProductPhoto(photoId, direction, btnEl) {
       await ppWrite([['UpdateRecord', 'Product_Photos', photoId, { [ppCols.url]: out.new_url }]]);
       p.url = out.new_url;
     }
+    // After a rotation the point is to see the new orientation.
+    shownProductPhotos.add(photoId);
     renderProductPhotos();
     showToast('Rotated');
   } catch (e) {
@@ -1803,7 +1841,7 @@ async function flagForReview() {
     showToast('Flagged for review');
   } catch (e) {
     console.error('Could not flag:', e);
-    showToast('Could not flag \u2014 see console');
+    showToast('Could not flag — see console');
   }
 }
 
@@ -1864,26 +1902,7 @@ function renderReviewBanner() {
    Anything genuinely unrecognised — "College/University" — is added as an
    option rather than discarded, because silently reassigning someone's data is
    worse than showing a value the list did not expect. */
-const SCOPE_OPTIONS = {
-  general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off',
-  le: 'Limited Edition', edu: 'College/University',
-};
-
-/* US states, for the school address. Two-letter codes because they go into the
-   SKU: acronyms collide constantly across institutions — MSU is Michigan State,
-   Missouri State, Mississippi State and Montana State — so the state is what
-   makes the code readable back. City disambiguates within a state, which is
-   where high schools collide. */
-const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA',
-  'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND',
-  'OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
-
-/* School_State / School_City / School_Code on Recipes. Detected rather than
-   assumed: without them the scope still works and still builds its SKU, the
-   values just are not persisted, and the field says so instead of throwing
-   the save away silently. */
-let SCHOOL_COLS = { state: null, city: null, code: null, checked: false };
-function hasSchoolCols() { return !!(SCHOOL_COLS.state && SCHOOL_COLS.city && SCHOOL_COLS.code); }
+const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off', le: 'Limited Edition' };
 
 /* Year the colourway was made.
    Not derived from Created_Date: that records when the row appeared in Grist,
@@ -1970,10 +1989,6 @@ function scopeKind(scope) {
   if (!t) return '';
   if (t.includes('reserv')) return 'reserved';
   if (t.includes('limited') || t === 'le') return 'le';
-  // Before 'oneoff': a school order is a custom make too, and "Custom —
-  // University" would otherwise be filed as a one-off and lose its address.
-  if (t.includes('college') || t.includes('universit') || t.includes('school') ||
-      t === 'edu' || t === 'hs') return 'edu';
   if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
   if (t.includes('general')) return 'general';
   return 'other';
@@ -2079,15 +2094,6 @@ async function promoteFromLE() {
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
 
-    // Only sent when the columns exist — Grist rejects the whole action for an
-    // unknown column, which would take every other field on this save with it.
-    if (hasSchoolCols()) {
-      const isEdu = scopeKind(document.getElementById('recipeScope').value) === 'edu';
-      recipeFields[SCHOOL_COLS.state] = isEdu ? document.getElementById('schoolState').value : '';
-      recipeFields[SCHOOL_COLS.city]  = isEdu ? document.getElementById('schoolCity').value.trim() : '';
-      recipeFields[SCHOOL_COLS.code]  = isEdu ? document.getElementById('schoolCode').value.trim().toUpperCase() : '';
-    }
-
     const result = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
     const newId = result && result.retValues && result.retValues[0];
     if (!newId) throw new Error('No row ID came back from AddRecord');
@@ -2114,14 +2120,14 @@ async function promoteFromLE() {
     const parts = [`${dyeCount} dye${dyeCount === 1 ? '' : 's'}`];
     if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
     if (segCount === -1) parts.push('layout NOT copied');
-    showToast(`${newSku} \u2713 \u2014 ${parts.join(', ')}, photos stay with the LE`);
+    showToast(`${newSku} ✓ — ${parts.join(', ')}, photos stay with the LE`);
     try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
   } catch (e) {
     console.error('Failed to create the new listing:', e);
-    showToast('Could not create the listing \u2014 see console');
+    showToast('Could not create the listing — see console');
   } finally {
     btn.disabled = false;
-    btn.textContent = '\u2191 New Listing';
+    btn.textContent = '↑ New Listing';
   }
 }
 
@@ -2229,7 +2235,6 @@ function renderScopeHint() {
     : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_CU_</code> plus their initials, e.g. <code>FFN_SUNSET_CU_KL</code>'
     : kind === 'le'       ? `Cannot be remade &mdash; kept for research and hidden from general lists. SKU is dated, e.g. <code>FFN_SUNSET_LE_${leYearMonth()}_01</code>`
     : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
-    : kind === 'edu'      ? 'Backend only &mdash; made on demand for a school, never listed or orderable online. SKU gains state, city and code, e.g. <code>FFN_SPARTAN_EDU_MI_EASTLANSING_MSU</code>'
     : '';
 }
 
@@ -2248,7 +2253,7 @@ function renderLinkedCustomerState() {
       + (isReserved ? ' &mdash; set by <em>Reserved For</em>, change it there' : '');
   } else if (isReserved) {
     el.className = 'linked-state warn';
-    el.textContent = 'No customer yet \u2014 pick a vendor in Reserved For';
+    el.textContent = 'No customer yet — pick a vendor in Reserved For';
   } else {
     el.className = 'linked-state';
     el.textContent = 'Not linked to a customer';
@@ -2281,106 +2286,9 @@ function renderLinkedOrderBanner() {
   `;
 }
 
-function fillStateOptions() {
-  const sel = document.getElementById('schoolState');
-  if (!sel || sel.dataset.filled) return;
-  US_STATES.forEach(st => {
-    const o = document.createElement('option');
-    o.value = st; o.textContent = st;
-    sel.appendChild(o);
-  });
-  sel.dataset.filled = '1';
-}
-
-function renderSchoolColsWarning() {
-  const el = document.getElementById('schoolColsWarning');
-  if (!el) return;
-  el.innerHTML = (SCHOOL_COLS.checked && !hasSchoolCols())
-    ? 'Add <code>School_State</code>, <code>School_City</code> and <code>School_Code</code> (Text) to Recipes to store these &mdash; the SKU still builds without them, but the values will not be saved.'
-    : '';
-}
-
-/* Reading the school address back out of a SKU.
-   For recipes saved before School_State/City/Code existed: the SKU already
-   carries the address, so it can be recovered rather than retyped. Only ever a
-   fallback — a stored value always wins.
-
-   The city is slugified in the SKU, so "East Lansing" comes back EASTLANSING.
-   Re-saving keeps the same SKU because it slugifies to the same thing; only the
-   spacing in the field is lost, which is why stored values take precedence.
-
-   Two trailing parts are read as state + code, not state + city: the code is
-   the part that identifies the school, so it is the better guess when the SKU
-   is ambiguous. */
-function schoolFromSku(sku) {
-  const m = /_EDU(?:_([A-Z0-9_]+))?$/.exec(String(sku || '').trim().toUpperCase());
-  if (!m) return null;
-  const parts = (m[1] || '').split('_').filter(Boolean);
-  if (!parts.length) return { state: '', city: '', code: '' };
-  const state = US_STATES.includes(parts[0]) ? parts.shift() : '';
-  if (parts.length >= 2) return { state, city: parts[0], code: parts.slice(1).join('_') };
-  if (parts.length === 1) return { state, city: '', code: parts[0] };
-  return { state, city: '', code: '' };
-}
-
-async function setSchoolFields(record) {
-  fillStateOptions();
-  const st = document.getElementById('schoolState');
-  const ci = document.getElementById('schoolCity');
-  const cd = document.getElementById('schoolCode');
-  if (!st || !ci || !cd) return;
-
-  let state = String(rowField(record, ['School_State']) || '').trim().toUpperCase();
-  let city  = String(rowField(record, ['School_City']) || '').trim();
-  let code  = String(rowField(record, ['School_Code']) || '').trim();
-
-  // Same Grist quirk setYearMade works around: a recently added column is not
-  // always on the record onRecord hands over, so it saves fine and then reads
-  // back empty until the page is reloaded. Read it from the table instead.
-  if (!state && !city && !code) {
-    try {
-      const recs = await grist.docApi.fetchTable('Recipes');
-      const idx = (recs.id || []).indexOf(record.id);
-      if (idx !== -1) {
-        const cS = findColumn(recs, ['School_State']);
-        const cC = findColumn(recs, ['School_City']);
-        const cK = findColumn(recs, ['School_Code']);
-        if (cS) state = String(columnAsArray(recs, cS)[idx] || '').trim().toUpperCase();
-        if (cC) city  = String(columnAsArray(recs, cC)[idx] || '').trim();
-        if (cK) code  = String(columnAsArray(recs, cK)[idx] || '').trim();
-      }
-    } catch (e) {
-      console.error('School column lookup fallback failed:', e);
-    }
-  }
-
-  // Still nothing, but the SKU says otherwise — recover it from there.
-  if (!state && !city && !code) {
-    const fromSku = schoolFromSku(rowField(record, ['SKU_Base']) || '');
-    if (fromSku) ({ state, city, code } = fromSku);
-  }
-
-  if (state && !US_STATES.includes(state)) {
-    // Never drop a value the list did not expect — same rule as setScopeValue.
-    const o = document.createElement('option');
-    o.value = state; o.textContent = state;
-    st.appendChild(o);
-  }
-  st.value = state;
-  ci.value = city;
-  cd.value = code;
-}
-
 async function loadAllSkus() {
   try {
     const recipesTable = await grist.docApi.fetchTable('Recipes');
-    SCHOOL_COLS = {
-      state: findColumn(recipesTable, ['School_State']),
-      city: findColumn(recipesTable, ['School_City']),
-      code: findColumn(recipesTable, ['School_Code']),
-      checked: true,
-    };
-    renderSchoolColsWarning();
     const R = resolveCols(recipesTable, 'Recipes', { sku: ['SKU_Base'], name: ['Recipe_Name'] }, null);
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
@@ -2399,15 +2307,6 @@ function onScopeChange() {
   const wrap = document.getElementById('reservedForWrap');
   const isReserved = /reserv/i.test(scope);
   wrap.style.display = isReserved ? 'flex' : 'none';
-
-  const schoolWrap = document.getElementById('schoolWrap');
-  if (schoolWrap) {
-    // Idempotent, and needed here as well as on record load: picking the scope
-    // on a recipe that had no school data still has to offer the states.
-    fillStateOptions();
-    schoolWrap.style.display = scopeKind(scope) === 'edu' ? 'flex' : 'none';
-    renderSchoolColsWarning();
-  }
 
   const linkedSelect = document.getElementById('linkedCustomer');
   linkedSelect.disabled = isReserved;
@@ -2463,18 +2362,6 @@ function computeSuggestedSku() {
     // _CU_KL is a person. Initials come from the linked customer's name.
     const initials = getLinkedCustomerInitials();
     if (initials) sku += `_CU_${initials}`;
-  } else if (kind === 'edu') {
-    // _EDU_MI_EASTLANSING_MSU. State first because it is the part that makes a
-    // reused acronym readable, city next because that is what separates two
-    // high schools in one state, acronym last as the thing actually printed on
-    // the order. City is taken as typed — "E Lansing" stays E LANSING — so the
-    // length is a decision rather than an imposed truncation.
-    const parts = [
-      (document.getElementById('schoolState') || {}).value || '',
-      slugifyForSku((document.getElementById('schoolCity') || {}).value || ''),
-      slugifyForSku((document.getElementById('schoolCode') || {}).value || ''),
-    ].filter(Boolean);
-    sku += '_EDU' + (parts.length ? '_' + parts.join('_') : '');
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
     // A code-named LE gets FFN_LE_2609_01, not FFN_LE260901_LE_2609_01 —
@@ -2560,6 +2447,9 @@ async function loadDyesList() {
 async function loadRecipe(record) {
   currentRecord = record;
   currentRecipeId = record.id;
+  // A new recipe starts with nothing loaded — see shownSlotPhotos above.
+  shownSlotPhotos.clear();
+  shownProductPhotos.clear();
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('content').style.display = 'block';
@@ -2579,7 +2469,6 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
-  await setSchoolFields(record);
   await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
@@ -2838,15 +2727,41 @@ function updatePhotoThumbs() {
   [['photoP1', 'thumbP1'], ['photoP2', 'thumbP2'], ['photoPF', 'thumbPF'], ['photoInsp', 'thumbInsp']].forEach(([inputId, thumbId]) => {
     const url = document.getElementById(inputId).value.trim();
     const thumb = document.getElementById(thumbId);
-    if (url) {
+    if (url && shownSlotPhotos.has(inputId)) {
       thumb.classList.remove('empty');
       thumb.innerHTML = `<img src="${esc(url)}" onerror="this.parentElement.classList.add('empty'); this.parentElement.innerHTML='<span>Could not load image</span>'">`;
+    } else if (url) {
+      thumb.classList.remove('empty');
+      thumb.innerHTML = `<button type="button" class="thumb-load-btn" onclick="showSlotPhoto('${inputId}')" title="Load this photo">🖼 Show photo</button>`;
     } else {
       thumb.classList.add('empty');
       thumb.innerHTML = `<span>No photo</span>`;
     }
   });
+  renderSlotPhotoBar();
   refreshPhotoFileLabels();
+}
+
+function showSlotPhoto(inputId) { shownSlotPhotos.add(inputId); updatePhotoThumbs(); }
+function showAllSlotPhotos() { Object.keys(PHOTO_SLOTS).forEach(k => shownSlotPhotos.add(k)); updatePhotoThumbs(); }
+function hideAllSlotPhotos() { shownSlotPhotos.clear(); updatePhotoThumbs(); }
+
+// How many slot photos are still unfetched, and the two bulk actions. Says the
+// count in photos rather than executions, but the two are the same number.
+function renderSlotPhotoBar() {
+  const bar = document.getElementById('slotPhotoBar');
+  if (!bar) return;
+  const withUrl = Object.keys(PHOTO_SLOTS).filter(k => {
+    const el = document.getElementById(k);
+    return el && el.value.trim();
+  });
+  if (!withUrl.length) { bar.innerHTML = ''; return; }
+  const pending = withUrl.filter(k => !shownSlotPhotos.has(k)).length;
+  const shown = withUrl.length - pending;
+  bar.innerHTML =
+    (pending ? `<button onclick="showAllSlotPhotos()" title="Each photo loaded is one n8n execution">🖼 Load all ${pending} photo${pending === 1 ? '' : 's'}</button>` : '') +
+    (shown ? `<button onclick="hideAllSlotPhotos()" title="Stop showing the loaded photos">Hide photos</button>` : '') +
+    `<span>${pending ? `${pending} photo${pending === 1 ? '' : 's'} not loaded` : 'All photos loaded'}</span>`;
 }
 
 // Filed path under each thumb, amber when it no longer matches the recipe.
@@ -2929,7 +2844,7 @@ function finalizeIssues() {
   if (sku) {
     const clash = (allOtherSkus || []).find(r =>
       r.id !== currentRecipeId && normalize(r.sku || '') === normalize(sku));
-    if (clash) out.push(`a unique SKU \u2014 ${clash.recipeName || 'another recipe'} already uses ${sku}`);
+    if (clash) out.push(`a unique SKU — ${clash.recipeName || 'another recipe'} already uses ${sku}`);
   }
 
   // Scope decides part of the SKU, so an incomplete scope means a wrong SKU.
@@ -2972,11 +2887,11 @@ async function finalizeRecipe() {
     ]);
     document.getElementById('draftBadge').style.display = 'none';
     document.getElementById('finalizeTopBtn').style.display = 'none';
-    showToast('Saved and finalized \u2014 now Active');
+    showToast('Saved and finalized — now Active');
     updateFinalizeGate();
   } catch (e) {
     console.error('Failed to finalize:', e);
-    showToast('Failed to finalize \u2014 nothing was changed');
+    showToast('Failed to finalize — nothing was changed');
   }
 }
 
@@ -3149,14 +3064,14 @@ async function duplicateRecipe() {
     const parts = [`${dyeCount} dye${dyeCount === 1 ? '' : 's'}`];
     if (segCount > 0) parts.push(`${segCount} layout segment${segCount === 1 ? '' : 's'}`);
     if (segCount === -1) parts.push('layout NOT copied');
-    showToast(`${leSku} \u2713 \u2014 ${parts.join(', ')}`);
+    showToast(`${leSku} ✓ — ${parts.join(', ')}`);
     try { grist.setCursorPos({ rowId: newId }); } catch (e) { /* best effort */ }
   } catch (e) {
     console.error('Failed to duplicate recipe:', e);
-    showToast('Duplicate failed \u2014 see console');
+    showToast('Duplicate failed — see console');
   } finally {
     btn.disabled = false;
-    btn.textContent = '\u29c9 Duplicate as LE';
+    btn.textContent = '⧉ Duplicate as LE';
   }
 }
 
