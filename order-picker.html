@@ -48,6 +48,11 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .order-card.channel-wholesale { border-left: 4px solid var(--teal); }
 .order-card.channel-retail { border-left: 4px solid var(--gold); }
 .order-card.channel-custom { border-left: 4px solid var(--accent); }
+/* A closed order is history, not work. It stays legible but stops competing
+   for attention with the orders that still need making. */
+.order-card.is-closed { background: #FBF9F6; border-style: dashed; }
+.order-card.is-closed .card-ordernum,
+.order-card.is-closed .card-customer { color: #6B5E52; }
 
 .shopify-link { color: var(--teal); text-decoration: none; }
 .shopify-link:hover { text-decoration: underline; }
@@ -79,6 +84,18 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 }
 .note-save-btn { background: var(--teal); border-color: var(--teal); color: white; font-weight: 600; }
 .note-cancel-btn { background: white; color: #6B5E52; }
+
+/* Close / reopen. Deliberately small and text-like rather than a big primary
+   button: closing an order is a bookkeeping act, not the point of this screen,
+   and an eye-catching button beside every card invites mis-clicks. */
+.status-action {
+  font-size: 10px; padding: 4px 9px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: #6B5E52; white-space: nowrap;
+}
+.status-action:hover { border-color: var(--ink); color: var(--ink); }
+.status-action.reopen:hover { border-color: var(--teal); color: var(--teal); }
+.status-action:disabled { opacity: .5; cursor: default; }
+
 .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card-ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
 .card-customer { font-size: 14px; font-weight: 600; }
@@ -98,6 +115,11 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .card-shopify { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; margin-top: 4px; }
 
 .empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
+.choice-hint {
+  margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13;
+}
+.choice-hint strong { font-family: 'DM Mono', monospace; }
 </style>
 </head>
 <body>
@@ -105,6 +127,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <div class="top-bar"><div class="title">Orders</div></div>
 
 <div class="summary-strip" id="summaryStrip"></div>
+<div id="choiceHint"></div>
 
 <div class="controls">
   <input class="search-input" id="searchBox" placeholder="Search customer, order #, Shopify ID..." oninput="renderList()">
@@ -113,6 +136,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
     <option value="orderdate">Sort: Order date (newest)</option>
     <option value="customer">Sort: Customer A–Z</option>
   </select>
+  <button class="view-toggle-btn active" id="closedToggle" onclick="toggleClosed()">Hiding closed</button>
   <button class="view-toggle-btn" id="denseToggle" onclick="toggleDense()">Compact view</button>
 </div>
 
@@ -127,6 +151,12 @@ function esc(s) {
   return (s == null ? '' : String(s)).replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+/* For a value going into a JS string inside an HTML attribute, e.g.
+   onclick="setStatusFilter(...)". JSON.stringify quotes and escapes it for JS,
+   esc() then makes it safe as attribute text. A status value containing an
+   apostrophe used to break the chip's onclick outright. */
+function jsAttr(v) { return esc(JSON.stringify(v == null ? '' : String(v))); }
+
 /* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
    normalize() strips anything outside a-z0-9, which DELETES accented letters
    rather than folding them: "Pathétique" became "pathtique" while the file
@@ -139,7 +169,7 @@ const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':
   'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
 function foldAccents(s) {
   return String(s == null ? '' : s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
 }
 
@@ -166,6 +196,19 @@ function fmtDate(dateVal) {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/* ---------- closing an order ----------
+   "Closed" is not an arbitrary label. Two places already test for this exact
+   word, so anything else leaves the order looking finished in one view and
+   still active in another:
+     - renderSummaryStrip() below counts active orders as status !== 'closed'
+     - order-overview.html lists active orders as Status === 'Active' || blank
+   A blank status therefore also means OPEN everywhere, which is why an order
+   never leaves a list until this field is written.
+   Kept as a constant so there is one place to change if the vocabulary ever
+   moves — and if it moves, order-overview has to move with it.            */
+const CLOSED_STATUS = 'Closed';
+function isClosedValue(s) { return (s || '').toString().trim().toLowerCase() === 'closed'; }
+
 let allOrders = [];
 let orderLineData = {}; // workOrderId -> {needed, dyed, wound, packed, hasRush, skus: []}
 let statusFilter = 'ALL';
@@ -173,11 +216,23 @@ let channelFilter = 'ALL';
 let selectedId = null;
 let denseMode = false;
 let editingNoteId = null;
+let hideClosed = true;      // closed orders are history; off the list by default
+let statusBusyId = null;    // guards against a double-click writing twice
+let sawClosedOnLoad = false; // was 'Closed' already a value in the column?
+let choiceHintShown = false;
+let statusColName = 'Status';
 
 function toggleDense() {
   denseMode = !denseMode;
   document.getElementById('denseToggle').classList.toggle('active', denseMode);
   document.getElementById('orderList').classList.toggle('dense', denseMode);
+}
+function toggleClosed() {
+  hideClosed = !hideClosed;
+  const b = document.getElementById('closedToggle');
+  b.classList.toggle('active', hideClosed);
+  b.textContent = hideClosed ? 'Hiding closed' : 'Showing closed';
+  renderList();
 }
 
 async function loadOrders() {
@@ -198,6 +253,10 @@ async function loadOrders() {
     const typeCol = c(['Order_Type']);
     const notesCol = c(['Notes']);
 
+    // Write to the resolved column id, never the literal — a renamed Status
+    // column would otherwise make every close silently fail.
+    statusColName = statusCol || null;
+
     allOrders = (table.id || []).map((id, i) => ({
       id,
       customerName: columnAsArray(table, custCol)[i] || '',
@@ -211,6 +270,8 @@ async function loadOrders() {
       orderType: typeCol ? (columnAsArray(table, typeCol)[i] || '') : '',
       notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
     }));
+
+    sawClosedOnLoad = allOrders.some(o => isClosedValue(o.status));
 
     // Per-order production summary from Work_Order_Lines
     // "Packed" now comes from Lot_Allocations: a line can be filled from several
@@ -249,16 +310,22 @@ async function loadOrders() {
     (linesTable.id || []).forEach((id, i) => {
       const woId = getRefId(columnAsArray(linesTable, lWoCol)[i]);
       if (!woId) return;
-      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, packed: 0, hasRush: false, skus: [] };
+      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, packed: 0, hasRush: false, skus: [], lines: 0, unlinked: 0 };
       const d = orderLineData[woId];
       const needed = lNeededCol ? Number(columnAsArray(linesTable, lNeededCol)[i]) || 0 : 0;
       d.needed += needed;
+      d.lines += 1;
       d.dyed += Math.min(lDyedCol ? Number(columnAsArray(linesTable, lDyedCol)[i]) || 0 : 0, needed || Infinity);
       const legacyPacked = lPackedCol ? Number(columnAsArray(linesTable, lPackedCol)[i]) || 0 : 0;
       const boxed = Math.max(allocBoxedByLine[id] || 0, legacyPacked);
       d.packed += Math.min(boxed, needed || Infinity);
       if (lPriorityCol && columnAsArray(linesTable, lPriorityCol)[i] === 'Rush') d.hasRush = true;
-      if (lSkuCol) { const sku = columnAsArray(linesTable, lSkuCol)[i]; if (sku) d.skus.push(sku); }
+      const sku = lSkuCol ? columnAsArray(linesTable, lSkuCol)[i] : '';
+      if (sku) d.skus.push(sku);
+      // A line with no SKU is usually a custom or limited-edition item made to
+      // order. It is called out in the close confirmation because it can never
+      // be matched by the Shopify sync, so it will not close itself.
+      else d.unlinked += 1;
     });
 
     renderFilters();
@@ -280,13 +347,13 @@ function renderFilters() {
   const statuses = [...new Set(allOrders.map(o => o.status).filter(Boolean))];
   const statusBox = document.getElementById('statusFilters');
   statusBox.innerHTML = ['ALL', ...statuses].map(s => `
-    <button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setStatusFilter('${s}')">${s === 'ALL' ? 'All Statuses' : s}</button>
+    <button class="filter-chip ${statusFilter === s ? 'active' : ''}" onclick="setStatusFilter(${jsAttr(s)})">${s === 'ALL' ? 'All Statuses' : esc(s)}</button>
   `).join('');
 
   const channels = [...new Set(allOrders.map(o => o.channel).filter(Boolean))];
   const channelBox = document.getElementById('channelFilters');
   channelBox.innerHTML = ['ALL', ...channels].map(c => `
-    <button class="filter-chip ${channelFilter === c ? 'active' : ''}" onclick="setChannelFilter('${c}')">${c === 'ALL' ? 'All Channels' : c}</button>
+    <button class="filter-chip ${channelFilter === c ? 'active' : ''}" onclick="setChannelFilter(${jsAttr(c)})">${c === 'ALL' ? 'All Channels' : esc(c)}</button>
   `).join('');
 }
 function setStatusFilter(s) { statusFilter = s; renderFilters(); renderList(); }
@@ -342,6 +409,88 @@ async function saveNote(id) {
   }
 }
 
+/* What is still outstanding on an order, in words, for the close confirmation.
+   Returns '' when there is nothing to warn about. */
+function outstandingText(id) {
+  const d = orderLineData[id];
+  if (!d || !d.lines) return 'this order has no line items at all';
+  if (!d.needed) return 'no quantities are set on its lines';
+  const parts = [];
+  if (d.packed < d.needed) parts.push(`${d.needed - d.packed} of ${d.needed} spools are not recorded as boxed`);
+  if (d.unlinked) parts.push(`${d.unlinked} line${d.unlinked === 1 ? '' : 's'} with no SKU`);
+  return parts.join(', ');
+}
+
+/* One write, one field. Closing is deliberately dumb: it does not touch
+   quantities, allocations, lots or Shopify. Nothing downstream is reversed by
+   reopening, which is what makes reopening safe. */
+async function setOrderStatus(id, value) {
+  if (!statusColName) {
+    alert('Work_Orders has no Status column — nothing to write to.');
+    return false;
+  }
+  const o = allOrders.find(x => x.id === id);
+  if (!o) return false;
+  const previous = o.status;
+  statusBusyId = id;
+  renderList();
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Orders', id, { [statusColName]: value }],
+    ]);
+    o.status = value;
+    statusBusyId = null;
+    renderFilters();   // a brand-new status value needs its own filter chip
+    renderList();
+    maybeShowChoiceHint(value);
+    return true;
+  } catch (e) {
+    console.error('Failed to set order status:', e);
+    o.status = previous;
+    statusBusyId = null;
+    renderList();
+    alert('Could not change the status — this widget needs Full document access. Nothing was changed.');
+    return false;
+  }
+}
+
+/* If "Closed" was not already in the column, and Status is a Choice column,
+   Grist stores the value but flags it as an invalid choice until it is added
+   to the column's option list. Say so once rather than leaving a mystery
+   red cell. */
+function maybeShowChoiceHint(value) {
+  if (choiceHintShown || sawClosedOnLoad || !isClosedValue(value)) return;
+  choiceHintShown = true;
+  document.getElementById('choiceHint').innerHTML =
+    `<div class="choice-hint">Saved. This is the first time <strong>${esc(CLOSED_STATUS)}</strong> has been used in this document —
+     if <strong>Status</strong> is a Choice column, the cell will show as an invalid choice until you add
+     <strong>${esc(CLOSED_STATUS)}</strong> to that column's options in the creator panel. The value itself is stored either way.</div>`;
+}
+
+async function closeOrder(id) {
+  const o = allOrders.find(x => x.id === id);
+  if (!o) return;
+  const out = outstandingText(id);
+  const who = [o.orderNumber, o.customerName].filter(Boolean).join(' — ') || 'this order';
+  let msg = `Close ${who}?\n\nStatus becomes "${CLOSED_STATUS}", which takes it off the active list here and in Order Overview.`;
+  if (out) {
+    msg += `\n\nStill outstanding: ${out}.\n\n` +
+      `That is fine for a custom or limited-edition item you made by hand and never allocated — ` +
+      `closing only changes the status. Production records are left exactly as they are.`;
+  }
+  msg += `\n\nYou can reopen it from the same card.`;
+  if (!confirm(msg)) return;
+  await setOrderStatus(id, CLOSED_STATUS);
+}
+
+async function reopenOrder(id) {
+  const o = allOrders.find(x => x.id === id);
+  if (!o) return;
+  const who = [o.orderNumber, o.customerName].filter(Boolean).join(' — ') || 'this order';
+  if (!confirm(`Reopen ${who}?\n\nStatus goes back to "Active" and it returns to the active list.`)) return;
+  await setOrderStatus(id, 'Active');
+}
+
 function channelClass(channel) {
   const c = (channel || '').toLowerCase();
   if (c === 'wholesale') return 'channel-wholesale';
@@ -356,10 +505,11 @@ function shopifyAdminUrl(shopifyId, orderType) {
 }
 
 function renderSummaryStrip() {
-  const now = allOrders.filter(o => (o.status || '').toLowerCase() !== 'closed');
+  const now = allOrders.filter(o => !isClosedValue(o.status));
   const overdue = now.filter(o => { const d = daysFromToday(o.dueDate); return d !== null && d < 0; });
   const dueThisWeek = now.filter(o => { const d = daysFromToday(o.dueDate); return d !== null && d >= 0 && d <= 7; });
   const rush = now.filter(o => orderHasRush(o.id));
+  const ready = now.filter(o => { const p = productionStatus(o.id); return p && p.cls === 'prod-ready'; });
 
   const strip = document.getElementById('summaryStrip');
   const parts = [];
@@ -367,6 +517,8 @@ function renderSummaryStrip() {
   if (overdue.length) parts.push(`<span class="summary-item warn">${overdue.length} overdue</span>`);
   if (dueThisWeek.length) parts.push(`<span class="summary-item soon">${dueThisWeek.length} due this week</span>`);
   if (rush.length) parts.push(`<span class="summary-item warn">${rush.length} rush</span>`);
+  // Everything boxed but still open — these are the ones waiting to be closed.
+  if (ready.length) parts.push(`<span class="summary-item">${ready.length} all boxed, still open</span>`);
   strip.innerHTML = parts.join('');
 }
 
@@ -376,9 +528,15 @@ function renderList() {
   const q = normalize(document.getElementById('searchBox').value);
   const sortMode = document.getElementById('sortSelect').value;
 
+  // Asking for the Closed status explicitly beats the hide-closed toggle —
+  // otherwise picking that chip would show an empty list.
+  const wantsClosed = statusFilter !== 'ALL' && isClosedValue(statusFilter);
+  let hiddenClosed = 0;
+
   let list = allOrders.filter(o => {
     if (statusFilter !== 'ALL' && o.status !== statusFilter) return false;
     if (channelFilter !== 'ALL' && o.channel !== channelFilter) return false;
+    if (hideClosed && !wantsClosed && isClosedValue(o.status)) { hiddenClosed++; return false; }
     if (q) {
       const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId + ' ' + orderSkuText(o.id));
       if (!hay.includes(q)) return false;
@@ -398,7 +556,9 @@ function renderList() {
     return a.customerName.localeCompare(b.customerName);
   });
 
-  document.getElementById('resultCount').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
+  document.getElementById('resultCount').textContent =
+    `${list.length} order${list.length === 1 ? '' : 's'}` +
+    (hiddenClosed ? ` · ${hiddenClosed} closed hidden` : '');
 
   const box = document.getElementById('orderList');
 
@@ -408,7 +568,7 @@ function renderList() {
   const pinnedIsHidden = pinnedOrder && !list.some(o => o.id === selectedId);
 
   if (!list.length && !pinnedIsHidden) {
-    box.innerHTML = `<div class="empty-state">No orders match.</div>`;
+    box.innerHTML = `<div class="empty-state">No orders match.${hiddenClosed ? ' Closed orders are hidden — use the toggle above.' : ''}</div>`;
     return;
   }
 
@@ -419,39 +579,47 @@ function renderList() {
     const dueLabel = dueDays === null ? '' : dueDays < 0 ? `${Math.abs(dueDays)}d overdue` : dueDays === 0 ? 'due today' : `due in ${dueDays}d`;
     const prodStatus = productionStatus(o.id);
     const isRush = orderHasRush(o.id);
-    const borderClass = overdue ? 'overdue' : channelClass(o.channel);
+    const closed = isClosedValue(o.status);
+    const borderClass = overdue && !closed ? 'overdue' : channelClass(o.channel);
     const shopifyUrl = shopifyAdminUrl(o.shopifyId, o.orderType);
+    const busy = statusBusyId === o.id;
+
+    const statusBtn = closed
+      ? `<button class="status-action reopen" ${busy ? 'disabled' : ''} onclick="reopenOrder(${o.id})">${busy ? 'Saving…' : 'Reopen'}</button>`
+      : `<button class="status-action" ${busy ? 'disabled' : ''} onclick="closeOrder(${o.id})"
+           title="Set Status to ${esc(CLOSED_STATUS)} — production records are left alone">${busy ? 'Saving…' : 'Close order'}</button>`;
 
     return `
-      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass}" onclick="selectOrder(${o.id})">
+      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass} ${closed ? 'is-closed' : ''}" onclick="selectOrder(${o.id})">
         <div class="card-top">
           <span class="card-ordernum">${esc(o.orderNumber || '—')}</span>
           <span class="card-customer">${esc(o.customerName || '(no customer)')}</span>
           <div class="card-badges">
-            ${isRush ? '<span class="badge rush">★ Rush</span>' : ''}
+            ${isRush && !closed ? '<span class="badge rush">★ Rush</span>' : ''}
             ${o.orderType === 'Draft' ? '<span class="badge draft">Draft</span>' : ''}
-            ${prodStatus ? `<span class="badge ${prodStatus.cls}">${esc(prodStatus.label)}</span>` : ''}
-            ${o.status ? `<span class="badge status ${o.status.toLowerCase() === 'closed' ? 'closed' : ''}">${esc(o.status)}</span>` : ''}
+            ${prodStatus && !closed ? `<span class="badge ${prodStatus.cls}">${esc(prodStatus.label)}</span>` : ''}
+            ${o.status ? `<span class="badge status ${closed ? 'closed' : ''}">${esc(o.status)}</span>` : ''}
             ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${esc(o.paymentStatus)}</span>` : ''}
-            ${o.channel ? `<span class="badge channel">${o.channel}</span>` : ''}
+            ${o.channel ? `<span class="badge channel">${esc(o.channel)}</span>` : ''}
           </div>
         </div>
         <div class="card-meta-row">
           ${o.orderDate ? `<span>Ordered ${fmtDate(o.orderDate)}</span>` : ''}
-          ${dueLabel ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${esc(dueLabel)}</span>` : ''}
+          ${dueLabel && !closed ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${esc(dueLabel)}</span>` : ''}
         </div>
-        ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${shopifyUrl}" target="_blank" onclick="event.stopPropagation()">Shopify #${o.shopifyId} ↗</a>` : `Shopify #${o.shopifyId}`}</div>` : ''}
+        ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${esc(shopifyUrl)}" target="_blank" onclick="event.stopPropagation()">Shopify #${esc(o.shopifyId)} ↗</a>` : `Shopify #${esc(o.shopifyId)}`}</div>` : ''}
         ${editingNoteId === o.id
           ? `<div class="note-edit" onclick="event.stopPropagation()">
-               <textarea class="note-textarea" id="noteInput-${o.id}">${(o.notes || '').replace(/</g, '&lt;')}</textarea>
+               <textarea class="note-textarea" id="noteInput-${o.id}">${esc(o.notes || '')}</textarea>
                <div class="note-edit-actions">
                  <button class="note-save-btn" onclick="saveNote(${o.id})">Save</button>
                  <button class="note-cancel-btn" onclick="cancelEditNote()">Cancel</button>
                </div>
              </div>`
           : `<div class="card-notes-row" onclick="event.stopPropagation()">
-               ${o.notes ? `<span class="card-notes">${o.notes}</span>` : `<span class="no-note">No note</span>`}
+               ${o.notes ? `<span class="card-notes">${esc(o.notes)}</span>` : `<span class="no-note">No note</span>`}
                <span class="note-edit-link" onclick="startEditNote(${o.id})">${o.notes ? 'edit' : '+ add note'}</span>
+               ${statusBtn}
              </div>`}
       </div>
     `;
