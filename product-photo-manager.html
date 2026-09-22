@@ -103,6 +103,33 @@ body {
 .rec-head { display: flex; align-items: center; gap: 10px; padding: 12px; cursor: pointer; }
 .rec-head:hover { background: var(--warm); }
 .rec-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+/* Browsing the recipe list is not a visual task — the name and the slot pills
+   carry it. Each preview is one n8n execution against the photo2 proxy, and a
+   slow scroll down a long list used to fire one per recipe. The preview loads
+   only when asked for. */
+.rec-thumb-btn {
+  width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
+  background: var(--warm); border: 1px dashed var(--rule); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #A89A8C; padding: 0; line-height: 1;
+}
+.rec-thumb-btn:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+.rec-thumb-none {
+  width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
+  background: var(--paper); border: 1px dashed var(--rule);
+}
+.preview-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 7px 10px;
+  background: white; border: 1px solid var(--rule); border-radius: 6px;
+}
+.preview-bar-note { font-size: 11px; color: #6B5E52; }
+.preview-bar button {
+  font-size: 11px; padding: 4px 10px; border-radius: 4px;
+  border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+  cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.preview-bar button:hover { border-color: var(--accent); color: var(--accent); }
 .rec-headmain { flex: 1; min-width: 0; }
 .rec-name { font-weight: 600; font-size: 14px; }
 .rec-sub { font-size: 11px; color: #8B7D72; margin-top: 1px; }
@@ -186,6 +213,13 @@ let allPhotos = [];    // {id, recipeId, Colorway_Name, Fiber_Type, Nextcloud_UR
 let currentTab = 'attention';
 let expandedRecipeId = null;
 let recipeSearch = '';
+
+/* Recipe ids whose list preview the user has actually asked to see. Kept in
+   module state so it survives re-renders (searching, starring, expanding) —
+   and because the browser has the image cached by then, redrawing it costs no
+   n8n execution. Photos INSIDE an expanded recipe are not gated: opening a
+   recipe is the moment you want to look at them. */
+let shownThumbs = new Set();
 
 // ── helpers ──
 function esc(s) {
@@ -516,6 +550,24 @@ function renderRecipes() {
   let html = `<input class="search-input" id="recSearchBox" placeholder="Search recipes…" value="${esc(recipeSearch)}">`;
   html += `<div class="section-note">★ is your standard — the most consistent version to show. Mark lot alternatives clients can use as <b>Approved</b>. Sending an approved photo to a client's order folder happens in Photo Gallery, per order.</div>`;
 
+  // For the one case that genuinely needs pictures side by side: telling apart
+  // two recipes that share a name across vendors.
+  const withThumbs = list.filter(r => {
+    const ps = photosForRecipe(r.id);
+    return (ps.find(p => p.Is_Favorite) || ps[0] || {}).Nextcloud_URL;
+  });
+  const pending = withThumbs.filter(r => !shownThumbs.has(r.id)).length;
+  const shown = withThumbs.length - pending;
+  html += `<div class="preview-bar">
+    <span class="preview-bar-note">${
+      pending
+        ? `${pending} preview${pending === 1 ? '' : 's'} not loaded — click one to load just it`
+        : (withThumbs.length ? `All ${withThumbs.length} previews loaded` : 'No previews available')
+    }</span>
+    ${pending ? `<button data-action="showallthumbs">Load all ${pending} preview${pending === 1 ? '' : 's'}</button>` : ''}
+    ${shown ? `<button data-action="hideallthumbs">Hide previews</button>` : ''}
+  </div>`;
+
   if (!list.length) {
     html += `<div class="done-state">${q ? 'No recipes match that search.' : 'No recipes have product photos yet.'}</div>`;
     v.innerHTML = html;
@@ -550,10 +602,20 @@ function recipeCardHTML(r) {
   if (approved) subBits += ` · ${approved} client-ready`;
   const noStandard = photos.length > 0 && !standard;
 
+  // Three states: nothing to show, asked-for, or a button. The button carries
+  // its own data-action so the delegated handler matches it before the
+  // data-action="expand" on the row around it — clicking the preview loads the
+  // preview, it does not open the recipe.
+  const thumbHTML = !thumb
+    ? `<div class="rec-thumb-none" title="No photo"></div>`
+    : shownThumbs.has(r.id)
+      ? `<img class="rec-thumb" data-src="${esc(thumb)}" alt="" loading="lazy">`
+      : `<button class="rec-thumb-btn" data-action="showthumb" data-recipe="${r.id}" title="Load this preview">🖼</button>`;
+
   return `
     <div class="rec-card ${isOpen ? 'open' : ''}" data-reccard="${r.id}">
       <div class="rec-head" data-action="expand" data-recipe="${r.id}">
-        <img class="rec-thumb" data-src="${esc(thumb)}" alt="" loading="lazy">
+        ${thumbHTML}
         <div class="rec-headmain">
           <div class="rec-name">${esc(r.Recipe_Name)}</div>
           <div class="rec-sub">${subBits}${noStandard ? ' · <span class="rec-warn">no standard set</span>' : ''}</div>
@@ -592,10 +654,18 @@ function photoCardHTML(p) {
     </div>`;
 }
 
+/* Debounced: rebuilding the list on every keystroke threw away and rebuilt
+   every <img> in the intermediate result sets. The dwell timer absorbed most of
+   that, but 250ms means only the set you actually pause on is ever built. */
+let recSearchTimer = null;
 function wireRecipeSearch() {
   const box = document.getElementById('recSearchBox');
   if (!box) return;
-  box.oninput = () => { recipeSearch = box.value; /* re-render list only, keep focus */ renderRecipesListOnly(); };
+  box.oninput = () => {
+    recipeSearch = box.value;
+    clearTimeout(recSearchTimer);
+    recSearchTimer = setTimeout(renderRecipesListOnly, 250);
+  };
 }
 // Re-render the recipe list without stealing focus from the search box.
 function renderRecipesListOnly() {
@@ -713,6 +783,20 @@ document.body.addEventListener('click', (e) => {
   else if (action === 'status') setStatus(photoId, el.dataset.status);
   else if (action === 'rotate') rotatePhoto(photoId, el.dataset.dir, el);
   else if (action === 'expand') { expandedRecipeId = (expandedRecipeId === recipeId) ? null : recipeId; renderRecipes(); }
+  else if (action === 'showthumb') {
+    // Load this one preview without opening the recipe.
+    e.stopPropagation();
+    shownThumbs.add(recipeId);
+    renderRecipes();
+  }
+  else if (action === 'showallthumbs') {
+    recipesWithPhotos().forEach(r => shownThumbs.add(r.id));
+    renderRecipes();
+  }
+  else if (action === 'hideallthumbs') {
+    shownThumbs.clear();
+    renderRecipes();
+  }
 });
 
 // Live recipe-search inside unlinked cards (delegated input).
