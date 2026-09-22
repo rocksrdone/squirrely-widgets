@@ -12,10 +12,14 @@
   * { box-sizing: border-box; }
   body { margin: 0; padding: 12px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          color: var(--ink); background: var(--bg); }
-  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   button { font: inherit; font-weight: 600; padding: 9px 18px; border: 0; border-radius: 6px;
            background: var(--accent); color: #fff; cursor: pointer; }
   button:disabled { background: #9ca3af; cursor: default; }
+  /* Secondary action — same bar, visibly not the main one. */
+  button.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  button.secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.secondary:disabled { background: #f3f4f6; color: #9ca3af; border-color: var(--line); }
   .stamp { color: var(--muted); font-size: 12px; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
   .card > h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .01em; }
@@ -44,8 +48,12 @@
 <!-- Static shell renders first; nothing here depends on Grist or the network. -->
 <div class="bar">
   <button id="runBtn">Run order sync</button>
+  <button id="importBtn" class="secondary" title="Scan the Nextcloud lots folder for photos that aren't in Grist yet">Import lot photos</button>
   <span class="stamp" id="stamp">Not run yet this session</span>
 </div>
+<!-- Photo import gets its own output area so running it doesn't wipe a sync
+     report you were still reading, and vice versa. -->
+<div id="photoOut"></div>
 <div id="out"></div>
 
 <script>
@@ -53,6 +61,11 @@
    ACTIVE for this to answer — the test URL only listens while you're watching the
    canvas in n8n. */
 const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/sync-drafts';
+
+/* SS - Import Lot Photos. This used to run itself on a 15-minute schedule —
+   96 executions a day against a folder that gains files a few times a week,
+   about a fifth of the whole n8n plan. It is now triggered only from here. */
+const IMPORT_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/import-lot-photos';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s)
@@ -184,7 +197,53 @@ async function run() {
   }
 }
 
+/* ── Lot photo import ─────────────────────────────────────────────────────
+   Scans Squirrely Stash/product-photos/lots/ and creates a Product_Photos row
+   for any file Grist has not seen. The workflow diffs on Source_Filename, so
+   pressing this twice in a row is harmless — the second run imports nothing. */
+function importCard(r) {
+  const n = Number(r.imported) || 0;
+  const files = Array.isArray(r.files) ? r.files : [];
+  const banner = n
+    ? `<div class="banner good">Imported ${n} new photo${n === 1 ? '' : 's'} into Product Photos.</div>`
+    : `<div class="banner good">No new photos — everything in the lots folder is already in Grist.</div>`;
+  if (!n) return banner;
+  return banner + `
+    <div class="card">
+      <h2>Lot photos imported<span class="sub">now Pending in Product Photos</span></h2>
+      ${list(files, 'No filenames returned.')}
+      ${r.truncated ? `<div class="empty">…and more; only the first ${files.length} are listed.</div>` : ''}
+    </div>`;
+}
+
+async function runImport() {
+  const btn = $('importBtn');
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  $('photoOut').innerHTML = '';
+  try {
+    const res = await fetch(IMPORT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      cache: 'no-store',
+    });
+    if (!res.ok) throw new Error(`webhook returned ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    $('photoOut').innerHTML = importCard(data || {});
+  } catch (e) {
+    $('photoOut').innerHTML = `<div class="banner warn">Couldn't reach the photo import — ${esc(e.message)}</div>
+      <div class="card">Check that <strong>SS - Import Lot Photos</strong> is <strong>active</strong> in n8n and that
+      <code>${esc(IMPORT_WEBHOOK_URL)}</code> matches the production URL on its
+      <strong>Webhook - manual import</strong> node.</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Import lot photos';
+  }
+}
+
 $('runBtn').addEventListener('click', run);
+$('importBtn').addEventListener('click', runImport);
 
 // Grist is optional here — this widget reads no tables. Kept in a try/catch so a
 // plugin-API hiccup can't kill the script before the button is wired up.
