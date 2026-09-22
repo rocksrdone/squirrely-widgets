@@ -7,6 +7,7 @@
   :root {
     --bg: #fff; --ink: #1a1a1a; --muted: #6b7280; --line: #e5e7eb;
     --accent: #2563eb; --good: #047857; --warn: #b45309; --goodbg: #ecfdf5; --warnbg: #fffbeb;
+    --infobg: #eff6ff; --info: #1d4ed8;
   }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 12px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -17,13 +18,19 @@
   button:disabled { background: #9ca3af; cursor: default; }
   .stamp { color: var(--muted); font-size: 12px; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .card > h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .01em; }
+  .card > h2 .sub { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
   .banner { border-radius: 6px; padding: 9px 12px; margin-bottom: 10px; font-weight: 600; }
   .banner.good { background: var(--goodbg); color: var(--good); }
   .banner.warn { background: var(--warnbg); color: var(--warn); }
+  .banner.info { background: var(--infobg); color: var(--info); }
+  .banner .thin { font-weight: 400; display: block; margin-top: 3px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 8px; }
   .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
   .stat .n { font-size: 20px; font-weight: 700; line-height: 1.1; }
   .stat .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  .stat.alert { border-color: #fcd34d; background: var(--warnbg); }
+  .stat.alert .n { color: var(--warn); }
   h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   ul { margin: 0; padding-left: 18px; }
   li { margin: 2px 0; }
@@ -56,20 +63,25 @@ function list(items, emptyText) {
   return '<ul>' + items.map(i => `<li>${esc(i)}</li>`).join('') + '</ul>';
 }
 
-function stat(n, label) {
-  return `<div class="stat"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
+function stat(n, label, alert) {
+  return `<div class="stat${alert ? ' alert' : ''}"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
 }
 
-function render(r) {
+/* The two passes are gated independently — each has its own DRY_RUN — so each
+   gets its own banner naming the node to flip. One shared banner used to imply
+   a single switch that does not exist. */
+function quantityCard(r) {
   const c = r.counts || {};
   const banner = r.dry_run
-    ? `<div class="banner warn">DRY RUN — nothing was written. Set DRY_RUN = false in "Diff Draft Quantities" to apply.</div>`
+    ? `<div class="banner warn">DRY RUN — no quantities written.
+         <span class="thin">Set <code>DRY_RUN = false</code> in the <strong>Diff Draft Quantities</strong> node to apply.</span></div>`
     : (r.applied
         ? `<div class="banner good">Applied ${c.lines_updated} update(s) and ${c.lines_added} new line(s) to Grist.</div>`
-        : `<div class="banner good">Everything already matched Shopify — nothing to change.</div>`);
+        : `<div class="banner good">Quantities already matched Shopify — nothing to change.</div>`);
 
-  $('out').innerHTML = banner + `
+  return banner + `
     <div class="card">
+      <h2>Quantities and new orders<span class="sub">drafts and unshipped orders only</span></h2>
       <div class="grid">
         ${stat(c.lines_updated || 0, 'Qty updated')}
         ${stat(c.lines_added || 0, 'Lines added')}
@@ -83,11 +95,57 @@ function render(r) {
       <h3>New orders imported</h3>
       ${list(r.imported_orders, 'No new orders.')}
       <h3>Needs a look</h3>
-      ${list((r.notes || []).filter(n => /^(HOLD|SKIP|WARN)/.test(n)), 'Nothing flagged.')}
+      ${list((r.notes || []).filter(n => /^(HOLD|SKIP|WARN|NOTE)/.test(n)), 'Nothing flagged.')}
       <h3>Not checked against Shopify</h3>
       ${list((r.unmatched || []).map(u => `${u.order} — ${u.reason}`),
              'Every active order was checked.')}
     </div>`;
+}
+
+/* Payment / fulfillment / tracking. Absent entirely on a workflow without the
+   Diff Order Status node — say so plainly rather than rendering an empty card,
+   because "which version am I running?" is otherwise unanswerable from here. */
+function statusCard(r) {
+  const st = r.status;
+  if (!st) {
+    return `<div class="banner info">Payment and tracking refresh is not installed in this workflow.
+      <span class="thin">This run only checked quantities. Payment status stays frozen at whatever it was on import day.</span></div>`;
+  }
+  const missing = st.columns_missing || [];
+  const banner = st.dry_run
+    ? `<div class="banner warn">DRY RUN — no payment or tracking written.
+         <span class="thin">Set <code>DRY_RUN = false</code> in the <strong>Diff Order Status</strong> node to apply.</span></div>`
+    : (st.applied
+        ? `<div class="banner good">Updated payment and tracking on ${st.orders_updated} order(s).</div>`
+        : `<div class="banner good">Payment and tracking already matched Shopify — nothing to change.</div>`);
+
+  const setup = missing.length
+    ? `<div class="banner warn">${missing.length} column(s) missing on Work_Orders, so those fields were skipped.
+         <span class="thin">Add ${missing.map(m => `<code>${esc(m)}</code>`).join(', ')} — <code>Shipped_Date</code> as a Date column, the rest as Text.</span></div>`
+    : '';
+
+  return banner + setup + `
+    <div class="card">
+      <h2>Payment and tracking<span class="sub">all orders, including archived</span></h2>
+      <div class="grid">
+        ${stat(st.orders_updated || 0, 'Orders updated')}
+        ${stat(st.matched || 0, 'Matched')}
+        ${stat((st.unmatched || []).length, 'Not matched')}
+        ${stat(missing.length, 'Columns missing', missing.length > 0)}
+      </div>
+      <h3>Status changes</h3>
+      ${list(st.changes, 'No payment or tracking changes.')}
+      <h3>Left alone on purpose</h3>
+      ${list((st.notes || []).filter(n => /^(HOLD|WARN|NOTE)/.test(n)),
+             'Nothing held back.')}
+      <h3>No Shopify match</h3>
+      ${list((st.unmatched || []).map(u => `${u.order} — ${u.reason}`),
+             'Every work order matched a Shopify order.')}
+    </div>`;
+}
+
+function render(r) {
+  $('out').innerHTML = quantityCard(r) + statusCard(r);
 }
 
 async function run() {
