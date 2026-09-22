@@ -89,6 +89,31 @@ body {
 }
 .pcard img.lazy-photo:not(.loaded) { opacity: 0.3; }
 .pcard img.lazy-photo { transition: opacity 0.2s; }
+/* Photos are NOT fetched on render. Every thumbnail is one n8n execution
+   against the photo2 proxy, and a big order was firing 30-40 of them just to
+   show a grid nobody was looking at yet. The slot starts as a button; the
+   image is only requested when it is actually asked for. */
+.pslot-empty {
+  width: 100%; height: 150px; background: var(--warm);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; cursor: pointer; border: none; padding: 8px;
+  font-family: 'Inter', sans-serif; color: #6B5E52; text-align: center;
+}
+.pslot-empty:hover { background: #DDD1C2; color: var(--accent); }
+.pslot-icon { font-size: 19px; opacity: .45; line-height: 1; }
+.pslot-label { font-size: 9px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+.loadbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 12px 0 0; padding: 7px 10px;
+  background: white; border: 1px solid var(--rule); border-radius: 6px;
+}
+.loadbar-note { font-size: 11px; color: #6B5E52; }
+.loadbar-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 4px;
+  border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+  cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.loadbar-btn:hover { border-color: var(--accent); color: var(--accent); }
 .pcard-body { padding: 8px; }
 .pcard-name { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
 .pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
@@ -142,6 +167,12 @@ body {
     <div class="order-tag" id="orderChannel"></div>
   </div>
 
+  <div class="loadbar">
+    <span class="loadbar-note" id="loadbarNote"></span>
+    <button class="loadbar-btn" id="loadAllBtn" onclick="showAllPhotos()">Load all photos</button>
+    <button class="loadbar-btn" id="unloadAllBtn" onclick="hideAllPhotos()" style="display:none">Hide photos</button>
+  </div>
+
   <div class="search-row">
     <input class="search-input" id="searchBox" type="text" placeholder="Search this order's colorways..." oninput="renderSearch(this.value)">
   </div>
@@ -178,6 +209,70 @@ let orderLines = [];
 let allPhotos = [];
 let existingShares = []; // [{photoId, workOrderId, destPath, sharedAt}]
 let vendorCode = '';
+
+/* Which photos the user has actually asked to see. Everything else renders as
+   a button and costs nothing. Survives re-renders (favouriting, searching,
+   sharing) so a photo already on screen does not blink out — and because the
+   browser has it cached by then, redrawing it costs no n8n execution either.
+   Cleared on every order change: a new order is a new browsing session. */
+let shownPhotos = new Set();
+
+function showPhoto(photoId) {
+  shownPhotos.add(photoId);
+  // Swap just this card's slot rather than re-rendering the whole grid. The
+  // same photo can appear twice (line block + search results), so update every
+  // slot that matches, not just the first.
+  document.querySelectorAll(`[data-slot-for="${photoId}"]`).forEach(slot => {
+    const p = allPhotos.find(x => x.id === photoId);
+    if (!p) return;
+    slot.outerHTML = photoSlotHTML(p);
+  });
+  updateLoadbar();
+  loadImagesInBatches();
+}
+
+function showAllPhotos() {
+  visiblePhotoIds().forEach(id => shownPhotos.add(id));
+  renderLines();
+  renderSearchNow(document.getElementById('searchBox').value);
+  updateLoadbar();
+}
+
+function hideAllPhotos() {
+  shownPhotos.clear();
+  renderLines();
+  renderSearchNow(document.getElementById('searchBox').value);
+  updateLoadbar();
+}
+
+// Every photo currently rendered on screen, deduped across line blocks and
+// search results.
+function visiblePhotoIds() {
+  const ids = new Set();
+  document.querySelectorAll('[data-photo-id]').forEach(el => {
+    const n = Number(el.getAttribute('data-photo-id'));
+    if (n) ids.add(n);
+  });
+  return [...ids];
+}
+
+function updateLoadbar() {
+  const note = document.getElementById('loadbarNote');
+  const loadBtn = document.getElementById('loadAllBtn');
+  const hideBtn = document.getElementById('unloadAllBtn');
+  if (!note) return;
+  const onScreen = visiblePhotoIds();
+  const shown = onScreen.filter(id => shownPhotos.has(id)).length;
+  const pending = onScreen.length - shown;
+  note.textContent = pending > 0
+    ? `${pending} photo${pending === 1 ? '' : 's'} not loaded — click a card to load just that one`
+    : (onScreen.length ? `All ${onScreen.length} photos loaded` : 'No photos on screen');
+  if (loadBtn) {
+    loadBtn.style.display = pending > 0 ? '' : 'none';
+    loadBtn.textContent = `Load all ${pending} photo${pending === 1 ? '' : 's'}`;
+  }
+  if (hideBtn) hideBtn.style.display = shown > 0 ? '' : 'none';
+}
 
 function getRefId(ref) {
   if (typeof ref === 'number') return ref;
@@ -247,6 +342,13 @@ function findColumn(tableData, candidates) {
   }
   return null;
 }
+/* HTML-escaping for anything coming out of Grist. Colorway names, SKUs and
+   statuses are free text; a single "<" in one of them used to be enough to
+   break the card layout. Same helper the other widgets use. */
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -261,9 +363,19 @@ function statusClass(status) {
   return 'status-other';
 }
 
+let lastLoadedOrderId = null;
+
 async function loadData(record) {
   currentOrder = record;
   const orderId = record.id;
+
+  // Forget which photos were on screen only when the ORDER changes. sharePhoto
+  // calls loadData() to refresh its own state, and clearing unconditionally
+  // there would collapse every photo the user had just opened.
+  if (lastLoadedOrderId !== orderId) {
+    shownPhotos = new Set();
+    lastLoadedOrderId = orderId;
+  }
 
   document.getElementById('orderTitle').textContent = record.Order_Number || 'Order';
   document.getElementById('orderSub').textContent = record.Customer_Name || '';
@@ -362,20 +474,37 @@ function orderColorwayGuesses() {
   return orderLines.map(l => parseColorwayFromSKU(l.SKU)).filter(Boolean);
 }
 
+// The image half of a card. Renders a button until the photo has been asked
+// for — swapping this one element is what makes click-to-load cheap.
+function photoSlotHTML(p) {
+  if (shownPhotos.has(p.id)) {
+    return `<img class="lazy-photo" data-slot-for="${p.id}" data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}">`;
+  }
+  return `
+    <button class="pslot-empty" data-slot-for="${p.id}" onclick="showPhoto(${p.id})" title="Load this photo">
+      <span class="pslot-icon">🖼</span>
+      <span class="pslot-label">Show photo</span>
+    </button>`;
+}
+
 function photoCardHTML(p) {
   const shareRecord = existingShares.find(s => s.photoId === p.id && s.workOrderId === currentOrder.id);
   const fav = !!p.Is_Favorite;
-  const safeDestPath = shareRecord ? shareRecord.destPath.replace(/'/g, "\\'").replace(/"/g, '&quot;') : '';
+  // A Photo_Shares row with an empty Dest_Path used to throw here, which took
+  // down the whole grid rather than this one card.
+  const safeDestPath = shareRecord
+    ? String(shareRecord.destPath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;')
+    : '';
   const sharedDateLabel = shareRecord && shareRecord.sharedAt
     ? new Date(shareRecord.sharedAt * 1000).toLocaleDateString()
     : '';
   return `
-    <div class="pcard ${fav ? 'fav' : ''}" id="pcard-${p.id}">
-      <img class="lazy-photo" data-src="${p.Nextcloud_URL || ''}" alt="${p.Colorway_Name || ''}">
+    <div class="pcard ${fav ? 'fav' : ''}" id="pcard-${p.id}" data-photo-id="${p.id}">
+      ${photoSlotHTML(p)}
       <div class="pcard-body">
-        <div class="pcard-name">${p.Colorway_Name || 'Untitled'}</div>
-        <div class="pcard-meta">${p.Fiber_Type || ''}${p.Lot_Date ? ' · ' + p.Lot_Date : ''}</div>
-        <span class="pcard-status ${statusClass(p.Status)}">${p.Status || 'unknown'}</span>
+        <div class="pcard-name">${esc(p.Colorway_Name || 'Untitled')}</div>
+        <div class="pcard-meta">${esc(p.Fiber_Type || '')}${p.Lot_Date ? ' · ' + esc(p.Lot_Date) : ''}</div>
+        <span class="pcard-status ${statusClass(p.Status)}">${esc(p.Status || 'unknown')}</span>
         <div class="pcard-actions">
           <button class="star-btn ${fav ? 'on' : ''}" onclick="toggleFavorite(${p.id}, ${fav})" title="Mark as favorite">★</button>
           <button class="rot-btn" onclick="rotatePhoto(${p.id}, 'ccw', this)" title="Rotate 90° counter-clockwise">↺</button>
@@ -403,7 +532,7 @@ function renderLines() {
       body = `<div class="photo-grid">${exact.map(photoCardHTML).join('')}</div>`;
     } else if (close.length) {
       body = `
-        <div class="no-match">No exact match for "${guess}" — close names only, check before sharing.</div>
+        <div class="no-match">No exact match for "${esc(guess)}" — close names only, check before sharing.</div>
         <div class="photo-grid">${close.map(photoCardHTML).join('')}</div>`;
     } else {
       body = `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`;
@@ -411,13 +540,14 @@ function renderLines() {
     return `
       <div class="line-block">
         <div class="line-head">
-          <span class="line-sku">${line.SKU || '—'}</span>
+          <span class="line-sku">${esc(line.SKU || '—')}</span>
           <span class="line-qty">qty ${line.Qty_Needed ?? '—'}</span>
-          <span class="line-guess">matching "${guess}"</span>
+          <span class="line-guess">matching "${esc(guess)}"</span>
         </div>
         ${body}
       </div>`;
   }).join('');
+  updateLoadbar();
   loadImagesInBatches();
 }
 
@@ -453,10 +583,20 @@ function loadOneImageWithRetry(img) {
   });
 }
 
+/* Debounced wrapper for the oninput handler. Rebuilding the results on every
+   keystroke re-created every <img> in the intermediate result sets; a photo
+   that only appeared on the way to the word you were typing cost a real n8n
+   execution. 250ms means only the set you paused on gets built. */
+let searchTimer = null;
 function renderSearch(query) {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => renderSearchNow(query), 250);
+}
+
+function renderSearchNow(query) {
   const results = document.getElementById('searchResults');
   const q = normalize(query);
-  if (!q) { results.innerHTML = ''; return; }
+  if (!q) { results.innerHTML = ''; updateLoadbar(); return; }
 
   const orderGuesses = orderColorwayGuesses();
 
@@ -480,6 +620,7 @@ function renderSearch(query) {
     <div class="photo-grid">
       ${matches.length ? matches.map(photoCardHTML).join('') : '<div class="no-match">No matching photos found among this order\'s colorways.</div>'}
     </div>`;
+  updateLoadbar();
   loadImagesInBatches();
 }
 
@@ -491,7 +632,7 @@ async function toggleFavorite(photoId, currentlyFav) {
     const p = allPhotos.find(p => p.id === photoId);
     if (p) p.Is_Favorite = !currentlyFav;
     renderLines();
-    renderSearch(document.getElementById('searchBox').value);
+    renderSearchNow(document.getElementById('searchBox').value);
   } catch (e) {
     console.error('Failed to update favorite:', e);
     showToast('Could not update favorite — check widget access level');
@@ -532,7 +673,7 @@ async function sharePhoto(photoId, btnEl) {
     const searchValue = document.getElementById('searchBox').value;
     await loadData(currentOrder);
     document.getElementById('searchBox').value = searchValue;
-    renderSearch(searchValue);
+    renderSearchNow(searchValue);
   } catch (e) {
     console.error('Share failed:', e);
     btnEl.textContent = originalText;
@@ -586,7 +727,7 @@ async function rotatePhoto(photoId, direction, btnEl) {
     }
 
     renderLines();
-    renderSearch(document.getElementById('searchBox').value);
+    renderSearchNow(document.getElementById('searchBox').value);
     showToast('Rotated — thumbnail refreshed');
   } catch (e) {
     console.error('Rotate failed:', e);
@@ -614,7 +755,7 @@ async function unsharePhoto(photoId, shareId, destPath, btnEl) {
 
     existingShares = existingShares.filter(s => s.shareId !== shareId);
     renderLines();
-    renderSearch(document.getElementById('searchBox').value);
+    renderSearchNow(document.getElementById('searchBox').value);
     showToast('Removed from vendor folder');
   } catch (e) {
     console.error('Unshare failed:', e);
