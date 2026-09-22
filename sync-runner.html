@@ -112,12 +112,23 @@ function statusCard(r) {
       <span class="thin">This run only checked quantities. Payment status stays frozen at whatever it was on import day.</span></div>`;
   }
   const missing = st.columns_missing || [];
+  /* Three outcomes, not two. "Attempted but rejected" used to render as the
+     success banner, because applied was computed from intent rather than from
+     the HTTP response — so a 401 read as "Updated 11 order(s)" and the only
+     symptom was the next run reporting the very same 11 changes again. */
   const banner = st.dry_run
     ? `<div class="banner warn">DRY RUN — no payment or tracking written.
          <span class="thin">Set <code>DRY_RUN = false</code> in the <strong>Diff Order Status</strong> node to apply.</span></div>`
-    : (st.applied
+    : st.write_error
+      ? `<div class="banner bad">Write REJECTED — nothing was saved.
+           <span class="thin">Grist said: ${esc(st.write_error)}</span>
+           <span class="thin">The run still reports success because <code>Apply Status Updates</code> is set to continue on error. Open that node in n8n for the full response.</span></div>`
+      : st.applied
         ? `<div class="banner good">Updated payment and tracking on ${st.orders_updated} order(s).</div>`
-        : `<div class="banner good">Payment and tracking already matched Shopify — nothing to change.</div>`);
+        : st.attempted
+          ? `<div class="banner bad">${st.orders_updated} change(s) were prepared but the write did not run.
+               <span class="thin">Check the <code>Is Status Dry Run?</code> branch in n8n.</span></div>`
+          : `<div class="banner good">Payment and tracking already matched Shopify — nothing to change.</div>`;
 
   const setup = missing.length
     ? `<div class="banner warn">${missing.length} column(s) missing on Work_Orders, so those fields were skipped.
