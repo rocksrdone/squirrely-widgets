@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payroll Hours</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --done-bg: #EAF3DE;
+  --done-border: #639922;
+  --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif;
+       font-size: 13px; line-height: 1.5; padding: 16px; }
+
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.head-title { font-family: 'Libre Baskerville', serif; font-size: 21px; font-weight: 700; }
+.head-sub { font-size: 11px; color: #8B7D72; margin-bottom: 14px; }
+
+.periodbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.pnav { font-size: 13px; padding: 6px 11px; border-radius: 6px; border: 1px solid var(--rule);
+        background: white; color: var(--ink); cursor: pointer; font-family: 'Inter', sans-serif; line-height: 1; }
+.pnav:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pnav:disabled { opacity: .4; cursor: default; }
+.plabel { font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700; min-width: 190px; text-align: center; }
+.pspacer { flex: 1; }
+
+.banner { border-radius: 7px; padding: 9px 12px; margin-bottom: 10px; font-size: 12px; }
+.banner b { display: block; margin-bottom: 2px; }
+.banner.warn { background: var(--gold-light); color: #7A5518; border: 1px solid var(--gold); }
+.banner.bad  { background: var(--accent-light); color: var(--accent); border: 1px solid var(--accent); }
+.banner.info { background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7; }
+.banner ul { margin: 4px 0 0 16px; }
+.banner li { margin: 1px 0; }
+
+.wcard { background: white; border: 1px solid var(--rule); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+.whead { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; flex-wrap: wrap; }
+.whead:hover { background: var(--paper); }
+.wname { font-family: 'Libre Baskerville', serif; font-size: 16px; font-weight: 700; flex: 1 1 150px; min-width: 0; }
+.wfig { text-align: right; min-width: 78px; }
+.wfig .n { font-family: 'DM Mono', monospace; font-size: 17px; font-weight: 500; }
+.wfig .l { font-size: 9px; color: #8B7D72; text-transform: uppercase; letter-spacing: .05em; }
+.wfig.pay .n { color: var(--done-text); }
+.wchev { font-size: 12px; color: #8B7D72; transition: transform .15s; }
+.wcard.open .wchev { transform: rotate(90deg); }
+.wbody { display: none; border-top: 1px solid var(--warm); padding: 10px 14px 14px; }
+.wcard.open .wbody { display: block; }
+
+table.days { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.days th { font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: #8B7D72; text-align: left; padding: 0 8px 5px 0; border-bottom: 1px solid var(--rule); }
+table.days td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--warm); vertical-align: top; }
+table.days tr:last-child td { border-bottom: none; }
+table.days td.num { font-family: 'DM Mono', monospace; text-align: right; white-space: nowrap; }
+.punch { font-family: 'DM Mono', monospace; font-size: 11px; color: #6B5E52; }
+.punch .flag { color: var(--accent); font-weight: 600; }
+.wkrow td { background: var(--paper); font-weight: 600; font-size: 11px; }
+.wkrow td.num { font-family: 'DM Mono', monospace; }
+.wkrow.over td { background: var(--gold-light); color: #7A5518; }
+
+.totals { display: flex; align-items: center; gap: 14px; padding: 12px 14px; background: white;
+  border: 1px solid var(--rule); border-radius: 10px; flex-wrap: wrap; }
+.totals .lbl { font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700; flex: 1; }
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.abtn { font-size: 12px; padding: 7px 13px; border-radius: 6px; border: 1px solid var(--rule);
+        background: white; color: var(--ink); cursor: pointer; font-family: 'Inter', sans-serif; }
+.abtn:hover { border-color: var(--accent); color: var(--accent); }
+
+.empty { color: #8B7D72; font-style: italic; padding: 18px 0; text-align: center; }
+.foot { font-size: 10px; color: #8B7D72; margin-top: 14px; line-height: 1.6; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink);
+  color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0;
+  pointer-events: none; transition: opacity .2s; z-index: 999; }
+.toast.show { opacity: 1; }
+
+@media print {
+  body { background: white; padding: 0; }
+  .periodbar, .actions, .toast { display: none !important; }
+  .wbody { display: block !important; }
+  .wcard, .totals { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="head-title">Payroll Hours</div>
+  <button class="abtn" id="reloadBtn">&#8635; Reload</button>
+</div>
+<div class="head-sub" id="headSub">Loading&hellip;</div>
+
+<div class="periodbar">
+  <button class="pnav" id="prevBtn" title="Previous pay period">&#9664;</button>
+  <span class="plabel" id="periodLabel"></span>
+  <button class="pnav" id="nextBtn" title="Next pay period">&#9654;</button>
+  <button class="pnav" id="todayBtn">Current period</button>
+  <span class="pspacer"></span>
+</div>
+
+<div id="banners"></div>
+<div id="workers"></div>
+<div id="totals"></div>
+
+<div class="actions">
+  <button class="abtn" id="copyBtn">&#10697; Copy summary</button>
+  <button class="abtn" id="printBtn">&#128424; Print</button>
+</div>
+
+<div class="foot" id="foot"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Payroll hours, semi-monthly ───────────────────────────────────────────
+   Reads Workers and Time_Clock and totals real clock-in-to-clock-out time for
+   one pay period. No rounding: exact minutes, which is the always-defensible
+   choice and what was asked for.
+
+   Pay periods are the 1st–15th and the 16th–end of each month.
+
+   OVERTIME: no 1.5x rate is applied, because these hours are not expected to
+   pass 40 in a week. That expectation is CHECKED rather than assumed — hours
+   are also totalled per workweek (Sunday–Saturday) and any week over 40 raises
+   a banner. A semi-monthly period cuts across workweeks, so a week straddling
+   the 15th/16th is counted from its own punches across both halves, not from
+   the half being displayed. Getting that wrong is how a real overtime week
+   hides in plain sight.
+
+   This is a view of hours and gross pay. It is not a payroll system: nothing
+   here withholds tax, files anything, or knows about deductions. */
+
+const PERIOD_ATTRIBUTION = 'clock-in';   // a shift is counted in the period its clock-in falls in
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, cands) {
+  const keys = Object.keys(t);
+  for (const c of cands) {
+    const target = c.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === target);
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId || null;
+  return null;
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+/* Grist DateTime columns are epoch SECONDS in this document (the time clock
+   writes Math.floor(Date.now()/1000)). Tolerate milliseconds anyway — a value
+   past ~2001 in seconds terms is unmistakably milliseconds, and silently
+   treating ms as seconds would put a punch in the year 56000. */
+function toEpochSec(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date) { const n = Math.floor(v.getTime() / 1000); return isFinite(n) ? n : null; }
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return null;
+  return n > 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+}
+
+const MONTHS = ['January','February','March','April','May','June',
+                'July','August','September','October','November','December'];
+
+// ── semi-monthly period maths ───────────────────────────────────────────────
+function periodOf(date) {
+  return { y: date.getFullYear(), m: date.getMonth(), half: date.getDate() <= 15 ? 1 : 2 };
+}
+function periodStart(p) { return new Date(p.y, p.m, p.half === 1 ? 1 : 16, 0, 0, 0, 0); }
+function periodEndExclusive(p) {
+  return p.half === 1 ? new Date(p.y, p.m, 16, 0, 0, 0, 0) : new Date(p.y, p.m + 1, 1, 0, 0, 0, 0);
+}
+function periodShift(p, delta) {
+  let idx = p.y * 24 + p.m * 2 + (p.half - 1) + delta;
+  const y = Math.floor(idx / 24); idx -= y * 24;
+  return { y, m: Math.floor(idx / 2), half: (idx % 2) + 1 };
+}
+function periodLabel(p) {
+  const endIncl = new Date(periodEndExclusive(p).getTime() - 1);
+  return `${MONTHS[p.m]} ${p.half === 1 ? 1 : 16}–${endIncl.getDate()}, ${p.y}`;
+}
+function periodKeyNum(p) { return p.y * 24 + p.m * 2 + (p.half - 1); }
+
+function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function startOfWeek(d) { const x = startOfDay(d); x.setDate(x.getDate() - x.getDay()); return x; }  // Sunday
+function dayKey(d) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
+function fmtDay(d) { return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); }
+function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+function hrs(sec) { return sec / 3600; }
+function fmtHours(sec) { return hrs(sec).toFixed(2); }
+function fmtMoney(n) { return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+
+// A punch longer than this almost certainly means someone forgot to clock out.
+const LONG_SHIFT_HOURS = 16;
+
+let workers = [];     // {id, name, rate}
+let punches = [];     // {id, workerId, inSec, outSec}
+let rateCol = null;
+let period = periodOf(new Date());
+let openCards = new Set();
+
+async function loadEverything() {
+  document.getElementById('headSub').textContent = 'Loading…';
+  try {
+    const [wt, ct] = await Promise.all([
+      grist.docApi.fetchTable('Workers'),
+      grist.docApi.fetchTable('Time_Clock'),
+    ]);
+
+    const nameCol = findColumn(wt, ['Name', 'Worker_Name', 'Full_Name']) || 'Name';
+    rateCol = findColumn(wt, ['Pay_Rate', 'Hourly_Rate', 'Rate', 'Wage']);
+    workers = (wt.id || []).map((id, i) => ({
+      id,
+      name: columnAsArray(wt, nameCol)[i],
+      rate: rateCol ? Number(columnAsArray(wt, rateCol)[i]) || 0 : 0,
+    })).filter(w => w.name);
+
+    const inCol  = findColumn(ct, ['Clock_In'])  || 'Clock_In';
+    const outCol = findColumn(ct, ['Clock_Out']) || 'Clock_Out';
+    const wCol   = findColumn(ct, ['Worker'])    || 'Worker';
+    punches = (ct.id || []).map((id, i) => ({
+      id,
+      workerId: getRefId(columnAsArray(ct, wCol)[i]),
+      inSec: toEpochSec(columnAsArray(ct, inCol)[i]),
+      outSec: toEpochSec(columnAsArray(ct, outCol)[i]),
+    })).filter(p => p.inSec && p.workerId);
+
+    document.getElementById('headSub').textContent =
+      `${workers.length} worker${workers.length === 1 ? '' : 's'} · ${punches.length} punch${punches.length === 1 ? '' : 'es'} on record · semi-monthly, exact minutes`;
+    render();
+  } catch (e) {
+    console.error('Load failed:', e);
+    document.getElementById('headSub').textContent = 'Failed to load — check the Workers and Time_Clock tables exist.';
+    document.getElementById('banners').innerHTML =
+      `<div class="banner bad"><b>Could not read Grist</b>${esc(e && e.message ? e.message : String(e))}</div>`;
+  }
+}
+
+// Every punch belonging to one worker that starts inside the period.
+function punchesFor(workerId, p) {
+  const s = periodStart(p).getTime() / 1000;
+  const e = periodEndExclusive(p).getTime() / 1000;
+  return punches
+    .filter(x => x.workerId === workerId && x.inSec >= s && x.inSec < e)
+    .sort((a, b) => a.inSec - b.inSec);
+}
+
+/* One punch, classified. `paid` seconds are only ever counted for a punch that
+   has both ends and runs forwards — an open or broken punch contributes zero
+   and is reported instead, because a half-finished record must never quietly
+   become an amount of money. */
+function classify(p) {
+  if (!p.outSec) return { kind: 'open', paid: 0 };
+  const dur = p.outSec - p.inSec;
+  if (dur < 0) return { kind: 'reversed', paid: 0, dur };
+  if (dur === 0) return { kind: 'zero', paid: 0, dur };
+  if (hrs(dur) > LONG_SHIFT_HOURS) return { kind: 'long', paid: dur, dur };
+  return { kind: 'ok', paid: dur, dur };
+}
+
+/* Workweek totals are computed from ALL punches, not just this period's, so a
+   week straddling the 15th/16th is judged whole. Only weeks that overlap the
+   displayed period are returned. */
+function weekTotals(workerId, p) {
+  const ps = periodStart(p), pe = periodEndExclusive(p);
+  const byWeek = new Map();
+  punches.filter(x => x.workerId === workerId).forEach(x => {
+    const d = new Date(x.inSec * 1000);
+    const wk = startOfWeek(d);
+    const key = wk.getTime();
+    const c = classify(x);
+    const cur = byWeek.get(key) || { start: wk, sec: 0 };
+    cur.sec += c.paid;
+    byWeek.set(key, cur);
+  });
+  const out = [];
+  byWeek.forEach(v => {
+    const wkEnd = new Date(v.start.getTime()); wkEnd.setDate(wkEnd.getDate() + 7);
+    if (wkEnd > ps && v.start < pe) out.push(v);
+  });
+  return out.sort((a, b) => a.start - b.start);
+}
+
+function summarise(w, p) {
+  const list = punchesFor(w.id, p);
+  const days = new Map();
+  let paidSec = 0;
+  const issues = [];
+
+  list.forEach(x => {
+    const c = classify(x);
+    const d = new Date(x.inSec * 1000);
+    const k = dayKey(d);
+    const day = days.get(k) || { date: startOfDay(d), sec: 0, rows: [] };
+    day.sec += c.paid;
+    day.rows.push({ punch: x, cls: c });
+    days.set(k, day);
+    paidSec += c.paid;
+    if (c.kind === 'open')     issues.push({ kind: 'open', date: d, punch: x });
+    if (c.kind === 'reversed') issues.push({ kind: 'reversed', date: d, punch: x });
+    if (c.kind === 'zero')     issues.push({ kind: 'zero', date: d, punch: x });
+    if (c.kind === 'long')     issues.push({ kind: 'long', date: d, punch: x, hours: hrs(c.dur) });
+  });
+
+  const weeks = weekTotals(w.id, p);
+  const overWeeks = weeks.filter(v => hrs(v.sec) > 40);
+
+  return {
+    worker: w,
+    days: [...days.values()].sort((a, b) => a.date - b.date),
+    paidSec,
+    hours: hrs(paidSec),
+    pay: hrs(paidSec) * (w.rate || 0),
+    issues,
+    weeks,
+    overWeeks,
+  };
+}
+
+function render() {
+  document.getElementById('periodLabel').textContent = periodLabel(period);
+  const cur = periodOf(new Date());
+  document.getElementById('nextBtn').disabled = periodKeyNum(period) >= periodKeyNum(cur);
+
+  const sums = workers.map(w => summarise(w, period));
+  renderBanners(sums);
+  renderWorkers(sums);
+  renderTotals(sums);
+  renderFoot();
+}
+
+function renderBanners(sums) {
+  const out = [];
+
+  if (!rateCol) {
+    out.push(`<div class="banner bad"><b>No pay rate column on Workers</b>
+      Hours are correct below, but pay can't be calculated. Add a Numeric column called
+      <b>Pay_Rate</b> to the Workers table and put each person's hourly rate in it.</div>`);
+  } else {
+    const noRate = workers.filter(w => !w.rate);
+    if (noRate.length) {
+      out.push(`<div class="banner warn"><b>No rate set for ${noRate.map(w => esc(w.name)).join(', ')}</b>
+        Their hours are counted but their pay shows as $0.00 until Pay_Rate is filled in.</div>`);
+    }
+  }
+
+  const over = sums.filter(s => s.overWeeks.length);
+  if (over.length) {
+    out.push(`<div class="banner bad"><b>&#9650; A workweek went over 40 hours</b>
+      This view applies no overtime rate, so the figures below are straight time and are
+      <b>too low</b> for these weeks. Non-exempt hourly employees are generally owed 1.5&times;
+      for hours past 40 in a workweek.
+      <ul>${over.map(s => s.overWeeks.map(v =>
+        `<li>${esc(s.worker.name)} &mdash; week of ${esc(fmtDay(v.start))}: <b>${fmtHours(v.sec)} h</b>
+         (${(hrs(v.sec) - 40).toFixed(2)} h over)</li>`).join('')).join('')}</ul></div>`);
+  }
+
+  const openOnes = sums.filter(s => s.issues.some(i => i.kind === 'open'));
+  if (openOnes.length) {
+    out.push(`<div class="banner warn"><b>Unfinished punches — not counted</b>
+      Someone clocked in and never clocked out. These contribute <b>zero</b> hours rather than
+      a guess, so the totals below are short until they're corrected in the Time_Clock table.
+      <ul>${openOnes.map(s => s.issues.filter(i => i.kind === 'open').map(i =>
+        `<li>${esc(s.worker.name)} &mdash; ${esc(fmtDay(i.date))} at ${esc(fmtTime(i.date))}</li>`).join('')).join('')}</ul></div>`);
+  }
+
+  const broken = sums.filter(s => s.issues.some(i => i.kind === 'reversed' || i.kind === 'zero'));
+  if (broken.length) {
+    out.push(`<div class="banner bad"><b>Broken punches — not counted</b>
+      <ul>${broken.map(s => s.issues.filter(i => i.kind === 'reversed' || i.kind === 'zero').map(i =>
+        `<li>${esc(s.worker.name)} &mdash; ${esc(fmtDay(i.date))}: clock-out is
+         ${i.kind === 'zero' ? 'the same as' : 'before'} clock-in</li>`).join('')).join('')}</ul></div>`);
+  }
+
+  const longs = sums.filter(s => s.issues.some(i => i.kind === 'long'));
+  if (longs.length) {
+    out.push(`<div class="banner warn"><b>Unusually long shifts — counted, but check them</b>
+      Over ${LONG_SHIFT_HOURS} hours in one punch usually means a missed clock-out.
+      <ul>${longs.map(s => s.issues.filter(i => i.kind === 'long').map(i =>
+        `<li>${esc(s.worker.name)} &mdash; ${esc(fmtDay(i.date))}: <b>${i.hours.toFixed(1)} h</b></li>`).join('')).join('')}</ul></div>`);
+  }
+
+  document.getElementById('banners').innerHTML = out.join('');
+}
+
+function renderWorkers(sums) {
+  const wrap = document.getElementById('workers');
+  if (!sums.length) { wrap.innerHTML = `<div class="empty">No workers in the Workers table.</div>`; return; }
+
+  wrap.innerHTML = sums.map(s => {
+    const open = openCards.has(s.worker.id);
+    const rateLabel = s.worker.rate ? fmtMoney(s.worker.rate) + '/h' : '—';
+    return `
+      <div class="wcard ${open ? 'open' : ''}">
+        <div class="whead" data-worker="${s.worker.id}">
+          <span class="wname">${esc(s.worker.name)}</span>
+          <span class="wfig"><span class="n">${fmtHours(s.paidSec)}</span><span class="l">Hours</span></span>
+          <span class="wfig"><span class="n">${esc(rateLabel)}</span><span class="l">Rate</span></span>
+          <span class="wfig pay"><span class="n">${fmtMoney(s.pay)}</span><span class="l">Gross</span></span>
+          <span class="wchev">&#9656;</span>
+        </div>
+        <div class="wbody">${dayTableHTML(s)}</div>
+      </div>`;
+  }).join('');
+
+  wrap.querySelectorAll('.whead').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.worker);
+      if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
+      render();
+    });
+  });
+}
+
+function dayTableHTML(s) {
+  if (!s.days.length) return `<div class="empty">No punches in this period.</div>`;
+
+  // Insert a subtotal row whenever the workweek changes, so a straddling week
+  // is visible rather than implied.
+  let lastWeek = null;
+  const rows = [];
+  s.days.forEach(d => {
+    const wk = startOfWeek(d.date).getTime();
+    if (wk !== lastWeek) {
+      const wt = s.weeks.find(v => v.start.getTime() === wk);
+      if (wt) {
+        const over = hrs(wt.sec) > 40;
+        rows.push(`<tr class="wkrow ${over ? 'over' : ''}">
+          <td colspan="2">Week of ${esc(fmtDay(wt.start))}${over ? ' &mdash; over 40 h' : ''}</td>
+          <td class="num">${fmtHours(wt.sec)} h</td></tr>`);
+      }
+      lastWeek = wk;
+    }
+    rows.push(`<tr>
+      <td>${esc(fmtDay(d.date))}</td>
+      <td class="punch">${d.rows.map(r => punchLabel(r)).join('<br>')}</td>
+      <td class="num">${fmtHours(d.sec)}</td>
+    </tr>`);
+  });
+
+  return `<table class="days">
+    <thead><tr><th style="width:34%">Day</th><th>Punches</th><th style="text-align:right">Hours</th></tr></thead>
+    <tbody>${rows.join('')}</tbody></table>`;
+}
+
+function punchLabel(r) {
+  const i = new Date(r.punch.inSec * 1000);
+  const o = r.punch.outSec ? new Date(r.punch.outSec * 1000) : null;
+  const base = `${esc(fmtTime(i))} – ${o ? esc(fmtTime(o)) : '—'}`;
+  if (r.cls.kind === 'open')     return `${base} <span class="flag">open, not counted</span>`;
+  if (r.cls.kind === 'reversed') return `${base} <span class="flag">out before in, not counted</span>`;
+  if (r.cls.kind === 'zero')     return `${base} <span class="flag">zero length, not counted</span>`;
+  if (r.cls.kind === 'long')     return `${base} <span class="flag">${hrs(r.cls.dur).toFixed(1)} h — check</span>`;
+  return base;
+}
+
+function renderTotals(sums) {
+  const hoursSec = sums.reduce((a, s) => a + s.paidSec, 0);
+  const pay = sums.reduce((a, s) => a + s.pay, 0);
+  document.getElementById('totals').innerHTML = `
+    <div class="totals">
+      <span class="lbl">Period total</span>
+      <span class="wfig"><span class="n">${fmtHours(hoursSec)}</span><span class="l">Hours</span></span>
+      <span class="wfig pay"><span class="n">${fmtMoney(pay)}</span><span class="l">Gross</span></span>
+    </div>`;
+}
+
+function renderFoot() {
+  document.getElementById('foot').innerHTML =
+    `Pay periods run the 1st&ndash;15th and the 16th&ndash;end of the month. A shift is counted in the
+     period its <b>clock-in</b> falls in, so a shift crossing midnight on the 15th belongs to the first half.
+     Hours are exact clock-in to clock-out with no rounding. Workweeks run Sunday&ndash;Saturday and are
+     totalled from all punches, including ones outside this period.
+     <br>This is a view of hours and gross pay &mdash; it does not withhold tax or file anything.`;
+}
+
+function copySummary() {
+  const sums = workers.map(w => summarise(w, period));
+  const lines = [`Payroll hours — ${periodLabel(period)}`, ''];
+  sums.forEach(s => {
+    lines.push(`${s.worker.name}\t${fmtHours(s.paidSec)} h\t${s.worker.rate ? fmtMoney(s.worker.rate) + '/h' : 'no rate'}\t${fmtMoney(s.pay)}`);
+  });
+  lines.push('');
+  lines.push(`TOTAL\t${fmtHours(sums.reduce((a, s) => a + s.paidSec, 0))} h\t\t${fmtMoney(sums.reduce((a, s) => a + s.pay, 0))}`);
+  const problems = sums.filter(s => s.issues.length || s.overWeeks.length);
+  if (problems.length) {
+    lines.push('');
+    lines.push('NEEDS ATTENTION:');
+    problems.forEach(s => {
+      s.overWeeks.forEach(v => lines.push(`  ${s.worker.name}: week of ${fmtDay(v.start)} = ${fmtHours(v.sec)} h (over 40)`));
+      s.issues.forEach(i => lines.push(`  ${s.worker.name}: ${fmtDay(i.date)} ${i.kind} punch`));
+    });
+  }
+  const text = lines.join('\n');
+  const done = () => showToast('Summary copied');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  } else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); }
+  catch (e) { showToast('Could not copy — select the text by hand'); }
+  finally { document.body.removeChild(ta); }
+}
+
+document.getElementById('prevBtn').addEventListener('click', () => { period = periodShift(period, -1); render(); });
+document.getElementById('nextBtn').addEventListener('click', () => { period = periodShift(period, 1); render(); });
+document.getElementById('todayBtn').addEventListener('click', () => { period = periodOf(new Date()); render(); });
+document.getElementById('reloadBtn').addEventListener('click', loadEverything);
+document.getElementById('copyBtn').addEventListener('click', copySummary);
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+
+// ── GRIST INTEGRATION ──
+grist.ready({ requiredAccess: 'full' });
+loadEverything();
+</script>
+</body>
+</html>
