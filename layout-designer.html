@@ -52,8 +52,50 @@
   .layout-grid { display: grid; grid-template-columns: 420px 1fr; gap: 20px; }
   @media (max-width: 800px) { .layout-grid { grid-template-columns: 1fr; } }
 
-  .ring-wrap { display: flex; flex-direction: column; align-items: center; }
+  .ring-wrap { display: flex; flex-direction: column; align-items: center; position: relative; }
   .ring-wrap svg { width: 100%; height: auto; display: block; touch-action: none; }
+
+  /* Rotate arrows sit ON the ring, vertically centred on it. Absolutely
+     positioned so they cost no vertical space — the whole point was not having
+     to scroll away from the circle to nudge it. */
+  .ring-rot {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 1px solid var(--rule); background: rgba(255,255,255,.92);
+    color: #6B5E52; cursor: pointer; font-size: 15px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0; z-index: 3; box-shadow: 0 1px 3px rgba(0,0,0,.10);
+  }
+  .ring-rot:hover { border-color: var(--accent); color: var(--accent); background: #fff; }
+  .ring-rot.left  { left: -4px; }
+  .ring-rot.right { right: -4px; }
+
+  /* Always-visible dye palette, directly under the ring. It used to live inside
+     the "Selected segment" panel, three panels down the right column, so
+     painting a 12-section layout meant scrolling for every single segment. */
+  .pal-strip { width: 100%; margin-top: 8px; }
+  .pal-strip .pal-cap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pal-strip .pal-row { margin-top: 4px; }
+  .pal-strip.idle .pal-row { opacity: .5; }
+  .pal-hint { font-size: 10px; color: #8B7D72; font-style: italic; text-transform: none; letter-spacing: 0; }
+  .pal-sw .pal-key { font-family: 'DM Mono', monospace; font-size: 9px; color: #A89A8C; }
+
+  .photos-head { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 10px; }
+  .photos-toggle {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72;
+    background: none; border: none; cursor: pointer; padding: 2px 0;
+    font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 5px;
+  }
+  .photos-toggle:hover { color: var(--accent); }
+  .photos-toggle .chev { transition: transform .15s; display: inline-block; }
+  .photos-toggle.collapsed .chev { transform: rotate(-90deg); }
+
+  /* One compact tools block instead of three stacked panels. */
+  .tool-row { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; flex-wrap: wrap; }
+  .tool-row:last-child { margin-bottom: 0; }
+  .tool-row .field-input { width: 52px; }
+  .tool-row .btn { padding: 5px 9px; font-size: 12px; }
+  .tool-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 42px; }
 
   .legend { display: flex; gap: 10px; margin-top: 6px; font-size: 11px; color: #6B5E52; }
   /* Linear read of the ring. The wedges have to abbreviate to fit; this does not,
@@ -158,44 +200,45 @@
 <div id="content" style="display:none">
   <div class="top-bar">
     <div class="recipe-title" id="recipeTitle"></div>
+    <button class="btn" id="refreshBtn" onclick="refreshFromGrist()" title="Re-read the recipe, its dyes and the Dyes table — use after adding a new dye in the recipe builder">↻ Refresh</button>
     <button class="btn btn-primary" id="saveBtn" onclick="saveLayout()">💾 Save</button>
   </div>
 
   <div class="layout-grid">
     <div class="ring-wrap">
+      <button class="ring-rot left" onclick="rotateByStep(-1)" title="Rotate the whole layout left">↺</button>
+      <button class="ring-rot right" onclick="rotateByStep(1)" title="Rotate the whole layout right">↻</button>
       <svg id="ringSvg" viewBox="0 0 400 400" width="400" height="400"></svg>
       <div class="legend">
         <span><span class="legend-dot" style="background:#C8A020"></span>Overlay layer (outer ring)</span>
         <span><span class="legend-dot" style="background:#888780"></span>Base layer</span>
       </div>
       <div id="sequenceStrip"></div>
+      <div class="pal-strip" id="paletteStrip"></div>
+      <div class="photos-head" id="photosHead" style="display:none">
+        <button class="photos-toggle" id="photosToggle" onclick="togglePhotos()"><span class="chev">▾</span><span id="photosToggleLabel">Photos</span></button>
+      </div>
       <div id="stepPhotosWrap"></div>
     </div>
 
     <div>
       <div class="panel-section">
-        <div class="panel-title">Quick start</div>
-        <button class="btn" onclick="fillFromRecipe()" style="width:100%;margin-bottom:8px;">Fill one section per dye in this recipe</button>
-        <div class="repeat-row">
-          <input class="field-input" type="number" id="sectionCount" value="4" min="1" max="24">
-          <button class="btn" onclick="createEqualSections()" title="Replaces the layout with evenly-sized blank sections">Start with this many equal sections</button>
+        <div class="panel-title">Build</div>
+        <div class="tool-row">
+          <span class="tool-lbl">Start</span>
+          <input class="field-input" type="number" id="sectionCount" value="4" min="1" max="24" title="How many equal sections to start from">
+          <button class="btn" onclick="createEqualSections()" title="Replaces the layout with this many evenly-sized blank sections">Equal</button>
+          <button class="btn" onclick="fillFromRecipe()" title="One section per dye in this recipe, in dye order">One per dye</button>
         </div>
-      </div>
-
-      <div class="panel-section">
-        <div class="panel-title">Rotate whole layout</div>
-        <div class="repeat-row">
-          <button class="btn" onclick="rotateLayout(-Number(document.getElementById('rotateStep').value))" style="flex:1" title="Spins everything together, order and widths unchanged">↺ Rotate left</button>
-          <input class="field-input" type="number" id="rotateStep" value="15" min="1" max="180" style="width:70px">
-          <button class="btn" onclick="rotateLayout(Number(document.getElementById('rotateStep').value))" style="flex:1" title="Spins everything together, order and widths unchanged">Rotate right ↻</button>
+        <div class="tool-row">
+          <span class="tool-lbl">Repeat</span>
+          <input class="field-input" type="number" id="repeatCount" value="1" min="1" max="12" title="How many times to tile the current pattern">
+          <button class="btn" onclick="applyRepeat()" title="Build one repeat spanning the full circle, then tile it this many times">Tile ×</button>
         </div>
-      </div>
-
-      <div class="panel-section">
-        <div class="panel-title">Base layer — repeat pattern</div>
-        <div class="repeat-row">
-          <input class="field-input" type="number" id="repeatCount" value="1" min="1" max="12">
-          <button class="btn" onclick="applyRepeat()" title="Build one repeat spanning the full circle, then tile it this many times">Repeat current pattern this many times</button>
+        <div class="tool-row">
+          <span class="tool-lbl">Rotate</span>
+          <input class="field-input" type="number" id="rotateStep" value="15" min="1" max="180" title="Degrees per click of the ↺ ↻ arrows on the ring">
+          <span class="pal-hint">degrees — use the ↺ ↻ arrows on the ring</span>
         </div>
       </div>
 
@@ -685,15 +728,42 @@ async function loadLayout(record) {
   if (autoFilledLayout) markUnsaved();
 }
 
+/* Reference photos are useful while matching a colour and in the way the rest
+   of the time, so they collapse. Collapsed means NOT RENDERED, not hidden with
+   CSS: each one is a photo2 webhook call, and a display:none <img> still
+   fetches. The choice sticks for the session. */
+let photosCollapsed = false;
+
+function togglePhotos() {
+  photosCollapsed = !photosCollapsed;
+  renderSummary();
+}
+
 function renderStepPhotos(photoItems) {
   const wrap = document.getElementById('stepPhotosWrap');
-  if (!photoItems.length) { wrap.innerHTML = ''; return; }
+  const head = document.getElementById('photosHead');
+  const btn = document.getElementById('photosToggle');
+  const lbl = document.getElementById('photosToggleLabel');
+
+  if (!photoItems.length) {
+    wrap.innerHTML = '';
+    if (head) head.style.display = 'none';
+    return;
+  }
+
+  if (head) head.style.display = 'flex';
+  if (btn) btn.classList.toggle('collapsed', photosCollapsed);
+  if (lbl) lbl.textContent = photosCollapsed
+    ? `Photos (${photoItems.length}) — show`
+    : `Photos (${photoItems.length}) — hide`;
+
+  if (photosCollapsed) { wrap.innerHTML = ''; return; }
 
   wrap.innerHTML = `
     <div class="step-photos-row">
       ${photoItems.map(p => `
         <div class="step-photo">
-          <img src="${p.url}" alt="${esc(p.label)}" onclick="window.open('${p.url}', '_blank')" onerror="this.parentElement.style.display='none'">
+          <img src="${esc(p.url)}" alt="${esc(p.label)}" onclick="window.open('${esc(p.url)}', '_blank')" onerror="this.parentElement.style.display='none'">
           <div class="step-photo-label">${esc(p.label)}</div>
         </div>
       `).join('')}
@@ -798,6 +868,9 @@ function renderRing() {
 
   svg.innerHTML = html;
   renderSequenceStrip();
+  // The strip's highlight follows the selection and its contents follow the
+  // dyes in use, so it is refreshed wherever the ring is.
+  renderPaletteStrip();
 }
 
 // The ring reads as a picture; this reads as a sentence. Same segments, same
@@ -984,8 +1057,79 @@ function applyPalette(clientKey, idx) {
   seg.dyeName = p.name;
   seg.dilution = p.dilution || '';
   markUnsaved();
-  renderRing();
+  renderRing();          // also refreshes the palette strip
   renderSegmentEditor();
+}
+
+/* The palette as a permanent strip under the ring.
+   Same data and same click behaviour as the old in-panel version; it just no
+   longer requires scrolling past three panels for every segment. Painting a
+   hand-built layout is click segment, click colour, click segment, click
+   colour — both targets now sit in the same place on screen.
+
+   Rendered even with nothing selected, greyed out, so the row of colours does
+   not appear and disappear and shift the page under the cursor. */
+function renderPaletteStrip() {
+  const wrap = document.getElementById('paletteStrip');
+  if (!wrap) return;
+  const list = palette();
+  if (!list.length) { wrap.innerHTML = ''; return; }
+
+  const seg = selectedSegmentKey
+    ? baseSegments.find(s => s.clientKey === selectedSegmentKey)
+    : null;
+  const cur = seg ? normalize(seg.dyeName || '') + '|' + normalize(seg.dilution || '') : null;
+
+  wrap.className = 'pal-strip' + (seg ? '' : ' idle');
+  wrap.innerHTML = `
+    <div class="pal-cap">Recipe dyes
+      <span class="pal-hint">${seg
+        ? 'click to set the selected segment' + (list.length <= 9 ? ' · or press 1–' + list.length : '')
+        : 'click a segment on the ring first'}</span>
+    </div>
+    <div class="pal-row">
+      ${list.map((p, i) => {
+        const key = normalize(p.name) + '|' + normalize(p.dilution);
+        const st = dilutionStrength(p.dilution);
+        const fill = tintForStrength(guessColor(p.name), st);
+        const dil = p.dilution && dilutionChoicesFor(p.name).length
+          ? `<span class="pal-dil">${esc(p.dilution)}</span>` : '';
+        const num = i < 9 ? `<span class="pal-key">${i + 1}</span>` : '';
+        return `<button class="pal-sw${key === cur ? ' on' : ''}"
+          title="${esc(p.name)}${p.dilution ? ' · ' + esc(p.dilution) : ''}"
+          onclick="applyPaletteToSelected(${i})">
+          <span class="pal-chip" style="background:${fill}"></span>
+          <span class="pal-nm">${esc(abbreviateLabel(p.name, 60))}</span>${dil}${num}</button>`;
+      }).join('')}
+    </div>`;
+}
+
+function applyPaletteToSelected(idx) {
+  if (!selectedSegmentKey) { showToast('Click a segment on the ring first'); return; }
+  applyPalette(selectedSegmentKey, idx);
+}
+
+/* Number keys assign the nth recipe dye to the selected segment. Ignored while
+   a field has focus, so typing 3 into "equal sections" does not repaint a
+   segment. */
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (!selectedSegmentKey) return;
+  const n = Number(e.key);
+  if (!Number.isInteger(n) || n < 1 || n > 9) return;
+  const list = palette();
+  if (n > list.length) return;
+  e.preventDefault();
+  applyPalette(selectedSegmentKey, n - 1);
+});
+
+// The ↺ ↻ buttons on the ring itself. Degrees come from the Rotate field.
+function rotateByStep(dir) {
+  const el = document.getElementById('rotateStep');
+  const step = Math.abs(Number(el && el.value)) || 15;
+  rotateLayout(dir * step);
 }
 
 /* Split the selected segment into n equal parts in one go. Building an uneven
@@ -1018,7 +1162,6 @@ function renderSegmentEditor() {
     const seg = baseSegments.find(s => s.clientKey === selectedSegmentKey);
     if (!seg) { wrap.innerHTML = `<div class="no-selection">Click a segment on the ring to edit it.</div>`; return; }
     wrap.innerHTML = `
-      ${paletteHtml(seg)}
       <div class="field-row">
         <span class="field-label">Split into</span>
         <div class="btn-row">
@@ -1556,6 +1699,54 @@ async function saveLayout() {
   } finally {
     btn.disabled = false;
     btn.textContent = '💾 Save';
+  }
+}
+
+/* Manual refresh.
+   A dye added in the recipe builder did not show up here without reloading the
+   whole page, and the reason is loadDyesList(): it returns early whenever
+   allDyes is already populated, so the Dyes table is read exactly once per page
+   load. Recipe_Dye_Components stores Dye_Name as a Ref into that table, so a
+   brand-new dye resolved to an empty name and never reached the palette.
+
+   Clearing the cache is therefore the whole point of this button — refreshing
+   without it would look like it worked and still miss new colours. */
+async function refreshFromGrist() {
+  if (!currentRecipeId) return;
+  if (unsavedChanges && !confirm(
+    'You have unsaved ring edits.\n\nRefreshing reloads the layout from Grist and discards them. Continue?'
+  )) return;
+
+  const btn = document.getElementById('refreshBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    allDyes = [];                 // force the Dyes table to be read again
+    let record = currentRecipeRecord || { id: currentRecipeId };
+    // Re-read the recipe row too, so a renamed colourway or a newly filed photo
+    // turns up as well — not just the dyes.
+    try {
+      const recs = await grist.docApi.fetchTable('Recipes');
+      const idx = (recs.id || []).indexOf(currentRecipeId);
+      if (idx !== -1) {
+        const fresh = { id: currentRecipeId };
+        Object.keys(recs).forEach(col => {
+          if (col === 'id') return;
+          const arr = recs[col];
+          if (Array.isArray(arr)) fresh[col] = arr[idx];
+        });
+        record = fresh;
+      }
+    } catch (e) {
+      console.warn('Could not re-read Recipes; refreshing dyes only.', e);
+    }
+    unsavedChanges = false;       // loadLayout() would otherwise be skipped by onRecord
+    await loadLayout(record);
+    showToast('Refreshed from Grist');
+  } catch (e) {
+    console.error('Refresh failed:', e);
+    showToast('Refresh failed — see console');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
   }
 }
 
