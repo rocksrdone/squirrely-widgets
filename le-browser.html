@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LE Browser</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --star: #C8A020;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+}
+
+/* ── header ── */
+.hdr { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 3px; }
+.hdr-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.hdr-sub { font-size: 12px; color: #6B5E52; }
+.hdr-spacer { flex: 1; }
+.btn {
+  font-family: 'Inter', sans-serif; font-size: 12px; padding: 5px 11px;
+  border: 1px solid var(--rule); border-radius: 5px; background: white;
+  color: var(--ink); cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-primary:hover { background: #73301F; color: white; }
+.intro { font-size: 11px; color: #6B5E52; margin-bottom: 14px; max-width: 760px; }
+
+/* ── setup banner (Listing_Number column missing) ── */
+.setup {
+  border: 1px solid var(--gold); background: var(--gold-light); border-radius: 7px;
+  padding: 11px 13px; margin-bottom: 14px;
+}
+.setup-title { font-weight: 600; margin-bottom: 4px; }
+.setup-body { font-size: 12px; color: #5C4A25; margin-bottom: 8px; }
+
+/* ── filters ── */
+.filters {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end;
+  background: white; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px;
+}
+.fgroup { display: flex; flex-direction: column; gap: 3px; }
+.fgroup.grow { flex: 1; min-width: 180px; }
+.flabel {
+  font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #8B7D72;
+}
+.finput, .fselect {
+  padding: 6px 9px; border: 1px solid var(--rule); border-radius: 5px;
+  font-family: 'Inter', sans-serif; font-size: 13px; background: white; color: var(--ink); outline: none;
+}
+.finput:focus, .fselect:focus { border-color: var(--accent); }
+.finput.num { width: 92px; font-family: 'DM Mono', monospace; }
+.fhint { font-size: 10px; color: #8B7D72; }
+
+/* ── load bar ──
+   Same contract as Photo Gallery and the Product Photo Manager: nothing is
+   fetched on render, the count of what is still unloaded is always visible,
+   and "load all" is a deliberate click rather than the default. */
+.loadbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 7px 10px;
+  background: white; border: 1px solid var(--rule); border-radius: 6px;
+}
+.loadbar-note { font-size: 11px; color: #6B5E52; flex: 1; }
+
+/* ── results ── */
+.group-head {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  margin: 16px 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--rule);
+}
+.group-head:first-of-type { margin-top: 0; }
+.group-num {
+  font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; color: var(--accent);
+}
+.group-note { font-size: 11px; color: #6B5E52; }
+.group-warn { font-size: 11px; color: var(--gold); font-weight: 500; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 12px; }
+.card {
+  border: 1px solid var(--rule); border-radius: 8px; background: white;
+  overflow: hidden; display: flex; flex-direction: column;
+}
+.card.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.card img.lazy-photo {
+  width: 100%; height: 165px; object-fit: contain; display: block;
+  background: var(--warm); padding: 4px; cursor: pointer;
+}
+.card img.lazy-photo:not(.loaded) { opacity: .3; }
+.card img.lazy-photo { transition: opacity .2s; }
+
+/* The image half starts as a button. display:none would not have helped —
+   a hidden <img src> is still fetched, and every fetch is one n8n execution
+   against the photo2 proxy. The element only becomes an <img> when asked for. */
+.pslot-empty {
+  width: 100%; height: 165px; background: var(--warm);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; cursor: pointer; border: none; padding: 8px;
+  font-family: 'Inter', sans-serif; color: #6B5E52; text-align: center;
+}
+.pslot-empty:hover { background: #DDD1C2; color: var(--accent); }
+.pslot-icon { font-size: 19px; opacity: .45; line-height: 1; }
+.pslot-label { font-size: 9px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+.pslot-none {
+  width: 100%; height: 165px; background: var(--warm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #A2958A;
+}
+
+.card-body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.card-code { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+.card-name { font-size: 12px; color: #6B5E52; word-break: break-word; }
+.card-meta { font-size: 11px; color: #8B7D72; }
+.dye-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.dye-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 9px;
+  background: var(--teal-light); color: #23564B; border: 1px solid #B6DBD3;
+}
+.dye-more { font-size: 10px; color: #8B7D72; padding: 1px 2px; }
+.card-notes {
+  font-size: 11px; color: #6B5E52; font-style: italic;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card-foot {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: auto; padding-top: 7px; border-top: 1px solid #EDE5DA;
+}
+.num-input {
+  width: 58px; padding: 3px 6px; border: 1px solid var(--rule); border-radius: 4px;
+  font-family: 'DM Mono', monospace; font-size: 12px; text-align: center;
+  background: white; color: var(--ink); outline: none;
+}
+.num-input:focus { border-color: var(--accent); }
+.num-input.set { background: var(--accent-light); border-color: #D9B6AD; font-weight: 500; }
+.num-label { font-size: 10px; color: #8B7D72; }
+.mini-link {
+  font-size: 11px; color: var(--accent); background: none; border: none;
+  padding: 0; cursor: pointer; text-decoration: underline;
+}
+.mini-link:hover { color: #73301F; }
+a.mini-link { text-decoration: underline; }
+
+.done-state {
+  padding: 26px 16px; text-align: center; color: #8B7D72; font-size: 12px;
+  border: 1px dashed var(--rule); border-radius: 8px; background: white;
+}
+.toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(70px);
+  background: var(--ink); color: var(--paper); padding: 8px 15px; border-radius: 5px;
+  font-size: 12px; opacity: 0; transition: all .25s; pointer-events: none; z-index: 50;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-title">Limited Editions</div>
+  <div class="hdr-sub" id="hdrSub">Loading…</div>
+  <div class="hdr-spacer"></div>
+  <button class="btn" onclick="reload()" id="refreshBtn">Refresh</button>
+</div>
+<div class="intro">
+  Every limited edition, by its store listing number, its colours, or when it was made.
+  A listing slot gets reused, so one number can have had several colourways in it — they are all
+  kept here, newest first, so a customer quoting &ldquo;LE #5&rdquo; can be matched against the one
+  they actually bought.
+</div>
+
+<div id="setupBanner"></div>
+
+<div class="filters">
+  <div class="fgroup">
+    <label class="flabel" for="numBox">Listing #</label>
+    <input class="finput num" id="numBox" placeholder="e.g. 5" inputmode="numeric" autocomplete="off">
+  </div>
+  <div class="fgroup grow">
+    <label class="flabel" for="textBox">Colour / name / notes</label>
+    <input class="finput" id="textBox" placeholder="teal, sunset, gold speckle, a parent name…" autocomplete="off">
+  </div>
+  <div class="fgroup">
+    <label class="flabel" for="whenBox">When made</label>
+    <select class="fselect" id="whenBox"></select>
+  </div>
+  <div class="fgroup">
+    <label class="flabel" for="sortBox">Order</label>
+    <select class="fselect" id="sortBox">
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="number">Listing number</option>
+      <option value="code">LE code</option>
+    </select>
+  </div>
+  <div class="fgroup">
+    <label class="flabel">&nbsp;</label>
+    <button class="btn" onclick="clearFilters()">Clear</button>
+  </div>
+</div>
+
+<div class="loadbar">
+  <span class="loadbar-note" id="loadbarNote">No previews loaded</span>
+  <button class="btn" id="loadAllBtn" onclick="showAllThumbs()" style="display:none">Load all</button>
+  <button class="btn" id="hideAllBtn" onclick="hideAllThumbs()" style="display:none">Hide previews</button>
+</div>
+
+<div id="results"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   LE Browser
+
+   What this is for: a customer comes back and wants the thread from "LE #5",
+   or cannot remember a number at all and only knows it was teal, or that they
+   bought it around last autumn. This widget is the way back from any of those
+   to the recipe.
+
+   Why the store listing number lives on the RECIPE and not in a table of its
+   own. The listing slot is reused — the same "#5" on the store has held
+   several colourways over the years — so the number is not an identity, it is
+   a label a recipe wore for a while. Put it on the recipe and reuse costs
+   nothing: two recipes simply both carry 5, and this widget groups them and
+   dates them, so the whole occupancy history of the slot is still there. A
+   separate LE_Listings table would record the same thing with a join in front
+   of it. The one thing a single column cannot do is say when a slot changed
+   hands — but the recipe dates already say that, near enough to match a
+   customer's "I bought it in the spring".
+
+   This is deliberately NOT the SKU. The SKU code (FFN_SUNSET_LE_2609_01) is
+   dated and permanent and must never be reused; the listing number is reused
+   by design. They answer different questions and are kept apart.
+
+   Photo discipline: nothing is fetched on render. Every preview is one n8n
+   execution against the photo2 proxy, so previews are click-to-load and loaded
+   two at a time, exactly as in Photo Gallery and the Product Photo Manager.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const LISTING_COL_CANDIDATES = ['Listing_Number', 'LE_Number', 'Listing_Slot', 'Store_Listing_Number'];
+const LISTING_COL_DEFAULT = 'Listing_Number';
+
+let allRecipes = [];        // LE recipes only
+let photosByRecipe = {};    // recipeId -> [photo rows]
+let dyesByRecipe = {};      // recipeId -> [dye names]
+let listingCol = null;      // resolved column id on Recipes, or null if absent
+let selectedRecipeId = null;
+let loaded = false;
+
+/* Which previews have been asked for. Survives a re-render and a save, so
+   typing a listing number into a card does not collapse the photo you were
+   looking at to decide the number. Cleared only by "Hide previews". */
+let shownThumbs = new Set();
+
+let filterNum = '';
+let filterText = '';
+let filterWhen = '';
+let sortMode = 'newest';
+
+/* ── shared helpers (kept byte-identical with the other widgets) ── */
+function columnAsArray(tableData, col) {
+  return Array.isArray(tableData[col]) ? tableData[col] : [];
+}
+function rowsFromTableData(tableData, colNames) {
+  const ids = tableData.id || [];
+  return ids.map((id, i) => {
+    const row = { id };
+    colNames.forEach(c => { row[c] = columnAsArray(tableData, c)[i]; });
+    return row;
+  });
+}
+function findColumn(tableData, candidates) {
+  const keys = Object.keys(tableData);
+  for (const cand of candidates) {
+    const hit = keys.find(k => k.toLowerCase() === cand.toLowerCase());
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+/* Word-preserving fold. The strict normalize() used for SKU matching deletes
+   separators, which makes substring tests dangerously loose. Here the user is
+   hunting rather than matching, so separators are kept as spaces: a loose
+   "teal" still finds "Deep Teal", but "rain" no longer matches "Ukraine". */
+function searchKey(s) {
+  return foldAccents((s == null ? '' : s).toString()).toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+/* ── LE identification ──────────────────────────────────────────────────── */
+
+// Scope match is loose on purpose: the column is free text in some rows
+// ("Limited Edition", "limited edition", "LE"), and a recipe wrongly excluded
+// here is a recipe that cannot be found at all.
+function isLeScope(scope) {
+  const s = searchKey(scope);
+  return s === 'le' || s.indexOf('limited') === 0 || s.indexOf('limited edition') >= 0;
+}
+
+/* The dated LE code, pulled back out of the SKU: FFN_SUNSET_LE_2609_01 -> the
+   first LE of September 2026. Accepts the legacy flat form (_LE_17) too, which
+   carries no date — those fall back to Created_Date / Year_Made below. */
+function leCodeFromSku(sku) {
+  const s = String(sku || '');
+  const dated = /_LE_(\d{2})(\d{2})_(\d+)/i.exec(s);
+  if (dated) return { code: `${dated[1]}${dated[2]}_${dated[3]}`, year: 2000 + Number(dated[1]), month: Number(dated[2]) };
+  const flat = /_LE_(\d{1,3})(?!\d)/i.exec(s);
+  if (flat) return { code: flat[1], year: null, month: null };
+  return { code: '', year: null, month: null };
+}
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/* When a recipe was made, in the order the sources can be trusted.
+   The SKU code is first because it was stamped at creation and never edited;
+   Created_Date is a real timestamp but a re-created row carries the wrong one;
+   Year_Made is hand-typed and year-only. Whichever answers, `sortKey` is what
+   orders the list and `label` is what the customer will recognise. */
+function madeWhen(r) {
+  const fromSku = leCodeFromSku(r.SKU_Base);
+  if (fromSku.year && fromSku.month >= 1 && fromSku.month <= 12) {
+    return {
+      year: fromSku.year, month: fromSku.month,
+      sortKey: fromSku.year * 100 + fromSku.month,
+      label: `${MONTH_NAMES[fromSku.month - 1]} ${fromSku.year}`,
+      exact: true,
+    };
+  }
+  const created = Number(r.Created_Date);
+  if (created > 0) {
+    // Grist DateTime columns are epoch SECONDS, not milliseconds.
+    const d = new Date(created * 1000);
+    if (!isNaN(d.getTime())) {
+      return {
+        year: d.getFullYear(), month: d.getMonth() + 1,
+        sortKey: d.getFullYear() * 100 + d.getMonth() + 1,
+        label: `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`,
+        exact: false,
+      };
+    }
+  }
+  const ym = parseInt(String(r.Year_Made || '').replace(/\D/g, ''), 10);
+  if (ym >= 1990 && ym <= 2999) {
+    return { year: ym, month: null, sortKey: ym * 100, label: String(ym), exact: false };
+  }
+  return { year: null, month: null, sortKey: 0, label: 'undated', exact: false };
+}
+
+function listingNumberOf(r) {
+  if (!listingCol) return null;
+  const raw = r[listingCol];
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/* Everything a text search should be able to reach. Dye names matter most:
+   LEs are deliberately named as bare codes so they stay out of colourway
+   searches elsewhere, which means the recipe name tells you nothing here. The
+   dyes are the only place the colour scheme is actually written down. */
+function haystack(r) {
+  const bits = [
+    r.Recipe_Name, r.SKU_Base, r.Notes, r.Layout_Description,
+    r.Draft_Notes, r.Fiber_Type, r.Dye_Method, r.Inspiration_Hex_Codes,
+    (dyesByRecipe[r.id] || []).join(' '),
+    madeWhen(r).label,
+  ];
+  return searchKey(bits.filter(Boolean).join(' '));
+}
+
+/* The one preview per recipe worth showing: the standard if one is set,
+   otherwise the newest photo. Same precedence as the Product Photo Manager. */
+function previewPhotoFor(recipeId) {
+  const ps = photosByRecipe[recipeId] || [];
+  if (!ps.length) return null;
+  const sorted = ps.slice().sort((a, b) => {
+    const af = a.Is_Favorite || a.Is_Preview ? 1 : 0;
+    const bf = b.Is_Favorite || b.Is_Preview ? 1 : 0;
+    if (af !== bf) return bf - af;
+    return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
+  });
+  return sorted.find(p => p.Nextcloud_URL) || null;
+}
+
+/* ── loading ────────────────────────────────────────────────────────────── */
+
+async function reload() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = 'Refreshing…';
+  try {
+    await loadData();
+    render();
+  } catch (e) {
+    console.error('LE browser load failed:', e);
+    document.getElementById('results').innerHTML =
+      `<div class="done-state">Could not read the tables — check the widget's access level (it needs Full).</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Refresh';
+  }
+}
+
+async function loadData() {
+  const [recipesData, photosData, compData] = await Promise.all([
+    grist.docApi.fetchTable('Recipes'),
+    grist.docApi.fetchTable('Product_Photos').catch(() => null),
+    grist.docApi.fetchTable('Recipe_Dye_Components').catch(() => null),
+  ]);
+
+  // Resolved rather than hardcoded: the column may not exist yet, and the user
+  // may have named it something else when adding it by hand.
+  listingCol = findColumn(recipesData, LISTING_COL_CANDIDATES);
+
+  const recipeCols = ['Recipe_Name', 'SKU_Base', 'Shopify_SKU', 'Shopify_URL', 'Recipe_Scope',
+    'Year_Made', 'Created_Date', 'Notes', 'Draft_Notes', 'Layout_Description',
+    'Fiber_Type', 'Dye_Method', 'Inspiration_Hex_Codes', 'Status'];
+  if (listingCol) recipeCols.push(listingCol);
+
+  const all = rowsFromTableData(recipesData, recipeCols);
+  allRecipes = all.filter(r => isLeScope(r.Recipe_Scope));
+
+  // Photos, grouped by recipe. Only rows that actually carry a URL are of any
+  // use as a preview, so the rest are dropped here rather than at render time.
+  photosByRecipe = {};
+  if (photosData) {
+    const photos = rowsFromTableData(photosData,
+      ['Recipe', 'Nextcloud_URL', 'Colorway_Name', 'Is_Favorite', 'Is_Preview', 'Lot_Date', 'Status']);
+    photos.forEach(p => {
+      const rid = getRefId(p.Recipe);
+      if (!rid || !p.Nextcloud_URL) return;
+      (photosByRecipe[rid] = photosByRecipe[rid] || []).push(p);
+    });
+  }
+
+  // Dye names, grouped by recipe — the colour-scheme search surface.
+  dyesByRecipe = {};
+  if (compData) {
+    const nameCol = findColumn(compData, ['Dye_Name', 'Dye_Full', 'Name']);
+    const recCol = findColumn(compData, ['Recipe']);
+    if (nameCol && recCol) {
+      const comps = rowsFromTableData(compData, [recCol, nameCol]);
+      comps.forEach(c => {
+        const rid = getRefId(c[recCol]);
+        const name = String(c[nameCol] || '').trim();
+        if (!rid || !name) return;
+        const list = dyesByRecipe[rid] = dyesByRecipe[rid] || [];
+        // De-duped: a dye used in three segments is one colour, not three chips.
+        if (!list.some(x => searchKey(x) === searchKey(name))) list.push(name);
+      });
+    }
+  }
+  loaded = true;
+}
+
+/* ── the missing-column banner ──────────────────────────────────────────── */
+
+function renderSetupBanner() {
+  const el = document.getElementById('setupBanner');
+  if (listingCol) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="setup">
+      <div class="setup-title">No listing number recorded yet</div>
+      <div class="setup-body">
+        Browsing by colour and by date works without it. To also look a recipe up by the
+        number on the store listing, <b>Recipes</b> needs a numeric
+        <code>${LISTING_COL_DEFAULT}</code> column. Nothing else is changed, and the number
+        is separate from the SKU — reusing a listing slot is expected here.
+      </div>
+      <button class="btn btn-primary" onclick="addListingColumn()">Add ${LISTING_COL_DEFAULT} to Recipes</button>
+    </div>`;
+}
+
+async function addListingColumn() {
+  try {
+    await grist.docApi.applyUserActions([
+      ['AddColumn', 'Recipes', LISTING_COL_DEFAULT, { type: 'Numeric', isFormula: false }],
+    ]);
+    showToast(`${LISTING_COL_DEFAULT} added`);
+    await reload();
+  } catch (e) {
+    console.error('AddColumn failed:', e);
+    showToast('Could not add the column — check the widget access level');
+  }
+}
+
+/* ── filtering and grouping ─────────────────────────────────────────────── */
+
+function filtered() {
+  let list = allRecipes.slice();
+
+  if (filterNum !== '') {
+    const want = parseInt(filterNum, 10);
+    if (Number.isFinite(want)) list = list.filter(r => listingNumberOf(r) === want);
+    else list = [];
+  }
+
+  const q = searchKey(filterText);
+  if (q) {
+    // Every word must appear somewhere, in any order: "teal gold" finds a
+    // recipe using both, regardless of which was typed first.
+    const words = q.split(' ').filter(Boolean);
+    list = list.filter(r => {
+      const h = haystack(r);
+      return words.every(w => h.indexOf(w) >= 0);
+    });
+  }
+
+  if (filterWhen) {
+    list = list.filter(r => {
+      const w = madeWhen(r);
+      if (filterWhen.length === 4) return String(w.year) === filterWhen;
+      return String(w.sortKey) === filterWhen;
+    });
+  }
+
+  list.sort((a, b) => {
+    const wa = madeWhen(a), wb = madeWhen(b);
+    if (sortMode === 'oldest') {
+      // Undated rows sort last either way rather than leading the list with
+      // a block of zeroes.
+      if (!wa.sortKey !== !wb.sortKey) return wa.sortKey ? -1 : 1;
+      return wa.sortKey - wb.sortKey || a.id - b.id;
+    }
+    if (sortMode === 'number') {
+      const na = listingNumberOf(a), nb = listingNumberOf(b);
+      if ((na === null) !== (nb === null)) return na === null ? 1 : -1;
+      if (na !== nb) return na - nb;
+      return wb.sortKey - wa.sortKey || b.id - a.id;
+    }
+    if (sortMode === 'code') {
+      return String(leCodeFromSku(a.SKU_Base).code).localeCompare(String(leCodeFromSku(b.SKU_Base).code))
+        || a.id - b.id;
+    }
+    return wb.sortKey - wa.sortKey || b.id - a.id;  // newest
+  });
+
+  return list;
+}
+
+/* Grouping by listing number is only switched on when it tells you something:
+   when a number was typed in, or when the list is being ordered by number.
+   Otherwise a flat grid is what you want to scan. */
+function groupsFor(list) {
+  const grouped = filterNum !== '' || sortMode === 'number';
+  if (!grouped) return [{ key: null, num: null, rows: list }];
+  const byNum = new Map();
+  list.forEach(r => {
+    const n = listingNumberOf(r);
+    const k = n === null ? 'none' : n;
+    if (!byNum.has(k)) byNum.set(k, []);
+    byNum.get(k).push(r);
+  });
+  return [...byNum.entries()].map(([k, rows]) => ({ key: k, num: k === 'none' ? null : k, rows }));
+}
+
+/* ── preview gating ─────────────────────────────────────────────────────── */
+
+function showThumb(recipeId) {
+  shownThumbs.add(recipeId);
+  // Swap just this card's slot rather than re-rendering the grid, so nothing
+  // else on screen is rebuilt (and nothing else is fetched).
+  document.querySelectorAll(`[data-slot-for="${recipeId}"]`).forEach(slot => {
+    slot.outerHTML = thumbHTML(recipeId);
+  });
+  mountThumbs();
+  updateLoadbar();
+  loadImagesInBatches();
+}
+
+/* Fills every mount point with the live <img> for that recipe — the one from
+   the last redraw if there is one, a fresh element otherwise. */
+function mountThumbs() {
+  document.querySelectorAll('.thumb-mount').forEach(mount => {
+    const id = Number(mount.getAttribute('data-slot-for'));
+    const p = previewPhotoFor(id);
+    if (!p) { mount.remove(); return; }
+    const url = String(p.Nextcloud_URL);
+    let entry = thumbNodes.get(id);
+    if (!entry || entry.url !== url) {
+      const img = document.createElement('img');
+      img.className = 'lazy-photo';
+      img.setAttribute('data-slot-for', String(id));
+      img.setAttribute('data-src', url);
+      img.alt = p.Colorway_Name || '';
+      img.title = p.Colorway_Name || '';
+      entry = { url, el: img };
+      thumbNodes.set(id, entry);
+    }
+    mount.replaceWith(entry.el);
+  });
+}
+
+function visibleRecipeIdsWithPhotos() {
+  const ids = [];
+  document.querySelectorAll('[data-card-for]').forEach(el => {
+    const n = Number(el.getAttribute('data-card-for'));
+    if (n && previewPhotoFor(n)) ids.push(n);
+  });
+  return ids;
+}
+
+function showAllThumbs() {
+  const ids = visibleRecipeIdsWithPhotos();
+  if (ids.length > 12 && !confirm(
+      `Load ${ids.length} previews?\n\nEach one is a separate request to n8n. Narrowing the search first is cheaper.`)) {
+    return;
+  }
+  ids.forEach(id => shownThumbs.add(id));
+  render();
+}
+
+function hideAllThumbs() {
+  shownThumbs.clear();
+  // Drop the retained nodes too, or "hide" would only stop showing pictures
+  // the widget was still holding on to.
+  thumbNodes.clear();
+  render();
+}
+
+function updateLoadbar() {
+  const note = document.getElementById('loadbarNote');
+  const loadBtn = document.getElementById('loadAllBtn');
+  const hideBtn = document.getElementById('hideAllBtn');
+  if (!note) return;
+  const onScreen = visibleRecipeIdsWithPhotos();
+  const shown = onScreen.filter(id => shownThumbs.has(id)).length;
+  const pending = onScreen.length - shown;
+  note.textContent = pending > 0
+    ? `${pending} preview${pending === 1 ? '' : 's'} not loaded — click one to load just it`
+    : (onScreen.length ? `All ${onScreen.length} preview${onScreen.length === 1 ? '' : 's'} loaded` : 'No previews to load');
+  if (loadBtn) {
+    loadBtn.style.display = pending > 0 ? '' : 'none';
+    loadBtn.textContent = `Load all ${pending}`;
+  }
+  if (hideBtn) hideBtn.style.display = shown > 0 ? '' : 'none';
+}
+
+/* Load previews a few at a time instead of all at once. Firing every request
+   at the n8n photo2 proxy simultaneously overwhelms it and trips n8n's crash
+   detection, which takes the workflow offline. Two-at-a-time, with one retry
+   on error, keeps the proxy's queue small. (Same pattern as Photo Gallery.) */
+async function loadImagesInBatches() {
+  const images = Array.from(document.querySelectorAll('img.lazy-photo:not(.loaded)'));
+  const BATCH_SIZE = 2;
+  for (let i = 0; i < images.length; i += BATCH_SIZE) {
+    const batch = images.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(img => loadOneImageWithRetry(img)));
+  }
+}
+
+function loadOneImageWithRetry(img) {
+  return new Promise(resolve => {
+    const src = img.getAttribute('data-src');
+    if (!src) { resolve(); return; }
+    let retried = false;
+    img.onload = () => { img.classList.add('loaded'); resolve(); };
+    img.onerror = () => {
+      if (!retried) {
+        retried = true;
+        setTimeout(() => { img.src = src; }, 1500);
+      } else {
+        img.style.opacity = 0.2;
+        resolve();
+      }
+    };
+    img.src = src;
+  });
+}
+
+/* ── rendering ──────────────────────────────────────────────────────────── */
+
+/* Loaded previews are kept as live DOM nodes and MOVED into each redraw rather
+   than re-written as HTML. Writing `<img src=…>` again creates a new element,
+   and a new element issues a new request — which is a real n8n execution
+   unless the photo2 proxy happens to return a cacheable response. Typing in
+   the search box redraws constantly, so that assumption is not one to rest on.
+   Moving an existing node re-parents it without touching the network, so a
+   preview is fetched exactly once however many times the list is rebuilt.
+   Keyed by URL as well as recipe, so a photo swapped in Grist is re-fetched
+   instead of showing the old picture. */
+const thumbNodes = new Map();   // recipeId -> { url, el }
+
+function thumbHTML(recipeId) {
+  const p = previewPhotoFor(recipeId);
+  if (!p) return `<div class="pslot-none" data-slot-for="${recipeId}">no photo</div>`;
+  if (shownThumbs.has(recipeId)) {
+    // A mount point; mountThumbs() puts the real <img> here after the HTML lands.
+    return `<span class="thumb-mount" data-slot-for="${recipeId}"></span>`;
+  }
+  const n = (photosByRecipe[recipeId] || []).length;
+  return `
+    <button class="pslot-empty" data-slot-for="${recipeId}" onclick="showThumb(${recipeId})"
+      title="Load this preview — one request to n8n">
+      <span class="pslot-icon">&#128247;</span>
+      <span class="pslot-label">Show photo</span>
+      ${n > 1 ? `<span class="fhint">${n} on file</span>` : ''}
+    </button>`;
+}
+
+function cardHTML(r) {
+  const when = madeWhen(r);
+  const code = leCodeFromSku(r.SKU_Base).code;
+  const num = listingNumberOf(r);
+  const dyes = dyesByRecipe[r.id] || [];
+  const shownDyes = dyes.slice(0, 5);
+  const notes = String(r.Notes || r.Draft_Notes || '').trim();
+
+  const dyeHTML = dyes.length
+    ? `<div class="dye-chips">${shownDyes.map(d => `<span class="dye-chip">${esc(d)}</span>`).join('')}${
+        dyes.length > shownDyes.length ? `<span class="dye-more">+${dyes.length - shownDyes.length}</span>` : ''}</div>`
+    : `<div class="card-meta" style="font-style:italic">no dyes recorded</div>`;
+
+  const numField = listingCol
+    ? `<input class="num-input ${num !== null ? 'set' : ''}" value="${num === null ? '' : num}"
+         placeholder="—" inputmode="numeric" title="Store listing number — reuse is expected"
+         data-numfor="${r.id}" onchange="saveListingNumber(${r.id}, this.value, this)">
+       <span class="num-label">listing&nbsp;#</span>`
+    : '';
+
+  const shopify = String(r.Shopify_URL || '').trim();
+  // Only a real http(s) link is rendered — a stray value in that column would
+  // otherwise become a javascript: href.
+  const shopifyHTML = /^https?:\/\//i.test(shopify)
+    ? `<a class="mini-link" href="${esc(shopify)}" target="_blank" rel="noopener">store</a>` : '';
+
+  return `
+    <div class="card ${selectedRecipeId === r.id ? 'current' : ''}" data-card-for="${r.id}">
+      ${thumbHTML(r.id)}
+      <div class="card-body">
+        <div class="card-code">${code ? 'LE ' + esc(code) : esc(r.SKU_Base || '(no SKU)')}</div>
+        <div class="card-name">${esc(r.Recipe_Name || 'Untitled')}</div>
+        <div class="card-meta">${esc(when.label)}${when.exact ? '' : ' <span title="Taken from the record date, not the SKU">≈</span>'}${
+          r.Fiber_Type ? ' · ' + esc(r.Fiber_Type) : ''}</div>
+        ${dyeHTML}
+        ${notes ? `<div class="card-notes">${esc(notes)}</div>` : ''}
+        <div class="card-foot">
+          ${numField}
+          <span style="flex:1"></span>
+          <button class="mini-link" onclick="selectRecipe(${r.id})" title="Select this recipe in linked widgets">open</button>
+          ${shopifyHTML}
+        </div>
+      </div>
+    </div>`;
+}
+
+function groupHeadHTML(g, total) {
+  if (g.key === null) return '';
+  if (g.num === null) {
+    return `<div class="group-head">
+      <span class="group-num">no number</span>
+      <span class="group-note">${g.rows.length} limited edition${g.rows.length === 1 ? '' : 's'} with no listing number recorded</span>
+    </div>`;
+  }
+  // The whole point of the grouping: say out loud that the slot was reused, so
+  // the answer to "LE #5" is never assumed to be a single colourway.
+  const reused = g.rows.length > 1;
+  const span = reused
+    ? `${madeWhen(g.rows[g.rows.length - 1]).label} – ${madeWhen(g.rows[0]).label}`
+    : madeWhen(g.rows[0]).label;
+  return `<div class="group-head">
+    <span class="group-num">Listing #${esc(String(g.num))}</span>
+    <span class="group-note">${g.rows.length} colourway${g.rows.length === 1 ? '' : 's'} · ${esc(span)}</span>
+    ${reused ? `<span class="group-warn">slot reused — check the date against the customer's order</span>` : ''}
+  </div>`;
+}
+
+function render() {
+  renderSetupBanner();
+  const list = filtered();
+  const results = document.getElementById('results');
+
+  document.getElementById('hdrSub').textContent = !loaded ? 'Loading…'
+    : `${list.length} of ${allRecipes.length} limited edition${allRecipes.length === 1 ? '' : 's'}`;
+
+  if (!allRecipes.length) {
+    results.innerHTML = `<div class="done-state">No recipes have <b>Recipe_Scope</b> set to Limited Edition yet.</div>`;
+    updateLoadbar();
+    return;
+  }
+  if (!list.length) {
+    results.innerHTML = `<div class="done-state">Nothing matches those filters.${
+      filterNum !== '' && listingCol ? ` No limited edition is recorded against listing #${esc(filterNum)} — the number may not have been filled in yet.` : ''
+    }</div>`;
+    updateLoadbar();
+    return;
+  }
+
+  // Sorting by number puts groups in number order; a number search has one group.
+  const groups = groupsFor(list);
+  results.innerHTML = groups.map(g =>
+    groupHeadHTML(g, list.length) +
+    `<div class="grid">${g.rows.map(cardHTML).join('')}</div>`
+  ).join('');
+
+  mountThumbs();
+  updateLoadbar();
+  // Only genuinely new previews reach the network here: anything already
+  // loaded was moved back in by mountThumbs() and is skipped by the :not(.loaded)
+  // selector, so a redraw costs no n8n execution.
+  loadImagesInBatches();
+}
+
+/* Rebuilds the "When made" options from the data actually present, so a month
+   with no LE in it is never offered as a dead end. */
+function renderWhenOptions() {
+  const sel = document.getElementById('whenBox');
+  const prev = sel.value;
+  const years = new Map();   // year -> Set of sortKeys
+  allRecipes.forEach(r => {
+    const w = madeWhen(r);
+    if (!w.year) return;
+    if (!years.has(w.year)) years.set(w.year, new Set());
+    if (w.month) years.get(w.year).add(w.sortKey);
+  });
+  const ordered = [...years.keys()].sort((a, b) => b - a);
+  let html = `<option value="">Any time</option>`;
+  ordered.forEach(y => {
+    html += `<option value="${y}">${y}</option>`;
+    [...years.get(y)].sort((a, b) => b - a).forEach(k => {
+      const m = k % 100;
+      html += `<option value="${k}">&nbsp;&nbsp;${MONTH_NAMES[m - 1]} ${y}</option>`;
+    });
+  });
+  sel.innerHTML = html;
+  // Keep the selection across a refresh if that period still exists.
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else if (prev) { sel.value = ''; filterWhen = ''; }
+}
+
+/* ── actions ────────────────────────────────────────────────────────────── */
+
+async function saveListingNumber(recipeId, raw, inputEl) {
+  if (!listingCol) return;
+  const r = allRecipes.find(x => x.id === recipeId);
+  if (!r) return;
+  const trimmed = String(raw == null ? '' : raw).trim();
+  let value = null;
+  if (trimmed !== '') {
+    const n = parseInt(trimmed.replace(/[^0-9]/g, ''), 10);
+    if (!Number.isFinite(n) || n <= 0) {
+      showToast('Listing numbers are whole numbers — nothing saved');
+      inputEl.value = listingNumberOf(r) === null ? '' : listingNumberOf(r);
+      return;
+    }
+    value = n;
+  }
+  if (value === listingNumberOf(r)) return;
+
+  // Reuse is the normal case, not an error — say which other recipes hold the
+  // number and let the save go through. Warning without blocking is the point:
+  // the slot genuinely has held several colourways.
+  if (value !== null) {
+    const others = allRecipes.filter(x => x.id !== recipeId && listingNumberOf(x) === value);
+    if (others.length) {
+      const names = others.map(o => `${leCodeFromSku(o.SKU_Base).code || o.SKU_Base || ('#' + o.id)} (${madeWhen(o).label})`);
+      if (!confirm(`Listing #${value} has also been used by:\n\n${names.join('\n')}\n\nThat is expected if the slot was reused. Save anyway?`)) {
+        inputEl.value = listingNumberOf(r) === null ? '' : listingNumberOf(r);
+        return;
+      }
+    }
+  }
+
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Recipes', recipeId, { [listingCol]: value }],
+    ]);
+    r[listingCol] = value;
+    showToast(value === null ? 'Listing number cleared' : `Saved as listing #${value}`);
+    // Re-render so grouping and the "slot reused" note catch up — but only
+    // when the view actually depends on the number.
+    if (filterNum !== '' || sortMode === 'number') render();
+    else { inputEl.classList.toggle('set', value !== null); }
+  } catch (e) {
+    console.error('Saving the listing number failed:', e);
+    showToast('Could not save — check the widget access level');
+    inputEl.value = listingNumberOf(r) === null ? '' : listingNumberOf(r);
+  }
+}
+
+// Select-by link: with this widget set as the source, clicking "open" moves
+// linked widgets (Recipe Card, Recipe Builder) onto the same recipe.
+function selectRecipe(recipeId) {
+  selectedRecipeId = recipeId;
+  try {
+    grist.setCursorPos({ rowId: recipeId });
+  } catch (e) {
+    console.warn('setCursorPos not available — is this widget set as a selector?', e);
+    showToast('Link a Recipes widget to this one to follow the selection');
+  }
+  document.querySelectorAll('.card').forEach(el =>
+    el.classList.toggle('current', Number(el.getAttribute('data-card-for')) === recipeId));
+}
+
+function clearFilters() {
+  filterNum = ''; filterText = ''; filterWhen = '';
+  document.getElementById('numBox').value = '';
+  document.getElementById('textBox').value = '';
+  document.getElementById('whenBox').value = '';
+  render();
+}
+
+/* Debounced, for the same reason the other widgets debounce: rebuilding on
+   every keystroke re-creates the cards, and any preview already loaded in an
+   intermediate result set would be re-requested. 250ms means only the set you
+   paused on is built. */
+let filterTimer = null;
+function scheduleRender() {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    const active = document.activeElement;
+    const id = active && active.id;
+    const caret = active && active.selectionStart;
+    render();
+    if (id) {
+      const again = document.getElementById(id);
+      if (again) { again.focus(); if (caret != null && again.setSelectionRange) again.setSelectionRange(caret, caret); }
+    }
+  }, 250);
+}
+
+function wireFilters() {
+  document.getElementById('numBox').oninput = e => { filterNum = e.target.value.replace(/[^0-9]/g, ''); e.target.value = filterNum; scheduleRender(); };
+  document.getElementById('textBox').oninput = e => { filterText = e.target.value; scheduleRender(); };
+  document.getElementById('whenBox').onchange = e => { filterWhen = e.target.value; render(); };
+  document.getElementById('sortBox').onchange = e => { sortMode = e.target.value; render(); };
+}
+
+/* ── Grist integration ──────────────────────────────────────────────────── */
+
+// 'full' because the widget writes the listing number back, and offers to add
+// the column when it is missing. allowSelectBy makes it usable as the source
+// for a linked Recipe Card / Recipe Builder.
+grist.ready({
+  requiredAccess: 'full',
+  allowSelectBy: true,
+});
+
+// A cursor change elsewhere just highlights the matching card. It deliberately
+// does NOT reload: this widget is a browsing surface over the whole LE list,
+// not a detail view of one row.
+grist.onRecord(record => {
+  selectedRecipeId = record ? record.id : null;
+  document.querySelectorAll('.card').forEach(el =>
+    el.classList.toggle('current', Number(el.getAttribute('data-card-for')) === selectedRecipeId));
+});
+
+// Recipes changing under us (a new LE promoted in the builder, a dye added)
+// refreshes the list — but never the previews, which stay exactly as asked for.
+if (grist.onRecords) {
+  grist.onRecords(() => {
+    if (!loaded) return;
+    loadData().then(() => { renderWhenOptions(); render(); }).catch(e => console.error(e));
+  });
+}
+
+wireFilters();
+loadData()
+  .then(() => { renderWhenOptions(); render(); })
+  .catch(e => {
+    console.error('LE browser failed to start:', e);
+    document.getElementById('results').innerHTML =
+      `<div class="done-state">Could not read the tables — check the widget's access level (it needs Full).</div>`;
+  });
+</script>
+</body>
+</html>
