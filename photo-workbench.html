@@ -1,0 +1,1550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photo Workbench</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614;
+  --paper: #F7F3EE;
+  --warm: #E8DFD4;
+  --rule: #D4C9BC;
+  --accent: #8B3A2A;
+  --accent-light: #F2E8E5;
+  --teal: #3A8B7A;
+  --teal-light: #E5F2EF;
+  --gold: #B07D2A;
+  --gold-light: #F5EDD8;
+  --done-bg: #EAF3DE;
+  --done-border: #639922;
+  --done-text: #27500A;
+  --star: #C8A020;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+}
+
+/* ── header ── */
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.head-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.refresh-btn { font-size: 11px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer; font-family: 'Inter', sans-serif; }
+.refresh-btn:hover { border-color: var(--accent); }
+.refresh-btn:disabled { opacity: .5; cursor: default; }
+.summary { font-size: 11px; color: #8B7D72; margin-bottom: 14px; }
+
+/* ── banner ── */
+.banner { display: none; padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 12px;
+  background: var(--accent-light); border: 1px solid var(--accent); color: var(--accent); }
+.banner.show { display: block; }
+
+/* ── tabs ── */
+.tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+.tab { font-size: 12px; font-weight: 600; padding: 8px 12px; cursor: pointer; color: #8B7D72;
+  border: none; background: none; border-bottom: 2px solid transparent; font-family: 'Inter', sans-serif; }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .count { font-family: 'DM Mono', monospace; font-size: 10px; margin-left: 4px; opacity: .8; }
+
+/* ── shared bits ── */
+.slabel { font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #8B7D72; margin: 20px 0 10px; }
+.slabel:first-child { margin-top: 0; }
+.slabel-warn { color: var(--accent); }
+.section-note { font-size: 11px; color: #8B7D72; margin: -4px 0 12px; font-style: italic; }
+.search-input { width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px;
+  font-family: 'Inter', sans-serif; font-size: 13px; background: white; color: var(--ink); outline: none; margin-bottom: 14px; }
+.search-input:focus { border-color: var(--accent); }
+.done-state { text-align: center; color: #8B7D72; padding: 28px 20px; font-style: italic;
+  border: 1px dashed var(--rule); border-radius: 8px; }
+.btn { font-size: 13px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif; }
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-primary:hover { background: #73301F; color: white; }
+img.lazy-photo:not(.loaded) { opacity: 0.3; }
+img.lazy-photo { transition: opacity 0.2s; }
+
+/* ══ TAB: INBOX ══════════════════════════════════════════════════════════ */
+.scan-prompt {
+  border: 1px dashed var(--rule); border-radius: 8px; background: white;
+  padding: 28px 20px; text-align: center;
+}
+.scan-prompt p { font-size: 12px; color: #8B7D72; margin-bottom: 12px; }
+.inbox-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.photo-card { position: relative; border: 1.5px solid var(--rule); border-radius: 8px; background: white; overflow: hidden; }
+.delete-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  font-size: 9px; padding: 3px 7px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.4); background: rgba(139,58,42,.75); color: white; cursor: pointer;
+}
+.delete-btn:hover { background: var(--accent); }
+.ovl-rots { position: absolute; top: 6px; left: 6px; z-index: 5; display: flex; gap: 4px; }
+.ovl-rot-btn {
+  font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.4); background: rgba(26,22,20,.6); color: white; cursor: pointer;
+  font-family: 'Inter', sans-serif;
+}
+.ovl-rot-btn:hover { background: rgba(26,22,20,.85); }
+.ovl-rot-btn:disabled { opacity: .4; cursor: default; }
+.photo-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
+.photo-card-body { padding: 10px; }
+.photo-folder { font-size: 9px; color: #A89A8C; margin-bottom: 2px; word-break: break-all; }
+.photo-filename { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; }
+.source-tag { display: inline-block; margin-top: 3px; font-size: 9px; padding: 1px 6px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.source-camera { background: var(--teal-light); color: var(--teal); }
+.source-dslr { background: var(--gold-light); color: var(--gold); }
+.inbox-search-wrap { position: relative; margin-top: 8px; }
+.inbox-search-input { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
+.inbox-search-input:focus { border-color: var(--accent); }
+.inbox-suggestions {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+  background: white; border: 1px solid var(--rule); border-top: none;
+  border-radius: 0 0 6px 6px; max-height: 160px; overflow-y: auto; box-shadow: 0 4px 10px rgba(0,0,0,.08);
+}
+.inbox-suggestion { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+.inbox-suggestion:hover { background: var(--warm); }
+.inbox-suggestion .rs-name { font-weight: 500; }
+.inbox-suggestion .rs-meta { font-size: 10px; color: #8B7D72; }
+.picked-chip {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  margin-top: 8px; padding: 6px 8px; border-radius: 5px;
+  background: var(--done-bg); border: 1px solid var(--done-border); font-size: 12px;
+}
+.picked-chip .change-link { font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; flex-shrink: 0; }
+.slot-row { display: flex; gap: 4px; margin-top: 8px; }
+.slot-btn { flex: 1; font-size: 10px; padding: 5px 4px; border-radius: 4px;
+  border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer;
+  text-transform: uppercase; letter-spacing: .03em; font-weight: 600; font-family: 'Inter', sans-serif; }
+.slot-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+.doctype-row { display: flex; gap: 4px; margin-top: 8px; }
+.doctype-btn { flex: 1; font-size: 10px; padding: 5px 4px; border-radius: 4px;
+  border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; font-weight: 600;
+  font-family: 'Inter', sans-serif; }
+.doctype-btn.active { background: var(--teal); border-color: var(--teal); color: white; }
+.inbox-note { width: 100%; margin-top: 8px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: none; }
+.inbox-note:focus { border-color: var(--accent); }
+.file-btn { width: 100%; margin-top: 8px; padding: 8px; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: white;
+  font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+.file-btn:disabled { opacity: .4; cursor: default; background: white; color: #8B7D72; border-color: var(--rule); }
+.file-btn.filed { background: var(--done-bg); border-color: var(--done-border); color: var(--done-text); }
+
+/* ══ TAB: TO LINK ════════════════════════════════════════════════════════ */
+.attn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.attn-card { border: 1.5px solid var(--rule); border-radius: 8px; background: white; overflow: hidden; }
+.attn-card img { width: 100%; height: 150px; object-fit: contain; background: var(--warm); display: block; }
+.attn-body { padding: 10px; }
+.attn-file { font-family: 'DM Mono', monospace; font-size: 10px; color: #6B5E52; word-break: break-all; margin-bottom: 6px; }
+.suggest-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.confidence { font-size: 9px; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.conf-exact { background: var(--done-bg); color: var(--done-text); }
+.conf-likely { background: var(--gold-light); color: var(--gold); }
+.link-btn { font-size: 11px; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--accent);
+  background: var(--accent); color: white; cursor: pointer; font-family: 'Inter', sans-serif; }
+.link-btn:hover { opacity: .9; }
+.link-search { position: relative; }
+.link-search input { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
+.link-search input:focus { border-color: var(--accent); }
+.suggestions { border: 1px solid var(--rule); border-radius: 0 0 6px 6px; border-top: none; background: white;
+  max-height: 180px; overflow-y: auto; margin-top: -1px; display: none; }
+.suggestions.show { display: block; }
+.sugg { padding: 6px 8px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--warm); }
+.sugg:last-child { border-bottom: none; }
+.sugg:hover { background: var(--warm); }
+.sugg .sn { font-weight: 500; }
+.sugg .sm { font-size: 10px; color: #8B7D72; }
+
+/* recipes with no photo, with their candidate photos */
+.miss-card { border: 1.5px solid var(--rule); border-radius: 8px; background: white; margin-bottom: 8px; overflow: hidden; }
+.miss-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; cursor: pointer; }
+.miss-head:hover { background: var(--warm); }
+.miss-name { font-weight: 500; }
+.miss-meta { font-size: 10px; color: #8B7D72; }
+.miss-badge { font-size: 9px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; background: var(--done-bg); color: var(--done-text); }
+.miss-chev { font-size: 11px; color: #8B7D72; }
+.miss-body { padding: 0 12px 12px; border-top: 1px solid var(--warm); }
+.candidates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.candidate-card { border: 1.5px solid var(--rule); border-radius: 6px; overflow: hidden; background: white; }
+.candidate-card img { width: 100%; height: 90px; object-fit: cover; background: var(--warm); display: block; }
+.candidate-body { padding: 6px; }
+.candidate-name { font-family: 'DM Mono', monospace; font-size: 9px; color: #6B5E52; word-break: break-all; margin-bottom: 4px; }
+.candidate-date { font-size: 9px; color: #8B7D72; margin-bottom: 4px; }
+.assign-btn { width: 100%; font-size: 10px; padding: 4px; border-radius: 4px;
+  border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; font-family: 'Inter', sans-serif; }
+.no-candidates { font-size: 11px; color: #8B7D72; font-style: italic; padding: 8px 0; }
+.manual-search-wrap { position: relative; margin-top: 10px; }
+.manual-search-input { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; outline: none; font-family: 'Inter', sans-serif; }
+.manual-search-input:focus { border-color: var(--accent); }
+.manual-suggestions { margin-top: 6px; border: 1px solid var(--rule); border-radius: 6px; background: white;
+  max-height: 200px; overflow-y: auto; display: none; }
+.manual-suggestions.show { display: block; }
+.manual-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; border-bottom: 1px solid var(--warm); }
+.manual-row:last-child { border-bottom: none; }
+.manual-row:hover { background: var(--warm); }
+.manual-row img { width: 30px; height: 30px; border-radius: 4px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+.manual-row-name { font-family: 'DM Mono', monospace; font-size: 10px; }
+
+/* ══ TAB: BY RECIPE ══════════════════════════════════════════════════════ */
+.rec-card { border: 1px solid var(--rule); border-radius: 8px; background: white; margin-bottom: 12px; overflow: hidden; }
+.rec-head { display: flex; align-items: center; gap: 10px; padding: 12px; cursor: pointer; }
+.rec-head:hover { background: var(--warm); }
+.rec-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: var(--warm); flex-shrink: 0; }
+/* Browsing the recipe list is not a visual task — the name and the slot pills
+   carry it. Each preview is one n8n execution against the photo2 proxy, and a
+   slow scroll down a long list used to fire one per recipe. The preview loads
+   only when asked for. */
+.rec-thumb-btn {
+  width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
+  background: var(--warm); border: 1px dashed var(--rule); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #A89A8C; padding: 0; line-height: 1;
+}
+.rec-thumb-btn:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+.rec-thumb-none { width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
+  background: var(--paper); border: 1px dashed var(--rule); }
+.preview-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 7px 10px; background: white; border: 1px solid var(--rule); border-radius: 6px; }
+.preview-bar-note { font-size: 11px; color: #6B5E52; }
+.preview-bar button { font-size: 11px; padding: 4px 10px; border-radius: 4px;
+  border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+  cursor: pointer; font-family: 'Inter', sans-serif; }
+.preview-bar button:hover { border-color: var(--accent); color: var(--accent); }
+.rec-headmain { flex: 1; min-width: 0; }
+.rec-name { font-weight: 600; font-size: 14px; }
+.rec-sub { font-size: 11px; color: #8B7D72; margin-top: 1px; }
+.rec-slots { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+.slot-pill { font-size: 8px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+  border: 1px solid var(--rule); color: #A89A8C; background: var(--paper); }
+.slot-pill.on { background: var(--teal-light); color: var(--teal); border-color: #9ACFC7; }
+.rec-chev { font-size: 12px; color: #8B7D72; transition: transform .15s; }
+.rec-card.open .rec-chev { transform: rotate(90deg); }
+.rec-warn { font-size: 10px; color: var(--gold); font-weight: 600; }
+.rec-body { display: none; padding: 0 12px 12px; border-top: 1px solid var(--warm); }
+.rec-card.open .rec-body { display: block; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.pcard { border: 1.5px solid var(--warm); border-radius: 6px; overflow: hidden; background: white; }
+.pcard.standard { border-color: var(--star); }
+.pcard.rejected { opacity: .6; }
+.pcard img { width: 100%; height: 120px; object-fit: cover; display: block; background: var(--warm); }
+.pcard-body { padding: 8px; }
+.pcard-meta { font-size: 10px; color: #8B7D72; margin-bottom: 6px; }
+.pcard-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.star-btn { background: none; border: none; cursor: pointer; font-size: 17px; color: var(--rule); line-height: 1; padding: 0; }
+.star-btn.on { color: var(--star); }
+.standard-tag { font-size: 9px; font-weight: 600; color: var(--star); text-transform: uppercase; letter-spacing: .04em; }
+.status-seg { display: flex; gap: 3px; margin-bottom: 6px; }
+.status-seg button { flex: 1; font-size: 9px; padding: 4px 2px; border-radius: 4px; border: 1px solid var(--rule);
+  background: white; color: #8B7D72; cursor: pointer; font-family: 'Inter', sans-serif; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em; }
+.status-seg button.active-pending { background: var(--gold-light); color: var(--gold); border-color: var(--gold); }
+.status-seg button.active-approved { background: var(--done-bg); color: var(--done-text); border-color: var(--done-border); }
+.status-seg button.active-rejected { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
+.note-input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: vertical; margin-bottom: 6px; }
+.note-input:focus { border-color: var(--accent); }
+.pcard-links { display: flex; gap: 8px; align-items: center; }
+.rot-btn { background: none; border: 1px solid var(--rule); border-radius: 3px; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 2px 5px; color: #6B5E52;
+  font-family: 'Inter', sans-serif; margin-left: auto; }
+.rot-btn + .rot-btn { margin-left: 0; }
+.rot-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rot-btn:disabled { opacity: .4; cursor: default; }
+.mini-link { font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-family: 'Inter', sans-serif; }
+
+/* ── toast ── */
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="head-title">Photo Workbench</div>
+  <button class="refresh-btn" id="refreshBtn">↻ Refresh</button>
+</div>
+<div class="summary" id="summary">Loading…</div>
+
+<div class="banner" id="banner"></div>
+
+<div class="tabs" id="tabs" style="display:none">
+  <button class="tab active" data-tab="inbox">Inbox<span class="count" id="inboxCount"></span></button>
+  <button class="tab" data-tab="link">To link<span class="count" id="linkCount"></span></button>
+  <button class="tab" data-tab="recipes">By recipe<span class="count" id="recCount"></span></button>
+</div>
+
+<div id="viewInbox"></div>
+<div id="viewLink" style="display:none"></div>
+<div id="viewRecipes" style="display:none"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHOTO WORKBENCH
+   Replaces photo-inbox.html, product-photo-manager.html and
+   recipes-missing-photo.html. Those three were one pipeline split across three
+   widgets:
+
+     Inbox      files sitting in Nextcloud that are not in Grist yet
+     To link    rows in Product_Photos with no recipe, and recipes with no photo
+     By recipe  curating what is already linked — standard, client-ready, notes
+
+   Merging is not only about screen space. The three widgets read the same two
+   Grist tables and disagreed with each other in two places, which is settled
+   here:
+
+   1. LIMITED EDITIONS. recipes-missing-photo excluded them from "missing"
+      (an LE with no photo is expected, not a gap to chase); the photo manager
+      listed them, so the same recipe was a problem in one widget and not in the
+      other. Excluded here, with a count so they are not silently dropped.
+
+   2. REJECTED PHOTOS. The photo manager left rejected photos out of the
+      unlinked list; recipes-missing-photo offered them as candidates to assign.
+      Excluded here — a photo you rejected is not a photo you want linked.
+
+   Duplicated name-matching is also gone: one matcher now answers both "which
+   recipe does this photo belong to" and "which photos might this recipe want".
+
+   COST. The inbox scan is the only n8n call made just by looking, so it fires
+   when the Inbox tab is first opened, not on load. Switching tabs never
+   re-scans. Grist tables are fetched once and shared by all three tabs, which
+   is the real saving here: three widgets on one page meant three fetches and
+   three separate thumbnail budgets.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const LIST_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/inbox-photos';
+const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
+const PRODUCT_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-product-photo';
+const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
+const ROTATE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/rotate-photo';
+
+const STATUSES = ['Pending', 'Approved', 'Rejected'];
+
+const SLOTS = {
+  step1: { label: 'Step 1', photoField: 'Photo_Process_1', noteField: 'Photo_Process_1_Note', filenameBase: 'step1' },
+  step2: { label: 'Step 2', photoField: 'Photo_Process_2', noteField: 'Photo_Process_2_Note', filenameBase: 'step2' },
+  finished: { label: 'Finished', photoField: 'Photo_Finished', noteField: 'Photo_Finished_Note', filenameBase: 'finished' },
+  inspiration: { label: 'Inspiration', photoField: 'Photo_Inspiration', noteField: 'Photo_Inspiration_Note', filenameBase: 'inspiration' },
+};
+
+// Vendor codes drive SKU-suffix parsing. The literal below is only a SEED so
+// parsing still works before the Customers fetch lands — refreshVendorCodes()
+// then replaces it with the live list, so adding a customer in Grist can never
+// again leave a vendor unrecognised and glue its code onto the colorway name.
+// Keep this pair byte-identical across widgets.
+let VENDOR_CODES = ['RDG','MMI','DNR','HBO','FOR','OBO','BMW','CDR','VVM','ACD','SOB',
+  'JIR','TRM','BAF','MYO','DWK','ALA','VAR','BBR','KPA','RIG','NWW'];
+function refreshVendorCodes(customersTable) {
+  if (!customersTable) return;
+  const col = findColumn(customersTable, ['Code', 'Vendor_Code', 'Customer_Code', 'Abbreviation']);
+  if (!col) return;
+  const codes = (Array.isArray(customersTable[col]) ? customersTable[col] : [])
+    .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+  if (codes.length) VENDOR_CODES = [...new Set(codes)];
+}
+const FIBER_NAME_TO_CODE = { 'FF Nylon': 'FFN', 'E Nylon': 'EN', 'FF Cotton': 'FFC', 'Blackwing': 'BW' };
+
+/* ── state ──────────────────────────────────────────────────────────────── */
+let allRecipes = [];      // {id, Recipe_Name, Fiber_Type, Recipe_Scope, SKU_Base, slots:{}}
+let allPhotos = [];       // Product_Photos rows
+let inboxPhotos = [];     // files from the n8n scan
+let cardState = {};       // per-inbox-photo UI state, keyed by path
+
+let currentTab = 'inbox';
+let inboxScanned = false;
+let inboxScanning = false;
+let visibleCount = 30;
+
+let expandedRecipeId = null;   // "By recipe" tab
+let expandedMissingId = null;  // "To link" tab — separate, or opening one closed the other
+let recipeSearch = '';
+
+/* Recipe ids whose list preview the user has actually asked to see. Kept in
+   module state so it survives re-renders (searching, starring, expanding) —
+   and because the proxy serves `immutable`, redrawing a loaded one costs no
+   n8n execution. Photos INSIDE an expanded recipe are not gated: opening a
+   recipe is the moment you want to look at them. */
+let shownThumbs = new Set();
+
+/* ── shared helpers (byte-identical with the other widgets) ─────────────── */
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const target = cand.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === target);
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(`${tableName}.${cands[0]}`);
+  }
+  return out;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId || null;
+  return null;
+}
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+function normalize(s) { return foldAccents((s || '').toString()).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+// Typing search keeps separators, so a part-word query still behaves.
+function typedKey(s) { return foldAccents((s || '').toString()).toLowerCase(); }
+
+function slugify(name) {
+  // Folded first, or an accent becomes a separator: "Pathétique" slugged to
+  // "path-tique" instead of "pathetique", and the filed name stopped matching
+  // the colourway it came from.
+  return foldAccents(name).toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+function fiberCode(fiberType) {
+  if (FIBER_NAME_TO_CODE[fiberType]) return FIBER_NAME_TO_CODE[fiberType];
+  return (fiberType || '').toString().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4) || 'GEN';
+}
+function vendorCodeFromSku(skuBase, recipeScope) {
+  if (!skuBase || !/reserv/i.test(recipeScope || '')) return null;
+  const parts = skuBase.toString().split('_');
+  const last = (parts[parts.length - 1] || '').toUpperCase();
+  return VENDOR_CODES.includes(last) ? last : null;
+}
+function recipeFolderName(recipe) {
+  const slug = slugify(recipe.Recipe_Name);
+  const fc = fiberCode(recipe.Fiber_Type);
+  const vendor = vendorCodeFromSku(recipe.SKU_Base, recipe.Recipe_Scope);
+  return vendor ? `${slug}_${fc}_${vendor}` : `${slug}_${fc}`;
+}
+function folderOf(path) {
+  if (!path) return '';
+  const idx = path.lastIndexOf('/');
+  return idx >= 0 ? path.slice(0, idx) : '';
+}
+function filled(v) { return Array.isArray(v) ? v.length > 0 : (v != null && v !== ''); }
+function fmtDate(v) {
+  const n = Number(v);
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  return isNaN(d) ? '' : d.toLocaleDateString();
+}
+function statusOf(p) {
+  const s = (p.Status || '').toLowerCase();
+  if (s.includes('approve')) return 'Approved';
+  if (s.includes('reject')) return 'Rejected';
+  return 'Pending';
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+function showBanner(msg) {
+  const b = document.getElementById('banner');
+  b.textContent = msg;
+  b.classList.add('show');
+}
+function clearBanner() { document.getElementById('banner').classList.remove('show'); }
+
+/* ── Recipe scope — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   Four kinds of recipe. The scope decides the SKU, and whether the colourway
+   turns up when someone goes browsing:
+
+     General            open stock, anyone can order it
+     Customer Reserved  held for one vendor
+     One-off            made for one person, not offered again unless they ask
+     Limited Edition    cannot be remade — wrong, unrepeatable, or unidentified
+
+   Limited editions are kept as a research record and hidden by default. They
+   are hidden at the point of BROWSING only. Anything that resolves a recipe by
+   id — an order line, a lot, a pull sheet — must still render it, or a colourway
+   would disappear halfway through being made.
+
+   Matched loosely because the stored values are not consistent: 12 recipes say
+   "Custom Retail", 2 say "Retail Custom", and one says "College/University". */
+function scopeKind(scope) {
+  const t = String(scope == null ? '' : scope).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!t) return '';
+  if (t.includes('reserv')) return 'reserved';
+  if (t.includes('limited') || t === 'le') return 'le';
+  if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
+  if (t.includes('general')) return 'general';
+  return 'other';
+}
+function isBrowsable(scope, showLE) {
+  return showLE ? true : scopeKind(scope) !== 'le';
+}
+
+/* ── Throttled, dwell-gated image loading ───────────────────────────────────
+   Every thumbnail is served through the n8n `photo2` proxy, which only handles
+   a few requests at once. Painting a whole grid would flood its queue and knock
+   the workflow offline. So: images carry their URL in data-src (not src), only
+   load once scrolled into view, only after they've stayed in view briefly
+   (fast scrolling past never fires a request), and never more than a few at a
+   time. The proxy's cache headers mean a photo loaded once is served from
+   browser cache on later renders, not re-fetched.
+
+   This replaces the plain two-at-a-time loader the inbox and
+   recipes-missing-photo used, which fetched every image on the page whether or
+   not it was ever scrolled to — 30 inbox cards meant 30 executions on open. */
+const IMG_MAX_CONCURRENT = 2;   // most requests in flight from this page at once
+const IMG_DWELL_MS = 500;       // must stay visible this long before loading
+let imgInFlight = 0;
+const imgQueue = [];
+const imgDwell = new WeakMap();
+let imgObserver = null;
+
+function pumpImageQueue() {
+  while (imgInFlight < IMG_MAX_CONCURRENT && imgQueue.length) {
+    const img = imgQueue.shift();
+    if (!img || !img.isConnected || img.dataset.loaded) continue;
+    const url = img.dataset.src;
+    if (!url) { img.dataset.loaded = '1'; continue; }
+    imgInFlight++;
+    img.dataset.loaded = '1';
+    const done = () => { imgInFlight--; pumpImageQueue(); };
+    img.addEventListener('load', () => { img.classList.add('loaded'); done(); }, { once: true });
+    img.addEventListener('error', () => { img.style.opacity = 0.2; done(); }, { once: true });
+    img.src = url;
+  }
+}
+
+function ensureObserver() {
+  if (imgObserver || !('IntersectionObserver' in window)) return;
+  imgObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const img = e.target;
+      if (e.isIntersecting) {
+        if (!imgDwell.has(img)) {
+          imgDwell.set(img, setTimeout(() => {
+            imgDwell.delete(img);
+            imgObserver.unobserve(img);
+            imgQueue.push(img);
+            pumpImageQueue();
+          }, IMG_DWELL_MS));
+        }
+      } else {
+        const t = imgDwell.get(img);
+        if (t) { clearTimeout(t); imgDwell.delete(img); }
+      }
+    }
+  }, { rootMargin: '150px' });
+}
+
+// Called after every render that adds <img data-src> elements.
+function observeImages() {
+  ensureObserver();
+  document.querySelectorAll('img[data-src]:not([data-observed])').forEach(img => {
+    img.dataset.observed = '1';
+    if (imgObserver) imgObserver.observe(img);
+    else imgQueue.push(img); // no IntersectionObserver: still throttle
+  });
+  if (!imgObserver) pumpImageQueue();
+}
+
+/* ── loading ────────────────────────────────────────────────────────────── */
+
+// Grist only. Cheap, shared by every tab, and makes no n8n call.
+async function loadGrist() {
+  document.getElementById('summary').textContent = 'Loading…';
+  clearBanner();
+  try {
+    const [recipesData, photosData, customersData] = await Promise.all([
+      grist.docApi.fetchTable('Recipes'),
+      grist.docApi.fetchTable('Product_Photos'),
+      // Fetched purely for the vendor-code list; a missing table must not take
+      // the whole widget down, hence the catch.
+      grist.docApi.fetchTable('Customers').catch(() => null),
+    ]);
+    refreshVendorCodes(customersData);
+
+    const missing = [];
+    const opt = cands => ({ cands, required: false });
+    const REC = resolveCols(recipesData, 'Recipes', {
+      name: ['Recipe_Name'],
+      fiber: opt(['Fiber_Type']),
+      scope: opt(['Recipe_Scope']),
+      sku: opt(['SKU_Base', 'SKUBase']),
+      step1: opt(['Photo_Process_1']),
+      step2: opt(['Photo_Process_2']),
+      finished: opt(['Photo_Finished']),
+      inspiration: opt(['Photo_Inspiration']),
+    }, missing);
+    const PH = resolveCols(photosData, 'Product_Photos', {
+      recipe: ['Recipe'],
+      colorway: opt(['Colorway_Name']),
+      fiber: opt(['Fiber_Type']),
+      url: opt(['Nextcloud_URL']),
+      filename: opt(['Source_Filename']),
+      status: opt(['Status']),
+      lotDate: opt(['Lot_Date']),
+      notes: opt(['Notes']),
+      fav: opt(['Is_Favorite']),
+      preview: opt(['Is_Preview']),
+    }, missing);
+
+    if (missing.length) {
+      showBanner('Missing columns: ' + [...new Set(missing)].join(', ') + '. Check the Product Photos / Recipes tables.');
+      document.getElementById('summary').textContent = 'Could not load — see above.';
+      return false;
+    }
+
+    const rIds = recipesData.id || [];
+    allRecipes = rIds.map((id, i) => ({
+      id,
+      Recipe_Name: columnAsArray(recipesData, REC.name)[i],
+      Fiber_Type: columnAsArray(recipesData, REC.fiber)[i],
+      Recipe_Scope: columnAsArray(recipesData, REC.scope)[i],
+      SKU_Base: columnAsArray(recipesData, REC.sku)[i],
+      slots: {
+        step1: filled(columnAsArray(recipesData, REC.step1)[i]),
+        step2: filled(columnAsArray(recipesData, REC.step2)[i]),
+        finished: filled(columnAsArray(recipesData, REC.finished)[i]),
+        inspiration: filled(columnAsArray(recipesData, REC.inspiration)[i]),
+      },
+    })).filter(r => r.Recipe_Name);
+
+    const pIds = photosData.id || [];
+    allPhotos = pIds.map((id, i) => ({
+      id,
+      recipeId: getRefId(columnAsArray(photosData, PH.recipe)[i]),
+      Colorway_Name: columnAsArray(photosData, PH.colorway)[i],
+      Fiber_Type: columnAsArray(photosData, PH.fiber)[i],
+      Nextcloud_URL: columnAsArray(photosData, PH.url)[i],
+      Source_Filename: columnAsArray(photosData, PH.filename)[i],
+      Status: columnAsArray(photosData, PH.status)[i],
+      Lot_Date: columnAsArray(photosData, PH.lotDate)[i],
+      Notes: columnAsArray(photosData, PH.notes)[i],
+      Is_Favorite: !!columnAsArray(photosData, PH.fav)[i],
+      Is_Preview: !!columnAsArray(photosData, PH.preview)[i],
+    }));
+
+    document.getElementById('tabs').style.display = 'flex';
+    return true;
+  } catch (e) {
+    console.error('Load failed:', e);
+    const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
+    showBanner('Failed to load — ' + msg);
+    document.getElementById('summary').textContent = 'Failed to load.';
+    return false;
+  }
+}
+
+/* The only call that costs an n8n execution just by looking, so it is never
+   made on load — only when the Inbox tab is actually opened, or rescanned. */
+async function scanInbox() {
+  if (inboxScanning) return;
+  inboxScanning = true;
+  renderInbox();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    let inboxRes;
+    try {
+      const r = await fetch(LIST_WEBHOOK_URL, { signal: controller.signal });
+      inboxRes = await r.json();
+      clearTimeout(timeoutId);
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      inboxScanning = false;
+      if (fetchErr.name === 'AbortError') {
+        showBanner('Too many files to scan in time — showing what loaded before, if anything.');
+        renderInbox();
+        return;
+      }
+      throw fetchErr;
+    }
+
+    inboxPhotos = (inboxRes.photos || []);
+    visibleCount = 30;
+    cardState = {};
+    inboxPhotos.forEach(p => {
+      cardState[p.path] = { recipe: null, slot: p.default_slot || null, note: '', docType: 'recipe' };
+    });
+    inboxScanned = true;
+    inboxScanning = false;
+    renderAll();
+  } catch (e) {
+    console.error('Inbox scan failed:', e);
+    inboxScanning = false;
+    showBanner('Could not scan the inbox — check the n8n webhook is active.');
+    renderInbox();
+  }
+}
+
+/* ── derived ────────────────────────────────────────────────────────────── */
+// A rejected photo is not a photo you want linked, so it is out of both the
+// unlinked list and the candidate suggestions. (The photo manager already did
+// this; recipes-missing-photo did not, and offered rejects for assignment.)
+function unlinkedPhotos() { return allPhotos.filter(p => !p.recipeId && statusOf(p) !== 'Rejected'); }
+function photosForRecipe(rid) { return allPhotos.filter(p => p.recipeId === rid); }
+function recipesWithPhotos() {
+  const linked = new Set(allPhotos.map(p => p.recipeId).filter(Boolean));
+  return allRecipes.filter(r => linked.has(r.id));
+}
+// Limited editions are excluded: an LE with no photo is expected, not a gap.
+// Counted separately so they are not silently dropped.
+function recipesMissingPhotos() {
+  const linked = new Set(allPhotos.map(p => p.recipeId).filter(Boolean));
+  return allRecipes
+    .filter(r => !linked.has(r.id))
+    .filter(r => isBrowsable(r.Recipe_Scope, false))
+    .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
+}
+function leMissingCount() {
+  const linked = new Set(allPhotos.map(p => p.recipeId).filter(Boolean));
+  return allRecipes.filter(r => !linked.has(r.id) && scopeKind(r.Recipe_Scope) === 'le').length;
+}
+function pendingCount() { return allPhotos.filter(p => p.recipeId && statusOf(p) === 'Pending').length; }
+
+/* One matcher, both directions. It used to be two: suggestRecipe() in the photo
+   manager and matchCandidates() in recipes-missing-photo, which could disagree
+   about whether a photo and a recipe belonged together. */
+function namesMatch(a, b) {
+  const x = normalize(a), y = normalize(b);
+  if (!x || !y) return false;
+  if (x === y) return 'exact';
+  return (x.includes(y) || y.includes(x)) ? 'likely' : false;
+}
+function suggestRecipe(photo) {
+  const n = normalize(photo.Colorway_Name);
+  if (!n) return null;
+  const exact = allRecipes.find(r => normalize(r.Recipe_Name) === n);
+  if (exact) return { recipe: exact, confidence: 'exact' };
+  const likely = allRecipes
+    .filter(r => namesMatch(r.Recipe_Name, photo.Colorway_Name))
+    .sort((a, b) => Math.abs(normalize(a.Recipe_Name).length - n.length) - Math.abs(normalize(b.Recipe_Name).length - n.length))[0];
+  return likely ? { recipe: likely, confidence: 'likely' } : null;
+}
+function matchCandidates(recipeName) {
+  return unlinkedPhotos()
+    .filter(p => namesMatch(recipeName, p.Colorway_Name))
+    .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0));
+}
+
+/* ── render root ────────────────────────────────────────────────────────── */
+function renderAll() {
+  const unl = unlinkedPhotos();
+  const miss = recipesMissingPhotos();
+
+  document.getElementById('inboxCount').textContent = inboxScanned
+    ? (inboxPhotos.length ? `(${inboxPhotos.length})` : '') : '';
+  document.getElementById('linkCount').textContent = (unl.length + miss.length) ? `(${unl.length + miss.length})` : '';
+  document.getElementById('recCount').textContent = `(${recipesWithPhotos().length})`;
+
+  const pend = pendingCount();
+  document.getElementById('summary').textContent =
+    (inboxScanned ? `${inboxPhotos.length} unfiled file${inboxPhotos.length === 1 ? '' : 's'} · ` : '') +
+    `${unl.length} photo${unl.length === 1 ? '' : 's'} to link · ` +
+    `${miss.length} recipe${miss.length === 1 ? '' : 's'} with no photo · ` +
+    `${pend} pending review`;
+
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === currentTab));
+  document.getElementById('viewInbox').style.display = currentTab === 'inbox' ? 'block' : 'none';
+  document.getElementById('viewLink').style.display = currentTab === 'link' ? 'block' : 'none';
+  document.getElementById('viewRecipes').style.display = currentTab === 'recipes' ? 'block' : 'none';
+
+  if (currentTab === 'inbox') renderInbox();
+  else if (currentTab === 'link') renderLink();
+  else renderRecipes();
+}
+
+/* ══ TAB: INBOX ════════════════════════════════════════════════════════════ */
+function renderInbox() {
+  const v = document.getElementById('viewInbox');
+
+  if (inboxScanning) {
+    v.innerHTML = `<div class="scan-prompt"><p>Scanning the inbox folders…</p></div>`;
+    return;
+  }
+  if (!inboxScanned) {
+    v.innerHTML = `
+      <div class="scan-prompt">
+        <p>Scanning reads the camera and DSLR upload folders over n8n. It is not run
+        automatically, so opening this widget costs nothing until you ask.</p>
+        <button class="btn btn-primary" data-action="scaninbox">Scan the inbox</button>
+      </div>`;
+    return;
+  }
+  if (!inboxPhotos.length) {
+    v.innerHTML = `
+      <div class="done-state">Inbox is empty — nothing waiting to be filed. 🎉</div>
+      <div style="text-align:center;margin-top:14px"><button class="btn" data-action="scaninbox">Rescan</button></div>`;
+    return;
+  }
+
+  const visible = inboxPhotos.slice(0, visibleCount);
+  const remaining = inboxPhotos.length - visible.length;
+  v.innerHTML = `
+    <div class="section-note">Pick a recipe, say whether it is a recipe step or a product photo, then file it. Filing moves the file in Nextcloud and writes the row in Grist.</div>
+    <div class="inbox-grid">${visible.map(inboxCardHTML).join('')}</div>
+    ${remaining > 0 ? `
+      <div style="text-align:center; margin-top:14px;">
+        <button class="btn" data-action="loadmore">Load ${Math.min(30, remaining)} more (${remaining} left)</button>
+      </div>` : ''}
+    <div style="text-align:center;margin-top:14px"><button class="btn" data-action="scaninbox">Rescan inbox</button></div>`;
+  observeImages();
+}
+
+function inboxCardHTML(p) {
+  const state = cardState[p.path] || { recipe: null, slot: null, note: '', docType: 'recipe' };
+  const key = btoa(unescape(encodeURIComponent(p.path))).replace(/=/g, '');
+
+  const recipeSection = state.recipe
+    ? `<div class="picked-chip">
+        <span>${esc(state.recipe.Recipe_Name)} <span style="color:#8B7D72">(${esc(state.recipe.SKU_Base || state.recipe.Fiber_Type || '—')})</span></span>
+        <span class="change-link" data-action="clearrecipe" data-key="${key}">change</span>
+      </div>`
+    : `<div class="inbox-search-wrap">
+        <input class="inbox-search-input" placeholder="Type recipe name..." data-inboxsearch="${key}" id="search-${key}">
+        <div class="inbox-suggestions" id="suggestions-${key}" style="display:none"></div>
+      </div>`;
+
+  const doctypeRow = `
+    <div class="doctype-row">
+      <button class="doctype-btn ${state.docType !== 'product' ? 'active' : ''}" data-action="doctype" data-key="${key}" data-doctype="recipe">Recipe Photo</button>
+      <button class="doctype-btn ${state.docType === 'product' ? 'active' : ''}" data-action="doctype" data-key="${key}" data-doctype="product">Product Photo</button>
+    </div>`;
+
+  const slotRow = state.docType === 'product' ? '' : `
+    <div class="slot-row">${Object.entries(SLOTS).map(([slotKey, s]) => `
+      <button class="slot-btn ${state.slot === slotKey ? 'active' : ''}" data-action="slot" data-key="${key}" data-slot="${slotKey}">${s.label}</button>
+    `).join('')}</div>`;
+
+  const canFile = !!(state.recipe && (state.docType === 'product' || state.slot));
+
+  return `
+    <div class="photo-card" id="card-${key}">
+      <button class="delete-btn" data-action="deleteinbox" data-key="${key}" title="Delete this photo permanently">🗑</button>
+      <div class="ovl-rots">
+        <button class="ovl-rot-btn" data-action="rotinbox" data-key="${key}" data-dir="ccw" title="Rotate 90° counter-clockwise">↺</button>
+        <button class="ovl-rot-btn" data-action="rotinbox" data-key="${key}" data-dir="cw" title="Rotate 90° clockwise">↻</button>
+      </div>
+      <img class="lazy-photo" data-src="${esc(p.preview_url || '')}" alt="${esc(p.filename || '')}">
+      <div class="photo-card-body">
+        <div class="photo-folder">${esc(folderOf(p.path))}</div>
+        <div class="photo-filename">${esc(p.filename || '')}</div>
+        <span class="source-tag source-${p.source === 'dslr' ? 'dslr' : 'camera'}">${p.source === 'dslr' ? 'DSLR' : 'Phone'}</span>
+        ${recipeSection}
+        ${doctypeRow}
+        ${slotRow}
+        <textarea class="inbox-note" rows="2" placeholder="Optional note (what did you do differently?)"
+          data-inboxnote="${key}">${esc(state.note || '')}</textarea>
+        <button class="file-btn" id="file-btn-${key}" ${canFile ? '' : 'disabled'} data-action="file" data-key="${key}">
+          File this photo
+        </button>
+      </div>
+    </div>`;
+}
+
+// btoa cannot handle non-Latin-1, and accented filenames are common here, so
+// the key is UTF-8 encoded on the way in and decoded on the way back out.
+function keyToPath(key) {
+  return decodeURIComponent(escape(atob(key)));
+}
+
+function refreshInboxCard(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+  const cardEl = document.getElementById(`card-${key}`);
+  if (cardEl) cardEl.outerHTML = inboxCardHTML(p);
+  observeImages();
+}
+
+function searchInboxRecipes(key, query) {
+  const box = document.getElementById(`suggestions-${key}`);
+  if (!box) return;
+  const q = typedKey(query.trim());
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = allRecipes
+    .filter(r => typedKey(r.Recipe_Name).includes(q) || typedKey(r.SKU_Base).includes(q))
+    .slice(0, 8);
+  if (!matches.length) {
+    box.innerHTML = `<div class="inbox-suggestion" style="color:#8B7D72;font-style:italic">No matches</div>`;
+    box.style.display = 'block';
+    return;
+  }
+  box.innerHTML = matches.map(r => `
+    <div class="inbox-suggestion" data-action="pickrecipe" data-key="${key}" data-recipe="${r.id}">
+      <div class="rs-name">${esc(r.Recipe_Name)}</div>
+      <div class="rs-meta">${r.SKU_Base ? esc(r.SKU_Base) + ' · ' : ''}${esc(r.Fiber_Type || '—')}${scopeKind(r.Recipe_Scope) === 'reserved' ? ' · reserved' : ''}${scopeKind(r.Recipe_Scope) === 'le' ? ' · limited edition' : ''}</div>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+/* ══ TAB: TO LINK ══════════════════════════════════════════════════════════ */
+function renderLink() {
+  const v = document.getElementById('viewLink');
+  const unl = unlinkedPhotos();
+  const miss = recipesMissingPhotos();
+  const leSkipped = leMissingCount();
+  let html = '';
+
+  html += `<div class="slabel">Photos waiting for a recipe (${unl.length})</div>`;
+  html += `<div class="section-note">These arrived from the lot-photo import and aren't linked to a recipe yet. Confirm the suggestion or search for the right one.</div>`;
+  if (!unl.length) {
+    html += `<div class="done-state">Nothing waiting — every photo is linked to a recipe. 🎉</div>`;
+  } else {
+    html += `<div class="attn-grid">` + unl.map(unlinkedCardHTML).join('') + `</div>`;
+  }
+
+  html += `<div class="slabel slabel-warn">Recipes with no product photo (${miss.length})</div>`;
+  html += `<div class="section-note">Open one to see photos whose name looks like a match, or search all unlinked photos.${
+    leSkipped ? ` ${leSkipped} limited edition${leSkipped === 1 ? '' : 's'} also ${leSkipped === 1 ? 'has' : 'have'} no photo — not listed, since an LE without one is expected.` : ''
+  }</div>`;
+  if (!miss.length) {
+    html += `<div class="done-state">Every recipe has at least one product photo linked.</div>`;
+  } else {
+    html += miss.map(missingCardHTML).join('');
+  }
+
+  v.innerHTML = html;
+  observeImages();
+}
+
+function unlinkedCardHTML(p) {
+  const s = suggestRecipe(p);
+  const suggestBlock = s
+    ? `<div class="suggest-row">
+         <span class="confidence conf-${s.confidence}">${s.confidence === 'exact' ? 'exact match' : 'likely'}</span>
+         <button class="link-btn" data-action="link" data-photo="${p.id}" data-recipe="${s.recipe.id}">Link to ${esc(s.recipe.Recipe_Name)}</button>
+       </div>`
+    : `<div class="suggest-row"><span class="confidence conf-likely">no name match</span><span style="font-size:11px;color:#8B7D72">Search for the recipe below.</span></div>`;
+  return `
+    <div class="attn-card">
+      <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
+      <div class="attn-body">
+        <div style="font-weight:500;margin-bottom:2px">${esc(p.Colorway_Name || 'Untitled')}</div>
+        <div class="attn-file">${esc(p.Source_Filename || '')}</div>
+        <div class="pcard-links" style="margin:4px 0">
+          <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="ccw" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="cw" title="Rotate 90° clockwise">↻</button>
+        </div>
+        ${suggestBlock}
+        <div class="link-search">
+          <input placeholder="Search recipes…" data-linksearch="${p.id}">
+          <div class="suggestions" data-suggfor="${p.id}"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function missingCardHTML(r) {
+  const isOpen = expandedMissingId === r.id;
+  // Counting candidates is cheap (name comparison only, no network), so the
+  // badge can be shown on every row without opening it.
+  const candidates = matchCandidates(r.Recipe_Name);
+  return `
+    <div class="miss-card">
+      <div class="miss-head" data-action="expandmissing" data-recipe="${r.id}">
+        <div>
+          <div class="miss-name">${esc(r.Recipe_Name)}</div>
+          <div class="miss-meta">${esc(r.Fiber_Type || '—')}${scopeKind(r.Recipe_Scope) === 'reserved' ? ' · reserved' : ''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${candidates.length ? `<span class="miss-badge">${candidates.length} possible</span>` : ''}
+          <span class="miss-chev">${isOpen ? '▲' : '▼'}</span>
+        </div>
+      </div>
+      ${isOpen ? `
+        <div class="miss-body">
+          ${candidates.length ? `
+            <div class="candidates-grid">
+              ${candidates.map(p => `
+                <div class="candidate-card">
+                  <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Source_Filename || '')}">
+                  <div class="candidate-body">
+                    <div class="candidate-name">${esc(p.Source_Filename || 'untitled')}</div>
+                    <div class="candidate-date">${esc(fmtDate(p.Lot_Date))}</div>
+                    <button class="assign-btn" data-action="link" data-photo="${p.id}" data-recipe="${r.id}">Assign</button>
+                  </div>
+                </div>`).join('')}
+            </div>
+          ` : `<div class="no-candidates">No photos found for this colorway yet — take one, or search manually below in case the name doesn't quite match.</div>`}
+          <div class="manual-search-wrap">
+            <input class="manual-search-input" placeholder="Search all unlinked photos…" data-manualsearch="${r.id}">
+            <div class="manual-suggestions" data-manualfor="${r.id}"></div>
+          </div>
+        </div>` : ''}
+    </div>`;
+}
+
+/* ══ TAB: BY RECIPE ════════════════════════════════════════════════════════ */
+function renderRecipes() {
+  const v = document.getElementById('viewRecipes');
+  const all = recipesWithPhotos();
+  const q = normalize(recipeSearch);
+  const list = (q ? all.filter(r => normalize(r.Recipe_Name).includes(q)) : all)
+    .sort((a, b) => a.Recipe_Name.localeCompare(b.Recipe_Name));
+
+  let html = `<input class="search-input" id="recSearchBox" placeholder="Search recipes…" value="${esc(recipeSearch)}">`;
+  html += `<div class="section-note">★ is your standard — the most consistent version to show. Mark lot alternatives clients can use as <b>Approved</b>. Sending an approved photo to a client's order folder happens in Photo Gallery, per order.</div>`;
+
+  // For the one case that genuinely needs pictures side by side: telling apart
+  // two recipes that share a name across vendors.
+  const withThumbs = list.filter(r => {
+    const ps = photosForRecipe(r.id);
+    return (ps.find(p => p.Is_Favorite) || ps[0] || {}).Nextcloud_URL;
+  });
+  const pending = withThumbs.filter(r => !shownThumbs.has(r.id)).length;
+  const shown = withThumbs.length - pending;
+  html += `<div class="preview-bar">
+    <span class="preview-bar-note">${
+      pending
+        ? `${pending} preview${pending === 1 ? '' : 's'} not loaded — click one to load just it`
+        : (withThumbs.length ? `All ${withThumbs.length} previews loaded` : 'No previews available')
+    }</span>
+    ${pending ? `<button data-action="showallthumbs">Load all ${pending} preview${pending === 1 ? '' : 's'}</button>` : ''}
+    ${shown ? `<button data-action="hideallthumbs">Hide previews</button>` : ''}
+  </div>`;
+
+  if (!list.length) {
+    html += `<div class="done-state">${q ? 'No recipes match that search.' : 'No recipes have product photos yet.'}</div>`;
+    v.innerHTML = html;
+    wireRecipeSearch();
+    observeImages();
+    return;
+  }
+
+  html += list.map(recipeCardHTML).join('');
+  v.innerHTML = html;
+  wireRecipeSearch();
+  observeImages();
+}
+
+function slotPills(slots) {
+  const defs = [['step1', 'Step 1'], ['step2', 'Step 2'], ['finished', 'Finished'], ['inspiration', 'Inspiration']];
+  return `<div class="rec-slots">` + defs.map(([k, label]) =>
+    `<span class="slot-pill ${slots[k] ? 'on' : ''}">${label}</span>`).join('') + `</div>`;
+}
+
+function recipeCardHTML(r) {
+  const photos = photosForRecipe(r.id).sort((a, b) => {
+    if (a.Is_Favorite !== b.Is_Favorite) return a.Is_Favorite ? -1 : 1;
+    return (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0);
+  });
+  const isOpen = expandedRecipeId === r.id;
+  const standard = photos.find(p => p.Is_Favorite);
+  const approved = photos.filter(p => statusOf(p) === 'Approved').length;
+  const thumb = (standard || photos[0] || {}).Nextcloud_URL || '';
+
+  let subBits = `${esc(r.Fiber_Type || '—')} · ${photos.length} photo${photos.length === 1 ? '' : 's'}`;
+  if (approved) subBits += ` · ${approved} client-ready`;
+  const noStandard = photos.length > 0 && !standard;
+
+  // Three states: nothing to show, asked-for, or a button. The button carries
+  // its own data-action so the delegated handler matches it before the
+  // data-action="expand" on the row around it — clicking the preview loads the
+  // preview, it does not open the recipe.
+  const thumbHTML = !thumb
+    ? `<div class="rec-thumb-none" title="No photo"></div>`
+    : shownThumbs.has(r.id)
+      ? `<img class="rec-thumb lazy-photo" data-src="${esc(thumb)}" alt="" loading="lazy">`
+      : `<button class="rec-thumb-btn" data-action="showthumb" data-recipe="${r.id}" title="Load this preview">🖼</button>`;
+
+  return `
+    <div class="rec-card ${isOpen ? 'open' : ''}" data-reccard="${r.id}">
+      <div class="rec-head" data-action="expand" data-recipe="${r.id}">
+        ${thumbHTML}
+        <div class="rec-headmain">
+          <div class="rec-name">${esc(r.Recipe_Name)}</div>
+          <div class="rec-sub">${subBits}${noStandard ? ' · <span class="rec-warn">no standard set</span>' : ''}</div>
+          ${slotPills(r.slots)}
+        </div>
+        <div class="rec-chev">▸</div>
+      </div>
+      <div class="rec-body">
+        ${isOpen ? `<div class="photo-grid">${photos.map(photoCardHTML).join('')}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function photoCardHTML(p) {
+  const st = statusOf(p);
+  const std = p.Is_Favorite;
+  return `
+    <div class="pcard ${std ? 'standard' : ''} ${st === 'Rejected' ? 'rejected' : ''}">
+      <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
+      <div class="pcard-body">
+        <div class="pcard-top">
+          <button class="star-btn ${std ? 'on' : ''}" data-action="standard" data-photo="${p.id}" title="Set as the standard to show">★</button>
+          ${std ? '<span class="standard-tag">Standard</span>' : '<span style="font-size:10px;color:#8B7D72">Set standard</span>'}
+        </div>
+        <div class="pcard-meta">${esc(fmtDate(p.Lot_Date) || p.Source_Filename || '')}</div>
+        <div class="status-seg">
+          ${STATUSES.map(s => `<button class="${st === s ? 'active-' + s.toLowerCase() : ''}" data-action="status" data-photo="${p.id}" data-status="${s}">${s === 'Approved' ? 'Client-ready' : s}</button>`).join('')}
+        </div>
+        <textarea class="note-input" rows="1" placeholder="Note (e.g. lot ran darker)" data-notefor="${p.id}">${esc(p.Notes || '')}</textarea>
+        <div class="pcard-links">
+          <button class="mini-link" data-action="unlink" data-photo="${p.id}">Unlink</button>
+          <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="ccw" title="Rotate 90° counter-clockwise">↺</button>
+          <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="cw" title="Rotate 90° clockwise">↻</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* Debounced: rebuilding the list on every keystroke threw away and rebuilt
+   every <img> in the intermediate result sets. The dwell timer absorbed most of
+   that, but 250ms means only the set you actually pause on is ever built. */
+let recSearchTimer = null;
+function wireRecipeSearch() {
+  const box = document.getElementById('recSearchBox');
+  if (!box) return;
+  box.oninput = () => {
+    recipeSearch = box.value;
+    clearTimeout(recSearchTimer);
+    recSearchTimer = setTimeout(renderRecipesListOnly, 250);
+  };
+}
+function renderRecipesListOnly() {
+  const box = document.getElementById('recSearchBox');
+  const caret = box ? box.selectionStart : null;
+  renderRecipes();
+  const box2 = document.getElementById('recSearchBox');
+  if (box2) { box2.focus(); if (caret != null) box2.setSelectionRange(caret, caret); }
+}
+
+/* ── actions: Grist ─────────────────────────────────────────────────────── */
+async function linkPhoto(photoId, recipeId) {
+  const p = allPhotos.find(x => x.id === photoId);
+  const r = allRecipes.find(x => x.id === recipeId);
+  if (!p || !r) return;
+  const fields = { Recipe: recipeId };
+  if (!p.Fiber_Type && r.Fiber_Type) fields.Fiber_Type = r.Fiber_Type;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, fields]]);
+    p.recipeId = recipeId;
+    if (fields.Fiber_Type) p.Fiber_Type = fields.Fiber_Type;
+    // Linking a photo can empty the recipe's "missing" card, so close it rather
+    // than leaving an open panel whose contents just vanished.
+    if (expandedMissingId === recipeId) expandedMissingId = null;
+    showToast(`Linked to ${r.Recipe_Name}`);
+    renderAll();
+  } catch (e) {
+    console.error('Link failed:', e);
+    showToast('Could not link — check widget access level');
+  }
+}
+
+async function unlinkPhoto(photoId) {
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Recipe: null }]]);
+    const p = allPhotos.find(x => x.id === photoId);
+    if (p) p.recipeId = null;
+    showToast('Unlinked');
+    renderAll();
+  } catch (e) {
+    console.error('Unlink failed:', e);
+    showToast('Could not unlink — check widget access level');
+  }
+}
+
+// Set the single standard for a recipe: favorite + preview on this photo, off its siblings.
+async function setStandard(photoId) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p || !p.recipeId) return;
+  const siblings = photosForRecipe(p.recipeId);
+  const turningOff = p.Is_Favorite; // clicking the current standard clears it
+  const actions = [];
+  siblings.forEach(s => {
+    const shouldBe = !turningOff && s.id === photoId;
+    if (s.Is_Favorite !== shouldBe || s.Is_Preview !== shouldBe) {
+      actions.push(['UpdateRecord', 'Product_Photos', s.id, { Is_Favorite: shouldBe, Is_Preview: shouldBe }]);
+    }
+  });
+  if (!actions.length) return;
+  try {
+    await grist.docApi.applyUserActions(actions);
+    siblings.forEach(s => { const on = !turningOff && s.id === photoId; s.Is_Favorite = on; s.Is_Preview = on; });
+    showToast(turningOff ? 'Standard cleared' : 'Standard set');
+    renderRecipes();
+  } catch (e) {
+    console.error('Set standard failed:', e);
+    showToast('Could not set standard — check widget access level');
+  }
+}
+
+async function setStatus(photoId, status) {
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Status: status }]]);
+    const p = allPhotos.find(x => x.id === photoId);
+    if (p) p.Status = status;
+    showToast(status === 'Approved' ? 'Marked client-ready' : status);
+    renderAll();
+  } catch (e) {
+    console.error('Set status failed:', e);
+    showToast('Could not update status — check widget access level');
+  }
+}
+
+async function setNote(photoId, text) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p || (p.Notes || '') === text) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Product_Photos', photoId, { Notes: text }]]);
+    p.Notes = text;
+    showToast('Note saved');
+  } catch (e) {
+    console.error('Save note failed:', e);
+    showToast('Could not save note — check widget access level');
+  }
+}
+
+/* Rotates a filed photo. The row keeps its URL; photo2 serves `immutable`, so
+   the workflow hands back a fresh &r= URL and that is what gets re-rendered. */
+async function rotatePhoto(photoId, direction, btnEl) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p) return;
+  const siblings = btnEl && btnEl.parentElement ? btnEl.parentElement.querySelectorAll('.rot-btn') : [];
+  siblings.forEach(b => { b.disabled = true; });
+  try {
+    const res = await fetch(ROTATE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo_id: photoId, photo_url: p.Nextcloud_URL, direction }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    const out = await res.json().catch(() => ({}));
+    if (out && out.new_url) p.Nextcloud_URL = out.new_url;
+    showToast('Rotated');
+    renderAll();
+  } catch (e) {
+    console.error('Rotate failed:', e);
+    siblings.forEach(b => { b.disabled = false; });
+    showToast('Rotate failed — is the n8n webhook live?');
+  }
+}
+
+/* ── actions: inbox ─────────────────────────────────────────────────────── */
+function pickInboxRecipe(key, recipeId) {
+  const recipe = allRecipes.find(r => r.id === recipeId);
+  if (!recipe) return;
+  const path = keyToPath(key);
+  cardState[path] = { ...(cardState[path] || {}), recipe };
+  refreshInboxCard(key);
+}
+function clearInboxRecipe(key) {
+  const path = keyToPath(key);
+  cardState[path] = { ...(cardState[path] || {}), recipe: null };
+  refreshInboxCard(key);
+}
+function setInboxSlot(key, slotKey) {
+  const path = keyToPath(key);
+  const current = cardState[path] || {};
+  cardState[path] = { ...current, slot: current.slot === slotKey ? null : slotKey };
+  refreshInboxCard(key);
+}
+function setInboxDocType(key, docType) {
+  const path = keyToPath(key);
+  const current = cardState[path] || {};
+  cardState[path] = { ...current, docType, slot: docType === 'product' ? null : current.slot };
+  refreshInboxCard(key);
+}
+
+// Rotates the file in place, before it is filed. Nothing in Grist yet, so the
+// only state to fix is this card's preview_url — which needs a fresh &r= or the
+// browser keeps showing the pre-rotation image (photo2 serves `immutable`).
+// Whatever the file looks like at File time is what gets filed.
+async function rotateInboxPhoto(key, direction) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+
+  const cardEl = document.getElementById(`card-${key}`);
+  const btns = cardEl ? cardEl.querySelectorAll('.ovl-rot-btn') : [];
+  btns.forEach(b => { b.disabled = true; });
+  if (cardEl) cardEl.style.opacity = '0.5';
+
+  try {
+    const res = await fetch(ROTATE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p.path, photo_url: p.preview_url, direction: direction }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+    const out = await res.json();
+    if (!out || !out.success) throw new Error('Workflow reported failure');
+
+    if (out.new_url) p.preview_url = out.new_url;
+    if (cardEl) cardEl.style.opacity = '1';
+    refreshInboxCard(key);
+    showToast('Rotated');
+  } catch (e) {
+    console.error('Rotate failed:', e);
+    if (cardEl) cardEl.style.opacity = '1';
+    btns.forEach(b => { b.disabled = false; });
+    showToast('Rotate failed — is the n8n webhook live?');
+  }
+}
+
+async function deleteInboxPhoto(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  if (!p) return;
+  if (!confirm(`Permanently delete "${p.filename}"? This cannot be undone.`)) return;
+
+  const cardEl = document.getElementById(`card-${key}`);
+  if (cardEl) cardEl.style.opacity = '0.4';
+
+  try {
+    const res = await fetch(DELETE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p.path }),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
+    delete cardState[path];
+    renderAll();
+    showToast('Photo deleted');
+  } catch (e) {
+    console.error('Delete failed:', e);
+    if (cardEl) cardEl.style.opacity = '1';
+    showToast('Delete failed — is the n8n webhook live?');
+  }
+}
+
+async function fileThisPhoto(key) {
+  const path = keyToPath(key);
+  const p = inboxPhotos.find(ph => ph.path === path);
+  const state = cardState[path];
+  if (!p || !state || !state.recipe) return;
+  if (state.docType !== 'product' && !state.slot) return;
+
+  const btn = document.getElementById(`file-btn-${key}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Filing...'; }
+
+  const extMatch = (p.filename || '').match(/\.[^.]+$/);
+  const ext = extMatch ? extMatch[0] : '.jpg';
+
+  let payload, webhookUrl, successLabel;
+
+  if (state.docType === 'product') {
+    webhookUrl = PRODUCT_FILE_WEBHOOK_URL;
+    payload = {
+      source_path: p.path,
+      recipe_id: state.recipe.id,
+      colorway_name: state.recipe.Recipe_Name,
+      fiber_type: state.recipe.Fiber_Type,
+      recipe_scope: state.recipe.Recipe_Scope,
+      sku_base: state.recipe.SKU_Base,
+      note_text: state.note || '',
+      ext,
+    };
+    successLabel = `Filed to Product Photos — ${state.recipe.Recipe_Name}`;
+  } else {
+    const slotInfo = SLOTS[state.slot];
+    const folder = recipeFolderName(state.recipe);
+    const destFolder = `Squirrely Stash/recipes/photos/${folder}/`;
+    const destPath = `${destFolder}${slotInfo.filenameBase}${ext}`;
+    webhookUrl = FILE_WEBHOOK_URL;
+    payload = {
+      source_path: p.path,
+      dest_folder: destFolder,
+      dest_path: destPath,
+      recipe_id: state.recipe.id,
+      photo_field: slotInfo.photoField,
+      note_field: slotInfo.noteField,
+      note_text: state.note || '',
+    };
+    successLabel = `Filed to ${state.recipe.Recipe_Name} — ${slotInfo.label}`;
+  }
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Webhook returned ' + res.status);
+
+    if (btn) { btn.textContent = 'Filed ✓'; btn.classList.add('filed'); }
+    showToast(successLabel);
+
+    inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
+    delete cardState[path];
+
+    /* A product photo just became a Product_Photos row, so the "To link" tab is
+       now out of date. Re-reading Grist is free (no n8n call) and keeps the two
+       tabs honest with each other — which is the point of merging them. */
+    if (state.docType === 'product') {
+      setTimeout(() => { loadGrist().then(ok => { if (ok) renderAll(); }); }, 600);
+    } else {
+      setTimeout(renderAll, 500);
+    }
+  } catch (e) {
+    console.error('Filing failed:', e);
+    if (btn) { btn.disabled = false; btn.textContent = 'File this photo'; }
+    showToast('Filing failed — is the n8n webhook live?');
+  }
+}
+
+/* ── event delegation ───────────────────────────────────────────────────── */
+document.getElementById('refreshBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  const ok = await loadGrist();
+  // Refresh never re-scans the inbox on its own — that is an n8n call, and the
+  // Rescan button inside the tab is where it belongs.
+  if (ok) renderAll();
+  btn.disabled = false;
+});
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  currentTab = tab.dataset.tab;
+  renderAll();
+});
+
+document.body.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const photoId = el.dataset.photo ? Number(el.dataset.photo) : null;
+  const recipeId = el.dataset.recipe ? Number(el.dataset.recipe) : null;
+  const key = el.dataset.key || null;
+
+  // Grist-side
+  if (action === 'link') linkPhoto(photoId, recipeId);
+  else if (action === 'unlink') unlinkPhoto(photoId);
+  else if (action === 'standard') setStandard(photoId);
+  else if (action === 'status') setStatus(photoId, el.dataset.status);
+  else if (action === 'rotate') rotatePhoto(photoId, el.dataset.dir, el);
+  else if (action === 'expand') { expandedRecipeId = (expandedRecipeId === recipeId) ? null : recipeId; renderRecipes(); }
+  else if (action === 'expandmissing') { expandedMissingId = (expandedMissingId === recipeId) ? null : recipeId; renderLink(); }
+  else if (action === 'showthumb') {
+    // Load this one preview without opening the recipe.
+    e.stopPropagation();
+    shownThumbs.add(recipeId);
+    renderRecipes();
+  }
+  else if (action === 'showallthumbs') { recipesWithPhotos().forEach(r => shownThumbs.add(r.id)); renderRecipes(); }
+  else if (action === 'hideallthumbs') { shownThumbs.clear(); renderRecipes(); }
+  // Inbox-side
+  else if (action === 'scaninbox') scanInbox();
+  else if (action === 'loadmore') { visibleCount += 30; renderInbox(); }
+  else if (action === 'pickrecipe') pickInboxRecipe(key, recipeId);
+  else if (action === 'clearrecipe') clearInboxRecipe(key);
+  else if (action === 'slot') setInboxSlot(key, el.dataset.slot);
+  else if (action === 'doctype') setInboxDocType(key, el.dataset.doctype);
+  else if (action === 'file') fileThisPhoto(key);
+  else if (action === 'deleteinbox') deleteInboxPhoto(key);
+  else if (action === 'rotinbox') rotateInboxPhoto(key, el.dataset.dir);
+});
+
+document.body.addEventListener('input', (e) => {
+  // Inbox: find a recipe to file this photo against.
+  const inboxBox = e.target.closest('[data-inboxsearch]');
+  if (inboxBox) { searchInboxRecipes(inboxBox.dataset.inboxsearch, inboxBox.value); return; }
+
+  // Inbox: the note travels with the card state; no re-render, or typing would
+  // lose focus on every keystroke.
+  const inboxNote = e.target.closest('[data-inboxnote]');
+  if (inboxNote) {
+    const path = keyToPath(inboxNote.dataset.inboxnote);
+    cardState[path] = { ...(cardState[path] || {}), note: inboxNote.value };
+    return;
+  }
+
+  // To link: find a recipe for an unlinked photo.
+  const linkInput = e.target.closest('[data-linksearch]');
+  if (linkInput) {
+    const pid = linkInput.dataset.linksearch;
+    const box = document.querySelector(`[data-suggfor="${pid}"]`);
+    if (!box) return;
+    const q = normalize(linkInput.value);
+    if (!q) { box.classList.remove('show'); box.innerHTML = ''; return; }
+    const matches = allRecipes.filter(r => normalize(r.Recipe_Name).includes(q)).slice(0, 8);
+    box.innerHTML = matches.length
+      ? matches.map(r => `
+          <div class="sugg" data-action="link" data-photo="${pid}" data-recipe="${r.id}">
+            <div class="sn">${esc(r.Recipe_Name)}</div>
+            <div class="sm">${esc(r.Fiber_Type || '—')}${scopeKind(r.Recipe_Scope) === 'reserved' ? ' · reserved' : ''}</div>
+          </div>`).join('')
+      : `<div class="sugg" style="color:#8B7D72;font-style:italic">No matches</div>`;
+    box.classList.add('show');
+    return;
+  }
+
+  // To link: find a photo for a recipe that has none.
+  const manualInput = e.target.closest('[data-manualsearch]');
+  if (manualInput) {
+    const rid = manualInput.dataset.manualsearch;
+    const box = document.querySelector(`[data-manualfor="${rid}"]`);
+    if (!box) return;
+    const q = normalize(manualInput.value);
+    if (!q) { box.classList.remove('show'); box.innerHTML = ''; return; }
+    const matches = unlinkedPhotos()
+      .filter(p => normalize(p.Colorway_Name).includes(q) || normalize(p.Source_Filename).includes(q))
+      .sort((a, b) => (Number(b.Lot_Date) || 0) - (Number(a.Lot_Date) || 0))
+      .slice(0, 10);
+    box.innerHTML = matches.length
+      ? matches.map(p => `
+          <div class="manual-row" data-action="link" data-photo="${p.id}" data-recipe="${rid}">
+            <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" alt="">
+            <div class="manual-row-name">${esc(p.Source_Filename || p.Colorway_Name || 'untitled')}</div>
+          </div>`).join('')
+      : `<div class="manual-row" style="color:#8B7D72;font-style:italic">No matches</div>`;
+    box.classList.add('show');
+    observeImages();
+  }
+});
+
+// Save filed-photo notes on blur / change (delegated).
+document.body.addEventListener('change', (e) => {
+  const ta = e.target.closest('[data-notefor]');
+  if (!ta) return;
+  setNote(Number(ta.dataset.notefor), ta.value);
+});
+
+/* ── Grist integration ──────────────────────────────────────────────────── */
+grist.ready({ requiredAccess: 'full' });
+loadGrist().then(ok => { if (ok) renderAll(); });
+</script>
+</body>
+</html>
