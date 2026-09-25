@@ -449,6 +449,78 @@
   }
 
   .no-data { color: #8B7D72; font-size: 12px; padding: 10px 0; font-style: italic; }
+
+  /* ── PREMADE DYE LOCATIONS ──
+     Collapsed by default and parked at the very bottom: this is for the rare
+     manual run that never went through a work order, so it must not compete
+     with the mix table for attention on the ordinary pass. */
+  .stash-wrap { margin-top: 18px; border-top: 1px solid var(--rule); padding-top: 10px; }
+  .stash-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--rule); background: white; cursor: pointer;
+    font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase; color: #6B5E52;
+    text-align: left;
+  }
+  .stash-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .stash-caret { font-size: 9px; transition: transform .15s ease; }
+  .stash-wrap.open .stash-caret { transform: rotate(90deg); }
+  .stash-toggle .stash-count { margin-left: auto; font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .stash-body { margin-top: 10px; }
+
+  .stash-walk {
+    font-size: 11px; color: #6B5E52; background: var(--warm);
+    border: 1px solid var(--rule); border-radius: 5px;
+    padding: 7px 10px; margin-bottom: 8px; line-height: 1.5;
+  }
+  .stash-walk b { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--ink); }
+
+  .stash-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--warm);
+  }
+  .stash-row:last-child { border-bottom: none; }
+  .stash-bin {
+    flex: 0 0 auto; min-width: 54px; text-align: center;
+    font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500;
+    padding: 3px 7px; border-radius: 4px;
+    border: 1.5px solid var(--ink); background: white; color: var(--ink);
+  }
+  .stash-bin.none { border-style: dashed; border-color: #D4A49A; color: var(--accent); font-size: 10px; font-weight: 600; }
+  .stash-bin.powder { border-color: #D4B07A; background: var(--gold-light); color: var(--gold); font-size: 10px; font-weight: 600; }
+  .stash-info { flex: 1 1 auto; min-width: 0; }
+  .stash-name { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+  .stash-sub { font-size: 10.5px; color: #8B7D72; margin-top: 2px; line-height: 1.45; }
+  .stash-qty { flex: 0 0 auto; text-align: right; }
+  .stash-have { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+  .stash-need { font-size: 9.5px; color: #8B7D72; }
+  .stash-flag {
+    font-size: 9px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; border: 1px solid;
+  }
+  .stash-flag.warn { background: var(--gold-light); color: var(--gold); border-color: #D4B07A; }
+  .stash-flag.bad { background: var(--accent-light); color: var(--accent); border-color: #D4A49A; }
+  .stash-foot {
+    font-size: 10.5px; color: #6B5E52; font-style: italic;
+    margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--rule);
+  }
+  .stash-refresh {
+    font-size: 10px; padding: 2px 7px; border-radius: 4px;
+    border: 1px solid var(--rule); background: transparent; cursor: pointer; color: #6B5E52;
+    font-family: 'Inter', sans-serif; margin-left: 6px;
+  }
+  .stash-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+  body.big-mode .stash-toggle { font-size: 14px; padding: 11px 14px; }
+  body.big-mode .stash-bin { font-size: 19px; min-width: 70px; padding: 4px 9px; }
+  body.big-mode .stash-name { font-size: 17px; }
+  body.big-mode .stash-sub { font-size: 13.5px; }
+  body.big-mode .stash-have { font-size: 16px; }
+  body.big-mode .stash-need { font-size: 12px; }
+  body.big-mode .stash-walk { font-size: 14px; }
+  body.big-mode .stash-walk b { font-size: 16px; }
+  body.big-mode .stash-foot { font-size: 13px; }
 </style>
 </head>
 <body>
@@ -477,6 +549,102 @@ function esc(s) {
   return (s == null ? '' : String(s)).replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+/* ── Mixed-dye bin codes — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
+   The made-dye shelf is M-A1 .. M-D4: letters are columns, numbers are rows,
+   matching back stock. Every widget that reads Dye_Stock.Bin_Location must
+   normalise before displaying OR grouping. Skipping it is what let one drawer
+   show up as several bins: "5", "b3", "B-3" and "M-B3" are all one place, and
+   an un-normalised group key splits them into four.
+
+   Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
+   different rack, are not being renamed, and must NOT be passed to normBin. */
+const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+const BIN_LETTERS = 'ABCDEFGHIJKL';
+const NO_BIN = '(no bin)';
+
+// Fills down a column before moving to the next. Keyed on ROWS, not COLS, so
+// widening the shelf later appends new letters instead of remapping every code.
+function dyeBinCode(index0) {
+  const col = Math.floor(index0 / DYE_BIN_ROWS);
+  const row = index0 % DYE_BIN_ROWS;
+  return 'M-' + BIN_LETTERS[col] + (row + 1);
+}
+function normBin(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
+  if (!s) return '';
+  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
+  if (m) return 'M-' + m[1] + Number(m[2]);
+  m = /^(\d{1,3})$/.exec(s);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= DYE_BIN_ROWS * DYE_BIN_COLS) return dyeBinCode(n - 1);
+  }
+  return String(raw).trim();   // off-grid / unrecognised — left alone, never invented
+}
+// Shelf position, for sorting. Off-grid codes sort last instead of colliding at 0.
+function binOrder(code) {
+  const m = /^M-([A-L])(\d{1,2})$/.exec(String(code || ''));
+  if (!m) return 9000;
+  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_ROWS + (Number(m[2]) - 1);
+}
+function binSortFn(a, b) {
+  const d = binOrder(a) - binOrder(b);
+  return d !== 0 ? d : String(a).localeCompare(String(b));
+}
+// Display form. One empty-bin string everywhere, so the label a worker reads is
+// the same label the grouping used.
+function binLabel(raw) {
+  return normBin(raw) || NO_BIN;
+}
+// First grid position with nothing in it. Returns '' when the shelf is full, so
+// the caller can say so instead of inventing an M-E1 that does not exist.
+function nextFreeBin(binGroups) {
+  for (let i = 0; i < DYE_BIN_ROWS * DYE_BIN_COLS; i++) {
+    const code = dyeBinCode(i);
+    if (!binGroups[code] || !binGroups[code].length) return code;
+  }
+  return '';
+}
+
+/* Column-resolution helpers, same contracts as the other widgets: never read a
+   hardcoded column name, so a rename in Grist degrades to a blank cell instead
+   of a silent undefined. */
+function columnAsArray(t, col) { return col && Array.isArray(t[col]) ? t[col] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function stockRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+// Mixed_Date arrives as epoch seconds from the date column, but hand-entered
+// rows and older imports can carry a string — both have to age correctly.
+function stockDaysAgo(dateVal) {
+  if (!dateVal) return null;
+  const ms = typeof dateVal === 'number' ? dateVal * 1000 : new Date(dateVal).getTime();
+  if (!ms || isNaN(ms)) return null;
+  return Math.floor((Date.now() - ms) / 86400000);
+}
+function stockDateSort(v) {
+  if (!v) return 0;
+  return typeof v === 'number' ? v : (new Date(v).getTime() / 1000 || 0);
+}
+function stockShortDate(v) {
+  if (!v) return '';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  if (isNaN(d)) return '';
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -563,6 +731,16 @@ let currentHistoryEntries = [];
 let currentPreviewId = null;
 let currentProductPhotos = [];
 let previewPickerOpen = false;
+
+// Premade-dye locations. Fetched the first time the panel is opened rather than
+// on every recipe click: the panel is for the occasional off-plan manual run, so
+// clicking through recipes must stay as cheap as it is now. The fetched tables
+// are cached for the session and re-read by the ↻ button, since a jar that moves
+// bins while this widget sits open would otherwise keep pointing at the old one.
+let stashOpen = false;
+let stashState = null;        // { jarsByDye, dye } once loaded
+let stashLoading = false;
+let stashError = '';
 
 function getPhotoList(r) {
   const list = [];
@@ -859,6 +1037,234 @@ function buildLayoutRingSvg(baseSegs, overlays) {
   return `<svg viewBox="0 0 400 400" width="${displaySize}" height="${displaySize}">${inner}</svg>`;
 }
 
+/* ── PREMADE DYE LOCATIONS ──
+   For the manual run that was never put on a work order: where each of this
+   recipe's dyes is sitting right now, and therefore where it goes back at the
+   end. Read-only on purpose — nothing here writes to Grist, so using it off the
+   normal flow cannot leave the production tables in a half-logged state.
+
+   Keyed on the dye's Grist row ID, never its name: 26 names are shared across
+   brands, so a name-keyed lookup would happily point at the wrong brand's jar. */
+async function loadStash() {
+  stashLoading = true;
+  stashError = '';
+  renderLeft();
+  try {
+    const [stkT, dyeT] = await Promise.all([
+      grist.docApi.fetchTable('Dye_Stock'),
+      grist.docApi.fetchTable('Dyes'),
+    ]);
+
+    const S = {
+      dye: findColumn(stkT, ['Dye']),
+      qty: findColumn(stkT, ['Quantity_mL']),
+      mixed: findColumn(stkT, ['Mixed_Date']),
+      bin: findColumn(stkT, ['Bin_Location']),
+    };
+    const D = {
+      name: findColumn(dyeT, ['Dye_Name']),
+      brand: findColumn(dyeT, ['Brand']),
+      serial: findColumn(dyeT, ['Serial']),
+      // Both spellings are in the wild across the doc's history.
+      shelf: findColumn(dyeT, ['Shelf_Life_days', 'Shelf_Life_days_']),
+    };
+    if (!S.dye) throw new Error('Dye_Stock has no Dye column');
+
+    const dye = {};
+    (dyeT.id || []).forEach((id, i) => {
+      dye[id] = {
+        name: columnAsArray(dyeT, D.name)[i] || '',
+        brand: columnAsArray(dyeT, D.brand)[i] || '',
+        serial: columnAsArray(dyeT, D.serial)[i] || '',
+        shelf: Number(columnAsArray(dyeT, D.shelf)[i]) || 0,
+      };
+    });
+
+    const jarsByDye = {};
+    (stkT.id || []).forEach((id, i) => {
+      const did = stockRefId(columnAsArray(stkT, S.dye)[i]);
+      if (!did) return;
+      (jarsByDye[did] = jarsByDye[did] || []).push({
+        id,
+        qty: Number(columnAsArray(stkT, S.qty)[i]) || 0,
+        mixed: columnAsArray(stkT, S.mixed)[i] || '',
+        bin: normBin(columnAsArray(stkT, S.bin)[i]),
+      });
+    });
+    // One jar per dye is the rule, so a second row is a stale record rather than
+    // a second container. Newest first, and the count gets flagged on the row.
+    Object.values(jarsByDye).forEach(a => a.sort((x, y) => stockDateSort(y.mixed) - stockDateSort(x.mixed)));
+
+    stashState = { jarsByDye, dye };
+  } catch (e) {
+    console.error('Failed to load premade dye locations:', e);
+    stashState = null;
+    stashError = (e && e.message) ? e.message : String(e);
+  }
+  stashLoading = false;
+  renderLeft();
+}
+
+function toggleStash() {
+  stashOpen = !stashOpen;
+  if (stashOpen && !stashState && !stashLoading) { loadStash(); return; }
+  renderLeft();
+}
+
+function refreshStash() {
+  if (stashLoading) return;
+  stashState = null;
+  loadStash();
+}
+
+/* One line per dye in the recipe, deduped by dye row ID — a dye used at two
+   steps is still one jar in one bin, and listing it twice would read as two. */
+function buildStashLines() {
+  const seen = new Map();
+  [...currentComponents]
+    .sort((a, b) => (a.Step_Number || 99) - (b.Step_Number || 99))
+    .forEach(c => {
+      const key = c.Dye_Id || ('name:' + (c.Dye_Name || ''));
+      const rate = Number(c.Effective_mL_per_100_yd) || Number(c.Default_mL_per_100_yds) || 0;
+      const existing = seen.get(key);
+      if (existing) {
+        existing.need += rate * (currentYardage / 100);
+        if (!existing.isPowder && c.Is_Powder) existing.isPowder = true;
+        return;
+      }
+      seen.set(key, {
+        dyeId: c.Dye_Id || null,
+        name: c.Dye_Name || '',
+        dilution: c.Dilution_Ratio || '',
+        isPowder: !!c.Is_Powder,
+        need: rate * (currentYardage / 100),
+      });
+    });
+
+  return [...seen.values()].map(line => {
+    const rec = line.dyeId && stashState ? stashState.dye[line.dyeId] : null;
+    const jars = line.dyeId && stashState ? (stashState.jarsByDye[line.dyeId] || []) : [];
+    const jar = jars.find(j => j.qty > 0) || jars[0] || null;
+    const age = jar ? stockDaysAgo(jar.mixed) : null;
+    const shelf = rec ? rec.shelf : 0;
+    return {
+      ...line,
+      brand: rec ? rec.brand : '',
+      serial: rec ? rec.serial : '',
+      jar,
+      dupes: jars.length > 1 ? jars.length : 0,
+      age,
+      expired: shelf > 0 && age !== null && age > shelf,
+      shelf,
+      empty: !!jar && jar.qty <= 0,
+      short: !!jar && jar.qty > 0 && line.need > 0 && jar.qty < line.need,
+      // A dye with no row ID can't be looked up at all — say that rather than
+      // reporting "no premade jar", which would be a guess dressed as a fact.
+      unresolved: !line.dyeId,
+    };
+  });
+}
+
+function stashRowHtml(L) {
+  const flags = [];
+  if (L.dupes) flags.push(`<span class="stash-flag bad">${L.dupes} jars logged</span>`);
+  if (L.expired) flags.push(`<span class="stash-flag warn">past ${L.shelf}-day shelf life</span>`);
+  if (L.short) flags.push(`<span class="stash-flag warn">may not cover the run</span>`);
+  if (L.jar && L.jar.qty > 0 && L.jar.qty <= 5) flags.push(`<span class="stash-flag warn">nearly empty</span>`);
+
+  let bin, sub, qty;
+  if (L.isPowder) {
+    bin = `<div class="stash-bin powder">POWDER</div>`;
+    sub = 'Recipe calls for dry powder — from the alphabetical powder box, not the made-dye shelf.';
+    qty = `<div class="stash-have">&mdash;</div><div class="stash-need">powder shelf</div>`;
+  } else if (L.unresolved) {
+    bin = `<div class="stash-bin none">NO DYE<br>RECORD</div>`;
+    sub = 'This component does not point at a row in the Dyes table, so there is nothing to look up. Fix the link in Recipe Dye Components.';
+    qty = `<div class="stash-have">&mdash;</div><div class="stash-need">&nbsp;</div>`;
+  } else if (!L.jar) {
+    bin = `<div class="stash-bin none">NO<br>PREMADE</div>`;
+    sub = 'No jar logged for this dye — mix it from powder.';
+    qty = `<div class="stash-have">&mdash;</div><div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}</div>`;
+  } else if (L.empty) {
+    bin = `<div class="stash-bin">${esc(binLabel(L.jar.bin))}</div>`;
+    sub = 'Jar is logged as empty — mix from powder, and the empty goes back to this bin.';
+    qty = `<div class="stash-have">0 mL</div><div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}</div>`;
+  } else {
+    bin = `<div class="stash-bin">${esc(binLabel(L.jar.bin))}</div>`;
+    sub = '';
+    qty = `<div class="stash-have">${L.jar.qty} mL</div>
+      <div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}${
+        L.jar.mixed ? ' · mixed ' + esc(stockShortDate(L.jar.mixed)) : ''}</div>`;
+  }
+
+  const ident = [L.brand, L.serial, L.dilution].filter(Boolean).map(esc).join(' · ');
+
+  return `<div class="stash-row">
+    ${bin}
+    <div class="stash-info">
+      <div class="stash-name">
+        <span class="swatch" style="background:${guessColor(L.name)}"></span>
+        ${esc(L.name || '(unnamed dye)')}
+        ${flags.join('')}
+      </div>
+      ${ident ? `<div class="stash-sub">${ident}</div>` : ''}
+      ${sub ? `<div class="stash-sub">${esc(sub)}</div>` : ''}
+    </div>
+    <div class="stash-qty">${qty}</div>
+  </div>`;
+}
+
+function stashBodyHtml() {
+  if (stashLoading) return `<div class="no-data">Reading Dye Stock…</div>`;
+  if (stashError) {
+    return `<div class="no-data">Could not read Dye Stock — ${esc(stashError)}.
+      The rest of the card is unaffected.</div>`;
+  }
+  if (!stashState) return `<div class="no-data">Not loaded yet.</div>`;
+  if (!currentComponents.length) {
+    return `<div class="no-data">This recipe has no dye components, so there is nothing to locate.</div>`;
+  }
+
+  const lines = buildStashLines();
+  // Powder lines are excluded even when a jar happens to exist for that dye: the
+  // recipe calls for dry powder, so sending someone to the made-dye shelf for it
+  // would contradict the row directly beneath.
+  const bins = [...new Set(
+    lines.filter(L => !L.isPowder && L.jar && L.jar.qty > 0 && L.jar.bin).map(L => L.jar.bin)
+  )].sort(binSortFn);
+  const missing = lines.filter(L => !L.isPowder && !L.unresolved && (!L.jar || L.empty)).length;
+  const powders = lines.filter(L => L.isPowder).length;
+  const noBin = lines.some(L => L.jar && L.jar.qty > 0 && !L.jar.bin);
+
+  const walkBits = [];
+  if (bins.length) walkBits.push(`Bins to visit: ${bins.map(b => `<b>${esc(b)}</b>`).join(' · ')}`);
+  if (noBin) walkBits.push('one jar has no bin recorded — give it one in Dye Stock');
+  if (missing) walkBits.push(`${missing} to mix from powder`);
+  if (powders) walkBits.push(`${powders} called for as dry powder`);
+
+  return `
+    ${walkBits.length ? `<div class="stash-walk">${walkBits.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+    ${lines.map(stashRowHtml).join('')}
+    <div class="stash-foot">Put-back: each jar returns to the bin shown beside it.
+      Nothing on this panel writes to Grist — if you mix a fresh jar or move one, log it in Dye Stock.</div>
+  `;
+}
+
+function stashPanelHtml() {
+  const count = currentComponents.length;
+  return `
+    <div class="stash-wrap ${stashOpen ? 'open' : ''}">
+      <button class="stash-toggle" onclick="toggleStash()">
+        <span class="stash-caret">▶</span>
+        <span>Premade dye locations</span>
+        <span class="stash-count">${count} dye${count === 1 ? '' : 's'}${
+          stashOpen && stashState ? ` <span class="stash-refresh" onclick="event.stopPropagation(); refreshStash()">↻ refresh</span>` : ''
+        }</span>
+      </button>
+      ${stashOpen ? `<div class="stash-body">${stashBodyHtml()}</div>` : ''}
+    </div>`;
+}
+
 function renderLeft() {
   const r = currentRecipe;
   const comps = [...currentComponents].sort((a,b) => (a.Step_Number||99) - (b.Step_Number||99));
@@ -1002,6 +1408,8 @@ function renderLeft() {
         return `<div style="font-size:12px;margin-top:4px;"><span style="color:#8B7D72;font-weight:600;">${d}:</span> ${e.note}</div>`;
       }).join('')}
     </div>` : ''}
+
+    ${stashPanelHtml()}
   `;
 }
 
@@ -1172,6 +1580,10 @@ grist.onRecord(async (record) => {
         id,
         Recipe: get('Recipe'),
         Dye_Name: resolvedDyeName,
+        // Kept alongside the resolved name because the premade-jar lookup keys on
+        // the row ID: 26 dye names are shared across brands, so matching on name
+        // would point at whichever brand's jar happened to be filed first.
+        Dye_Id: dyeRefId,
         Dye_Full: get('Dye_Full'),
         'Std_Powder_tsp_': get('Std_Powder_tsp_'),
         'Std_Water_mL_': get('Std_Water_mL_'),
@@ -1364,6 +1776,10 @@ grist.onRecord(async (record) => {
   try {
     renderLeft();
     renderRight();
+    // Left open from the previous recipe, so re-read the jars rather than showing
+    // the last recipe's snapshot: a bin code is only useful if it is current, and
+    // a stale one walks someone to the wrong drawer.
+    if (stashOpen) loadStash();
   } catch (e) {
     console.error('Rendering failed for recipe', recipeRowId, e);
     document.getElementById('leftPanel').innerHTML = `<div class="no-data">Something went wrong displaying this recipe — check the browser console for details.</div>`;
