@@ -239,6 +239,7 @@ let S = {
   openDrawer: null,    // lineId whose action drawer is open
   qty: {},             // lineId -> qty override typed into the row
   lotChoice: {},       // lineId -> lotId chosen in the drawer
+  linkChoice: {},      // lineId -> recipeId chosen in the "link a colourway" picker
   xferTarget: {}, xferQty: {}, stockQty: {},
   log: [],             // [{text, cls, inverse:[actions]}]
   ready: false,
@@ -412,6 +413,9 @@ async function loadAll() {
     const needed = Number(columnAsArray(wolT, WOL.qtyNeeded)[i]) || 0;
     S.lines.push({
       id, woId, order: o, recipeId,
+      // Kept so the link picker can show WHICH sku failed to match a recipe.
+      // Read-only here — nothing in this widget ever writes it back.
+      sku,
       name: rec ? rec.name : (sku ? `SKU ${sku}` : '(no recipe on this line)'),
       fiber: rec ? fiberCode(rec.fiber) : '',
       needed, inBin, boxed,
@@ -608,6 +612,63 @@ function lineRowHtml(l) {
   return row + (S.openDrawer === l.id ? drawerHtml(l) : '');
 }
 
+/* A line with no recipe is a dead end: no lots can be found for it, so Bin and
+   Box build zero actions and only toast. It happens whenever the SKU on the
+   order line doesn't exactly match a recipe's SKU_Base — a wrong suffix that
+   was corrected in Shopify AFTER the order was placed (a Shopify line item
+   keeps the SKU it was created with), or a custom draft line, which has no
+   SKU at all.
+
+   This block replaces the useless lot picker in that state and writes the
+   line's Recipe reference.
+
+   IT DELIBERATELY NEVER WRITES THE SKU, and that is not a simplification —
+   "SS - Reprocess Open Orders" matches Grist lines to Shopify lines BY SKU.
+   Give this line a SKU that the Shopify order doesn't carry and the next sync
+   run finds no match for it, zeroes it to Qty_Needed 0 / Queue_Status
+   Cancelled, and then re-adds the original bad-SKU line from Shopify. The
+   repair would undo itself and duplicate the row. Writing the Recipe alone is
+   invisible to that workflow: its quantity pass only ever patches Qty_Needed
+   and Queue_Status, so the link survives every future run.
+
+   The same trap applies in reverse to a blank-SKU custom line — the sync
+   explicitly leaves those alone precisely BECAUSE they have no SKU, so
+   putting one on would hand it to the cancel path. */
+function linkBlockHtml(l) {
+  const canWrite = !!(S.cols && S.cols.WOL && S.cols.WOL.recipe);
+  const chosen = S.linkChoice[l.id];
+  const opts = Object.values(S.recipes)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .map(r => `<option value="${r.id}" ${chosen === r.id ? 'selected' : ''}>${
+      esc(r.name)}${r.fiber ? ' — ' + esc(r.fiber) : ''}</option>`).join('');
+
+  if (!canWrite) {
+    return `<div class="dblock">
+      <h4>Not linked to a colorway</h4>
+      <div class="dnote">This line has no Recipe, so no lots can be found and nothing can be
+        binned or boxed against it. There is no <strong>Recipe</strong> column on
+        Work_Order_Lines to write, so it has to be fixed in Grist directly.</div>
+    </div>`;
+  }
+
+  return `<div class="dblock">
+    <h4>Link this line to a colorway</h4>
+    <div class="drow">
+      <select data-linksel="${l.id}">
+        <option value="">choose a colorway...</option>
+        ${opts}
+      </select>
+    </div>
+    <div class="drow">
+      <button class="btn tiny solid" data-dolink="${l.id}" ${chosen ? '' : 'disabled'}>Link</button>
+      <span style="font-size:11px;color:var(--muted);">SKU <span class="mono">${esc(l.sku || '(none)')}</span> matched no recipe</span>
+    </div>
+    <div class="dnote">Nothing on this line can be binned or boxed until it knows its colorway.
+      This sets the line's <strong>Recipe</strong> only — the SKU is left exactly as it is, because
+      the Shopify sync matches on SKU and would cancel this line if it stopped matching.</div>
+  </div>`;
+}
+
 function drawerHtml(l) {
   const lots = S.lotsByRecipe[l.recipeId] || [];
   const a = availFor(l);
@@ -636,6 +697,7 @@ function drawerHtml(l) {
 
   return `<tr class="drawer"><td colspan="8"><div class="drawer-grid">
 
+    ${!l.recipeId ? linkBlockHtml(l) : `
     <div class="dblock">
       <h4>Lot to draw from</h4>
       <div class="drow"><select data-lotsel="${l.id}" ${lots.length ? '' : 'disabled'}>${lotOpts}</select></div>
@@ -649,7 +711,7 @@ function drawerHtml(l) {
       <div class="dnote">${lots.length
         ? 'Defaults to the oldest lot with free spools. Every Bin/Boxed action on this line writes against this lot.'
         : 'No Production_Lots row exists for this colorway, so an allocation here would have no lot attached. Make the lot first if you want the count to reconcile.'}</div>
-    </div>
+    </div>`}
 
     <div class="dblock">
       <h4>Transfer to another line</h4>
@@ -711,6 +773,36 @@ function newAllocAction(line, lotId, qty, status) {
    allocation, not add a second one beside it. Adding left the original row
    sitting at "Wound - Needs Labels" forever, so Wind & Box kept asking for it
    and the spools were counted twice. Only the shortfall becomes a new row. */
+/* Writes ONLY Work_Order_Lines.Recipe. See linkBlockHtml for why the SKU is
+   left alone — writing it would make the Shopify sync cancel this very line. */
+async function doLink(lineId) {
+  const l = lineById(lineId);
+  if (!l) return;
+  const recipeId = S.linkChoice[lineId];
+  if (!recipeId) { showToast('Pick a colorway first'); return; }
+  const col = S.cols && S.cols.WOL && S.cols.WOL.recipe;
+  if (!col) { showToast('No Recipe column on Work_Order_Lines'); return; }
+
+  const rec = S.recipes[recipeId];
+  const before = l.recipeId || 0;
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [col]: recipeId }],
+    ]);
+    S.log.unshift({
+      text: `${l.order.num} ${l.sku || '(no sku)'} linked to ${rec ? rec.name : 'a colorway'}`,
+      cls: '',
+      inverse: [['UpdateRecord', 'Work_Order_Lines', lineId, { [col]: before }]],
+    });
+    delete S.linkChoice[lineId];
+    showToast('Linked ✓');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: could not link the line to a recipe', e);
+    showToast('Could not link — check Work_Order_Lines');
+  }
+}
+
 async function logSpools(lines, status, label) {
   const toBin = status === BIN_STATUS;
   const jobs = lines.map(l => ({ line: l, qty: rowQty(l), lot: defaultLotFor(l) }))
@@ -939,6 +1031,14 @@ function bind() {
     S.openDrawer = S.openDrawer === id ? null : id;
     render();
   }));
+  document.querySelectorAll('[data-linksel]').forEach(el => el.addEventListener('change', () => {
+    const id = Number(el.dataset.linksel);
+    const v = Number(el.value);
+    if (v) S.linkChoice[id] = v; else delete S.linkChoice[id];
+    render();
+  }));
+  document.querySelectorAll('[data-dolink]').forEach(el =>
+    el.addEventListener('click', () => doLink(Number(el.dataset.dolink))));
   document.querySelectorAll('[data-lotsel]').forEach(el => el.addEventListener('change', () => {
     S.lotChoice[Number(el.dataset.lotsel)] = Number(el.value) || null;
   }));
