@@ -812,6 +812,22 @@ async function logSpools(lines, status, label) {
   const actions = [], inverse = [], addIdx = [];
   let promoted = 0, fresh = 0, needLot = 0;
 
+  /* Spools drawn out of back stock have to come OFF the back stock count, or
+     they are counted twice — still sitting in General_Stock_Spools and also
+     allocated to the order. `doToStock` already does this in the other
+     direction; this is the matching half.
+
+     Nobody has to declare where the spools came from, because the lot's own
+     numbers say it: `free` is what is made but neither allocated nor in stock,
+     so anything needed beyond `free` can only have come out of stock.
+
+     Accumulated per lot rather than written per job — two lines drawing on one
+     lot would otherwise each compute `before` from the same stale stockVal and
+     the second write would silently undo the first. */
+  const stockDraw = {};   // lotId -> spools taken out of the stock column
+  const lotClaim = {};    // lotId -> spools newly allocated against it this run
+  let shortStock = 0;     // wanted from stock but the column did not have it
+
   jobs.forEach(j => {
     let need = j.qty;
     if (!toBin) {
@@ -842,7 +858,36 @@ async function logSpools(lines, status, label) {
       fresh += need;
       addIdx.push(actions.length);
       actions.push(newAllocAction(j.line, j.lot.id, need, status));
+
+      // Whatever this lot could not cover from free spools came out of stock.
+      // Two separate running totals: how much of the lot has been claimed at
+      // all (which is what exhausts `free`), and how much has been taken off
+      // the stock column. Using one for both understates the draw when an
+      // earlier line already ate the free spools.
+      if (S.stockCol) {
+        const claimedBefore = lotClaim[j.lot.id] || 0;
+        const freeLeft = Math.max(0, j.lot.free - claimedBefore);
+        const fromStock = Math.max(0, need - freeLeft);
+        if (fromStock > 0) {
+          const drawnBefore = stockDraw[j.lot.id] || 0;
+          const stockLeft = Math.max(0, j.lot.stockVal - drawnBefore);
+          const take = Math.min(fromStock, stockLeft);
+          if (take > 0) stockDraw[j.lot.id] = drawnBefore + take;
+          // Beyond what the column holds is a real over-allocation. Never write
+          // the column negative — say so and let Bin Audit show the rest.
+          shortStock += fromStock - take;
+        }
+      }
+      lotClaim[j.lot.id] = (lotClaim[j.lot.id] || 0) + need;
     }
+  });
+
+  Object.entries(stockDraw).forEach(([lotId, taken]) => {
+    const lot = S.lots.find(x => x.id === Number(lotId));
+    const before = lot ? lot.stockVal : 0;
+    actions.push(['UpdateRecord', 'Production_Lots', Number(lotId),
+      { [S.stockCol]: Math.max(0, before - taken) }]);
+    inverse.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before }]);
   });
 
   if (!actions.length) {
@@ -856,16 +901,23 @@ async function logSpools(lines, status, label) {
     const inv = addIdx.map(i => vals[i]).filter(id => id != null)
       .map(id => ['RemoveRecord', 'Lot_Allocations', id]).concat(inverse);
     const total = promoted + fresh;
+    const drawn = Object.values(stockDraw).reduce((a, b) => a + b, 0);
     const detail = (promoted && fresh) ? ` (${promoted} from the bin, ${fresh} newly wound)`
       : (promoted ? ' from the bin' : '');
+    // Taking spools off the back stock count is a second, invisible change to a
+    // different table — it gets said out loud rather than left to be noticed.
+    const stockNote = drawn
+      ? ` · ${drawn} came off ${S.stockColLabel.toLowerCase()}` : '';
     S.log.unshift({
       text: `${total} spool${total === 1 ? '' : 's'} ${label}${detail}${
-        jobs.length > 1 ? ` across ${jobs.length} lines` : ` — ${jobs[0].line.name}`}`,
+        jobs.length > 1 ? ` across ${jobs.length} lines` : ` — ${jobs[0].line.name}`}${stockNote}`,
       cls: toBin ? 'warnish' : '',
       inverse: inv,
     });
     S.picked = {}; S.qty = {}; S.openDrawer = null;
-    showToast(needLot ? `Logged — ${needLot} line${needLot === 1 ? '' : 's'} had no lot` : 'Logged \u2713');
+    showToast(needLot ? `Logged — ${needLot} line${needLot === 1 ? '' : 's'} had no lot`
+      : shortStock ? `Logged — ${shortStock} more than ${S.stockColLabel.toLowerCase()} had; check Bin Audit`
+      : 'Logged \u2713');
     await loadAll();
   } catch (e) {
     console.error('Quick Log: could not write allocations', e);
