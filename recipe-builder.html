@@ -322,6 +322,7 @@
           <option>General</option>
           <option>Customer Reserved</option>
           <option>One-off</option>
+          <option>College/University</option>
           <option>Limited Edition</option>
         </select>
       </div>
@@ -335,6 +336,21 @@
           <option value="">— pick vendor —</option>
         </select>
       </div>
+      <div class="field-wrap" id="schoolStateWrap" style="display:none">
+        <span class="field-label">School state</span>
+        <input class="field-input" id="schoolState" maxlength="2" placeholder="ID"
+               oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
+      </div>
+      <div class="field-wrap" id="schoolCityWrap" style="display:none">
+        <span class="field-label">School city</span>
+        <input class="field-input" id="schoolCity" placeholder="Moscow"
+               oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
+      </div>
+      <div class="field-wrap" id="schoolCodeWrap" style="display:none">
+        <span class="field-label">School code</span>
+        <input class="field-input" id="schoolCode" placeholder="UOFI"
+               oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
+      </div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
         <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();">
@@ -346,7 +362,7 @@
       </div>
       <div class="field-wrap">
         <span class="field-label">Linked Customer (optional)</span>
-        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner(); renderSkuSuggestion(); renderLinkedCustomerState();">
+        <select class="field-select" id="linkedCustomer" onchange="markUnsaved(); renderLinkedOrderBanner(); renderSkuSuggestion(); renderLinkedCustomerState(); renderScopeHint();">
           <option value="">— none —</option>
         </select>
         <div class="linked-state" id="linkedCustomerState"></div>
@@ -791,6 +807,10 @@ function refreshVendorCodes(customersTable) {
 
 function vendorCodeFromExistingSku(skuBase) {
   if (!skuBase) return '';
+  // An institution's SKU ends in its abbreviation, not a vendor code. Reading
+  // the last segment blindly would call UOFI a reseller the moment some
+  // customer's code happened to match it.
+  if (/_EDU_/i.test(String(skuBase))) return '';
   const parts = skuBase.toString().split('_');
   const last = (parts[parts.length - 1] || '').toUpperCase();
   return VENDOR_CODES.includes(last) ? last : '';
@@ -1899,10 +1919,15 @@ function renderReviewBanner() {
    scheme when it had simply lost the scope.
 
    Legacy spellings are mapped onto the option that means the same thing.
-   Anything genuinely unrecognised — "College/University" — is added as an
-   option rather than discarded, because silently reassigning someone's data is
-   worse than showing a value the list did not expect. */
-const SCOPE_OPTIONS = { general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off', le: 'Limited Edition' };
+   Anything still unrecognised is added as an option rather than discarded,
+   because silently reassigning someone's data is worse than showing a value the
+   list did not expect. "College/University" used to land there — it is now a
+   scope in its own right, so the one recipe carrying it resolves properly
+   instead of only appearing while that recipe happens to be open. */
+const SCOPE_OPTIONS = {
+  general: 'General', reserved: 'Customer Reserved', oneoff: 'One-off',
+  edu: 'College/University', le: 'Limited Edition',
+};
 
 /* Year the colourway was made.
    Not derived from Created_Date: that records when the row appeared in Grist,
@@ -1990,6 +2015,12 @@ function scopeKind(scope) {
   if (t.includes('reserv')) return 'reserved';
   if (t.includes('limited') || t === 'le') return 'le';
   if (t.includes('oneoff') || (t.includes('custom') && t.includes('retail')) || t === 'custom') return 'oneoff';
+  // Institutional buyers — a school music department, not a reseller and not an
+  // individual. Checked before 'general' so "General University" cannot fall
+  // through to plain stock. The one recipe already stored as
+  // "College/University" now resolves here instead of landing in 'other',
+  // where it was getting a SKU with no suffix at all.
+  if (t.includes('universit') || t.includes('college') || t === 'edu' || t.includes('school')) return 'edu';
   if (t.includes('general')) return 'general';
   return 'other';
 }
@@ -2235,7 +2266,17 @@ function renderScopeHint() {
     : kind === 'oneoff'   ? 'Made for one person, not offered again unless they ask &mdash; SKU gains <code>_CU_</code> plus their initials, e.g. <code>FFN_SUNSET_CU_KL</code>'
     : kind === 'le'       ? `Cannot be remade &mdash; kept for research and hidden from general lists. SKU is dated, e.g. <code>FFN_SUNSET_LE_${leYearMonth()}_01</code>`
     : kind === 'general'  ? 'Open stock, anyone can order it &mdash; SKU stays plain'
+    : kind === 'edu'      ? eduScopeHint()
     : '';
+}
+
+/* The College/University hint does double duty: it shows the shape, and when a
+   piece is missing it says so instead of letting a plain SKU look finished. */
+function eduScopeHint() {
+  const edu = eduSuffixParts();
+  const shape = 'An institution &mdash; SKU gains <code>_EDU_</code> plus state, city and their abbreviation, e.g. <code>FFN_UNIVERSITYOFIDAHO_EDU_ID_MOSCOW_UOFI</code>';
+  if (!edu.missing.length) return shape;
+  return `${shape}<br><b>No suffix yet</b> &mdash; still needs ${edu.missing.join(', ')}. The SKU stays plain until all three are filled in, rather than emitting a partial one that would be read back wrongly.`;
 }
 
 function renderLinkedCustomerState() {
@@ -2308,6 +2349,14 @@ function onScopeChange() {
   const isReserved = /reserv/i.test(scope);
   wrap.style.display = isReserved ? 'flex' : 'none';
 
+  // The three School_* fields only mean anything for an institution, so they
+  // stay out of the form for every other scope rather than sitting there empty.
+  const isEdu = scopeKind(scope) === 'edu';
+  ['schoolStateWrap', 'schoolCityWrap', 'schoolCodeWrap'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isEdu ? 'flex' : 'none';
+  });
+
   const linkedSelect = document.getElementById('linkedCustomer');
   linkedSelect.disabled = isReserved;
   linkedSelect.title = isReserved ? 'Following the vendor picked in Reserved For — change that instead' : '';
@@ -2316,6 +2365,52 @@ function onScopeChange() {
 
 function slugifyForSku(name) {
   return (name || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/* The College/University suffix: _EDU_{STATE}_{CITY}_{CODE}
+   e.g. FFN_UNIVERSITYOFIDAHO_EDU_ID_MOSCOW_UOFI
+
+   The three parts are columns on RECIPES — School_State, School_City and
+   School_Code — which already existed in the table before this widget knew
+   about them. They belong to the recipe rather than to the linked customer:
+   a school orders under its own name, and the same institution can appear
+   without ever being a Customers row.
+
+   The code is typed, not derived. "University of Idaho" gives UI under the
+   initials rule used for one-offs, and the real code is UOFI — a thing that
+   cannot be computed has to be stored.
+
+   Returns what is present and what is missing; the caller refuses to build a
+   partial suffix from it — see the branch in computeSuggestedSku(). */
+/* Reading the three parts back OUT of an existing SKU.
+   The 13 institution recipes already in the table predate these columns: their
+   state, city and code live only inside the SKU string, and School_State /
+   School_City / School_Code are all empty. Without this, opening one of them
+   showed "No suffix yet" and suggested the bare FFN_UNIVERSITYOFMICHIGAN — one
+   click of "Use this" would have stripped _EDU_MI_ANNARBOR_UMICH off a live,
+   permanent SKU that is already printed on labels.
+
+   Anchored at the end because the EDU suffix is always last, and the city is
+   already collapsed to one token (ANNARBOR, URBANACHAMPAIGN) so exactly three
+   segments follow _EDU_. Verified against all 13. */
+function eduPartsFromSku(sku) {
+  const m = /_EDU_([A-Z0-9]+)_([A-Z0-9]+)_([A-Z0-9]+)$/i.exec(String(sku || '').trim());
+  return m ? { state: m[1].toUpperCase(), city: m[2].toUpperCase(), code: m[3].toUpperCase() } : null;
+}
+
+function eduSuffixParts() {
+  const clean = v => String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const val = id => { const el = document.getElementById(id); return el ? clean(el.value) : ''; };
+
+  const state = val('schoolState');
+  const city  = val('schoolCity');
+  const abbr  = val('schoolCode');
+
+  const missing = [];
+  if (!state) missing.push('<b>School state</b>');
+  if (!city)  missing.push('<b>School city</b>');
+  if (!abbr)  missing.push('<b>School code</b> (e.g. UOFI)');
+  return { state, city, abbr, missing, suffix: missing.length ? '' : `_EDU_${state}_${city}_${abbr}` };
 }
 
 function getLinkedCustomerInitials() {
@@ -2362,6 +2457,15 @@ function computeSuggestedSku() {
     // _CU_KL is a person. Initials come from the linked customer's name.
     const initials = getLinkedCustomerInitials();
     if (initials) sku += `_CU_${initials}`;
+  } else if (kind === 'edu') {
+    /* All three parts or none. A partial suffix would be read back wrongly by
+       anyone scanning a label: _EDU_MOSCOW_UOFI with the state missing says the
+       state is MOSCOW. And a suffix that quietly shortens itself is exactly how
+       12 recipes ended up stored as "Custom Retail" with no suffix at all —
+       nobody noticed until the SKUs were already printed. So when something is
+       missing the SKU stays plain and renderScopeHint() names what to fill in. */
+    const edu = eduSuffixParts();
+    if (edu.suffix) sku += edu.suffix;
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
     // A code-named LE gets FFN_LE_2609_01, not FFN_LE260901_LE_2609_01 —
@@ -2469,6 +2573,20 @@ async function loadRecipe(record) {
   document.getElementById('fiberType').value = rowField(record, ['Fiber_Type']) || '';
   document.getElementById('dyeMethod').value = rowField(record, ['Dye_Method']) || '';
   setScopeValue(rowField(record, ['Recipe_Scope']) || '');
+  document.getElementById('schoolState').value = rowField(record, ['School_State']) || '';
+  document.getElementById('schoolCity').value = rowField(record, ['School_City']) || '';
+  document.getElementById('schoolCode').value = rowField(record, ['School_Code']) || '';
+  /* Backfill from the SKU for the institution recipes that predate the columns.
+     Deliberately does NOT markUnsaved(): 13 recipes lighting up as modified the
+     moment they are merely opened would be noise, and the SKU remains the
+     source of truth until something is actually edited and saved. */
+  if (scopeKind(rowField(record, ['Recipe_Scope'])) === 'edu') {
+    const parsed = eduPartsFromSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '');
+    if (parsed) {
+      [['schoolState', parsed.state], ['schoolCity', parsed.city], ['schoolCode', parsed.code]]
+        .forEach(([id, v]) => { const el = document.getElementById(id); if (el && !el.value.trim()) el.value = v; });
+    }
+  }
   await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
@@ -3141,6 +3259,11 @@ async function saveRecipe() {
       Dye_Method: document.getElementById('dyeMethod').value,
       Recipe_Scope: document.getElementById('recipeScope').value,
       Year_Made: document.getElementById('yearMade').value.trim(),
+      // Saved verbatim as typed, not upper-cased: the SKU builder folds them to
+      // ID/MOSCOW/UOFI on its own, and the columns are also read by eyes.
+      School_State: document.getElementById('schoolState').value.trim(),
+      School_City: document.getElementById('schoolCity').value.trim(),
+      School_Code: document.getElementById('schoolCode').value.trim(),
       SKU_Base: document.getElementById('skuBase').value,
       Shopify_URL: document.getElementById('shopifyProductUrl').value.trim(),
       Notes: document.getElementById('generalNotes').value,

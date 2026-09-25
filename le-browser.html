@@ -399,7 +399,11 @@ function listingNumberOf(r) {
   const raw = r[listingCol];
   if (raw === null || raw === undefined || raw === '') return null;
   const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10);
-  return Number.isFinite(n) ? n : null;
+  /* 0 means UNSET, not "listing zero". Grist Numeric columns default to 0
+     rather than blank, so every recipe in the table currently reads 0 — treated
+     as a number, they would all pile into one "Listing #0" group announcing that
+     the slot had been reused 300-odd times. Listings are 1-based anyway. */
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /* Everything a text search should be able to reach. Dye names matter most:
