@@ -753,9 +753,17 @@ function combineJars(dyeId) {
 
 function saveJarBin(id) {
   const c = jarById(id); if (!c) return;
-  const bin = (document.getElementById('jb-' + id).value || '').trim();
-  if (!bin) { showToast('Enter a bin first', false); return; }
-  if (bin === c.bin) return;
+  const typed = (document.getElementById('jb-' + id).value || '').trim();
+  if (!typed) { showToast('Enter a bin first', false); return; }
+  // Normalised on the way in, like both of dye-stock.html's doors. Without it
+  // this repair tool is the one remaining way to write "b3" into a column where
+  // every other writer stores M-B3 — the drift it exists to clean up.
+  // Compared after normalising too, so re-typing the same drawer in a different
+  // spelling is a no-op rather than a pointless write.
+  // NOTE: made-dye bins only. saveLotBin below must NOT do this — those are
+  // back-stock bins (bare A1-D7), a different rack that is not being renamed.
+  const bin = normBin(typed);
+  if (bin === normBin(c.bin)) return;
   runFix([['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.bin]: bin }]],
     `${c.label} moved to bin ${bin}`,
     () => [['UpdateRecord', 'Dye_Stock', c.id, { [COLS.stock.bin]: c.bin }]]);
