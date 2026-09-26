@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inventory Desk</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5;
+  --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+  --held: #6B5E52;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif;
+  font-size: 13px; line-height: 1.5; padding: 14px;
+}
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; }
+.sub { font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.search {
+  flex: 1; min-width: 160px; padding: 7px 10px; border: 1px solid var(--rule);
+  border-radius: 6px; font-size: 12.5px; font-family: 'Inter', sans-serif; outline: none;
+}
+.btn {
+  font-size: 12px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: var(--ink); font-family: 'Inter', sans-serif;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.solid { background: var(--teal); border-color: var(--teal); color: white; }
+.btn.tiny { font-size: 11px; padding: 4px 9px; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled:hover { border-color: var(--rule); }
+
+/* Totals across everything, so a number that moves is visible at a glance. */
+.totals { display: flex; gap: 0; margin-bottom: 14px; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.tot { flex: 1; padding: 9px 12px; background: white; border-right: 1px solid var(--rule); }
+.tot:last-child { border-right: none; }
+.tot .n { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 500; }
+.tot .l { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tot.held .n { color: var(--held); }
+.tot.vendor .n { color: var(--teal); }
+.tot.retail .n { color: var(--gold); }
+
+.card { background: white; border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 7px; }
+.card-head {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+}
+.card-head:hover { background: var(--paper); }
+.cw-name { font-weight: 600; font-size: 13.5px; }
+.cw-meta { font-size: 10.5px; color: var(--muted); }
+.fiber-tag {
+  font-size: 9px; font-weight: 600; letter-spacing: .04em; padding: 1px 5px;
+  border-radius: 3px; background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7;
+}
+.buckets { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.bucket {
+  min-width: 62px; text-align: center; padding: 4px 8px; border-radius: 5px;
+  border: 1px solid var(--rule); background: var(--paper);
+}
+.bucket .n { font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; display: block; }
+.bucket .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.bucket.held { border-color: #C9BCAE; }
+.bucket.held .n { color: var(--held); }
+.bucket.vendor { border-color: #9ACFC7; background: var(--teal-light); }
+.bucket.vendor .n { color: var(--teal); }
+.bucket.retail { border-color: #D4B07A; background: var(--gold-light); }
+.bucket.retail .n { color: var(--gold); }
+.bucket.zero { opacity: .4; }
+.onhand { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; min-width: 38px; text-align: right; }
+
+.body { border-top: 1px solid var(--rule); padding: 11px 12px; }
+.moverow { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.qty-in {
+  width: 58px; padding: 5px 6px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12.5px; text-align: center; font-family: 'DM Mono', monospace;
+}
+select.pick {
+  padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12px; font-family: 'Inter', sans-serif; background: white;
+}
+.arrow { color: var(--muted); font-size: 13px; }
+.hint { font-size: 10.5px; color: var(--muted); margin-top: 7px; line-height: 1.5; }
+
+.lots { margin-top: 10px; border-top: 1px dotted var(--rule); padding-top: 8px; }
+.lot-line {
+  display: flex; gap: 10px; align-items: center; font-size: 11.5px;
+  padding: 3px 0; color: #4A403A;
+}
+.lot-no { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 108px; }
+.lot-b { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 34px; text-align: right; }
+.lot-age { color: var(--muted); font-size: 10px; margin-left: auto; }
+/* Three bare numbers per lot are unreadable without saying which is which —
+   this is an auditing view, so the columns are labelled. */
+.lot-head span { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-family: 'Inter', sans-serif; }
+.lot-head { border-bottom: 1px solid var(--warm); padding-bottom: 2px; margin-bottom: 2px; }
+
+.log { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 9px; }
+.log-line {
+  display: flex; gap: 9px; align-items: baseline; font-size: 11.5px;
+  padding: 3px 0; border-bottom: 1px solid var(--warm);
+}
+.undo { color: var(--accent); cursor: pointer; text-decoration: underline; font-size: 10.5px; margin-left: auto; }
+.empty { color: var(--muted); font-style: italic; padding: 26px; text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px;
+  font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
+}
+.toast.show { opacity: 1; }
+.warn-banner {
+  background: var(--gold-light); border: 1px solid #D4B07A; color: #7A5518;
+  padding: 8px 11px; border-radius: 6px; font-size: 11.5px; margin-bottom: 12px; line-height: 1.5;
+}
+</style>
+</head>
+<body>
+
+<div class="title">Inventory Desk</div>
+<div class="sub">Every colourway you physically have, and where each spool is listed.</div>
+<div id="banner"></div>
+<div class="toolbar">
+  <input class="search" id="search" placeholder="Search colourway or SKU…">
+  <button class="btn" id="showAll">Show colourways with none on hand</button>
+  <button class="btn" id="reload">↻ Reload</button>
+</div>
+<div id="totals"></div>
+<div id="list"><div class="empty">Loading…</div></div>
+<div id="log"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Inventory Desk ───────────────────────────────────────────────────────
+   One physical pile per colourway; the three stock columns on Production_Lots
+   say where that pile is LISTED, not which shelf it sits on:
+
+     General_Stock_Spools  held back, listed nowhere (LEs, waiting for the
+                           monthly retail push)
+     Vendor_Stock_Spools   live on the vendor store
+     Store_Stock_Spools    live on the retail store
+
+   On hand = General + Vendor + Store. Moving between the columns IS the act of
+   listing or de-listing, which is the thing that had no home before and sent
+   people into Grist by hand.
+
+   Deliberately NOT a Shopify sync. Nothing here talks to either store — Grist
+   is not the master and a wrong automatic write to a live storefront is far
+   worse than a number being stale. The comparison against what each store
+   actually reports is a separate step that needs an n8n webhook to fetch it. */
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function normalize(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function fiberCode(f) {
+  const s = (f || '').toString().trim().toUpperCase();
+  if (!s) return '';
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+function daysSince(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor((Date.now() / 1000 - n) / 86400);
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+/* The three buckets, in the order they are shown and in the order a fallback
+   picks them. `col` is filled in from the document's real column ids at load. */
+const BUCKETS = [
+  { key: 'held',   label: 'Held back',    short: 'held',   cands: ['General_Stock_Spools'] },
+  { key: 'vendor', label: 'Vendor store', short: 'vendor', cands: ['Vendor_Stock_Spools'] },
+  { key: 'retail', label: 'Retail store', short: 'retail', cands: ['Store_Stock_Spools'] },
+];
+
+let S = {
+  cols: null, recipes: {}, lots: [], byRecipe: [],
+  search: '', showEmpty: false, open: {},
+  moveQty: {}, moveFrom: {}, moveTo: {},
+  log: [], ready: false,
+};
+
+async function loadAll() {
+  try {
+    const [lotsT, recT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+
+    const LOT = {
+      recipe: findColumn(lotsT, ['Recipe']),
+      lotNumber: findColumn(lotsT, ['Lot_Number']),
+      date: findColumn(lotsT, ['Date_Dyed']),
+      fiber: findColumn(lotsT, ['Fiber']),
+      made: findColumn(lotsT, ['Spools_Made']),
+    };
+    BUCKETS.forEach(b => { b.col = findColumn(lotsT, b.cands); });
+    const missing = BUCKETS.filter(b => !b.col);
+
+    const REC = {
+      name: findColumn(recT, ['Recipe_Name']),
+      sku: findColumn(recT, ['SKU_Base']),
+      fiber: findColumn(recT, ['Fiber_Type']),
+    };
+
+    S.recipes = {};
+    (recT.id || []).forEach((id, i) => {
+      S.recipes[id] = {
+        id,
+        name: columnAsArray(recT, REC.name)[i] || `Recipe #${id}`,
+        sku: columnAsArray(recT, REC.sku)[i] || '',
+        fiber: fiberCode(columnAsArray(recT, REC.fiber)[i] || ''),
+      };
+    });
+
+    S.lots = [];
+    (lotsT.id || []).forEach((id, i) => {
+      const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
+      if (!rid) return;   // a lot with no recipe can't be attributed to a colourway
+      const vals = {};
+      BUCKETS.forEach(b => { vals[b.key] = b.col ? num(columnAsArray(lotsT, b.col)[i]) : 0; });
+      S.lots.push({
+        id, recipeId: rid,
+        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+        date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
+        fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || ''),
+        made: LOT.made ? num(columnAsArray(lotsT, LOT.made)[i]) : 0,
+        vals,
+      });
+    });
+
+    // Oldest first everywhere, so a move rotates stock without being asked to.
+    S.lots.sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0));
+
+    const map = new Map();
+    S.lots.forEach(l => {
+      if (!map.has(l.recipeId)) {
+        const r = S.recipes[l.recipeId] || { name: `Recipe #${l.recipeId}`, sku: '', fiber: '' };
+        map.set(l.recipeId, { recipeId: l.recipeId, recipe: r, lots: [], held: 0, vendor: 0, retail: 0 });
+      }
+      const g = map.get(l.recipeId);
+      g.lots.push(l);
+      BUCKETS.forEach(b => { g[b.key] += l.vals[b.key]; });
+    });
+    S.byRecipe = [...map.values()]
+      .map(g => { g.onHand = g.held + g.vendor + g.retail; return g; })
+      .sort((a, b) => String(a.recipe.name).localeCompare(String(b.recipe.name)));
+
+    S.cols = { LOT };
+    S.ready = true;
+    document.getElementById('banner').innerHTML = missing.length
+      ? `<div class="warn-banner"><strong>${missing.map(b => esc(b.cands[0])).join(', ')}</strong>
+          ${missing.length === 1 ? 'is' : 'are'} not on Production_Lots, so that bucket always reads 0 and
+          cannot be moved into. Add the column${missing.length === 1 ? '' : 's'} to use it.</div>`
+      : '';
+    render();
+  } catch (e) {
+    console.error('Inventory Desk: load failed', e);
+    document.getElementById('list').innerHTML =
+      `<div class="empty">Could not load — ${esc(e && e.message ? e.message : e)}</div>`;
+  }
+}
+
+function visible() {
+  const q = normalize(S.search);
+  return S.byRecipe.filter(g => {
+    if (!S.showEmpty && g.onHand <= 0) return false;
+    if (!q) return true;
+    return normalize(g.recipe.name).includes(q) || normalize(g.recipe.sku).includes(q);
+  });
+}
+
+function bucketHtml(g, b) {
+  const v = g[b.key];
+  return `<div class="bucket ${b.key} ${v ? '' : 'zero'}">
+    <span class="n">${v}</span><span class="l">${esc(b.short)}</span>
+  </div>`;
+}
+
+function cardHtml(g) {
+  const open = !!S.open[g.recipeId];
+  const r = g.recipe;
+  const from = S.moveFrom[g.recipeId] || 'held';
+  const to = S.moveTo[g.recipeId] || (from === 'held' ? 'vendor' : 'held');
+  const qty = S.moveQty[g.recipeId] !== undefined ? S.moveQty[g.recipeId] : '';
+  const avail = g[from] || 0;
+  const n = Math.max(0, Number(qty) || 0);
+  const canMove = n > 0 && n <= avail && from !== to;
+
+  const lotLines = g.lots.map(l => {
+    const d = daysSince(l.date);
+    const tot = BUCKETS.reduce((a, b) => a + l.vals[b.key], 0);
+    if (!tot && !S.showEmpty) return '';
+    return `<div class="lot-line">
+      <span class="lot-no">${esc(l.lotNumber)}</span>
+      ${BUCKETS.map(b => `<span class="lot-b" title="${esc(b.label)}">${l.vals[b.key] || '·'}</span>`).join('')}
+      <span class="lot-age">${d === null ? '' : d + 'd old'}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="card-head" data-toggle="${g.recipeId}">
+      <div>
+        <div class="cw-name">${esc(r.name)} ${r.fiber ? `<span class="fiber-tag">${esc(r.fiber)}</span>` : ''}</div>
+        <div class="cw-meta">${esc(r.sku || '')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}</div>
+      </div>
+      <div class="buckets">
+        ${BUCKETS.map(b => bucketHtml(g, b)).join('')}
+        <span class="onhand" title="On hand — the sum of all three">${g.onHand}</span>
+      </div>
+    </div>
+    ${open ? `<div class="body">
+      <div class="moverow">
+        <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Move</span>
+        <input class="qty-in" data-qty="${g.recipeId}" value="${esc(String(qty))}" placeholder="0">
+        <select class="pick" data-from="${g.recipeId}">
+          ${BUCKETS.map(b => `<option value="${b.key}" ${from === b.key ? 'selected' : ''}>from ${esc(b.label)} (${g[b.key]})</option>`).join('')}
+        </select>
+        <span class="arrow">→</span>
+        <select class="pick" data-to="${g.recipeId}">
+          ${BUCKETS.map(b => `<option value="${b.key}" ${to === b.key ? 'selected' : ''}>to ${esc(b.label)}</option>`).join('')}
+        </select>
+        <button class="btn tiny solid" data-move="${g.recipeId}" ${canMove ? '' : 'disabled'}>Move</button>
+        ${g[from] > 0 ? `<button class="btn tiny" data-all="${g.recipeId}">All ${g[from]}</button>` : ''}
+      </div>
+      <div class="hint">${
+        from === to ? 'Pick two different places.'
+        : n > avail ? `Only ${avail} in ${esc(BUCKETS.find(b => b.key === from).label.toLowerCase())}.`
+        : 'Nothing is sent to Shopify — this only records where the spools are listed. Oldest lot is drawn from first.'
+      }</div>
+      ${lotLines ? `<div class="lots">
+        <div class="lot-line lot-head">
+          <span class="lot-no">Lot</span>
+          ${BUCKETS.map(b => `<span class="lot-b">${esc(b.short)}</span>`).join('')}
+          <span class="lot-age"></span>
+        </div>
+        ${lotLines}</div>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+
+function render() {
+  if (!S.ready) return;
+  const rows = visible();
+
+  const tot = { held: 0, vendor: 0, retail: 0 };
+  S.byRecipe.forEach(g => BUCKETS.forEach(b => { tot[b.key] += g[b.key]; }));
+  const onHand = tot.held + tot.vendor + tot.retail;
+  document.getElementById('totals').innerHTML = `<div class="totals">
+    <div class="tot"><div class="n">${onHand}</div><div class="l">On hand</div></div>
+    <div class="tot held"><div class="n">${tot.held}</div><div class="l">Held back</div></div>
+    <div class="tot vendor"><div class="n">${tot.vendor}</div><div class="l">Vendor store</div></div>
+    <div class="tot retail"><div class="n">${tot.retail}</div><div class="l">Retail store</div></div>
+  </div>`;
+
+  document.getElementById('list').innerHTML = rows.length
+    ? rows.map(cardHtml).join('')
+    : `<div class="empty">${S.search ? 'Nothing matches that.' : 'No colourways with spools on hand.'}</div>`;
+
+  document.getElementById('showAll').textContent = S.showEmpty
+    ? 'Hide colourways with none on hand' : 'Show colourways with none on hand';
+
+  wire();
+  renderLog();
+}
+
+function wire() {
+  document.querySelectorAll('[data-toggle]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.toggle);
+    S.open[id] = !S.open[id];
+    render();
+  }));
+  document.querySelectorAll('[data-qty]').forEach(el => el.addEventListener('input', () => {
+    S.moveQty[Number(el.dataset.qty)] = el.value;
+    render();
+    const again = document.querySelector(`[data-qty="${el.dataset.qty}"]`);
+    if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+  }));
+  document.querySelectorAll('[data-from]').forEach(el => el.addEventListener('change', () => {
+    S.moveFrom[Number(el.dataset.from)] = el.value;
+    render();
+  }));
+  document.querySelectorAll('[data-to]').forEach(el => el.addEventListener('change', () => {
+    S.moveTo[Number(el.dataset.to)] = el.value;
+    render();
+  }));
+  document.querySelectorAll('[data-all]').forEach(el => el.addEventListener('click', () => {
+    const id = Number(el.dataset.all);
+    const g = S.byRecipe.find(x => x.recipeId === id);
+    if (g) S.moveQty[id] = String(g[S.moveFrom[id] || 'held'] || 0);
+    render();
+  }));
+  document.querySelectorAll('[data-move]').forEach(el =>
+    el.addEventListener('click', () => doMove(Number(el.dataset.move))));
+}
+
+function renderLog() {
+  document.getElementById('log').innerHTML = S.log.length
+    ? `<div class="log">${S.log.map((e, i) => `
+        <div class="log-line"><span>${esc(e.text)}</span>
+        <span class="undo" data-undo="${i}">↺ undo</span></div>`).join('')}</div>`
+    : '';
+  document.querySelectorAll('[data-undo]').forEach(el =>
+    el.addEventListener('click', () => undo(Number(el.dataset.undo))));
+}
+
+/* Move spools between two buckets for one colourway.
+
+   Drawn oldest lot first so stock rotates, and applied per lot: the whole point
+   is that a colourway's pile is spread across several lots, and a move that
+   wrote a single total somewhere would lose which lot the spools came from —
+   which is what makes a lot's arithmetic stop balancing. Both columns of a lot
+   are written in the same action, so the lot's total never changes. */
+async function doMove(recipeId) {
+  const g = S.byRecipe.find(x => x.recipeId === recipeId);
+  if (!g) return;
+  const from = S.moveFrom[recipeId] || 'held';
+  const to = S.moveTo[recipeId] || 'vendor';
+  if (from === to) { showToast('Pick two different places'); return; }
+  const want = Math.max(0, Number(S.moveQty[recipeId]) || 0);
+  if (!want) { showToast('Set a quantity first'); return; }
+
+  const fromB = BUCKETS.find(b => b.key === from);
+  const toB = BUCKETS.find(b => b.key === to);
+  if (!fromB.col || !toB.col) { showToast('That column does not exist on Production_Lots'); return; }
+  if (want > g[from]) { showToast(`Only ${g[from]} in ${fromB.label.toLowerCase()}`); return; }
+
+  let left = want;
+  const actions = [], inverse = [], touched = [];
+  for (const l of g.lots) {          // already oldest-first
+    if (left <= 0) break;
+    const have = l.vals[from];
+    if (have <= 0) continue;
+    const take = Math.min(have, left);
+    left -= take;
+    actions.push(['UpdateRecord', 'Production_Lots', l.id, {
+      [fromB.col]: l.vals[from] - take,
+      [toB.col]: l.vals[to] + take,
+    }]);
+    inverse.push(['UpdateRecord', 'Production_Lots', l.id, {
+      [fromB.col]: l.vals[from],
+      [toB.col]: l.vals[to],
+    }]);
+    touched.push(`${l.lotNumber} ${take}`);
+  }
+  if (!actions.length) { showToast('Nothing to move'); return; }
+
+  try {
+    await grist.docApi.applyUserActions(actions);
+    S.log.unshift({
+      text: `${want} × ${g.recipe.name} — ${fromB.label.toLowerCase()} → ${toB.label.toLowerCase()}` +
+        (touched.length > 1 ? ` (${touched.length} lots)` : ` (${touched[0]})`),
+      inverse,
+    });
+    delete S.moveQty[recipeId];
+    showToast('Moved ✓');
+    await loadAll();
+  } catch (e) {
+    console.error('Inventory Desk: move failed', e);
+    showToast('Move failed — check Production_Lots');
+  }
+}
+
+async function undo(i) {
+  const entry = S.log[i];
+  if (!entry) return;
+  try {
+    await grist.docApi.applyUserActions(entry.inverse);
+    S.log.splice(i, 1);
+    showToast('Undone');
+    await loadAll();
+  } catch (e) {
+    console.error('Inventory Desk: undo failed', e);
+    showToast('Undo failed — check the console');
+  }
+}
+
+document.getElementById('search').addEventListener('input', (e) => { S.search = e.target.value; render(); });
+document.getElementById('showAll').addEventListener('click', () => { S.showEmpty = !S.showEmpty; render(); });
+document.getElementById('reload').addEventListener('click', () => loadAll());
+
+// Static shell is already rendered. Only now talk to Grist.
+try {
+  grist.ready({ requiredAccess: 'full' });
+  loadAll();
+} catch (e) {
+  document.getElementById('list').innerHTML =
+    `<div class="empty">Grist plugin API unavailable: ${esc(e && e.message ? e.message : e)}</div>`;
+}
+</script>
+</body>
+</html>
