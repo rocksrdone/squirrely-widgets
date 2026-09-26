@@ -287,6 +287,17 @@ async function loadBoard() {
         stockNow: (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0)
           + (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0)
           + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0),
+        /* Each stock column's OWN value, keyed by column id. `stockNow` above is
+           the sum across all three, which is right for display and wrong for a
+           write: adding the sum into a single column re-counts whatever the
+           other two hold. A lot with Store 3 and General 2, resolved for 7,
+           became General 12 beside Store 3 — 15 spools out of a 12-spool pot.
+           Only invisible because one column is usually the only one in use. */
+        stockByCol: [LOT.storeStock, LOT.vendorStock, LOT.generalStock]
+          .reduce((m, c) => {
+            if (c) m[c] = Number(columnAsArray(lotsT, c)[i]) || 0;
+            return m;
+          }, {}),
         brokenNow: LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0,
         days: daysSince(LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null),
         waiting: waitingByRecipe[recipeId] || 0,
@@ -388,9 +399,14 @@ async function resolveRemainder(lotId, how) {
 
   const fields = {};
   if (how === 'stock') {
-    const col = LOT.vendorStock || LOT.generalStock || LOT.storeStock;
+    /* General first, matching back-stock.html and quick-log.html. This used to
+       prefer Vendor, so pot leftovers were filed as thread promised to a vendor
+       while every other widget looks at General — and quick-log's back-stock
+       decrement reads General only, so spools filed here were never taken off
+       the count when they were later boxed. */
+    const col = LOT.generalStock || LOT.storeStock || LOT.vendorStock;
     if (!col) { showToast('No stock column to write to'); return; }
-    fields[col] = (l.stockNow || 0) + n;
+    fields[col] = ((l.stockByCol && l.stockByCol[col]) || 0) + n;
     // Shelved thread needs a bin, same rule as everywhere else.
     if (LOT.bin && !l.binId && S.hasBin) {
       const sug = suggestBin({ ...l, unwound: n });
