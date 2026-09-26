@@ -76,6 +76,11 @@
     width: 52px; padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px;
     font-size: 12px; text-align: center; font-family: 'DM Mono', ui-monospace, monospace;
   }
+  /* Wider than .qty-in and left-aligned: this holds a colourway name, not a count. */
+  .name-in {
+    flex: 1; min-width: 0; padding: 3px 6px; border: 1px solid var(--rule);
+    border-radius: 4px; font-size: 12px; font-family: 'Inter', sans-serif;
+  }
   .acts { display: flex; gap: 3px; justify-content: flex-end; white-space: nowrap; }
   .pill {
     font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
@@ -240,6 +245,7 @@ let S = {
   qty: {},             // lineId -> qty override typed into the row
   lotChoice: {},       // lineId -> lotId chosen in the drawer
   linkChoice: {},      // lineId -> recipeId chosen in the "link a colourway" picker
+  nameDraft: {},       // lineId -> the one-time customer name being typed
   xferTarget: {}, xferQty: {}, stockQty: {},
   log: [],             // [{text, cls, inverse:[actions]}]
   ready: false,
@@ -286,6 +292,7 @@ async function loadAll() {
   const WOL = resolveCols(wolT, 'Work_Order_Lines', {
     workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
     recipe: opt(['Recipe']), sku: opt(['SKU']),
+    displayName: opt(['Display_Name', 'Label_Name', 'Custom_Name']),
   }, missing);
   const WO = resolveCols(woT, 'Work_Orders', {
     status: ['Status'], orderNumber: opt(['Order_Number']),
@@ -416,6 +423,9 @@ async function loadAll() {
       // Kept so the link picker can show WHICH sku failed to match a recipe.
       // Read-only here — nothing in this widget ever writes it back.
       sku,
+      // The one-time name this customer asked for on this order, if any.
+      displayName: WOL.displayName
+        ? (columnAsArray(wolT, WOL.displayName)[i] || '').toString().trim() : '',
       name: rec ? rec.name : (sku ? `SKU ${sku}` : '(no recipe on this line)'),
       fiber: rec ? fiberCode(rec.fiber) : '',
       needed, inBin, boxed,
@@ -669,6 +679,48 @@ function linkBlockHtml(l) {
   </div>`;
 }
 
+/* A one-time name the customer asked for on this order only.
+
+   It lives on the LINE, never on the recipe. The colourway is permanent and
+   keeps its own name and history; what a customer calls it is per-order and
+   gets reused — the same customer may want that name on a different colour
+   next year, and two customers may want the same name on different colours.
+   Putting it here means none of that collides, and the recipe stays one row
+   describing one colour.
+
+   Blank means "no override" — the label prints the recipe name, exactly as it
+   always has. */
+function nameBlockHtml(l) {
+  const canWrite = !!(S.cols && S.cols.WOL && S.cols.WOL.displayName);
+  const draft = S.nameDraft[l.id] !== undefined ? S.nameDraft[l.id] : (l.displayName || '');
+  const recipeName = l.recipeId && S.recipes[l.recipeId] ? S.recipes[l.recipeId].name : '';
+  const dirty = draft.trim() !== (l.displayName || '');
+
+  if (!canWrite) {
+    return `<div class="dblock">
+      <h4>Name on the label</h4>
+      <div class="dnote">Labels print <strong>${esc(recipeName || 'the recipe name')}</strong>.
+        To let a customer ask for a one-time name, add a <strong>Display_Name</strong>
+        column to Work_Order_Lines.</div>
+    </div>`;
+  }
+
+  return `<div class="dblock">
+    <h4>Name on the label</h4>
+    <div class="drow">
+      <input class="name-in" data-namein="${l.id}" value="${esc(draft)}"
+        placeholder="${esc(recipeName || 'colorway name')}">
+      <button class="btn tiny solid" data-doname="${l.id}" ${dirty ? '' : 'disabled'}>Save</button>
+      ${l.displayName ? `<button class="btn tiny" data-clearname="${l.id}">Clear</button>` : ''}
+    </div>
+    <div class="dnote">${l.displayName
+      ? `Labels for this line print <strong>${esc(l.displayName)}</strong> instead of
+         <strong>${esc(recipeName || 'the recipe name')}</strong>. The recipe is untouched.`
+      : `Leave blank and labels print <strong>${esc(recipeName || 'the recipe name')}</strong>.
+         Set it only when this customer asked for a one-time name on this order.`}</div>
+  </div>`;
+}
+
 function drawerHtml(l) {
   const lots = S.lotsByRecipe[l.recipeId] || [];
   const a = availFor(l);
@@ -736,6 +788,8 @@ function drawerHtml(l) {
         : 'No stock column on Production_Lots — add <strong>General_Stock_Spools</strong> or <strong>Store_Stock_Spools</strong>.'}</div>
     </div>
 
+    ${nameBlockHtml(l)}
+
   </div></td></tr>`;
 }
 
@@ -800,6 +854,38 @@ async function doLink(lineId) {
   } catch (e) {
     console.error('Quick Log: could not link the line to a recipe', e);
     showToast('Could not link — check Work_Order_Lines');
+  }
+}
+
+/* Writes Work_Order_Lines.Display_Name. Deliberately does NOT touch the recipe:
+   a one-time name must never rename the colourway, or the next customer to ask
+   for that name renames it again and the recipe's own history is lost. */
+async function saveDisplayName(lineId, forced) {
+  const l = lineById(lineId);
+  if (!l) return;
+  const col = S.cols && S.cols.WOL && S.cols.WOL.displayName;
+  if (!col) { showToast('No Display_Name column on Work_Order_Lines'); return; }
+  const next = (forced !== undefined ? forced
+    : (S.nameDraft[lineId] !== undefined ? S.nameDraft[lineId] : (l.displayName || ''))).trim();
+  const before = l.displayName || '';
+  if (next === before) return;
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [col]: next }],
+    ]);
+    S.log.unshift({
+      text: next
+        ? `${l.order.num} ${l.name} — labels will print "${next}"`
+        : `${l.order.num} ${l.name} — custom label name cleared`,
+      cls: '',
+      inverse: [['UpdateRecord', 'Work_Order_Lines', lineId, { [col]: before }]],
+    });
+    delete S.nameDraft[lineId];
+    showToast(next ? 'Label name set \u2713' : 'Back to the recipe name');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: could not save the display name', e);
+    showToast('Could not save — check Work_Order_Lines');
   }
 }
 
@@ -1083,6 +1169,16 @@ function bind() {
     S.openDrawer = S.openDrawer === id ? null : id;
     render();
   }));
+  document.querySelectorAll('[data-namein]').forEach(el => el.addEventListener('input', () => {
+    S.nameDraft[Number(el.dataset.namein)] = el.value;
+    const btn = document.querySelector(`[data-doname="${el.dataset.namein}"]`);
+    const line = lineById(Number(el.dataset.namein));
+    if (btn && line) btn.disabled = el.value.trim() === (line.displayName || '');
+  }));
+  document.querySelectorAll('[data-doname]').forEach(el =>
+    el.addEventListener('click', () => saveDisplayName(Number(el.dataset.doname))));
+  document.querySelectorAll('[data-clearname]').forEach(el =>
+    el.addEventListener('click', () => saveDisplayName(Number(el.dataset.clearname), '')));
   document.querySelectorAll('[data-linksel]').forEach(el => el.addEventListener('change', () => {
     const id = Number(el.dataset.linksel);
     const v = Number(el.value);

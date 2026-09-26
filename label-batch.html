@@ -112,6 +112,9 @@ body {
 .pl-line:hover { background: var(--paper); }
 .pl-line.on { background: var(--accent-light, #F3EEE6); }
 .pl-name { flex: 1; min-width: 0; }
+/* The real colourway, shown beside a one-time customer name so it is obvious
+   which colour is actually being printed under that label. */
+.pl-asname { color: #8B7D72; font-weight: 400; font-size: 11px; }
 .pl-fiber { font-size: 9px; font-weight: 700; color: #2A6B6B; background: #E4F0EF; padding: 1px 5px; border-radius: 8px; }
 .pl-qty { font-family: 'DM Mono', monospace; color: var(--mid); min-width: 26px; text-align: right; }
 .pl-summary { margin-top: 9px; font-size: 11.5px; color: var(--mid); }
@@ -516,6 +519,9 @@ async function loadAll() {
     wo: findColumn(wolT, ['Work_Order']), recipe: findColumn(wolT, ['Recipe']),
     sku: findColumn(wolT, ['SKU']), qty: findColumn(wolT, ['Qty_Needed']),
     product: findColumn(wolT, ['Product_Name']),
+    /* The one-time name a customer asked for on THIS order. Optional: without
+       the column every row falls back to the recipe name exactly as before. */
+    displayName: findColumn(wolT, ['Display_Name', 'Label_Name', 'Custom_Name']),
   };
   S.lines = (wolT.id || []).map((id, i) => {
     const sku = columnAsArray(wolT, lc.sku)[i] || '';
@@ -524,6 +530,7 @@ async function loadAll() {
     return {
       id, woId: getRefId(columnAsArray(wolT, lc.wo)[i]), recipeId: rid, sku,
       productName: lc.product ? columnAsArray(wolT, lc.product)[i] || '' : '',
+      displayName: lc.displayName ? (columnAsArray(wolT, lc.displayName)[i] || '').toString().trim() : '',
       qty: Number(columnAsArray(wolT, lc.qty)[i]) || 0,
     };
   });
@@ -902,13 +909,33 @@ function setBanner(items) {
 // mixing several orders can still write the right Customer and Order into the
 // merge CSV — in Order batch mode they're all the same, in Pick lines they
 // aren't.
+/* What actually gets printed on the label.
+
+   The line's Display_Name WINS over the recipe name — that is the whole point
+   of the column. A customer can ask for a one-time name on a colourway we
+   carry permanently, and the spools they receive have to say their name while
+   the recipe keeps its own. Reusing that same name for a different colourway
+   next year is fine: the name lives on the order line, so nothing collides.
+
+   Falls through to the recipe name, then the imported product name, then the
+   SKU. With no Display_Name column present this is byte-for-byte the old
+   behaviour. */
+function labelNameFor(l, r) {
+  return (l && l.displayName)
+    || (r ? r.name : '')
+    || (l && (l.productName || l.sku))
+    || '(unmatched SKU)';
+}
+
 function rowFromLine(l) {
   const r = S.recipes[l.recipeId] || null;
   const o = S.orders.find(x => x.id === l.woId) || null;
   const cust = o ? customerForOrder(o) : null;
   return {
     rowKey: 'L' + l.id, lineId: l.id, recipeId: l.recipeId,
-    name: r ? r.name : (l.productName || l.sku || '(unmatched SKU)'),
+    name: labelNameFor(l, r),
+    customName: l.displayName || '',
+    recipeName: r ? r.name : '',
     sku: (r && r.sku) || l.sku, fiber: r ? r.fiber : '',
     sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
     defaultQty: l.qty, stock: r ? r.stock : 0,
@@ -1046,8 +1073,15 @@ function currentRows() {
       if (!l.qty) return;
       const o = orderById[l.woId];
       if (!o || (o.status && o.status !== 'Active')) return;
-      const key = l.recipeId || ('sku:' + (l.sku || l.id));
-      if (!byRecipe.has(key)) byRecipe.set(key, { recipeId: l.recipeId, sku: l.sku, productName: l.productName, qty: 0, orders: new Set() });
+      /* Keyed on the colourway AND the printed name, not the colourway alone.
+         Two customers can order the same colourway and have asked for
+         different one-time names on it — merging those into one row would
+         print one customer's name on both sets of spools. A line with no
+         custom name keys on the recipe exactly as before, so ordinary
+         colourways still collapse into a single row. */
+      const key = (l.recipeId || ('sku:' + (l.sku || l.id)))
+        + (l.displayName ? '|' + l.displayName.toLowerCase() : '');
+      if (!byRecipe.has(key)) byRecipe.set(key, { recipeId: l.recipeId, sku: l.sku, productName: l.productName, displayName: l.displayName, qty: 0, orders: new Set() });
       const e = byRecipe.get(key);
       e.qty += l.qty;
       e.orders.add(l.woId);
@@ -1055,8 +1089,11 @@ function currentRows() {
     return [...byRecipe.values()].map(e => {
       const r = S.recipes[e.recipeId] || null;
       return {
-        rowKey: 'A' + (e.recipeId || e.sku), recipeId: e.recipeId,
-        name: r ? r.name : (e.productName || e.sku || '(unmatched SKU)'),
+        rowKey: 'A' + (e.recipeId || e.sku) + (e.displayName ? '|' + e.displayName : ''),
+        recipeId: e.recipeId,
+        name: labelNameFor(e, r),
+        customName: e.displayName || '',
+        recipeName: r ? r.name : '',
         sku: (r && r.sku) || e.sku, fiber: r ? r.fiber : '',
         sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
         defaultQty: e.qty, stock: r ? r.stock : 0,
@@ -1191,7 +1228,7 @@ function linesPaneHtml() {
     if (S.lineOnlyActive && o.status && o.status !== 'Active') return false;
     if (!q) return true;
     const r = S.recipes[l.recipeId];
-    return `${o.num} ${o.custName} ${(r && r.name) || ''} ${l.sku || ''} ${l.productName || ''}`
+    return `${o.num} ${o.custName} ${(r && r.name) || ''} ${l.sku || ''} ${l.productName || ''} ${l.displayName || ''}`
       .toLowerCase().includes(q);
   });
 
@@ -1210,7 +1247,9 @@ function linesPaneHtml() {
       const fib = r ? fiberCode(r.fiber) : '';
       return `<div class="pl-line ${on ? 'on' : ''}" data-pickline="${l.id}">
         <input type="checkbox" ${on ? 'checked' : ''} data-pickbox="${l.id}">
-        <span class="pl-name">${esc(r ? r.name : (l.productName || l.sku || '(unmatched SKU)'))}</span>
+        <span class="pl-name">${esc(labelNameFor(l, r))}${
+          l.displayName && r && r.name && l.displayName !== r.name
+            ? ` <span class="pl-asname">(${esc(r.name)})</span>` : ''}</span>
         ${fib ? `<span class="pl-fiber">${esc(fib)}</span>` : ''}
         <span class="pl-qty">${l.qty}</span>
       </div>`;
