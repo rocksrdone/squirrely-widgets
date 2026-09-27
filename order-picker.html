@@ -67,6 +67,9 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .order-list.dense .card-notes-row { display: none; }
 .order-list.dense .card-shopify { display: none; }
 .order-list.dense .card-meta-row { margin-top: 2px; }
+/* The shipment row survives compact view on purpose — a tracking number is the
+   thing being looked up when the list is long enough to want compacting. */
+.order-list.dense .card-ship { margin-top: 3px; padding-top: 3px; }
 
 .card-notes-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
 .card-notes { font-size: 11px; color: #8B7D72; font-style: italic; flex: 1; }
@@ -107,6 +110,10 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .badge.pay-paid { background: var(--done-bg); color: var(--done-text); }
 .badge.pay-other { background: var(--gold-light); color: var(--gold); }
 .badge.channel { background: var(--warm); color: #6B5E52; }
+.badge.ful-done { background: var(--done-bg); color: var(--done-text); }
+.badge.ful-moving { background: var(--teal-light); color: var(--teal); }
+.badge.ful-none { background: var(--rule); color: #6B5E52; }
+.badge.ful-other { background: var(--gold-light); color: var(--gold); }
 .badge.draft { background: var(--gold-light); color: var(--gold); }
 .card-meta-row { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; font-size: 11px; color: #8B7D72; }
 .due-tag { font-weight: 700; padding: 1px 6px; border-radius: 8px; }
@@ -114,23 +121,74 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .card-notes { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 6px; }
 .card-shopify { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; margin-top: 4px; }
 
+/* Shipment row. Deliberately monospaced and one line: a tracking number is
+   read character by character when it is being checked against a label, and a
+   proportional font makes that harder than it needs to be. */
+.card-ship {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-top: 5px; padding-top: 5px; border-top: 1px dotted var(--rule);
+  font-size: 10.5px; color: #6B5E52;
+}
+.ship-carrier { font-weight: 600; text-transform: uppercase; letter-spacing: .03em; font-size: 9.5px; color: #8B7D72; }
+.ship-track { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--teal); text-decoration: none; }
+.ship-track:hover { text-decoration: underline; }
+.ship-track.plain { color: var(--ink); }
+.ship-date { color: #8B7D72; }
+.ship-action {
+  font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: #6B5E52; white-space: nowrap;
+}
+.ship-action:hover { border-color: var(--teal); color: var(--teal); }
+.ship-none { color: #B8ABA0; font-style: italic; }
+
 .empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
 .choice-hint {
   margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
   background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13;
 }
 .choice-hint strong { font-family: 'DM Mono', monospace; }
+.choice-hint code { font-family: 'DM Mono', monospace; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; }
+
+/* Refresh report. One line when it went fine, a list when something needs
+   doing — the point is that a quiet run stays quiet. */
+.sync-box {
+  margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: white; border: 1px solid var(--rule); color: #6B5E52;
+}
+.sync-box.good { background: var(--done-bg); border-color: #BBD79A; color: var(--done-text); }
+.sync-box.warn { background: var(--gold-light); border-color: #E4CF9E; color: #6E4C13; }
+.sync-box.bad { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.sync-box ul { margin: 5px 0 0 16px; }
+.sync-box li { margin-bottom: 2px; }
+.sync-box code { font-family: 'DM Mono', monospace; background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 3px; }
+.sync-dismiss { float: right; cursor: pointer; font-size: 14px; line-height: 1; opacity: .5; padding-left: 8px; }
+.sync-dismiss:hover { opacity: 1; }
+.sync-stamp { font-size: 10.5px; color: #8B7D72; }
+.refresh-btn {
+  font-size: 11px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--teal);
+  background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.refresh-btn:disabled { opacity: .55; cursor: default; }
 </style>
 </head>
 <body>
 
-<div class="top-bar"><div class="title">Orders</div></div>
+<div class="top-bar">
+  <div class="title">Orders</div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="sync-stamp" id="syncStamp"></span>
+    <button class="refresh-btn" id="refreshBtn" onclick="refreshFromShopify()"
+      title="Re-read Shopify: payment, fulfilment and tracking on every order, plus any new orders and edited draft quantities">↻ Refresh from Shopify</button>
+  </div>
+</div>
 
 <div class="summary-strip" id="summaryStrip"></div>
+<div id="syncReport"></div>
+<div id="shipHint"></div>
 <div id="choiceHint"></div>
 
 <div class="controls">
-  <input class="search-input" id="searchBox" placeholder="Search customer, order #, Shopify ID..." oninput="renderList()">
+  <input class="search-input" id="searchBox" placeholder="Search customer, order #, Shopify ID, tracking..." oninput="renderList()">
   <select class="sort-select" id="sortSelect" onchange="renderList()">
     <option value="due">Sort: Due date (soonest)</option>
     <option value="orderdate">Sort: Order date (newest)</option>
@@ -221,6 +279,45 @@ let statusBusyId = null;    // guards against a double-click writing twice
 let sawClosedOnLoad = false; // was 'Closed' already a value in the column?
 let choiceHintShown = false;
 let statusColName = 'Status';
+let shipCols = {};          // which shipment columns actually exist on Work_Orders
+let syncBusy = false;
+
+/* ── Refreshing from Shopify ───────────────────────────────────────────────
+   This calls the SAME webhook the Sync Runner widget uses — the production URL
+   of the "Run From Dashboard" node on "SS - Reprocess Open Orders". There is
+   deliberately no second, lighter workflow: that one already contains a
+   dedicated status pass ("Diff Order Status") whose whole job is exactly what
+   was asked for here — re-read payment, fulfilment, tracking number, tracking
+   URL, carrier and shipped date on EVERY work order, including archived and
+   cancelled ones, and write nothing else. A status-only workflow would have to
+   repeat the same two Shopify fetches and the same Grist read, so it would not
+   actually be cheaper; it would just be a second thing to keep in step.
+
+   BE AWARE, because pressing this does more than refresh statuses: the same run
+   also imports Shopify orders that are not in Grist yet, and syncs quantities
+   on drafts and unshipped orders. That is usually what you want from this
+   screen, but it is a write, not a read — the report below names everything it
+   changed. */
+const SYNC_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/sync-drafts';
+
+/* Two Shopify pages plus four Grist tables, so this is slow by nature. Without
+   a ceiling a stalled workflow leaves the button spinning forever with no way
+   to tell a slow run from a dead one. */
+const SYNC_TIMEOUT_MS = 120000;
+
+/* ── ShipStation ──────────────────────────────────────────────────────────
+   ShipStation publishes no per-order URL — linking straight to an order has
+   been an open feature request on their own community forum for years, and
+   neither their help centre nor their API docs document a search query string.
+   Rather than invent a URL that would 404 or silently land on the wrong
+   screen, the button copies the order number and opens ShipStation, which is
+   one paste into Quicksearch away from the order.
+
+   If a working deep link ever turns up, put it here with {order} where the
+   order number goes — e.g. 'https://ship.shipstation.com/orders/...?q={order}'
+   — and the button will use it directly instead of copying. */
+const SHIPSTATION_URL = 'https://ship.shipstation.com/';
+const SHIPSTATION_DEEP_LINK = '';   // '' = copy-and-open; set a {order} template to link directly
 
 function toggleDense() {
   denseMode = !denseMode;
@@ -253,12 +350,31 @@ async function loadOrders() {
     const typeCol = c(['Order_Type']);
     const notesCol = c(['Notes']);
 
+    /* Shipment columns, all optional. The n8n status pass discovers its own
+       writable columns the same way and skips the ones that do not exist, so
+       an absent column here means "nothing has ever been written to it",
+       not "the sync is broken" — which is why a missing one produces the
+       setup hint below rather than an error. */
+    shipCols = {
+      tracking: c(['Tracking_Number', 'Tracking']),
+      trackingUrl: c(['Tracking_URL']),
+      carrier: c(['Carrier']),
+      shippedDate: c(['Shipped_Date']),
+      fulfillment: c(['Fulfillment_Status']),
+    };
+    const rowOpt = (col, i) => (col ? (columnAsArray(table, col)[i] || '') : '');
+
     // Write to the resolved column id, never the literal — a renamed Status
     // column would otherwise make every close silently fail.
     statusColName = statusCol || null;
 
     allOrders = (table.id || []).map((id, i) => ({
       id,
+      tracking: rowOpt(shipCols.tracking, i),
+      trackingUrl: rowOpt(shipCols.trackingUrl, i),
+      carrier: rowOpt(shipCols.carrier, i),
+      shippedDate: shipCols.shippedDate ? columnAsArray(table, shipCols.shippedDate)[i] : null,
+      fulfillment: rowOpt(shipCols.fulfillment, i),
       customerName: columnAsArray(table, custCol)[i] || '',
       orderDate: orderDateCol ? columnAsArray(table, orderDateCol)[i] : null,
       dueDate: dueCol ? columnAsArray(table, dueCol)[i] : null,
@@ -328,6 +444,7 @@ async function loadOrders() {
       else d.unlinked += 1;
     });
 
+    renderShipHint();
     renderFilters();
     renderList();
   } catch (e) {
@@ -358,6 +475,19 @@ function renderFilters() {
 }
 function setStatusFilter(s) { statusFilter = s; renderFilters(); renderList(); }
 function setChannelFilter(c) { channelFilter = c; renderFilters(); renderList(); }
+
+/* Fulfilment wording comes from the n8n status pass, which titleizes whatever
+   Shopify's newest fulfillment reports — so 'Delivered', 'In Transit',
+   'Out For Delivery', 'Shipped', 'Partially Shipped', 'Restocked' and
+   'Unfulfilled' are all possible. Matched loosely rather than exhaustively: an
+   unrecognised value gets the neutral badge instead of no badge at all. */
+function fulfillmentBadgeClass(status) {
+  const s = (status || '').toLowerCase();
+  if (/deliver/.test(s) && !/out for/.test(s)) return 'ful-done';
+  if (/transit|out for|shipped/.test(s)) return 'ful-moving';
+  if (/unfulfilled|restock/.test(s)) return 'ful-none';
+  return 'ful-other';
+}
 
 function paymentBadgeClass(status) {
   const s = (status || '').toLowerCase();
@@ -491,6 +621,242 @@ async function reopenOrder(id) {
   await setOrderStatus(id, 'Active');
 }
 
+/* ── Shipment display ─────────────────────────────────────────────────────
+   Every field here is optional and read through a resolved column, so this
+   whole block is inert on a document that has none of them. */
+
+const SHIP_COL_TYPES = {
+  Tracking_Number: 'Text', Tracking_URL: 'Text', Carrier: 'Text',
+  Shipped_Date: 'Date', Fulfillment_Status: 'Text',
+};
+
+/* Said once, on load, and only when a column is genuinely absent. The n8n
+   status pass reports the same list in its own run summary — but nobody reads
+   that until something is already wrong, and this is the screen where the
+   absence is actually noticeable. */
+function renderShipHint() {
+  const box = document.getElementById('shipHint');
+  if (!box) return;
+  const missing = Object.keys(SHIP_COL_TYPES).filter(name => {
+    const k = { Tracking_Number: 'tracking', Tracking_URL: 'trackingUrl', Carrier: 'carrier',
+                Shipped_Date: 'shippedDate', Fulfillment_Status: 'fulfillment' }[name];
+    return !shipCols[k];
+  });
+  if (!missing.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="choice-hint">Shipping information can't be shown for
+    ${missing.length === Object.keys(SHIP_COL_TYPES).length ? 'any order' : 'every order'} —
+    <strong>Work_Orders</strong> has no
+    ${missing.map(m => `<code>${esc(m)}</code>`).join(', ')} column${missing.length === 1 ? '' : 's'}.
+    Add ${missing.length === 1 ? 'it' : 'them'} in Grist
+    (${missing.map(m => `<code>${esc(m)}</code> as ${esc(SHIP_COL_TYPES[m])}`).join(', ')}),
+    then press <strong>Refresh from Shopify</strong> — the sync fills
+    ${missing.length === 1 ? 'it' : 'them'} in and skips whatever is missing rather than failing.</div>`;
+}
+
+function shortShipDate(v) {
+  if (!v) return '';
+  const ms = typeof v === 'number' ? v * 1000 : Date.parse(v);
+  if (!ms || isNaN(ms)) return '';
+  // Grist Date columns hold epoch SECONDS at UTC midnight, so this must be
+  // formatted in UTC — local formatting lands on the previous day west of UTC.
+  return new Date(ms).toLocaleDateString(undefined,
+    { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+/* The ShipStation action. With no deep link available it copies the order
+   number and opens ShipStation in a new tab, so the number is already on the
+   clipboard when Quicksearch has focus. Clipboard access can be refused inside
+   an iframe, so the tab is opened either way and the copy is best-effort. */
+async function openShipStation(id) {
+  const o = allOrders.find(x => x.id === id);
+  if (!o) return;
+  const num = String(o.orderNumber || '').trim();
+
+  if (SHIPSTATION_DEEP_LINK && num) {
+    window.open(SHIPSTATION_DEEP_LINK.replace('{order}', encodeURIComponent(num)), '_blank');
+    return;
+  }
+
+  let copied = false;
+  if (num) {
+    try {
+      await navigator.clipboard.writeText(num);
+      copied = true;
+    } catch (e) {
+      console.warn('Clipboard refused — the order number was not copied', e);
+    }
+  }
+  window.open(SHIPSTATION_URL, '_blank');
+  const btn = document.getElementById(`ssBtn-${id}`);
+  if (btn) {
+    btn.textContent = copied ? `${num} copied` : (num ? `paste ${num}` : 'ShipStation');
+    setTimeout(() => { const b = document.getElementById(`ssBtn-${id}`); if (b) b.textContent = 'ShipStation'; }, 4000);
+  }
+}
+
+function shipRowHtml(o) {
+  const date = shortShipDate(o.shippedDate);
+  const hasAny = o.tracking || o.carrier || date;
+  // Nothing shipped and nothing to look up — don't spend a row saying so.
+  if (!hasAny && !o.orderNumber) return '';
+
+  /* A multi-parcel shipment stores every tracking number, comma-separated, but
+     only ONE tracking URL — the n8n pass keeps `urls[0]`, because Shopify hands
+     back a list and nothing links a url to a particular number. Rendering the
+     whole joined string as one link would claim that url tracks all of them,
+     which is wrong for every parcel after the first. So only the first number
+     is a link; the rest are plain text to be pasted into the carrier's site. */
+  const numbers = String(o.tracking || '').split(',').map(s => s.trim()).filter(Boolean);
+  let trackHtml;
+  if (!numbers.length) {
+    trackHtml = `<span class="ship-none">no tracking yet</span>`;
+  } else {
+    trackHtml = numbers.map((n, idx) => (idx === 0 && o.trackingUrl)
+      ? `<a class="ship-track" href="${esc(o.trackingUrl)}" target="_blank" onclick="event.stopPropagation()"
+           title="Tracks this parcel${numbers.length > 1 ? ' — the other numbers have no link of their own' : ''}">${esc(n)} ↗</a>`
+      : `<span class="ship-track plain">${esc(n)}</span>`).join(' ');
+    if (numbers.length > 1) {
+      trackHtml += ` <span class="ship-date">${numbers.length} parcels</span>`;
+    }
+  }
+
+  return `
+    <div class="card-ship" onclick="event.stopPropagation()">
+      ${o.carrier ? `<span class="ship-carrier">${esc(o.carrier)}</span>` : ''}
+      ${trackHtml}
+      ${date ? `<span class="ship-date">shipped ${esc(date)}</span>` : ''}
+      ${o.orderNumber ? `<button class="ship-action" id="ssBtn-${o.id}" onclick="openShipStation(${o.id})"
+          title="Copies ${esc(o.orderNumber)} and opens ShipStation — paste it into Quicksearch">ShipStation</button>` : ''}
+    </div>`;
+}
+
+/* ── Refresh from Shopify ─────────────────────────────────────────────────── */
+
+function setRefreshBusy(busy) {
+  syncBusy = busy;
+  const btn = document.getElementById('refreshBtn');
+  if (btn) {
+    btn.disabled = busy;
+    btn.textContent = busy ? 'Reading Shopify…' : '↻ Refresh from Shopify';
+  }
+  const stamp = document.getElementById('syncStamp');
+  if (stamp && busy) stamp.textContent = 'this takes up to a minute';
+}
+
+function dismissSyncReport() { document.getElementById('syncReport').innerHTML = ''; }
+
+function syncList(items, cap) {
+  const list = (items || []).filter(Boolean);
+  if (!list.length) return '';
+  const shown = list.slice(0, cap);
+  return '<ul>' + shown.map(i => `<li>${esc(i)}</li>`).join('') +
+    (list.length > shown.length ? `<li>…and ${list.length - shown.length} more</li>` : '') + '</ul>';
+}
+
+/* The report is assembled from the webhook's own answer rather than from the
+   fact that the call returned 200. "Applied" on the status pass means the PATCH
+   response came back clean — the workflow computes that by reading Grist's
+   reply, because its write node continues on error and a rejected write would
+   otherwise flow onward looking like a success. */
+function renderSyncReport(data) {
+  const st = data.status || {};
+  const c = data.counts || {};
+  const missing = st.columns_missing || [];
+  const parts = [];
+
+  const statusChanges = st.changes || [];
+  const imported = data.imported_orders || [];
+  const qtyChanges = data.changes || [];
+  const touched = statusChanges.length + imported.length + qtyChanges.length;
+
+  let cls = 'good';
+  if (st.write_error || missing.length) cls = 'warn';
+
+  parts.push(`<span class="sync-dismiss" onclick="dismissSyncReport()" title="Dismiss">×</span>`);
+
+  if (!touched) {
+    parts.push(`<strong>Nothing changed.</strong> ${st.matched || 0} order(s) checked against Shopify —
+      payment, fulfilment and tracking already matched.`);
+  } else {
+    parts.push(`<strong>Updated from Shopify.</strong> `);
+    if (statusChanges.length) {
+      parts.push(`${statusChanges.length} order(s) had payment, fulfilment or tracking corrected:` +
+        syncList(statusChanges, 8));
+    }
+    if (imported.length) {
+      parts.push(`${imported.length} order(s) imported that weren't in Grist yet:` + syncList(imported, 8));
+    }
+    if (qtyChanges.length) {
+      parts.push(`${qtyChanges.length} line quantity change(s):` + syncList(qtyChanges, 8));
+    }
+  }
+
+  if (st.write_error) {
+    cls = 'bad';
+    parts.push(`<div style="margin-top:6px">The status write was rejected by Grist —
+      <code>${esc(st.write_error)}</code>. Nothing on this screen was updated.</div>`);
+  }
+  if (missing.length) {
+    parts.push(`<div style="margin-top:6px">Skipped ${missing.length} field(s) with no column on
+      Work_Orders: ${missing.map(m => `<code>${esc(m)}</code>`).join(', ')}.</div>`);
+  }
+  if (st.dry_run) {
+    cls = 'warn';
+    parts.push(`<div style="margin-top:6px">The status pass is in <strong>dry run</strong> —
+      it reported what it would change but wrote nothing. Set <code>DRY_RUN = false</code> in the
+      <strong>Diff Order Status</strong> node in n8n.</div>`);
+  }
+
+  document.getElementById('syncReport').innerHTML =
+    `<div class="sync-box ${cls}">${parts.join('')}</div>`;
+}
+
+async function refreshFromShopify() {
+  if (syncBusy) return;
+  setRefreshBusy(true);
+  dismissSyncReport();
+
+  /* AbortController rather than a bare await: a stalled n8n run would otherwise
+     hold the button hostage with nothing to distinguish slow from dead. */
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), SYNC_TIMEOUT_MS) : null;
+
+  try {
+    const res = await fetch(SYNC_WEBHOOK_URL, {
+      method: 'GET', cache: 'no-store',
+      ...(ctrl ? { signal: ctrl.signal } : {}),
+    });
+    if (!res.ok) throw new Error(`the workflow answered ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    renderSyncReport(data || {});
+    // Grist is the source of truth for this screen; the webhook only wrote to
+    // it. Re-read rather than patching allOrders from the response, so what is
+    // on screen is what is actually stored.
+    await loadOrders();
+    const stamp = document.getElementById('syncStamp');
+    if (stamp) stamp.textContent = 'last refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('Refresh from Shopify failed:', e);
+    const aborted = e && (e.name === 'AbortError');
+    document.getElementById('syncReport').innerHTML = `<div class="sync-box bad">
+      <span class="sync-dismiss" onclick="dismissSyncReport()" title="Dismiss">×</span>
+      <strong>Couldn't refresh.</strong> ${aborted
+        ? `The workflow didn't answer within ${Math.round(SYNC_TIMEOUT_MS / 1000)} seconds. It may still
+           be running in n8n — check its execution list before pressing this again, because a second run
+           on top of the first can import the same order twice.`
+        : esc(e.message)}
+      <div style="margin-top:6px">Nothing on this screen was changed. Check that
+      <strong>SS - Reprocess Open Orders</strong> is <strong>active</strong> in n8n and that
+      <code>${esc(SYNC_WEBHOOK_URL)}</code> is the production URL on its
+      <strong>Run From Dashboard</strong> node.</div></div>`;
+    const stamp = document.getElementById('syncStamp');
+    if (stamp) stamp.textContent = 'last refresh failed';
+  } finally {
+    if (timer) clearTimeout(timer);
+    setRefreshBusy(false);
+  }
+}
+
 function channelClass(channel) {
   const c = (channel || '').toLowerCase();
   if (c === 'wholesale') return 'channel-wholesale';
@@ -538,7 +904,8 @@ function renderList() {
     if (channelFilter !== 'ALL' && o.channel !== channelFilter) return false;
     if (hideClosed && !wantsClosed && isClosedValue(o.status)) { hiddenClosed++; return false; }
     if (q) {
-      const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId + ' ' + orderSkuText(o.id));
+      const hay = normalize(o.customerName + ' ' + o.orderNumber + ' ' + o.shopifyId + ' ' +
+        o.tracking + ' ' + o.carrier + ' ' + orderSkuText(o.id));
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -600,6 +967,7 @@ function renderList() {
             ${prodStatus && !closed ? `<span class="badge ${prodStatus.cls}">${esc(prodStatus.label)}</span>` : ''}
             ${o.status ? `<span class="badge status ${closed ? 'closed' : ''}">${esc(o.status)}</span>` : ''}
             ${o.paymentStatus ? `<span class="badge ${paymentBadgeClass(o.paymentStatus)}">${esc(o.paymentStatus)}</span>` : ''}
+            ${o.fulfillment ? `<span class="badge ${fulfillmentBadgeClass(o.fulfillment)}">${esc(o.fulfillment)}</span>` : ''}
             ${o.channel ? `<span class="badge channel">${esc(o.channel)}</span>` : ''}
           </div>
         </div>
@@ -608,6 +976,7 @@ function renderList() {
           ${dueLabel && !closed ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${esc(dueLabel)}</span>` : ''}
         </div>
         ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${esc(shopifyUrl)}" target="_blank" onclick="event.stopPropagation()">Shopify #${esc(o.shopifyId)} ↗</a>` : `Shopify #${esc(o.shopifyId)}`}</div>` : ''}
+        ${shipRowHtml(o)}
         ${editingNoteId === o.id
           ? `<div class="note-edit" onclick="event.stopPropagation()">
                <textarea class="note-textarea" id="noteInput-${o.id}">${esc(o.notes || '')}</textarea>
