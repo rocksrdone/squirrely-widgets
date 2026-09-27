@@ -789,9 +789,11 @@ function linkJarDye(id) {
 }
 
 // ── Thread fixes ─────────────────────────────────────────────────
-function saveLotBin(id) {
+function saveLotBin(id, prefix) {
   const l = lotById(id); if (!l) return;
-  const bin = (document.getElementById('lb-' + id).value || '').trim();
+  const el = document.getElementById((prefix || 'lb') + '-' + id);
+  if (!el) return;
+  const bin = (el.value || '').trim();
   if (!bin) { showToast('Enter a bin first', false); return; }
   if (bin === l.bin) return;
   runFix([['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: bin }]],
@@ -809,10 +811,15 @@ function jarBinFix(c) {
     <button class="fixbtn" onclick="saveJarBin(${c.id})">Save bin</button>
   </span>`;
 }
-function lotBinFix(l) {
+/* `prefix` keeps element ids unique when one lot shows a control in two places
+   at once — a fibre-mismatched lot appears in its problem group AND in its bin
+   card, and two inputs sharing id "lb-7" would make getElementById return
+   whichever came first, so you would save the value you were not looking at. */
+function lotBinFix(l, prefix) {
+  const p = prefix || 'lb';
   return `<span class="fix">
-    <input class="fixin" id="lb-${l.id}" list="threadbins" placeholder="bin" value="${esc(l.bin)}">
-    <button class="fixbtn" onclick="saveLotBin(${l.id})">Save bin</button>
+    <input class="fixin" id="${p}-${l.id}" list="threadbins" placeholder="bin" value="${esc(l.bin)}">
+    <button class="fixbtn" onclick="saveLotBin(${l.id}, '${p}')">Save bin</button>
   </span>`;
 }
 
@@ -862,6 +869,7 @@ function probGroup(title, why, items) {
     ${items.join('')}
   </div>`;
 }
+
 function problemsPanel(lead, groups) {
   const body = groups.filter(Boolean).join('');
   if (!body) return `<div class="allgood"><strong>Nothing to fix.</strong> Every record here passes its checks — the bins below are what the system believes you have.</div>`;
@@ -1167,7 +1175,8 @@ function binCard(g, amountOf, extraCells, extraHead) {
       ${g.lots.map(l => `<tr>
         <td><span class="name">${esc(l.recipe.name)}</span><span class="sub">${esc(l.fiber)}${l.onRack ? ' · still on the rack' : ''}</span></td>
         <td><span class="sub" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--ink)">${esc(l.lotNumber)}</span>
-          <span class="sub">${esc(shortDate(l.date))}</span></td>
+          <span class="sub">${esc(shortDate(l.date))}</span>
+          <div class="fixrow">${lotBinFix(l, 'bc')}</div></td>
         ${extraCells(l)}
         <td class="num"><strong>${amountOf(l)}</strong></td>
         ${countCell()}
