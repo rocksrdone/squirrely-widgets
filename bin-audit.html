@@ -336,10 +336,16 @@ function ageDays(dateVal) {
   if (!ms || isNaN(ms)) return null;
   return Math.floor((Date.now() - ms) / 86400000);
 }
+/* Grist Date columns hold epoch SECONDS at UTC midnight. Formatting one in
+   local time lands on the PREVIOUS day for anyone west of UTC — a lot numbered
+   LOT-260909 read "Sep 8" in New York, which makes a lot number and its own
+   date disagree on screen. Every date this widget shows (lot dates, dye mixed
+   dates) comes from a Grist Date column, so they all format in UTC. */
 function shortDate(dateVal) {
   if (!dateVal) return '';
   const d = typeof dateVal === 'number' ? new Date(dateVal * 1000) : new Date(dateVal);
-  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' });
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined,
+    { year: '2-digit', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 // Bins sort naturally: A1 before A2 before A10, and 2 before 12.
 function binSort(a, b) {
@@ -621,7 +627,11 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
 
   const problems = {
     unbinned: lots.filter(l => !l.bin && l.inBin > 0 && !l.onRack),
-    unknownBin: lots.filter(l => l.bin && locations.length && !locByCode[normalize(l.bin)]),
+    /* `l.inBin > 0` matches the `unbinned` filter above. Without it a lot whose
+       spools have all been packed or written off was still demanding a bin
+       nobody can act on — "0 spools, currently bin 1" is noise in a list whose
+       whole purpose is spools that cannot be counted against a bin. */
+    unknownBin: lots.filter(l => l.bin && l.inBin > 0 && locations.length && !locByCode[normalize(l.bin)]),
     fiberMismatch: lots.filter(l => {
       const loc = l.bin ? locByCode[normalize(l.bin)] : null;
       return !!(loc && loc.fiber && l.fiber && fiberKey(loc.fiber) !== fiberKey(l.fiber));
