@@ -114,6 +114,19 @@ select.pick {
   font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
+/* Store comparison. Muted when it agrees, loud only when it does not — an
+   audit screen that shouts on every row teaches you to stop reading it. */
+.cmp { font-size: 10.5px; margin-left: 8px; white-space: nowrap; }
+.cmp.ok { color: var(--teal); }
+.cmp.bad { color: var(--accent); font-weight: 600; }
+.cmp.unknown { color: var(--muted); font-style: italic; }
+.store-bar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: white; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 9px 12px; margin-bottom: 12px; font-size: 12px;
+}
+.store-bar .stamp { color: var(--muted); font-size: 11px; }
+.store-bar .bad { color: var(--accent); font-weight: 600; }
 .warn-banner {
   background: var(--gold-light); border: 1px solid #D4B07A; color: #7A5518;
   padding: 8px 11px; border-radius: 6px; font-size: 11.5px; margin-bottom: 12px; line-height: 1.5;
@@ -128,9 +141,11 @@ select.pick {
 <div class="toolbar">
   <input class="search" id="search" placeholder="Search colourway or SKU…">
   <button class="btn" id="showAll">Show colourways with none on hand</button>
+  <button class="btn" id="checkStores">Check stores</button>
   <button class="btn" id="reload">↻ Reload</button>
 </div>
 <div id="totals"></div>
+<div id="storeBar"></div>
 <div id="list"><div class="empty">Loading…</div></div>
 <div id="log"></div>
 <div class="toast" id="toast"></div>
@@ -210,7 +225,18 @@ let S = {
   search: '', showEmpty: false, open: {},
   moveQty: {}, moveFrom: {}, moveTo: {},
   log: [], ready: false,
+  store: null, storeLoading: false, storeError: '',
 };
+
+/* Read-only snapshot of what the vendor store actually reports, via
+   "SS - Store Inventory Snapshot". A widget cannot call the Shopify Admin API
+   itself — the token cannot live in client-side code and CORS blocks it — so
+   n8n holds the credential and this only ever reads the result.
+
+   Nothing on this screen writes to Shopify. The comparison exists so YOU can
+   decide what to correct and where; an automatic reconcile would be writing to
+   a live storefront off a number that might itself be the stale one. */
+const STORE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/store-inventory';
 
 async function loadAll() {
   try {
@@ -293,6 +319,78 @@ async function loadAll() {
   }
 }
 
+async function checkStores() {
+  if (S.storeLoading) return;
+  S.storeLoading = true; S.storeError = '';
+  render();
+  try {
+    const res = await fetch(STORE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'inventory-desk' }),
+    });
+    if (!res.ok) throw new Error('webhook returned ' + res.status);
+    const data = await res.json();
+    if (data && data.ok === false) throw new Error(data.error || 'the workflow reported a failure');
+    const bySku = {};
+    (data.variants || []).forEach(v => { bySku[normalize(v.sku)] = v; });
+    S.store = { ...data, bySku };
+  } catch (e) {
+    console.error('Inventory Desk: store check failed', e);
+    S.store = null;
+    S.storeError = (e && e.message) ? e.message : String(e);
+  }
+  S.storeLoading = false;
+  render();
+}
+
+/* What the vendor store says about one colourway, against what Grist claims is
+   listed there. Returns null when there is nothing to say, so an un-checked
+   screen looks exactly as it did before. */
+function storeCmp(g) {
+  if (!S.store) return null;
+  const sku = g.recipe.sku;
+  if (!sku) return { kind: 'unknown', text: 'no SKU on the recipe' };
+  const v = S.store.bySku[normalize(sku)];
+  if (!v) {
+    return g.vendor > 0
+      ? { kind: 'bad', text: `not on the vendor store, but Grist lists ${g.vendor}` }
+      : { kind: 'unknown', text: 'not on the vendor store' };
+  }
+  // Quantity alone is misleading: stock on a draft product cannot be bought.
+  if (!v.active && (v.qty > 0 || g.vendor > 0)) {
+    return { kind: 'bad', text: `Shopify ${v.qty}, product is ${v.status} — not buyable` };
+  }
+  if (v.qty === g.vendor) return { kind: 'ok', text: `Shopify ${v.qty} \u2713` };
+  const d = v.qty - g.vendor;
+  return { kind: 'bad', text: `Shopify ${v.qty} (${d > 0 ? '+' : ''}${d})` };
+}
+
+function storeBarHtml() {
+  const el = document.getElementById('storeBar');
+  if (!el) return;
+  if (S.storeLoading) { el.innerHTML = `<div class="store-bar">Reading the vendor store\u2026</div>`; return; }
+  if (S.storeError) {
+    el.innerHTML = `<div class="store-bar"><span class="bad">Could not read the vendor store</span>
+      <span class="stamp">${esc(S.storeError)}</span>
+      <span class="stamp">Grist figures below are unaffected.</span></div>`;
+    return;
+  }
+  if (!S.store) { el.innerHTML = ''; return; }
+
+  const rows = visible();
+  const diffs = rows.map(g => ({ g, c: storeCmp(g) })).filter(x => x.c && x.c.kind === 'bad');
+  const c = S.store.counts || {};
+  el.innerHTML = `<div class="store-bar">
+    <span><strong>${diffs.length}</strong> ${diffs.length === 1 ? 'colourway disagrees' : 'colourways disagree'} with the vendor store</span>
+    <span class="stamp">${c.variants || 0} SKUs read${c.not_active ? ` \u00b7 ${c.not_active} not active` : ''} \u00b7 ${
+      S.store.fetched_at ? new Date(S.store.fetched_at).toLocaleTimeString() : ''}</span>
+    ${S.store.truncated ? '<span class="bad">partial snapshot \u2014 250-product cap hit</span>' : ''}
+    ${(S.store.notes || []).map(n => `<span class="stamp">${esc(n)}</span>`).join('')}
+    <span class="stamp">Comparison only \u2014 nothing is written to Shopify.</span>
+  </div>`;
+}
+
 function visible() {
   const q = normalize(S.search);
   return S.byRecipe.filter(g => {
@@ -307,6 +405,11 @@ function bucketHtml(g, b) {
   return `<div class="bucket ${b.key} ${v ? '' : 'zero'}">
     <span class="n">${v}</span><span class="l">${esc(b.short)}</span>
   </div>`;
+}
+
+function cmpHtml(g) {
+  const c = storeCmp(g);
+  return c ? `<span class="cmp ${c.kind}">${esc(c.text)}</span>` : '';
 }
 
 function cardHtml(g) {
@@ -338,6 +441,7 @@ function cardHtml(g) {
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => bucketHtml(g, b)).join('')}
+        ${cmpHtml(g)}
         <span class="onhand" title="On hand — the sum of all three">${g.onHand}</span>
       </div>
     </div>
@@ -393,6 +497,7 @@ function render() {
     ? 'Hide colourways with none on hand' : 'Show colourways with none on hand';
 
   wire();
+  storeBarHtml();
   renderLog();
 }
 
@@ -510,6 +615,7 @@ async function undo(i) {
 document.getElementById('search').addEventListener('input', (e) => { S.search = e.target.value; render(); });
 document.getElementById('showAll').addEventListener('click', () => { S.showEmpty = !S.showEmpty; render(); });
 document.getElementById('reload').addEventListener('click', () => loadAll());
+document.getElementById('checkStores').addEventListener('click', () => checkStores());
 
 // Static shell is already rendered. Only now talk to Grist.
 try {
