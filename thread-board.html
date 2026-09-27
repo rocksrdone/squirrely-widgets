@@ -27,6 +27,8 @@
     border:1px solid var(--warn-text); border-radius:6px; padding:7px 10px; margin-bottom:8px; }
   .resolve { margin-top:7px; padding:7px 9px; border:1px solid var(--warn-text);
     border-radius:6px; background:var(--warn-bg); }
+  .closeall { display:flex; align-items:center; gap:6px; font-size:11.5px; color:#6B5E52;
+    margin:0 0 10px; cursor:pointer; }
   .resolve-cap { font-size:11px; color:var(--warn-text); font-weight:600; margin-bottom:5px; }
   .resolve-btns { display:flex; gap:5px; flex-wrap:wrap; }
   .btn-res { min-height:36px; padding:6px 11px; border:1px solid var(--warn-text); border-radius:5px;
@@ -168,7 +170,7 @@ function ageLabel(d) {
   return `${d} days`;
 }
 
-let S = { lots: [], cols: null, hasPos: true };
+let S = { lots: [], cols: null, hasPos: true, closeAll: false };
 
 async function loadBoard() {
   try {
@@ -441,10 +443,19 @@ function staleBanner() {
   </div>`;
 }
 
+/* Normally only lots past STALE_DAYS offer these, so fresh production cannot be
+   closed out by a stray click while it is still legitimately in flight.
+
+   The toggle exists because that gate also blocks a deliberate clean-up: after
+   clearing the genuinely stale lots you can be left with a board of 11-18 day
+   lots you know the answer for, and no way to say so for another three days.
+   It is off by default and per-session, so the protection is the resting state
+   and switching it on is a decision you make each time. */
 function resolveHtml(l) {
-  if (!isStale(l) || l.unwound <= 0) return '';
+  if ((!isStale(l) && !S.closeAll) || l.unwound <= 0) return '';
   return `<div class="resolve">
-    <div class="resolve-cap">${l.unwound} spool${l.unwound === 1 ? '' : 's'} unaccounted for ${ageLabel(l.days)} &mdash; what happened to them?</div>
+    <div class="resolve-cap">${l.unwound} spool${l.unwound === 1 ? '' : 's'} unaccounted for${
+      isStale(l) ? ' ' + ageLabel(l.days) : (l.days != null ? ` \u00b7 ${l.days} days old` : '')} &mdash; what happened to them?</div>
     <div class="resolve-btns">
       <button class="btn-res" onclick="resolveRemainder(${l.id},'stock')">Back stock</button>
       <button class="btn-res" onclick="resolveRemainder(${l.id},'broken')">Broken / lost</button>
@@ -523,6 +534,10 @@ function render() {
   c.innerHTML = `
     <div class="head"><span class="title">Thread Board</span></div>
     <div class="sub">Where every unwound lot is &mdash; drying, waiting to be bagged, or in a bin.</div>
+    <label class="closeall">
+      <input type="checkbox" id="closeAll" ${S.closeAll ? 'checked' : ''}>
+      Show close-out buttons on every lot, not just those over ${STALE_DAYS} days
+    </label>
     ${staleBanner()}
     ${posWarn}
     ${section(wet, 'stage-wet', 'Drying', 'nothing on the wet rack')}
@@ -530,6 +545,9 @@ function render() {
     ${S.hasBin ? section(bagged, 'stage-bagged', 'Bagged in bins', 'nothing bagged yet') : ''}
     ${other.length ? section(other, 'stage-other', 'Unrecognised status', '') : ''}
   `;
+
+  const ca = document.getElementById('closeAll');
+  if (ca) ca.addEventListener('change', () => { S.closeAll = ca.checked; render(); });
 }
 
 
