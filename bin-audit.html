@@ -1048,8 +1048,14 @@ function renderThread(stamp) {
       probGroup('Spools with no bin', 'Off the rack but never assigned a bin, so no audit can find them.',
         P.unbinned.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.fiber)}
           <div class="fixrow">${lotBinFix(l)}</div></div>`)),
-      probGroup('Bin code not in Storage_Locations', 'Typo, or a bin that was never set up.',
-        P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> — bin <span class="mono">${esc(l.bin)}</span>
+      /* Carries the same identifying line as its sibling groups. It used to show
+         only the lot number and the unrecognised bin, which is unusable: deciding
+         where a lot belongs needs to know WHAT it is, and a screen of
+         "LOT-260909-7 — bin 5" tells you nothing you can act on. The colourway,
+         spool count and fibre were on the lot object the whole time. */
+      probGroup('Bin code not in Storage_Locations',
+        'The bin on the lot is not a code in Storage_Locations — a typo, a bin that was never set up, or an older numbering.',
+        P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.fiber)} · currently bin <span class="mono">${esc(l.bin)}</span>${l.date ? ` · ${esc(shortDate(l.date))}` : ''}
           <div class="fixrow">${lotBinFix(l)}</div></div>`)),
       probGroup('Wrong fibre for the bin', 'The bin is set up for one fibre and holds another.',
         P.fiberMismatch.map(l => {
