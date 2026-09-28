@@ -310,8 +310,17 @@ const TAG_RULES = [
 
    Whichever decided it, the verdict and its reasoning print on every card. */
 const STORE_LABELS = {
-  // 123456: { label: 'Vendor', expectInGrist: true },
-  // 123457: { label: 'Retail', expectInGrist: false },
+  /* Confirmed from a live run on 2026-09-27: five orders under this id, all
+     single spools to named individuals with NFF_ SKUs, none matching Recipes.
+     Retail never enters Grist, so having no work order is correct for these. */
+  451515: { label: 'Retail', expectInGrist: false },
+
+  /* The vendor store id is still unknown — it had nothing in Awaiting Shipment
+     when this was written, so it never appeared. Get it from
+     GET https://ssapi.shipstation.com/stores and add it here as
+     { label: 'Vendor', expectInGrist: true }. Until then a vendor order whose
+     colourway is not yet in Recipes will fall back to the SKU guess and read
+     as retail, which is the one case the guess gets wrong. */
 };
 
 /* Does this order's contents look like something Grist ought to know about? */
@@ -722,6 +731,28 @@ function sameWeight(a, b) {
     up(a.units).slice(0, 2) === up(b.units).slice(0, 2);
 }
 
+/* ── Fill blanks, never overwrite ─────────────────────────────────────────
+   Order #5786 is why this exists. It was already set to
+   stamps_com / usps_first_class_mail at 6.5 oz — somebody chose that — while
+   the service rule here says every domestic order is Ground Advantage. Left
+   unchecked, the write step would have quietly replaced a deliberate, probably
+   cheaper choice on every order it touched, and the only evidence would have
+   been a postage bill going up.
+
+   The rule is therefore: a field that is EMPTY gets filled, a field that
+   already holds something is left exactly as it is and reported as such. That
+   keeps the whole point of the exercise — an order that arrives blank comes up
+   pre-filled — while making it impossible for a crude rule to overrule a human.
+
+   Turning this off is a deliberate act, not a default. Do it per field, once a
+   rule is actually better than what is already in the box. */
+const FILL_BLANKS_ONLY = true;
+
+function isBlankField(v) {
+  return v === null || v === undefined || String(v).trim() === '';
+}
+function hasWeight(w) { return !!(w && num(w.value) > 0); }
+
 function build() {
   const rows = [];
   const ship = (S.ship && S.ship.orders) || [];
@@ -747,17 +778,31 @@ function build() {
     const tags = proposeTags(o, g, expectInGrist);
     const note = proposeNote(o, g);
 
+    /* `diffs` is what would actually be written. `kept` is what this screen
+       WANTED to set but won't, because ShipStation already holds a value and
+       FILL_BLANKS_ONLY is on — surfaced rather than hidden, so a rule that
+       consistently disagrees with reality is visible and can be fixed. */
     const diffs = [];
-    if (weight.value && !sameWeight(o.weight, weight.value)) diffs.push('weight');
-    if (service.carrier && up(o.carrierCode) !== up(service.carrier)) diffs.push('carrier');
-    if (service.service && up(o.serviceCode) !== up(service.service)) diffs.push('service');
-    if (note && String(o.internalNotes || '').trim() !== note) diffs.push('note');
+    const kept = [];
+    const consider = (name, occupied, proposed, differs) => {
+      if (!proposed) return;
+      if (occupied) { if (differs && FILL_BLANKS_ONLY) kept.push(name); else if (differs) diffs.push(name); }
+      else diffs.push(name);
+    };
+
+    consider('weight', hasWeight(o.weight), !!weight.value, !sameWeight(o.weight, weight.value));
+    consider('carrier', !isBlankField(o.carrierCode), !!service.carrier,
+      up(o.carrierCode) !== up(service.carrier));
+    consider('service', !isBlankField(o.serviceCode), !!service.service,
+      up(o.serviceCode) !== up(service.service));
+    consider('note', !isBlankField(o.internalNotes), !!note,
+      String(o.internalNotes || '').trim() !== note);
 
     rows.push({
       kind: 'shipstation',
       o, g, store, expectInGrist, expectWhy,
       weight, box, service, tags, note,
-      diffs,
+      diffs, kept,
       /* Comparing lines against Grist only says anything when Grist is
          supposed to have this order. A retail order never enters Grist at all,
          so running the comparison would report every one of its SKUs as
@@ -1015,6 +1060,16 @@ function gristOnlyReading(g) {
     'Worth a look if you know it went out.';
 }
 
+/* Marks a value this screen computed but will NOT write, because ShipStation
+   already holds one. Deliberately conspicuous: a field that is permanently
+   "left alone" means the rule and reality disagree, and that is worth seeing
+   rather than quietly dropping. */
+function keptMark(r, field) {
+  return (r.kept || []).includes(field)
+    ? ' <span class="cant">— left alone, ShipStation already has one</span>'
+    : '';
+}
+
 function cardHtml(r) {
   if (r.kind === 'grist-only') {
     const g = r.g;
@@ -1043,7 +1098,8 @@ function cardHtml(r) {
   if (o.isInternational) badges.push(`<span class="badge info">${esc(o.shipTo.country)}</span>`);
   if (g && g.isSplit) badges.push(`<span class="badge warn">part made</span>`);
   if (g && g.hasRush) badges.push(`<span class="badge bad">rush</span>`);
-  if (r.diffs.length) badges.push(`<span class="badge warn">${r.diffs.length} field(s) would change</span>`);
+  if (r.diffs.length) badges.push(`<span class="badge warn">${r.diffs.length} blank field(s) would be filled</span>`);
+  if (r.kept.length) badges.push(`<span class="badge info">${r.kept.length} left alone</span>`);
 
   const klass = g ? 'matched' : (r.expectInGrist === false ? 'nogrist-ok' : 'nogrist-bad');
 
@@ -1102,7 +1158,7 @@ function cardHtml(r) {
         <h4>Would be set from Grist</h4>
         <table class="fields">
           <tr class="${r.diffs.includes('weight') ? 'changed' : ''}"><td class="k">weight</td>
-            <td class="v">${r.weight.value ? esc(weightText(r.weight.value))
+            <td class="v">${r.weight.value ? esc(weightText(r.weight.value)) + keptMark(r, 'weight')
               : `<span class="cant">not yet — ${esc(r.weight.why)}</span>`}</td></tr>
           <tr><td class="k">box</td><td class="v">${r.box.box
             ? esc(r.box.box.name)
@@ -1112,13 +1168,13 @@ function cardHtml(r) {
               + (r.box.oversize ? ' <span class="cant">— oversize</span>' : '')
             : `<span class="cant">${esc(r.box.why)}</span>`}</td></tr>
           <tr class="${r.diffs.includes('carrier') ? 'changed' : ''}"><td class="k">carrier</td>
-            <td class="v">${esc(r.service.carrier || '—')}</td></tr>
+            <td class="v">${esc(r.service.carrier || '—')}${keptMark(r, 'carrier')}</td></tr>
           <tr class="${r.diffs.includes('service') ? 'changed' : ''}"><td class="k">service</td>
-            <td class="v">${esc(r.service.service || '—')}</td></tr>
+            <td class="v">${esc(r.service.service || '—')}${keptMark(r, 'service')}</td></tr>
           <tr><td class="k">tags</td><td class="v">${r.tags.length
             ? esc(r.tags.join(', ')) : '<span class="blank">none</span>'}</td></tr>
           <tr class="${r.diffs.includes('note') ? 'changed' : ''}"><td class="k">note</td>
-            <td class="v">${r.note ? esc(r.note) : '<span class="blank">—</span>'}</td></tr>
+            <td class="v">${r.note ? esc(r.note) + keptMark(r, 'note') : '<span class="blank">—</span>'}</td></tr>
         </table>
       </div>
     </div>
