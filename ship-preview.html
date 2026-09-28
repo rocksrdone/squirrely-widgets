@@ -284,15 +284,50 @@ const TAG_RULES = [
   { name: 'Not in Grist',   when: (o, g, expectInGrist) => !g && expectInGrist !== false },
 ];
 
-/* Store id -> what that store is. Filled in after the first run: the preview
-   lists any id it does not recognise, so you can label it here. This matters
-   because RETAIL orders never enter Grist at all, so their absence from Grist
-   is correct — and without this map every retail order would be reported as a
-   missing work order, which would bury the ones that genuinely are. */
+/* ── Telling a retail order from a vendor one ─────────────────────────────
+   RETAIL orders never enter Grist, so having no work order is correct for
+   them. VENDOR orders always should, so having no work order means something
+   went wrong. This screen is only useful if it can tell those apart —
+   otherwise every retail order reads as a fault and buries the real ones.
+
+   STORE ID IS THE RELIABLE SIGNAL, and it is what to use. ShipStation keeps a
+   separate store per connected sales channel — vendor and retail are two — and
+   the consolidated order list in the UI hides that, but every order still
+   carries its own `advancedOptions.storeId`. Map the two ids in STORE_LABELS
+   below and classification becomes exact, with no guessing at all.
+
+   UNTIL THEY ARE MAPPED there is a fallback, because an unconfigured screen
+   that reports every retail order as a fault is a screen nobody reads. The two
+   catalogues use transposed SKU prefixes — retail sells NFF_DUDLACH, Grist and
+   the vendor store know it as FFN_DUDLACH — so a retail order's SKUs match
+   nothing in Recipes while a vendor order's match. It is checked against the
+   live Recipes table rather than a hardcoded prefix, so it survives a renaming.
+
+   The fallback has a real failure case the mapping does not: a VENDOR order for
+   a colourway not yet in Recipes has no matching SKUs, so it reads as retail
+   and stops being flagged — exactly the order you would want flagged. That is
+   the reason to fill in the ids rather than leave the guess running.
+
+   Whichever decided it, the verdict and its reasoning print on every card. */
 const STORE_LABELS = {
   // 123456: { label: 'Vendor', expectInGrist: true },
   // 123457: { label: 'Retail', expectInGrist: false },
 };
+
+/* Does this order's contents look like something Grist ought to know about? */
+function looksLikeVendorOrder(o) {
+  const skus = (o.items || []).map(i => up(i.sku)).filter(Boolean);
+  if (!skus.length) {
+    return { expect: true, why: 'no SKUs to judge by, so treated as one that should be in Grist' };
+  }
+  const known = skus.filter(s => S.grist && S.grist.recipeSkus.has(s));
+  if (known.length) {
+    return { expect: true,
+             why: `${known.length} of ${skus.length} SKU(s) are in Recipes — this should have a work order` };
+  }
+  return { expect: false,
+           why: `none of its ${skus.length} SKU(s) are in Recipes, so this reads as a retail order` };
+}
 
 const PREVIEW_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/shipstation-preview';
 const PREVIEW_TIMEOUT_MS = 60000;
@@ -409,7 +444,12 @@ async function loadGrist() {
       }
     }
 
-    S.grist = { orders, byKey, collisions };
+    /* Every SKU Grist knows about. Used to tell a vendor order from a retail
+       one — see looksLikeVendorOrder above. */
+    const recipeSkus = new Set();
+    Object.values(recipes).forEach(r => { if (r.sku) recipeSkus.add(up(r.sku)); });
+
+    S.grist = { orders, byKey, collisions, recipeSkus };
     S.gristError = '';
     await loadWeightTables();
   } catch (e) {
@@ -693,8 +733,13 @@ function build() {
     const g = byKey[key(o.orderNumber)] || byKey[key(o.orderKey)] || null;
     if (g) seenGrist.add(g.id);
 
+    /* A manual store mapping wins when one exists; otherwise the order's own
+       SKUs decide. Never null now — an undecided verdict left every retail
+       order looking like a fault. */
     const store = STORE_LABELS[o.storeId] || null;
-    const expectInGrist = store ? store.expectInGrist !== false : null;
+    const guess = looksLikeVendorOrder(o);
+    const expectInGrist = store ? store.expectInGrist !== false : guess.expect;
+    const expectWhy = store ? `store ${o.storeId} is mapped as ${store.label}` : guess.why;
 
     const box = proposeBox(g);
     const weight = proposeWeight(g, box);
@@ -710,7 +755,7 @@ function build() {
 
     rows.push({
       kind: 'shipstation',
-      o, g, store, expectInGrist,
+      o, g, store, expectInGrist, expectWhy,
       weight, box, service, tags, note,
       diffs,
       /* Comparing lines against Grist only says anything when Grist is
@@ -877,15 +922,31 @@ function renderBanners() {
       orders need a measurement for — it only asks for the ones actually in front of you.</div></div>`);
   }
 
-  const unknownStores = S.ship
+  /* Store ids seen but not yet mapped. Deliberately NOT styled as a warning:
+     the SKU fallback is working and nothing is broken. It is an offer of a
+     better setting, and it exists at all because the ids are otherwise
+     invisible — they are not shown anywhere in ShipStation's own UI. */
+  const unmappedStores = S.ship
     ? (S.ship.store_ids || []).filter(id => !STORE_LABELS[id])
     : [];
-  if (unknownStores.length) {
-    out.push(`<div class="banner warn"><strong>Unrecognised ShipStation store(s):
-      ${unknownStores.map(i => `<code>${esc(i)}</code>`).join(', ')}.</strong>
-      Until each id is labelled, an order from that store with no work order is reported as a problem.
-      Retail orders never enter Grist, so if one of these is the retail store it should be marked
-      <code>expectInGrist: false</code> in <code>STORE_LABELS</code> and its orders will stop being flagged.</div>`);
+  if (unmappedStores.length) {
+    const counts = {};
+    S.rows.filter(r => r.kind === 'shipstation').forEach(r => {
+      const k = String(r.o.storeId);
+      counts[k] = counts[k] || { vendor: 0, retail: 0 };
+      counts[k][r.expectInGrist === false ? 'retail' : 'vendor']++;
+    });
+    out.push(`<div class="banner"><strong>${unmappedStores.length} ShipStation store(s) not mapped yet.</strong>
+      Retail and vendor are being told apart from each SKU instead, which works but can be fooled by a
+      vendor order for a colourway that isn't in Recipes yet — it would read as retail and stop being
+      flagged. Mapping the ids makes it exact.
+      <ul>${unmappedStores.map(id => {
+        const c = counts[String(id)] || { vendor: 0, retail: 0 };
+        return `<li><code>${esc(id)}</code> — ${c.vendor} order(s) read as vendor,
+          ${c.retail} as retail</li>`;
+      }).join('')}</ul>
+      Add them to <code>STORE_LABELS</code> at the top of this file, e.g.
+      <code>${esc(unmappedStores[0])}: { label: 'Vendor', expectInGrist: true }</code>.</div>`);
   }
 
   document.getElementById('banners').innerHTML = out.join('');
@@ -926,6 +987,34 @@ function weightText(w) {
   return `${num(w.value)} ${w.units || ''}`.trim();
 }
 
+/* What it MEANS that a work order isn't in Awaiting Shipment.
+
+   The obvious reading — "not made yet" — is wrong here more often than it is
+   right. Vendor orders ship first and get paid afterwards over Wise, so a work
+   order routinely stays Active long after the parcel has gone, waiting on
+   money rather than on thread. Saying "not made yet" next to an order that
+   shipped three weeks ago trains you to ignore this whole section.
+
+   The draft case is worse than it looks. A Shopify DRAFT order has no
+   fulfilments, so the status sync can never find a tracking number for it —
+   `shipmentFacts` returns empty for drafts by construction. An empty
+   Tracking_Number on a draft therefore means nothing at all, and must not be
+   read as "hasn't shipped". */
+function gristOnlyReading(g) {
+  const isDraft = /draft/i.test(g.type || '');
+  if (g.tracking) {
+    return 'Has a tracking number, so it shipped. Still Active — either waiting on payment, ' +
+      'or it just needs closing in Order Picker.';
+  }
+  if (isDraft) {
+    return 'This is a draft order, and Shopify drafts have no fulfilments — so the sync can never ' +
+      'pull a tracking number for it, and a blank one here says nothing either way. ' +
+      'Check Shopify or ShipStation directly to tell whether it went out.';
+  }
+  return 'No tracking and not waiting to ship, so most likely it isn\'t made yet. ' +
+    'Worth a look if you know it went out.';
+}
+
 function cardHtml(r) {
   if (r.kind === 'grist-only') {
     const g = r.g;
@@ -938,19 +1027,19 @@ function cardHtml(r) {
       <div class="meta-row">
         <span>${g.spools} spool(s) across ${g.lines.length} line(s)</span>
         ${g.status ? `<span>${esc(g.status)}</span>` : ''}
-        ${g.tracking ? `<span>already has tracking — may have shipped</span>` : ''}
+        ${g.type ? `<span>${esc(g.type)}</span>` : ''}
       </div>
-      <div class="why">Usually this just means it isn't made yet. It becomes worth checking if it
-        has tracking, or if you know it went out.</div>
+      <div class="why">${gristOnlyReading(g)}</div>
     </div>`;
   }
 
   const { o, g, store } = r;
   const badges = [];
   if (g) badges.push(`<span class="badge ok">WO ${esc(g.number)}</span>`);
-  else if (r.expectInGrist === false) badges.push(`<span class="badge neutral">${esc(store.label)} — not in Grist by design</span>`);
+  else if (r.expectInGrist === false) badges.push(`<span class="badge neutral">retail — not in Grist by design</span>`);
   else badges.push(`<span class="badge bad">no work order</span>`);
-  if (store && r.expectInGrist !== false) badges.push(`<span class="badge neutral">${esc(store.label)}</span>`);
+  // Only worth showing when a store id was actually mapped by hand.
+  if (store) badges.push(`<span class="badge neutral">${esc(store.label)}</span>`);
   if (o.isInternational) badges.push(`<span class="badge info">${esc(o.shipTo.country)}</span>`);
   if (g && g.isSplit) badges.push(`<span class="badge warn">part made</span>`);
   if (g && g.hasRush) badges.push(`<span class="badge bad">rush</span>`);
@@ -988,6 +1077,7 @@ function cardHtml(r) {
         ${esc(o.shipTo.country || '')}</span>` : ''}
       ${g ? `<span>${g.spools} spool(s)</span>` : ''}
       ${o.gift ? '<span>gift</span>' : ''}
+      ${o.storeId != null && !store ? `<span>store ${esc(o.storeId)}</span>` : ''}
     </div>
 
     <div class="cols">
@@ -1033,6 +1123,7 @@ function cardHtml(r) {
       </div>
     </div>
 
+    <div class="why">${esc(r.expectWhy)}</div>
     <div class="why">${esc(r.service.why)} · ${esc(r.box.why)} · weight: ${esc(r.weight.why)}</div>
 
     <div class="contents">
