@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Builder</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.subtitle { font-size: 11.5px; color: #8B7D72; margin-bottom: 12px; }
+
+.btn { font-size: 11px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--teal);
+  background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn.secondary { background: white; color: var(--ink); border-color: var(--rule); font-weight: 500; }
+.btn.danger { background: white; color: var(--accent); border-color: var(--rule); font-weight: 500; }
+.btn.danger:hover { border-color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.small { font-size: 10px; padding: 4px 9px; }
+
+.banner { margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: white; border: 1px solid var(--rule); color: #6B5E52; }
+.banner.warn { background: var(--gold-light); border-color: #E4CF9E; color: #6E4C13; }
+.banner.bad { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.banner code { font-family: 'DM Mono', monospace; background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 3px; }
+
+.cols { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.side { width: 240px; flex-shrink: 0; }
+.main { flex: 1; min-width: 320px; }
+
+.order-item { background: white; border: 1.5px solid var(--rule); border-radius: 7px; padding: 8px 10px;
+  margin-bottom: 6px; cursor: pointer; }
+.order-item:hover { border-color: var(--teal); }
+.order-item.sel { border-color: var(--accent); background: var(--accent-light); }
+.order-item .num { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 12px; }
+.order-item .cust { font-size: 12px; font-weight: 600; }
+.order-item .meta { font-size: 10.5px; color: #8B7D72; margin-top: 2px; }
+
+.panel { background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 14px; }
+.panel h3 { font-family: 'Libre Baskerville', serif; font-size: 15px; margin-bottom: 2px; }
+.panel .sub { font-size: 11px; color: #8B7D72; margin-bottom: 12px; }
+
+.field-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+label.lab { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 70px; }
+select, input[type=text], input[type=number] {
+  padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12.5px;
+  font-family: 'Inter', sans-serif; background: white; color: var(--ink);
+}
+select:focus, input:focus { outline: none; border-color: var(--teal); }
+input[type=number] { width: 70px; font-family: 'DM Mono', monospace; }
+
+table.lines { width: 100%; border-collapse: collapse; margin-top: 4px; }
+table.lines th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72;
+  text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--rule); }
+table.lines td { padding: 5px 6px; border-bottom: 1px solid #F0EAE2; font-size: 12.5px; vertical-align: middle; }
+table.lines td.sku { font-family: 'DM Mono', monospace; font-size: 11px; color: #8B7D72; }
+table.lines td.num { font-family: 'DM Mono', monospace; text-align: right; }
+table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); border-bottom: none; }
+
+.totals { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.tot { font-size: 11px; padding: 6px 12px; border-radius: 6px; font-weight: 600;
+  background: var(--warm); color: #6B5E52; }
+
+.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase;
+  letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.badge.building { background: var(--gold-light); color: var(--gold); }
+.badge.active { background: var(--teal-light); color: var(--teal); }
+.badge.pushed { background: var(--done-bg); color: var(--done-text); }
+
+.empty { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; }
+.toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 9px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--rule); flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <span class="title">Order Builder</span>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn secondary" onclick="loadAll()">↻ Reload</button>
+    <button class="btn" onclick="newOrder()">+ New order</button>
+  </div>
+</div>
+<div class="subtitle">
+  Build a vendor order here while it is still changing. It lives only in Grist — nothing reaches Shopify,
+  so no notification can fire — until you deliberately push it.
+</div>
+
+<div id="banners"></div>
+
+<div class="cols">
+  <div class="side" id="side"></div>
+  <div class="main" id="main"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Order Builder ─────────────────────────────────────────────────────────
+   Somewhere to build a vendor order before it exists in Shopify.
+
+   WHY THIS EXISTS. A Shopify draft order is silent, but it is also invisible
+   to ShipStation — nothing can be shipped until the draft is completed into a
+   real order, and completing it emails the customer. Shopify is explicit that
+   this cannot be turned off: the only workaround they offer is to create the
+   draft with no customer details at all and attach the customer afterwards,
+   which means the draft does not say who it is for during exactly the period
+   you are working on it.
+
+   So an order that is still being negotiated has nowhere good to live. Here it
+   lives in Grist, where it can be edited for as long as it takes and nothing
+   can be sent to anyone, because there is nothing in Shopify to send about.
+
+   SAFE FROM THE EXISTING SYNC, by construction. "Diff Draft Quantities" looks
+   up each Active work order in Shopify and, finding none, records it as
+   unmatched and moves on — it returns before reaching the line loop, so
+   CANCEL_REMOVED_LINES can never zero these lines out. Orders held at
+   BUILDING_STATUS are skipped earlier still, on the status check. Neither path
+   writes anything.
+
+   Order numbers are prefixed so they cannot collide with Shopify's. The import
+   branch dedupes on Order_Number, so a Shopify order could in principle share a
+   number with a manual one and be skipped as "already imported" — the prefix
+   makes that impossible. */
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function up(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+function sortKey(s) { return foldAccents(s || '').toLowerCase(); }
+
+/* ── Vocabulary, shared with the rest of the stack ────────────────────────
+   MANUAL_PREFIX keeps these numbers out of Shopify's namespace. Shopify uses
+   bare integers for orders and a "D" prefix for drafts, so "M-" is free.
+
+   BUILDING_STATUS is a status no other widget treats as live work: Thread
+   Board and Order Overview look for Active or blank, and the quantity sync
+   only touches Active. An order sitting here is therefore invisible to
+   production until it is deliberately released — which is the point, because
+   a fluid order should not be sending anyone to a kettle. */
+const MANUAL_PREFIX = 'M-';
+const BUILDING_STATUS = 'Building';
+const READY_STATUS = 'Active';
+const MANUAL_TYPE = 'Manual';
+
+const S = {
+  orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
+  pricing: {},           // customerId -> recipeId -> unit price
+  selected: null,
+  cols: {}, lineCols: {},
+  loading: true, error: '',
+  addRecipe: '', addQty: 1,
+  missing: [],
+};
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ── Load ───────────────────────────────────────────────────────────────── */
+
+async function loadAll() {
+  S.loading = true; S.error = ''; render();
+  try {
+    const [woT, wolT, recT] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+
+    const c = (cands) => findColumn(woT, cands);
+    S.cols = {
+      number: c(['Order_Number']), shopifyId: c(['Shopify_Order_ID']),
+      customerName: c(['Customer_Name']), customer: c(['Customer']),
+      status: c(['Status']), channel: c(['Channel']), type: c(['Order_Type']),
+      orderDate: c(['Order_Date']), dueDate: c(['Due_Date']), notes: c(['Notes']),
+    };
+    const lc = (cands) => findColumn(wolT, cands);
+    S.lineCols = {
+      wo: lc(['Work_Order']), sku: lc(['SKU']), qty: lc(['Qty_Needed']),
+      dyed: lc(['Qty_Dyed']), recipe: lc(['Recipe']), queue: lc(['Queue_Status']),
+      priority: lc(['Production_Priority']), notes: lc(['Notes']),
+      price: lc(['Unit_Price', 'Price']),
+    };
+
+    /* Writing to a column that does not exist 400s the whole request, so the
+       ones this widget writes are checked up front and the builder refuses
+       rather than failing halfway through creating an order. */
+    S.missing = [];
+    [['Order_Number', S.cols.number], ['Customer_Name', S.cols.customerName],
+     ['Status', S.cols.status], ['Order_Type', S.cols.type]]
+      .forEach(([name, col]) => { if (!col) S.missing.push('Work_Orders.' + name); });
+    [['Work_Order', S.lineCols.wo], ['SKU', S.lineCols.sku], ['Qty_Needed', S.lineCols.qty]]
+      .forEach(([name, col]) => { if (!col) S.missing.push('Work_Order_Lines.' + name); });
+
+    const rc = (cands) => findColumn(recT, cands);
+    const REC = { name: rc(['Recipe_Name']), sku: rc(['SKU_Base']), fiber: rc(['Fiber_Type']) };
+    S.recipes = (recT.id || []).map((id, i) => ({
+      id,
+      name: columnAsArray(recT, REC.name)[i] || `Recipe #${id}`,
+      sku: columnAsArray(recT, REC.sku)[i] || '',
+      fiber: columnAsArray(recT, REC.fiber)[i] || '',
+    })).filter(r => r.sku).sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
+    S.recipesById = {};
+    S.recipes.forEach(r => { S.recipesById[r.id] = r; });
+
+    S.orders = (woT.id || []).map((id, i) => ({
+      id,
+      number: String(columnAsArray(woT, S.cols.number)[i] || ''),
+      shopifyId: String(columnAsArray(woT, S.cols.shopifyId)[i] || ''),
+      customerName: columnAsArray(woT, S.cols.customerName)[i] || '',
+      customerId: S.cols.customer ? getRefId(columnAsArray(woT, S.cols.customer)[i]) : null,
+      status: String(columnAsArray(woT, S.cols.status)[i] || ''),
+      type: String(columnAsArray(woT, S.cols.type)[i] || ''),
+      notes: columnAsArray(woT, S.cols.notes)[i] || '',
+    }));
+
+    S.lines = {};
+    (wolT.id || []).forEach((id, i) => {
+      const woId = getRefId(columnAsArray(wolT, S.lineCols.wo)[i]);
+      if (!woId) return;
+      const recipeId = S.lineCols.recipe ? getRefId(columnAsArray(wolT, S.lineCols.recipe)[i]) : null;
+      (S.lines[woId] = S.lines[woId] || []).push({
+        id,
+        sku: columnAsArray(wolT, S.lineCols.sku)[i] || '',
+        qty: num(columnAsArray(wolT, S.lineCols.qty)[i]),
+        dyed: num(columnAsArray(wolT, S.lineCols.dyed)[i]),
+        recipeId,
+        recipeName: recipeId && S.recipesById[recipeId] ? S.recipesById[recipeId].name : '',
+        price: S.lineCols.price ? num(columnAsArray(wolT, S.lineCols.price)[i]) : 0,
+      });
+    });
+
+    await loadCustomers();
+    await loadPricing();
+
+    // Keep the selection across a reload if it still exists.
+    if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
+
+    S.loading = false;
+    render();
+  } catch (e) {
+    console.error('Order Builder failed to load:', e);
+    S.error = e && e.message ? e.message : String(e);
+    S.loading = false;
+    render();
+  }
+}
+
+/* Customers and pricing are both optional — the builder works without either,
+   it just asks you to type a name and a price instead of offering them. */
+async function loadCustomers() {
+  S.customers = [];
+  try {
+    const t = await grist.docApi.fetchTable('Customers');
+    const nameCol = findColumn(t, ['Customer_Name', 'Name']);
+    const codeCol = findColumn(t, ['Code']);
+    S.customers = (t.id || []).map((id, i) => ({
+      id,
+      name: columnAsArray(t, nameCol)[i] || `Customer #${id}`,
+      code: columnAsArray(t, codeCol)[i] || '',
+    })).sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
+  } catch (e) {
+    console.warn('Customers table unavailable — type the name instead', e);
+  }
+}
+
+async function loadPricing() {
+  S.pricing = {};
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Pricing');
+    const custCol = findColumn(t, ['Customer']);
+    const recCol = findColumn(t, ['Recipe']);
+    const priceCol = findColumn(t, ['Unit_Price', 'Price']);
+    if (!custCol || !priceCol) return;
+    (t.id || []).forEach((id, i) => {
+      const cid = getRefId(columnAsArray(t, custCol)[i]);
+      const rid = recCol ? getRefId(columnAsArray(t, recCol)[i]) : null;
+      if (!cid) return;
+      S.pricing[cid] = S.pricing[cid] || {};
+      // A row with no recipe is the customer's default rate.
+      S.pricing[cid][rid || 'default'] = num(columnAsArray(t, priceCol)[i]);
+    });
+  } catch (e) {
+    console.warn('Customer_Pricing unavailable — prices left blank', e);
+  }
+}
+
+function priceFor(customerId, recipeId) {
+  const p = S.pricing[customerId];
+  if (!p) return 0;
+  return num(p[recipeId] != null ? p[recipeId] : p.default);
+}
+
+/* ── Order numbering ────────────────────────────────────────────────────── */
+
+/* Next free M- number. Derived from what is in the table rather than stored in
+   a counter, so a deleted order's number is reused and nothing drifts if two
+   people build at once — the worst case is a collision that Grist itself would
+   accept, which is why the number is re-derived at the moment of creation
+   rather than when the panel opens. */
+function nextManualNumber() {
+  let max = 0;
+  for (const o of S.orders) {
+    const m = /^M-(\d+)$/i.exec(String(o.number || '').trim());
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return MANUAL_PREFIX + (max + 1);
+}
+
+function isManual(o) {
+  return String(o.type || '') === MANUAL_TYPE ||
+    /^M-\d+$/i.test(String(o.number || '').trim());
+}
+
+/* ── Writes ─────────────────────────────────────────────────────────────── */
+
+async function newOrder() {
+  if (S.missing.length) { toast('Missing columns — see the banner'); return; }
+  const fields = {
+    [S.cols.number]: nextManualNumber(),
+    [S.cols.customerName]: '',
+    [S.cols.status]: BUILDING_STATUS,
+    [S.cols.type]: MANUAL_TYPE,
+  };
+  if (S.cols.channel) fields[S.cols.channel] = 'Wholesale';
+  /* Grist Date columns hold epoch SECONDS at UTC midnight — never
+     milliseconds, and never local midnight, which lands on the previous day
+     for anyone west of UTC. */
+  if (S.cols.orderDate) {
+    const now = new Date();
+    fields[S.cols.orderDate] =
+      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 1000;
+  }
+  try {
+    const res = await grist.docApi.applyUserActions([['AddRecord', 'Work_Orders', null, fields]]);
+    const newId = res && res.retValues && res.retValues[0];
+    await loadAll();
+    if (newId) S.selected = newId;
+    render();
+    toast('Created ' + fields[S.cols.number]);
+  } catch (e) {
+    console.error('Could not create the order:', e);
+    alert('Could not create the order — this widget needs Full document access. Nothing was changed.');
+  }
+}
+
+async function setOrderField(id, col, value) {
+  if (!col) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, { [col]: value }]]);
+  } catch (e) {
+    console.error('Could not save:', e);
+    alert('Could not save that change.');
+    await loadAll();
+  }
+}
+
+async function pickCustomer(id, customerId) {
+  const cid = customerId ? Number(customerId) : null;
+  const cust = S.customers.find(c => c.id === cid);
+  const fields = {};
+  if (S.cols.customer) fields[S.cols.customer] = cid;
+  if (S.cols.customerName) fields[S.cols.customerName] = cust ? cust.name : '';
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, fields]]);
+    const o = S.orders.find(x => x.id === id);
+    if (o) { o.customerId = cid; o.customerName = cust ? cust.name : ''; }
+    render();
+  } catch (e) {
+    console.error('Could not set the customer:', e);
+    alert('Could not set the customer.');
+  }
+}
+
+async function addLine(orderId) {
+  const recipeId = Number(S.addRecipe);
+  const qty = Math.max(1, Math.round(num(S.addQty)));
+  const r = S.recipesById[recipeId];
+  if (!r) { toast('Pick a colourway first'); return; }
+
+  const o = S.orders.find(x => x.id === orderId);
+  const existing = (S.lines[orderId] || []).find(l => l.recipeId === recipeId);
+  /* One line per colourway. The quantity sync cannot tell two lines with the
+     same SKU apart — it skips both and says so — so merging here keeps a
+     pushed order syncable later. */
+  if (existing) {
+    await setLineQty(existing.id, existing.qty + qty);
+    toast(`${r.name} → ${existing.qty + qty}`);
+    return;
+  }
+
+  const fields = {
+    [S.lineCols.wo]: orderId,
+    [S.lineCols.sku]: r.sku,
+    [S.lineCols.qty]: qty,
+  };
+  if (S.lineCols.recipe) fields[S.lineCols.recipe] = recipeId;
+  if (S.lineCols.dyed) fields[S.lineCols.dyed] = 0;
+  if (S.lineCols.queue) fields[S.lineCols.queue] = 'Open';
+  if (S.lineCols.priority) fields[S.lineCols.priority] = 'Normal';
+  if (S.lineCols.notes) fields[S.lineCols.notes] = r.name;
+  if (S.lineCols.price && o) {
+    const p = priceFor(o.customerId, recipeId);
+    if (p) fields[S.lineCols.price] = p;
+  }
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', 'Work_Order_Lines', null, fields]]);
+    await loadAll();
+    toast(`Added ${qty}× ${r.name}`);
+  } catch (e) {
+    console.error('Could not add the line:', e);
+    alert('Could not add that line.');
+  }
+}
+
+async function setLineQty(lineId, qty) {
+  const n = Math.max(0, Math.round(num(qty)));
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [S.lineCols.qty]: n }],
+    ]);
+    await loadAll();
+  } catch (e) {
+    console.error('Could not change the quantity:', e);
+    alert('Could not change that quantity.');
+  }
+}
+
+async function removeLine(lineId, label) {
+  const line = Object.values(S.lines).flat().find(l => l.id === lineId);
+  /* A line with dyed spools against it has real production behind it.
+     Removing it would orphan whatever was made, so say so plainly rather
+     than letting a click throw work away. */
+  if (line && line.dyed > 0) {
+    alert(`${label} already has ${line.dyed} spool(s) recorded as dyed.\n\n` +
+      `Removing the line would leave those unaccounted for. Set the quantity to 0 instead, ` +
+      `or sort out the allocation first.`);
+    return;
+  }
+  if (!confirm(`Remove ${label} from this order?`)) return;
+  try {
+    await grist.docApi.applyUserActions([['RemoveRecord', 'Work_Order_Lines', lineId]]);
+    await loadAll();
+    toast('Removed ' + label);
+  } catch (e) {
+    console.error('Could not remove the line:', e);
+    alert('Could not remove that line.');
+  }
+}
+
+async function markReady(id) {
+  const o = S.orders.find(x => x.id === id);
+  const lines = S.lines[id] || [];
+  if (!o) return;
+  if (!lines.length) { alert('This order has no lines yet.'); return; }
+  if (!o.customerName) { alert('Set a customer first.'); return; }
+  const spools = lines.reduce((n, l) => n + l.qty, 0);
+  if (!confirm(`Release ${o.number} for production?\n\n` +
+      `${spools} spool(s) across ${lines.length} line(s) for ${o.customerName}.\n\n` +
+      `Status becomes "${READY_STATUS}", which puts it on Thread Board and the work lists. ` +
+      `It still does not exist in Shopify and no one is emailed.`)) return;
+  await setOrderField(id, S.cols.status, READY_STATUS);
+  await loadAll();
+  toast(o.number + ' released');
+}
+
+async function backToBuilding(id) {
+  await setOrderField(id, S.cols.status, BUILDING_STATUS);
+  await loadAll();
+  toast('Back to building');
+}
+
+async function deleteOrder(id) {
+  const o = S.orders.find(x => x.id === id);
+  if (!o) return;
+  const lines = S.lines[id] || [];
+  /* Shopify first. An order that exists in Shopify may ALSO have dyed spools
+     against it, and if the dyed check ran first you would be told to sort out
+     an allocation when the real answer is that this row is no longer yours to
+     delete — the order lives somewhere else now. Most actionable reason wins. */
+  if (o.shopifyId) {
+    alert('This order has already been pushed to Shopify. Cancel it there rather than deleting it here.');
+    return;
+  }
+  if (lines.some(l => l.dyed > 0)) {
+    alert('Some lines already have dyed spools recorded. Sort those out before deleting the order.');
+    return;
+  }
+  if (!confirm(`Delete ${o.number} and its ${lines.length} line(s)?\n\nThis cannot be undone.`)) return;
+  try {
+    const acts = lines.map(l => ['RemoveRecord', 'Work_Order_Lines', l.id]);
+    acts.push(['RemoveRecord', 'Work_Orders', id]);
+    await grist.docApi.applyUserActions(acts);
+    S.selected = null;
+    await loadAll();
+    toast('Deleted ' + o.number);
+  } catch (e) {
+    console.error('Could not delete:', e);
+    alert('Could not delete that order.');
+  }
+}
+
+/* ── Render ─────────────────────────────────────────────────────────────── */
+
+function selectOrder(id) { S.selected = id; render(); }
+
+function renderBanners() {
+  const out = [];
+  if (S.error) {
+    out.push(`<div class="banner bad"><strong>Couldn't load.</strong> ${esc(S.error)}</div>`);
+  }
+  if (S.missing.length) {
+    out.push(`<div class="banner bad"><strong>Can't build orders yet.</strong>
+      These columns don't exist, and writing to a missing column fails the whole request:
+      ${S.missing.map(m => `<code>${esc(m)}</code>`).join(', ')}.</div>`);
+  }
+  if (!S.customers.length && !S.loading && !S.error) {
+    out.push(`<div class="banner warn">No <code>Customers</code> table found, so the customer has to be
+      typed by hand and won't be linked to a customer record.</div>`);
+  }
+  document.getElementById('banners').innerHTML = out.join('');
+}
+
+function renderSide() {
+  const mine = S.orders.filter(isManual)
+    .sort((a, b) => {
+      const an = parseInt((/\d+/.exec(a.number) || [0])[0], 10);
+      const bn = parseInt((/\d+/.exec(b.number) || [0])[0], 10);
+      return bn - an;
+    });
+  const box = document.getElementById('side');
+  if (!mine.length) {
+    box.innerHTML = `<div class="empty" style="padding:16px">No manual orders yet.</div>`;
+    return;
+  }
+  box.innerHTML = mine.map(o => {
+    const lines = S.lines[o.id] || [];
+    const spools = lines.reduce((n, l) => n + l.qty, 0);
+    const badge = o.shopifyId
+      ? '<span class="badge pushed">in Shopify</span>'
+      : (o.status === BUILDING_STATUS
+          ? '<span class="badge building">building</span>'
+          : '<span class="badge active">released</span>');
+    return `<div class="order-item ${S.selected === o.id ? 'sel' : ''}" onclick="selectOrder(${o.id})">
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span class="num">${esc(o.number)}</span> ${badge}
+      </div>
+      <div class="cust">${esc(o.customerName || '(no customer)')}</div>
+      <div class="meta">${spools} spool(s) · ${lines.length} line(s)</div>
+    </div>`;
+  }).join('');
+}
+
+function renderMain() {
+  const box = document.getElementById('main');
+  if (S.loading) { box.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`; return; }
+  const o = S.selected ? S.orders.find(x => x.id === S.selected) : null;
+  if (!o) {
+    box.innerHTML = `<div class="panel"><div class="empty">
+      Pick an order on the left, or start a new one.</div></div>`;
+    return;
+  }
+
+  const lines = S.lines[o.id] || [];
+  const spools = lines.reduce((n, l) => n + l.qty, 0);
+  const value = lines.reduce((n, l) => n + l.qty * l.price, 0);
+  const building = o.status === BUILDING_STATUS;
+  const pushed = !!o.shopifyId;
+
+  const custOptions = S.customers.length
+    ? `<select onchange="pickCustomer(${o.id}, this.value)">
+         <option value="">— pick a customer —</option>
+         ${S.customers.map(c => `<option value="${c.id}" ${c.id === o.customerId ? 'selected' : ''}>
+           ${esc(c.name)}${c.code ? ' (' + esc(c.code) + ')' : ''}</option>`).join('')}
+       </select>`
+    : `<input type="text" value="${esc(o.customerName)}" placeholder="Customer name"
+         onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.customerName)}, this.value)">`;
+
+  const lineRows = lines.length
+    ? lines.map(l => `<tr>
+        <td>${esc(l.recipeName || l.sku)}</td>
+        <td class="sku">${esc(l.sku)}</td>
+        <td class="num"><input type="number" min="0" value="${l.qty}"
+          onchange="setLineQty(${l.id}, this.value)"></td>
+        <td class="num">${l.price ? '$' + (l.qty * l.price).toFixed(2) : '—'}</td>
+        <td style="text-align:right">
+          <button class="btn danger small"
+            onclick="removeLine(${l.id}, ${esc(JSON.stringify(l.recipeName || l.sku))})">remove</button></td>
+      </tr>`).join('')
+    : `<tr><td colspan="5" class="empty" style="padding:14px">No lines yet.</td></tr>`;
+
+  box.innerHTML = `<div class="panel">
+    <h3>${esc(o.number)} ${building ? '<span class="badge building">building</span>'
+      : '<span class="badge active">released</span>'}</h3>
+    <div class="sub">${building
+      ? 'Editable, invisible to production, and not in Shopify.'
+      : 'Released for production. Still not in Shopify.'}</div>
+
+    <div class="field-row">
+      <label class="lab">Customer</label>${custOptions}
+    </div>
+
+    <table class="lines">
+      <thead><tr><th>Colourway</th><th>SKU</th><th style="text-align:right">Spools</th>
+        <th style="text-align:right">Value</th><th></th></tr></thead>
+      <tbody>${lineRows}</tbody>
+      ${lines.length ? `<tfoot><tr><td colspan="2">Total</td>
+        <td class="num">${spools}</td>
+        <td class="num">${value ? '$' + value.toFixed(2) : '—'}</td><td></td></tr></tfoot>` : ''}
+    </table>
+
+    <div class="field-row" style="margin-top:12px">
+      <select id="addRecipe" onchange="S.addRecipe = this.value">
+        <option value="">— add a colourway —</option>
+        ${S.recipes.map(r => `<option value="${r.id}" ${String(r.id) === String(S.addRecipe) ? 'selected' : ''}>
+          ${esc(r.name)} · ${esc(r.sku)}</option>`).join('')}
+      </select>
+      <input type="number" min="1" value="${esc(S.addQty)}" onchange="S.addQty = this.value">
+      <button class="btn" onclick="addLine(${o.id})">Add</button>
+    </div>
+
+    <div class="actions">
+      ${building
+        ? `<button class="btn" onclick="markReady(${o.id})">Release for production</button>`
+        : `<button class="btn secondary" onclick="backToBuilding(${o.id})">Back to building</button>`}
+      <button class="btn secondary" disabled
+        title="Needs the write_orders scope on the Shopify custom app before this can be built">
+        Push to Shopify — not built yet</button>
+      <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
+    </div>
+  </div>`;
+}
+
+function render() {
+  renderBanners();
+  renderSide();
+  renderMain();
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadAll();
+</script>
+</body>
+</html>
