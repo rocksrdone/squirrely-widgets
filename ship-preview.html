@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ship Preview</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.subtitle { font-size: 11.5px; color: #8B7D72; margin-bottom: 12px; }
+.btn {
+  font-size: 11px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--teal);
+  background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn.secondary { background: white; color: var(--ink); border-color: var(--rule); font-weight: 500; }
+.btn:disabled { opacity: .55; cursor: default; }
+.stamp { font-size: 10.5px; color: #8B7D72; }
+
+.readonly-flag {
+  display: inline-block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; padding: 3px 8px; border-radius: 10px;
+  background: var(--done-bg); color: var(--done-text); border: 1px solid #BBD79A;
+}
+
+.summary-strip { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.summary-item {
+  font-size: 11px; padding: 6px 12px; border-radius: 6px; font-weight: 600;
+  background: white; border: 1px solid var(--rule); color: #6B5E52;
+}
+.summary-item.warn { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.summary-item.soon { background: var(--gold-light); border-color: var(--gold); color: var(--gold); }
+.summary-item.good { background: var(--done-bg); border-color: #BBD79A; color: var(--done-text); }
+
+.banner {
+  margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: white; border: 1px solid var(--rule); color: #6B5E52;
+}
+.banner.warn { background: var(--gold-light); border-color: #E4CF9E; color: #6E4C13; }
+.banner.bad { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.banner code { font-family: 'DM Mono', monospace; background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 3px; }
+.banner ul { margin: 5px 0 0 16px; }
+
+.controls { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.search-input { flex: 1; min-width: 160px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.chip { font-size: 11px; padding: 5px 10px; border-radius: 12px; border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; }
+.chip.active { background: var(--ink); border-color: var(--ink); color: white; }
+
+.rules-panel { margin-bottom: 12px; }
+.rules-toggle { font-size: 11px; color: var(--teal); cursor: pointer; text-decoration: underline; }
+.rules-body {
+  margin-top: 8px; padding: 10px 12px; background: white; border: 1px solid var(--rule);
+  border-radius: 6px; font-size: 11.5px;
+}
+.rules-body h4 { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; margin: 8px 0 4px; }
+.rules-body h4:first-child { margin-top: 0; }
+.rules-body table { border-collapse: collapse; width: 100%; }
+.rules-body td { padding: 2px 10px 2px 0; font-size: 11px; }
+.rules-body td.k { font-family: 'DM Mono', monospace; color: #6B5E52; white-space: nowrap; }
+.rules-body .unset { color: var(--accent); font-style: italic; }
+
+.card {
+  background: white; border: 1.5px solid var(--rule); border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 8px;
+}
+.card.matched { border-left: 4px solid var(--teal); }
+.card.nogrist-ok { border-left: 4px solid var(--rule); }
+.card.nogrist-bad { border-left: 4px solid var(--accent); }
+.card.grist-only { border-left: 4px solid var(--gold); background: #FDFBF8; }
+
+.card-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ordernum { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; }
+.customer { font-size: 14px; font-weight: 600; }
+.badges { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
+.badge { font-size: 9px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; white-space: nowrap; }
+.badge.ok { background: var(--done-bg); color: var(--done-text); }
+.badge.info { background: var(--teal-light); color: var(--teal); }
+.badge.warn { background: var(--gold-light); color: var(--gold); }
+.badge.bad { background: var(--accent-light); color: var(--accent); }
+.badge.neutral { background: var(--warm); color: #6B5E52; }
+
+.meta-row { display: flex; gap: 14px; margin-top: 4px; flex-wrap: wrap; font-size: 11px; color: #8B7D72; }
+
+.why { margin-top: 8px; font-size: 11px; color: #6B5E52; font-style: italic; }
+
+.cols { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+.col { flex: 1; min-width: 210px; }
+.col h4 {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72;
+  margin-bottom: 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rule);
+}
+.fields { width: 100%; border-collapse: collapse; }
+.fields td { padding: 2px 0; font-size: 11.5px; vertical-align: top; }
+.fields td.k { color: #8B7D72; width: 82px; white-space: nowrap; padding-right: 8px; }
+.fields td.v { font-family: 'DM Mono', monospace; }
+.fields tr.changed td.v { background: var(--gold-light); border-radius: 3px; padding-left: 4px; }
+.fields .blank { color: #B8ABA0; font-style: italic; font-family: 'Inter', sans-serif; }
+.fields .cant { color: var(--accent); font-style: italic; font-family: 'Inter', sans-serif; }
+
+.contents { margin-top: 10px; padding-top: 8px; border-top: 1px dotted var(--rule); }
+.contents h4 { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; margin-bottom: 5px; }
+.line { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; padding: 1px 0; }
+.line .qty { font-family: 'DM Mono', monospace; font-weight: 600; min-width: 26px; }
+.line .name { flex: 1; }
+.line .sku { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+.line.mismatch .sku { color: var(--accent); font-weight: 600; }
+.line-note { font-size: 10.5px; color: var(--accent); margin-top: 4px; }
+
+.empty { color: #8B7D72; font-style: italic; padding: 28px; text-align: center; }
+.section-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: #8B7D72; margin: 16px 0 6px;
+}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <span class="title">Ship Preview</span>
+    <span class="readonly-flag">read only</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="stamp" id="stamp"></span>
+    <button class="btn" id="loadBtn" onclick="loadShipStation()">Read ShipStation</button>
+  </div>
+</div>
+<div class="subtitle">
+  What is sitting in ShipStation's Awaiting Shipment, matched against the work orders in Grist —
+  and the exact fields a future write step would set. Nothing here changes anything, in ShipStation or in Grist.
+</div>
+
+<div id="banners"></div>
+<div class="summary-strip" id="summary"></div>
+
+<div class="rules-panel">
+  <span class="rules-toggle" onclick="toggleRules()" id="rulesToggle">Show the rules this preview is using ▾</span>
+  <div id="rulesBody" style="display:none"></div>
+</div>
+
+<div class="controls">
+  <input class="search-input" id="searchBox" placeholder="Search order #, customer, SKU, colourway..." oninput="render()">
+  <button class="chip active" id="f-all" onclick="setFilter('all')">All</button>
+  <button class="chip" id="f-changed" onclick="setFilter('changed')">Would change</button>
+  <button class="chip" id="f-problem" onclick="setFilter('problem')">Needs a look</button>
+</div>
+
+<div id="list"><div class="empty">Press <strong>Read ShipStation</strong> to load.</div></div>
+
+<script>
+/* ── Ship Preview ──────────────────────────────────────────────────────────
+   A dry run for a write step that does not exist yet.
+
+   The eventual plan is for n8n to set weight, service, package, tags and
+   internal notes on a ShipStation order from what Grist knows about it, so
+   that opening ShipStation shows an order already filled in correctly. Before
+   anything writes, this screen shows — for every order waiting to ship — what
+   ShipStation holds now, what would be set, and why.
+
+   WHY A DRY RUN IS NOT OPTIONAL HERE. ShipStation's POST /orders/createorder
+   does not support partial updates: "The entire resource must be provided in
+   the body of the request." There is no way to nudge one field. A write has to
+   send the whole order back, which means a bug does not produce a wrong weight,
+   it produces an order with no line items. That is the failure this screen
+   exists to catch while it is still free to catch.
+
+   Everything below reads. There is no applyUserActions call in this file and
+   the workflow it calls contains no write node. */
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+function searchKey(s) { return foldAccents(s || '').toLowerCase(); }
+
+/* Order-number matching — the SAME normalisation the n8n workflows use.
+   key() strips a leading '#' and uppercases, so draft "#1083" and order 1083
+   collapse to one key. That collision is a known hazard on the n8n side; here
+   it is reported rather than silently resolved, because this screen exists to
+   find exactly that sort of thing. */
+function key(s) { return String(s == null ? '' : s).trim().replace(/^#/, '').toUpperCase(); }
+function up(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+
+/* ══ RULES ═════════════════════════════════════════════════════════════════
+   What a future write step would compute.
+
+   WEIGHTS AND BOXES LIVE IN GRIST, not in this file. Two tables:
+
+     Packaging     one row per box or mailer you actually use
+       Name          Text      "Poly mailer", "Small box"
+       Package_Code  Text      ShipStation's packageCode, or blank for custom
+       Length_In     Numeric   outside dimensions
+       Width_In      Numeric
+       Height_In     Numeric
+       Tare_Oz       Numeric   the empty container on a scale
+       Max_Spools    Integer   most spools that fit; the smallest box that
+                               fits the order wins
+       Active        Toggle    untick to retire one without deleting history
+       Notes         Text
+
+     Item_Weights  one row per thing that goes IN a box
+       Item_Key      Text      'SPOOL_FFN', 'INSERT_CARD' — unique, stable
+       Category      Choice    Spool / Insert / Other
+       Fiber         Text      fibre code for a spool row; blank otherwise
+       Label         Text      what it is, in words
+       Weight_Oz     Numeric   one of them on a scale
+       Per_Order     Toggle    on  = counted once per parcel (a thank-you card)
+                               off = counted per spool
+       Active        Toggle
+       Notes         Text
+
+   Neither table has to exist for this screen to work. Without them it says
+   plainly that it cannot compute a weight, rather than inventing one — an
+   invented weight here becomes real postage later, and a parcel that is
+   under-declared is the carrier's problem to notice and your problem to pay
+   for. Everything else on the screen still works meanwhile.
+
+   Nothing is hardcoded as a fallback on purpose: a constant in this file that
+   silently disagrees with the table is worse than no number at all. */
+
+const PACKAGING_TABLE = 'Packaging';
+const ITEM_WEIGHTS_TABLE = 'Item_Weights';
+
+/* Service selection. Deliberately coarse — it only has to be right often
+   enough to save a click, and anything it gets wrong you override in
+   ShipStation before buying. */
+const SERVICE_RULES = [
+  { when: o => o.isInternational, carrier: 'stamps_com', service: 'usps_priority_mail_international',
+    label: 'international' },
+  { when: o => true, carrier: 'stamps_com', service: 'usps_ground_advantage',
+    label: 'domestic default' },
+];
+
+/* Tags are named here and resolved to ShipStation tag ids later — the preview
+   shows names because an id tells you nothing when you are checking a rule. */
+const TAG_RULES = [
+  { name: 'Wholesale',      when: (o, g) => !!g && g.channel && /wholesale/i.test(g.channel) },
+  { name: 'Rush',           when: (o, g) => !!g && g.hasRush },
+  { name: 'Split shipment', when: (o, g) => !!g && g.isSplit },
+  { name: 'Customs needed', when: (o) => o.isInternational },
+  /* Only when a work order was EXPECTED. A retail order legitimately has none,
+     and tagging those would put the label on most of the board. */
+  { name: 'Not in Grist',   when: (o, g, expectInGrist) => !g && expectInGrist !== false },
+];
+
+/* Store id -> what that store is. Filled in after the first run: the preview
+   lists any id it does not recognise, so you can label it here. This matters
+   because RETAIL orders never enter Grist at all, so their absence from Grist
+   is correct — and without this map every retail order would be reported as a
+   missing work order, which would bury the ones that genuinely are. */
+const STORE_LABELS = {
+  // 123456: { label: 'Vendor', expectInGrist: true },
+  // 123457: { label: 'Retail', expectInGrist: false },
+};
+
+const PREVIEW_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/shipstation-preview';
+const PREVIEW_TIMEOUT_MS = 60000;
+
+// ══════════════════════════════════════════════════════════════════════════
+
+const S = {
+  grist: null,        // { orders: [], byKey: {} }
+  boxes: null,        // Packaging rows, or null if the table isn't there
+  items: null,        // Item_Weights rows, or null
+  weightTables: { packaging: 'missing', items: 'missing' },
+  ship: null,         // webhook payload
+  rows: [],           // joined comparison rows
+  filter: 'all',
+  search: '',
+  loading: false,
+  error: '',
+  gristError: '',
+  rulesOpen: false,
+};
+
+/* ── Grist side ─────────────────────────────────────────────────────────── */
+
+async function loadGrist() {
+  try {
+    const [woT, wolT, recT] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+
+    const wc = (c) => findColumn(woT, c);
+    const WO = {
+      number: wc(['Order_Number']), shopifyId: wc(['Shopify_Order_ID']),
+      customer: wc(['Customer_Name']), status: wc(['Status']),
+      channel: wc(['Channel']), type: wc(['Order_Type']),
+      notes: wc(['Notes']), tracking: wc(['Tracking_Number']),
+    };
+
+    const lc = (c) => findColumn(wolT, c);
+    const WOL = {
+      wo: lc(['Work_Order']), sku: lc(['SKU']), qty: lc(['Qty_Needed']),
+      dyed: lc(['Qty_Dyed']), recipe: lc(['Recipe']), queue: lc(['Queue_Status']),
+      priority: lc(['Production_Priority']),
+      display: lc(['Display_Name', 'Label_Name', 'Custom_Name']),
+      notes: lc(['Notes']),
+    };
+
+    const rc = (c) => findColumn(recT, c);
+    const REC = { name: rc(['Recipe_Name']), sku: rc(['SKU_Base']), fiber: rc(['Fiber_Type']) };
+
+    const recipes = {};
+    (recT.id || []).forEach((id, i) => {
+      recipes[id] = {
+        id,
+        name: columnAsArray(recT, REC.name)[i] || `Recipe #${id}`,
+        sku: columnAsArray(recT, REC.sku)[i] || '',
+        fiber: fiberCode(columnAsArray(recT, REC.fiber)[i] || ''),
+      };
+    });
+
+    const linesByWo = {};
+    (wolT.id || []).forEach((id, i) => {
+      const woId = getRefId(columnAsArray(wolT, WOL.wo)[i]);
+      if (!woId) return;
+      const qty = num(columnAsArray(wolT, WOL.qty)[i]);
+      const queue = String(columnAsArray(wolT, WOL.queue)[i] || '');
+      // A cancelled or zeroed line is not going in the box.
+      if (qty <= 0 || /cancel/i.test(queue)) return;
+      const recipeId = getRefId(columnAsArray(wolT, WOL.recipe)[i]);
+      const rec = recipeId ? recipes[recipeId] : null;
+      (linesByWo[woId] = linesByWo[woId] || []).push({
+        id,
+        sku: columnAsArray(wolT, WOL.sku)[i] || '',
+        qty,
+        dyed: num(columnAsArray(wolT, WOL.dyed)[i]),
+        recipeId,
+        recipeName: rec ? rec.name : '',
+        fiber: rec ? rec.fiber : fiberFromSku(columnAsArray(wolT, WOL.sku)[i] || ''),
+        displayName: columnAsArray(wolT, WOL.display)[i] || '',
+        priority: String(columnAsArray(wolT, WOL.priority)[i] || ''),
+      });
+    });
+
+    const orders = (woT.id || []).map((id, i) => {
+      const lines = linesByWo[id] || [];
+      return {
+        id,
+        number: String(columnAsArray(woT, WO.number)[i] || ''),
+        shopifyId: String(columnAsArray(woT, WO.shopifyId)[i] || ''),
+        customer: columnAsArray(woT, WO.customer)[i] || '',
+        status: String(columnAsArray(woT, WO.status)[i] || ''),
+        channel: String(columnAsArray(woT, WO.channel)[i] || ''),
+        type: String(columnAsArray(woT, WO.type)[i] || ''),
+        notes: columnAsArray(woT, WO.notes)[i] || '',
+        tracking: WO.tracking ? (columnAsArray(woT, WO.tracking)[i] || '') : '',
+        lines,
+        spools: lines.reduce((n, l) => n + l.qty, 0),
+        hasRush: lines.some(l => /rush/i.test(l.priority)),
+        // Part-made: some spools accounted for, not all. The honest signal that
+        // this may go out as a split shipment.
+        isSplit: lines.some(l => l.dyed > 0 && l.dyed < l.qty),
+      };
+    });
+
+    const byKey = {};
+    const collisions = [];
+    for (const o of orders) {
+      for (const k of [key(o.number), key(o.shopifyId)].filter(Boolean)) {
+        if (byKey[k] && byKey[k] !== o) {
+          collisions.push({ key: k, kept: o.number, hidden: byKey[k].number });
+        }
+        byKey[k] = o;
+      }
+    }
+
+    S.grist = { orders, byKey, collisions };
+    S.gristError = '';
+    await loadWeightTables();
+  } catch (e) {
+    console.error('Failed to read Grist:', e);
+    S.gristError = e && e.message ? e.message : String(e);
+    S.grist = null;
+  }
+}
+
+/* The two weight tables. Each is optional and fetched in its own try/catch:
+   a document without them must still show everything else, and a missing table
+   is a setup state to report, not an error to fail on. */
+async function loadWeightTables() {
+  S.boxes = null; S.items = null;
+  S.weightTables = { packaging: 'missing', items: 'missing' };
+
+  try {
+    const t = await grist.docApi.fetchTable(PACKAGING_TABLE);
+    const c = (cands) => findColumn(t, cands);
+    const COL = {
+      name: c(['Name']), code: c(['Package_Code', 'PackageCode']),
+      l: c(['Length_In', 'Length']), w: c(['Width_In', 'Width']), h: c(['Height_In', 'Height']),
+      tare: c(['Tare_Oz', 'Tare']), max: c(['Max_Spools', 'MaxSpools']),
+      active: c(['Active']), notes: c(['Notes']),
+    };
+    S.boxes = (t.id || []).map((id, i) => ({
+      id,
+      name: columnAsArray(t, COL.name)[i] || `Box #${id}`,
+      code: columnAsArray(t, COL.code)[i] || '',
+      l: num(columnAsArray(t, COL.l)[i]), w: num(columnAsArray(t, COL.w)[i]),
+      h: num(columnAsArray(t, COL.h)[i]),
+      tare: COL.tare ? num(columnAsArray(t, COL.tare)[i]) : 0,
+      hasTare: !!COL.tare,
+      max: num(columnAsArray(t, COL.max)[i]),
+      // A table with no Active column means every row is live.
+      active: COL.active ? columnAsArray(t, COL.active)[i] !== false : true,
+    })).filter(b => b.active);
+    S.weightTables.packaging = S.boxes.length ? 'ok' : 'empty';
+  } catch (e) {
+    console.warn(`${PACKAGING_TABLE} not available — box and tare can't be computed`, e);
+  }
+
+  try {
+    const t = await grist.docApi.fetchTable(ITEM_WEIGHTS_TABLE);
+    const c = (cands) => findColumn(t, cands);
+    const COL = {
+      itemKey: c(['Item_Key', 'Key']), category: c(['Category']),
+      fiber: c(['Fiber', 'Fibre', 'Fiber_Type']), label: c(['Label', 'Name']),
+      weight: c(['Weight_Oz', 'Weight']), perOrder: c(['Per_Order', 'PerOrder']),
+      active: c(['Active']),
+    };
+    S.items = (t.id || []).map((id, i) => ({
+      id,
+      itemKey: up(columnAsArray(t, COL.itemKey)[i]),
+      category: String(columnAsArray(t, COL.category)[i] || ''),
+      fiber: fiberCode(columnAsArray(t, COL.fiber)[i] || ''),
+      label: columnAsArray(t, COL.label)[i] || '',
+      weight: num(columnAsArray(t, COL.weight)[i]),
+      perOrder: COL.perOrder ? columnAsArray(t, COL.perOrder)[i] === true : false,
+      active: COL.active ? columnAsArray(t, COL.active)[i] !== false : true,
+    })).filter(r => r.active);
+    S.weightTables.items = S.items.length ? 'ok' : 'empty';
+  } catch (e) {
+    console.warn(`${ITEM_WEIGHTS_TABLE} not available — spool weights can't be computed`, e);
+  }
+}
+
+/* Per-spool weight for a fibre, or null if nobody has weighed one.
+   Matched on the Fiber column first, then on an Item_Key of SPOOL_<FIBRE>, so
+   either convention works and neither has to be explained twice. */
+function spoolWeightFor(fiber) {
+  if (!S.items) return null;
+  const f = fiberCode(fiber);
+  const row = S.items.find(r => /spool/i.test(r.category) && r.fiber && r.fiber === f)
+    || S.items.find(r => r.itemKey === 'SPOOL_' + f);
+  return row && row.weight > 0 ? row.weight : null;
+}
+
+/* Everything added once per parcel regardless of spool count — an invoice, a
+   thank-you card. Packaging tare is NOT included here; it comes from the box
+   row, because it depends which box was chosen. */
+function perOrderExtrasOz() {
+  if (!S.items) return 0;
+  return S.items.filter(r => r.perOrder).reduce((n, r) => n + r.weight, 0);
+}
+
+function fiberCode(f) {
+  const s = String(f || '').trim().toUpperCase();
+  if (!s) return '';
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s.slice(0, 3);
+}
+/* Last resort when a line has no recipe: SKUs are built as FIBRE_COLOURWAY. */
+function fiberFromSku(sku) {
+  const head = String(sku || '').split('_')[0];
+  return /^(FFN|FFC|EN|BW|CN)$/i.test(head) ? head.toUpperCase() : '';
+}
+
+/* ── ShipStation side ───────────────────────────────────────────────────── */
+
+async function loadShipStation() {
+  if (S.loading) return;
+  S.loading = true; S.error = '';
+  setBusy(true);
+  render();
+
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), PREVIEW_TIMEOUT_MS) : null;
+
+  try {
+    await loadGrist();
+    const res = await fetch(PREVIEW_WEBHOOK_URL, {
+      method: 'GET', cache: 'no-store',
+      ...(ctrl ? { signal: ctrl.signal } : {}),
+    });
+    if (!res.ok) throw new Error(`the workflow answered ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    if (data && data.ok === false && data.error) throw new Error(data.error);
+    S.ship = data || {};
+    build();
+    document.getElementById('stamp').textContent = 'read ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('ShipStation preview failed:', e);
+    S.error = (e && e.name === 'AbortError')
+      ? `ShipStation didn't answer within ${Math.round(PREVIEW_TIMEOUT_MS / 1000)} seconds.`
+      : (e && e.message ? e.message : String(e));
+    S.ship = null; S.rows = [];
+    document.getElementById('stamp').textContent = 'read failed';
+  } finally {
+    if (timer) clearTimeout(timer);
+    S.loading = false;
+    setBusy(false);
+    render();
+  }
+}
+
+function setBusy(busy) {
+  const b = document.getElementById('loadBtn');
+  if (b) { b.disabled = busy; b.textContent = busy ? 'Reading…' : 'Read ShipStation'; }
+}
+
+/* ── The comparison ─────────────────────────────────────────────────────── */
+
+function isInternational(o) {
+  const c = up(o.shipTo && o.shipTo.country);
+  // Blank country means Shopify didn't send one; treat as domestic rather than
+  // tagging every such order for customs it doesn't need.
+  return !!c && c !== 'US';
+}
+
+/* Smallest active box that holds the order. A box with no Max_Spools can't be
+   sized against anything, so it is only used as a last resort — and said so. */
+function proposeBox(g) {
+  if (!g) return { box: null, why: 'no work order, so nothing to size a box against' };
+  if (!S.boxes || !S.boxes.length) {
+    return { box: null, why: `no ${PACKAGING_TABLE} rows` };
+  }
+  const sized = S.boxes.filter(b => b.max > 0).sort((a, b) => a.max - b.max);
+  const fits = sized.find(b => g.spools <= b.max);
+  if (fits) {
+    return { box: fits, why: `${g.spools} spool(s) → smallest box that holds them` };
+  }
+  if (sized.length) {
+    const biggest = sized[sized.length - 1];
+    return { box: biggest, oversize: true,
+             why: `${g.spools} spool(s) is more than any box holds (largest is ${biggest.max}) — ` +
+                  `this one probably ships as more than one parcel` };
+  }
+  return { box: null, why: `no ${PACKAGING_TABLE} row has Max_Spools set` };
+}
+
+/* Weight is only ever computed from measured numbers. Any gap and it returns
+   null with the reason, because a guessed weight becomes real postage. */
+function proposeWeight(g, boxChoice) {
+  if (!g) return { value: null, why: 'no work order, so no idea what is in the box' };
+
+  const missing = [];
+  if (!S.items) missing.push(`the ${ITEM_WEIGHTS_TABLE} table`);
+
+  let contentsOz = 0;
+  const unweighed = new Set();
+  for (const l of g.lines) {
+    const per = spoolWeightFor(l.fiber);
+    if (per == null) unweighed.add(l.fiber || 'unknown fibre');
+    else contentsOz += l.qty * per;
+  }
+  if (unweighed.size) missing.push(`a measured spool weight for ${[...unweighed].join(', ')}`);
+
+  const box = boxChoice && boxChoice.box;
+  if (!box) missing.push('a box to take the tare from');
+  else if (!box.hasTare) missing.push(`a Tare_Oz column on ${PACKAGING_TABLE}`);
+  else if (!(box.tare > 0)) missing.push(`a Tare_Oz value on "${box.name}"`);
+
+  if (missing.length) {
+    return { value: null, why: 'needs ' + missing.join('; ') };
+  }
+
+  const oz = contentsOz + box.tare + perOrderExtrasOz();
+  const extras = perOrderExtrasOz();
+  return {
+    value: { value: Math.round(oz * 10) / 10, units: 'ounces' },
+    why: `${g.spools} spool(s) = ${Math.round(contentsOz * 10) / 10} oz, ` +
+         `+ ${box.tare} oz for "${box.name}"` + (extras ? `, + ${extras} oz per-order items` : ''),
+  };
+}
+
+function proposeService(o) {
+  const rule = SERVICE_RULES.find(r => r.when(o)) || null;
+  if (!rule) return { carrier: '', service: '', why: 'no rule matched' };
+  return { carrier: rule.carrier, service: rule.service, why: rule.label };
+}
+
+function proposeTags(o, g, expectInGrist) {
+  return TAG_RULES
+    .filter(r => { try { return !!r.when(o, g, expectInGrist); } catch (e) { return false; } })
+    .map(r => r.name);
+}
+
+function proposeNote(o, g) {
+  if (!g) return '';
+  const bits = g.lines.map(l => {
+    const nm = l.displayName || l.recipeName || l.sku || '(unnamed)';
+    return `${l.qty}× ${nm}`;
+  });
+  const head = `WO ${g.number}${g.type ? ' (' + g.type + ')' : ''}`;
+  const tail = g.isSplit ? ' — PART SHIPMENT, check what is already made' : '';
+  return `${head}: ${bits.join(', ')}${tail}`;
+}
+
+/* SKU-level comparison. This is the most valuable thing on the screen: a SKU
+   in ShipStation with no matching Grist line is the same failure that makes an
+   order unboxable in Quick Log, and it shows up here before anyone has packed
+   anything. */
+function compareLines(o, g) {
+  const shipBySku = {};
+  (o.items || []).forEach(it => {
+    const k = up(it.sku);
+    if (!k) return;
+    shipBySku[k] = (shipBySku[k] || 0) + it.quantity;
+  });
+  const gristBySku = {};
+  if (g) g.lines.forEach(l => {
+    const k = up(l.sku);
+    if (!k) return;
+    gristBySku[k] = (gristBySku[k] || 0) + l.qty;
+  });
+
+  const allSkus = [...new Set([...Object.keys(shipBySku), ...Object.keys(gristBySku)])];
+  const problems = [];
+  for (const k of allSkus) {
+    const s = shipBySku[k], gq = gristBySku[k];
+    if (s == null) problems.push(`${k}: in Grist (${gq}) but not on the ShipStation order`);
+    else if (gq == null) problems.push(`${k}: on the ShipStation order (${s}) but no Grist line`);
+    else if (s !== gq) problems.push(`${k}: ShipStation says ${s}, Grist says ${gq}`);
+  }
+  const blankShipSkus = (o.items || []).filter(it => !up(it.sku)).length;
+  if (blankShipSkus) {
+    problems.push(`${blankShipSkus} ShipStation line(s) with no SKU — custom items, can't be matched`);
+  }
+  return problems;
+}
+
+function sameWeight(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Math.abs(num(a.value) - num(b.value)) < 0.05 &&
+    up(a.units).slice(0, 2) === up(b.units).slice(0, 2);
+}
+
+function build() {
+  const rows = [];
+  const ship = (S.ship && S.ship.orders) || [];
+  const byKey = (S.grist && S.grist.byKey) || {};
+  const seenGrist = new Set();
+
+  for (const o of ship) {
+    o.isInternational = isInternational(o);
+    const g = byKey[key(o.orderNumber)] || byKey[key(o.orderKey)] || null;
+    if (g) seenGrist.add(g.id);
+
+    const store = STORE_LABELS[o.storeId] || null;
+    const expectInGrist = store ? store.expectInGrist !== false : null;
+
+    const box = proposeBox(g);
+    const weight = proposeWeight(g, box);
+    const service = proposeService(o);
+    const tags = proposeTags(o, g, expectInGrist);
+    const note = proposeNote(o, g);
+
+    const diffs = [];
+    if (weight.value && !sameWeight(o.weight, weight.value)) diffs.push('weight');
+    if (service.carrier && up(o.carrierCode) !== up(service.carrier)) diffs.push('carrier');
+    if (service.service && up(o.serviceCode) !== up(service.service)) diffs.push('service');
+    if (note && String(o.internalNotes || '').trim() !== note) diffs.push('note');
+
+    rows.push({
+      kind: 'shipstation',
+      o, g, store, expectInGrist,
+      weight, box, service, tags, note,
+      diffs,
+      /* Comparing lines against Grist only says anything when Grist is
+         supposed to have this order. A retail order never enters Grist at all,
+         so running the comparison would report every one of its SKUs as
+         missing — on every order, every day, until the real mismatches were
+         invisible underneath. Skip it rather than filter it out later. */
+      lineProblems: (g || expectInGrist !== false) ? compareLines(o, g) : [],
+    });
+  }
+
+  /* The other direction: a Grist work order that is active, has spools to send
+     and is NOT in ShipStation's awaiting-shipment list. Usually that just means
+     it is not made yet — so this is informational, listed separately, and never
+     counted as a fault. */
+  const gristOnly = [];
+  if (S.grist) {
+    for (const g of S.grist.orders) {
+      if (seenGrist.has(g.id)) continue;
+      if (/closed|cancel/i.test(g.status)) continue;
+      if (!g.spools) continue;
+      gristOnly.push({ kind: 'grist-only', g });
+    }
+  }
+
+  S.rows = rows.concat(gristOnly);
+}
+
+/* ── Render ─────────────────────────────────────────────────────────────── */
+
+function setFilter(f) {
+  S.filter = f;
+  ['all', 'changed', 'problem'].forEach(k => {
+    const el = document.getElementById('f-' + k);
+    if (el) el.classList.toggle('active', k === f);
+  });
+  render();
+}
+function toggleRules() {
+  S.rulesOpen = !S.rulesOpen;
+  document.getElementById('rulesBody').style.display = S.rulesOpen ? 'block' : 'none';
+  document.getElementById('rulesToggle').textContent =
+    (S.rulesOpen ? 'Hide' : 'Show') + ' the rules this preview is using ' + (S.rulesOpen ? '▴' : '▾');
+  if (S.rulesOpen) renderRules();
+}
+
+function rowIsProblem(r) {
+  if (r.kind === 'grist-only') return false;
+  if (r.lineProblems.length) return true;
+  if (!r.g && r.expectInGrist !== false) return true;   // unknown store counts as suspicious
+  return false;
+}
+
+/* Which fibres are actually in the orders on screen. Asking for a measurement
+   only for those beats listing every fibre that has ever existed — the point
+   is a short, finishable list. */
+function fibersInPlay() {
+  const out = new Set();
+  S.rows.forEach(r => {
+    const g = r.g || (r.kind === 'grist-only' ? r.g : null);
+    if (g) g.lines.forEach(l => out.add(l.fiber || 'unknown'));
+  });
+  return [...out].sort();
+}
+
+function renderRules() {
+  const fibers = fibersInPlay();
+  const w = fibers.length
+    ? fibers.map(f => {
+        const v = spoolWeightFor(f);
+        return `<tr><td class="k">${esc(f)}</td><td>${v == null
+          ? '<span class="unset">not measured — add a Spool row to ' + esc(ITEM_WEIGHTS_TABLE) + '</span>'
+          : esc(v) + ' oz each'}</td></tr>`;
+      }).join('')
+    : `<tr><td colspan="2"><span class="unset">nothing loaded yet</span></td></tr>`;
+
+  const extras = (S.items || []).filter(r => r.perOrder);
+  const extrasHtml = extras.length
+    ? extras.map(r => `<tr><td class="k">${esc(r.label || r.itemKey)}</td><td>${esc(r.weight)} oz per parcel</td></tr>`).join('')
+    : `<tr><td colspan="2" style="color:#8B7D72">none</td></tr>`;
+
+  const boxes = (S.boxes && S.boxes.length)
+    ? [...S.boxes].sort((a, b) => (a.max || 1e9) - (b.max || 1e9)).map(b =>
+        `<tr><td class="k">${esc(b.name)}</td><td>` +
+        (b.max > 0 ? `up to ${esc(b.max)} spools` : '<span class="unset">no Max_Spools</span>') +
+        (b.hasTare && b.tare > 0 ? ` · ${esc(b.tare)} oz empty` : ' · <span class="unset">no tare</span>') +
+        (b.l && b.w && b.h ? ` · ${esc(b.l)}×${esc(b.w)}×${esc(b.h)} in` : ' · <span class="unset">no dimensions</span>') +
+        (b.code ? ` · <code>${esc(b.code)}</code>` : '') +
+        `</td></tr>`).join('')
+    : `<tr><td colspan="2"><span class="unset">no ${esc(PACKAGING_TABLE)} table or no active rows</span></td></tr>`;
+
+  const svc = SERVICE_RULES.map(s =>
+    `<tr><td class="k">${esc(s.label)}</td><td>${esc(s.carrier)} / ${esc(s.service)}</td></tr>`).join('');
+  const tags = TAG_RULES.map(t => `<tr><td class="k">${esc(t.name)}</td><td></td></tr>`).join('');
+  const stores = Object.keys(STORE_LABELS).length
+    ? Object.entries(STORE_LABELS).map(([id, v]) =>
+        `<tr><td class="k">${esc(id)}</td><td>${esc(v.label)} —
+          ${v.expectInGrist === false ? 'not expected in Grist' : 'expected in Grist'}</td></tr>`).join('')
+    : `<tr><td colspan="2"><span class="unset">none mapped yet — see the banner above</span></td></tr>`;
+
+  document.getElementById('rulesBody').innerHTML = `<div class="rules-body">
+    <h4>Spool weight — for the fibres in these orders</h4><table>${w}</table>
+    <h4>Added once per parcel</h4><table>${extrasHtml}</table>
+    <h4>Boxes (from ${esc(PACKAGING_TABLE)})</h4><table>${boxes}</table>
+    <h4>Service</h4><table>${svc}</table>
+    <h4>Tags applied when they fit</h4><table>${tags}</table>
+    <h4>Stores</h4><table>${stores}</table>
+  </div>`;
+}
+
+function renderBanners() {
+  const out = [];
+
+  if (S.error) {
+    out.push(`<div class="banner bad"><strong>Couldn't read ShipStation.</strong> ${esc(S.error)}
+      <div style="margin-top:6px">Check that <strong>SS - ShipStation Order Preview</strong> is
+      <strong>active</strong> in n8n, that its Basic Auth credential holds your ShipStation API key and
+      secret, and that <code>${esc(PREVIEW_WEBHOOK_URL)}</code> is the production URL on its webhook node.</div></div>`);
+  }
+  if (S.gristError) {
+    out.push(`<div class="banner bad"><strong>Couldn't read Grist.</strong> ${esc(S.gristError)}</div>`);
+  }
+  if (S.ship && S.ship.truncated) {
+    out.push(`<div class="banner warn"><strong>Only the first 500 orders were read.</strong>
+      Anything past that is missing from this comparison, so an order not listed here may still exist.</div>`);
+  }
+  if (S.grist && S.grist.collisions && S.grist.collisions.length) {
+    out.push(`<div class="banner warn"><strong>${S.grist.collisions.length} order number collision(s) in Grist.</strong>
+      Two work orders share a key once a leading <code>#</code> is stripped, so only one of them can ever
+      be matched:<ul>${S.grist.collisions.map(c =>
+        `<li><code>${esc(c.key)}</code> — kept ${esc(c.kept)}, hidden ${esc(c.hidden)}</li>`).join('')}</ul></div>`);
+  }
+  /* The weight tables. Said once, near the top, with the exact schema — this
+     is the only thing standing between the preview and a usable weight, and
+     burying it in a per-card message would repeat it thirty times. */
+  if (S.grist && (S.weightTables.packaging !== 'ok' || S.weightTables.items !== 'ok')) {
+    const need = [];
+    if (S.weightTables.packaging === 'missing') {
+      need.push(`<li><code>${esc(PACKAGING_TABLE)}</code> — one row per box or mailer:
+        <code>Name</code> (Text), <code>Package_Code</code> (Text),
+        <code>Length_In</code> / <code>Width_In</code> / <code>Height_In</code> (Numeric),
+        <code>Tare_Oz</code> (Numeric — the empty container on a scale),
+        <code>Max_Spools</code> (Integer), <code>Active</code> (Toggle), <code>Notes</code> (Text)</li>`);
+    } else if (S.weightTables.packaging === 'empty') {
+      need.push(`<li><code>${esc(PACKAGING_TABLE)}</code> exists but has no active rows —
+        add the boxes and mailers you actually use.</li>`);
+    }
+    if (S.weightTables.items === 'missing') {
+      need.push(`<li><code>${esc(ITEM_WEIGHTS_TABLE)}</code> — one row per thing that goes in a box:
+        <code>Item_Key</code> (Text, e.g. <code>SPOOL_FFN</code>),
+        <code>Category</code> (Choice: Spool / Insert / Other),
+        <code>Fiber</code> (Text, for spool rows), <code>Label</code> (Text),
+        <code>Weight_Oz</code> (Numeric), <code>Per_Order</code> (Toggle — on for something
+        counted once per parcel rather than per spool), <code>Active</code> (Toggle),
+        <code>Notes</code> (Text)</li>`);
+    } else if (S.weightTables.items === 'empty') {
+      need.push(`<li><code>${esc(ITEM_WEIGHTS_TABLE)}</code> exists but has no active rows —
+        weigh one spool of each fibre you ship and add a row each.</li>`);
+    }
+    out.push(`<div class="banner warn"><strong>Weights can't be computed yet.</strong>
+      Everything else on this screen works; only the weight column is held back, because a guessed
+      weight would become real postage on a real parcel.<ul>${need.join('')}</ul>
+      <div style="margin-top:6px">Open the rules panel below to see exactly which fibres these
+      orders need a measurement for — it only asks for the ones actually in front of you.</div></div>`);
+  }
+
+  const unknownStores = S.ship
+    ? (S.ship.store_ids || []).filter(id => !STORE_LABELS[id])
+    : [];
+  if (unknownStores.length) {
+    out.push(`<div class="banner warn"><strong>Unrecognised ShipStation store(s):
+      ${unknownStores.map(i => `<code>${esc(i)}</code>`).join(', ')}.</strong>
+      Until each id is labelled, an order from that store with no work order is reported as a problem.
+      Retail orders never enter Grist, so if one of these is the retail store it should be marked
+      <code>expectInGrist: false</code> in <code>STORE_LABELS</code> and its orders will stop being flagged.</div>`);
+  }
+
+  document.getElementById('banners').innerHTML = out.join('');
+}
+
+function renderSummary() {
+  const box = document.getElementById('summary');
+  if (!S.ship) { box.innerHTML = ''; return; }
+  const ss = S.rows.filter(r => r.kind === 'shipstation');
+  const matched = ss.filter(r => r.g).length;
+  const changed = ss.filter(r => r.diffs.length).length;
+  const problems = ss.filter(rowIsProblem).length;
+  const gristOnly = S.rows.filter(r => r.kind === 'grist-only').length;
+
+  const parts = [
+    `<span class="summary-item">${ss.length} awaiting shipment</span>`,
+    `<span class="summary-item ${matched === ss.length ? 'good' : ''}">${matched} matched to a work order</span>`,
+  ];
+  if (changed) parts.push(`<span class="summary-item soon">${changed} would change</span>`);
+  if (problems) parts.push(`<span class="summary-item warn">${problems} need a look</span>`);
+  if (gristOnly) parts.push(`<span class="summary-item">${gristOnly} in Grist, not yet in ShipStation</span>`);
+  box.innerHTML = parts.join('');
+}
+
+function fieldRow(label, now, next, changed, cantWhy) {
+  const show = (v) => (v === null || v === undefined || v === ''
+    ? '<span class="blank">(blank)</span>' : esc(v));
+  const nextCell = cantWhy
+    ? `<span class="cant">can't compute — ${esc(cantWhy)}</span>`
+    : show(next);
+  return `<tr class="${changed ? 'changed' : ''}">
+    <td class="k">${esc(label)}</td><td class="v">${show(now)}</td></tr>
+    <tr class="${changed ? 'changed' : ''}"><td class="k"></td><td class="v">→ ${nextCell}</td></tr>`;
+}
+
+function weightText(w) {
+  if (!w) return '';
+  return `${num(w.value)} ${w.units || ''}`.trim();
+}
+
+function cardHtml(r) {
+  if (r.kind === 'grist-only') {
+    const g = r.g;
+    return `<div class="card grist-only">
+      <div class="card-top">
+        <span class="ordernum">${esc(g.number || '—')}</span>
+        <span class="customer">${esc(g.customer || '(no customer)')}</span>
+        <div class="badges"><span class="badge warn">not in ShipStation yet</span></div>
+      </div>
+      <div class="meta-row">
+        <span>${g.spools} spool(s) across ${g.lines.length} line(s)</span>
+        ${g.status ? `<span>${esc(g.status)}</span>` : ''}
+        ${g.tracking ? `<span>already has tracking — may have shipped</span>` : ''}
+      </div>
+      <div class="why">Usually this just means it isn't made yet. It becomes worth checking if it
+        has tracking, or if you know it went out.</div>
+    </div>`;
+  }
+
+  const { o, g, store } = r;
+  const badges = [];
+  if (g) badges.push(`<span class="badge ok">WO ${esc(g.number)}</span>`);
+  else if (r.expectInGrist === false) badges.push(`<span class="badge neutral">${esc(store.label)} — not in Grist by design</span>`);
+  else badges.push(`<span class="badge bad">no work order</span>`);
+  if (store && r.expectInGrist !== false) badges.push(`<span class="badge neutral">${esc(store.label)}</span>`);
+  if (o.isInternational) badges.push(`<span class="badge info">${esc(o.shipTo.country)}</span>`);
+  if (g && g.isSplit) badges.push(`<span class="badge warn">part made</span>`);
+  if (g && g.hasRush) badges.push(`<span class="badge bad">rush</span>`);
+  if (r.diffs.length) badges.push(`<span class="badge warn">${r.diffs.length} field(s) would change</span>`);
+
+  const klass = g ? 'matched' : (r.expectInGrist === false ? 'nogrist-ok' : 'nogrist-bad');
+
+  const lines = g
+    ? g.lines.map(l => {
+        const shipQty = (o.items || []).filter(it => up(it.sku) === up(l.sku))
+          .reduce((n, it) => n + it.quantity, 0);
+        const mismatch = up(l.sku) && shipQty !== l.qty;
+        const nm = l.displayName || l.recipeName || l.sku || '(unnamed)';
+        return `<div class="line ${mismatch ? 'mismatch' : ''}">
+          <span class="qty">${l.qty}×</span>
+          <span class="name">${esc(nm)}${l.displayName && l.recipeName
+            ? ` <span class="sku">(${esc(l.recipeName)})</span>` : ''}</span>
+          <span class="sku">${esc(l.sku || 'no SKU')}${l.fiber ? ' · ' + esc(l.fiber) : ''}</span>
+        </div>`;
+      }).join('')
+    : (o.items || []).map(it => `<div class="line">
+        <span class="qty">${it.quantity}×</span>
+        <span class="name">${esc(it.name || '(unnamed)')}</span>
+        <span class="sku">${esc(it.sku || 'no SKU')}</span>
+      </div>`).join('');
+
+  return `<div class="card ${klass}">
+    <div class="card-top">
+      <span class="ordernum">${esc(o.orderNumber || '—')}</span>
+      <span class="customer">${esc(o.shipTo.name || o.customerEmail || '(no name)')}</span>
+      <div class="badges">${badges.join('')}</div>
+    </div>
+    <div class="meta-row">
+      ${o.shipTo.city ? `<span>${esc(o.shipTo.city)}${o.shipTo.state ? ', ' + esc(o.shipTo.state) : ''}
+        ${esc(o.shipTo.country || '')}</span>` : ''}
+      ${g ? `<span>${g.spools} spool(s)</span>` : ''}
+      ${o.gift ? '<span>gift</span>' : ''}
+    </div>
+
+    <div class="cols">
+      <div class="col">
+        <h4>In ShipStation now</h4>
+        <table class="fields">
+          <tr><td class="k">weight</td><td class="v">${o.weight
+            ? esc(weightText(o.weight)) : '<span class="blank">(blank)</span>'}</td></tr>
+          <tr><td class="k">carrier</td><td class="v">${o.carrierCode
+            ? esc(o.carrierCode) : '<span class="blank">(blank)</span>'}</td></tr>
+          <tr><td class="k">service</td><td class="v">${o.serviceCode
+            ? esc(o.serviceCode) : '<span class="blank">(blank)</span>'}</td></tr>
+          <tr><td class="k">package</td><td class="v">${o.packageCode
+            ? esc(o.packageCode) : '<span class="blank">(blank)</span>'}</td></tr>
+          <tr><td class="k">tags</td><td class="v">${o.tagIds.length
+            ? esc(o.tagIds.join(', ')) : '<span class="blank">none</span>'}</td></tr>
+          <tr><td class="k">note</td><td class="v">${o.internalNotes
+            ? esc(o.internalNotes) : '<span class="blank">(blank)</span>'}</td></tr>
+        </table>
+      </div>
+      <div class="col">
+        <h4>Would be set from Grist</h4>
+        <table class="fields">
+          <tr class="${r.diffs.includes('weight') ? 'changed' : ''}"><td class="k">weight</td>
+            <td class="v">${r.weight.value ? esc(weightText(r.weight.value))
+              : `<span class="cant">not yet — ${esc(r.weight.why)}</span>`}</td></tr>
+          <tr><td class="k">box</td><td class="v">${r.box.box
+            ? esc(r.box.box.name)
+              + (r.box.box.l && r.box.box.w && r.box.box.h
+                  ? ` <span class="blank">${esc(r.box.box.l)}×${esc(r.box.box.w)}×${esc(r.box.box.h)}</span>`
+                  : ' <span class="cant">(no dimensions)</span>')
+              + (r.box.oversize ? ' <span class="cant">— oversize</span>' : '')
+            : `<span class="cant">${esc(r.box.why)}</span>`}</td></tr>
+          <tr class="${r.diffs.includes('carrier') ? 'changed' : ''}"><td class="k">carrier</td>
+            <td class="v">${esc(r.service.carrier || '—')}</td></tr>
+          <tr class="${r.diffs.includes('service') ? 'changed' : ''}"><td class="k">service</td>
+            <td class="v">${esc(r.service.service || '—')}</td></tr>
+          <tr><td class="k">tags</td><td class="v">${r.tags.length
+            ? esc(r.tags.join(', ')) : '<span class="blank">none</span>'}</td></tr>
+          <tr class="${r.diffs.includes('note') ? 'changed' : ''}"><td class="k">note</td>
+            <td class="v">${r.note ? esc(r.note) : '<span class="blank">—</span>'}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="why">${esc(r.service.why)} · ${esc(r.box.why)} · weight: ${esc(r.weight.why)}</div>
+
+    <div class="contents">
+      <h4>${g ? 'What Grist says is in it' : 'What ShipStation says is in it'}</h4>
+      ${lines || '<div class="line"><span class="name">no lines</span></div>'}
+      ${r.lineProblems.map(p => `<div class="line-note">⚠ ${esc(p)}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function render() {
+  renderBanners();
+  renderSummary();
+
+  const box = document.getElementById('list');
+  if (S.loading) { box.innerHTML = `<div class="empty">Reading ShipStation and Grist…</div>`; return; }
+  if (!S.ship && !S.error) { box.innerHTML = `<div class="empty">Press <strong>Read ShipStation</strong> to load.</div>`; return; }
+  if (S.error) { box.innerHTML = ''; return; }
+
+  const q = searchKey(document.getElementById('searchBox').value.trim());
+
+  let rows = S.rows.filter(r => {
+    if (S.filter === 'changed' && !(r.kind === 'shipstation' && r.diffs.length)) return false;
+    if (S.filter === 'problem' && !rowIsProblem(r)) return false;
+    if (!q) return true;
+    const hay = r.kind === 'grist-only'
+      ? searchKey([r.g.number, r.g.customer, ...r.g.lines.map(l => l.sku + ' ' + l.recipeName)].join(' '))
+      : searchKey([
+          r.o.orderNumber, r.o.shipTo.name, r.o.customerEmail,
+          ...(r.o.items || []).map(i => i.sku + ' ' + i.name),
+          ...(r.g ? r.g.lines.map(l => l.sku + ' ' + l.recipeName + ' ' + l.displayName) : []),
+        ].join(' '));
+    return hay.includes(q);
+  });
+
+  if (!rows.length) {
+    box.innerHTML = `<div class="empty">Nothing matches.</div>`;
+    return;
+  }
+
+  const ss = rows.filter(r => r.kind === 'shipstation');
+  const go = rows.filter(r => r.kind === 'grist-only');
+
+  let html = '';
+  if (ss.length) {
+    // Problems first — the whole point is to find them.
+    ss.sort((a, b) => (rowIsProblem(b) ? 1 : 0) - (rowIsProblem(a) ? 1 : 0)
+      || b.diffs.length - a.diffs.length);
+    html += ss.map(cardHtml).join('');
+  }
+  if (go.length) {
+    html += `<div class="section-label">In Grist, not in ShipStation's awaiting-shipment list</div>`;
+    html += go.map(cardHtml).join('');
+  }
+  box.innerHTML = html;
+}
+
+grist.ready({ requiredAccess: 'read table' });
+render();
+</script>
+</body>
+</html>
