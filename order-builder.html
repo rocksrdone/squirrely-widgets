@@ -186,6 +186,20 @@ function sortKey(s) { return foldAccents(s || '').toLowerCase(); }
    only touches Active. An order sitting here is therefore invisible to
    production until it is deliberately released — which is the point, because
    a fluid order should not be sending anyone to a kettle. */
+/* ── Pushing to Shopify ───────────────────────────────────────────────────
+   Two presses, deliberately. The first previews — the workflow builds exactly
+   what it would send and returns it without touching anything — and the second
+   sends. It is the same webhook and the same code path either way, so what you
+   are shown is produced by the thing that does the sending rather than by a
+   second implementation that can drift.
+
+   The preview matters most for the address: Grist keeps city, state and
+   postcode in one column and Shopify needs them apart, so the workflow has to
+   split them. A silently mis-split address is a parcel that goes to the wrong
+   place and a customer who finds out before you do. */
+const PUSH_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/push-manual-order';
+const PUSH_TIMEOUT_MS = 60000;
+
 const MANUAL_PREFIX = 'M-';
 const BUILDING_STATUS = 'Building';
 const READY_STATUS = 'Active';
@@ -199,6 +213,8 @@ const S = {
   loading: true, error: '',
   addRecipe: '', addQty: 1,
   missing: [],
+  push: null,        // the last preview or push response
+  pushBusy: false,
 };
 
 function toast(msg) {
@@ -552,6 +568,117 @@ async function deleteOrder(id) {
   }
 }
 
+/* ── Push to Shopify ────────────────────────────────────────────────────── */
+
+async function callPush(workOrderId, dryRun) {
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), PUSH_TIMEOUT_MS) : null;
+  try {
+    const res = await fetch(PUSH_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workOrderId, dryRun: !!dryRun }),
+      cache: 'no-store',
+      ...(ctrl ? { signal: ctrl.signal } : {}),
+    });
+    if (!res.ok) throw new Error(`the workflow answered ${res.status} ${res.statusText}`);
+    return await res.json();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function previewPush(id) {
+  if (S.pushBusy) return;
+  S.pushBusy = true; S.push = null; render();
+  try {
+    S.push = await callPush(id, true);
+  } catch (e) {
+    console.error('Preview failed:', e);
+    S.push = { ok: false, created: false, transport: true,
+      reasons: [(e && e.name === 'AbortError')
+        ? `The workflow didn't answer within ${Math.round(PUSH_TIMEOUT_MS / 1000)} seconds. ` +
+          `Nothing was sent — a preview never sends.`
+        : (e && e.message) || String(e)] };
+  } finally {
+    S.pushBusy = false; render();
+  }
+}
+
+async function doPush(id) {
+  if (S.pushBusy) return;
+  const o = S.orders.find(x => x.id === id);
+  const p = S.push;
+  if (!o || !p || !p.summary) return;
+  if (!confirm(`Create a real Shopify order for ${o.number}?\n\n` +
+      `${p.summary.spools} spool(s), ${p.summary.lines} line(s), $${p.summary.value} ` +
+      `to ${p.summary.customer}.\n${p.summary.address}\n\n` +
+      `No email is sent and Shopify inventory is not touched. ` +
+      `Once it exists it can't be deleted from here — you'd cancel it in Shopify.`)) return;
+
+  S.pushBusy = true; render();
+  try {
+    S.push = await callPush(id, false);
+    await loadAll();
+    if (S.push && S.push.created) toast('Pushed as ' + (S.push.shopify_name || S.push.shopify_order_id));
+  } catch (e) {
+    console.error('Push failed:', e);
+    /* A transport failure is the one case where the order may or may not exist
+       in Shopify — the request could have landed and the answer been lost. Say
+       that plainly rather than implying nothing happened. */
+    S.push = { ok: false, created: false, transport: true, uncertain: true,
+      reasons: [((e && e.name === 'AbortError')
+        ? `The workflow didn't answer within ${Math.round(PUSH_TIMEOUT_MS / 1000)} seconds.`
+        : (e && e.message) || String(e)) +
+        ` The order MAY still have been created — check the vendor store in Shopify before ` +
+        `pressing this again. If it exists, put its id into Shopify_Order_ID on this row by hand.`] };
+  } finally {
+    S.pushBusy = false; render();
+  }
+}
+
+function pushPanelHtml(o) {
+  const p = S.push;
+  if (S.pushBusy) return `<div class="banner">Talking to Shopify…</div>`;
+  if (!p) return '';
+
+  if (p.created) {
+    return `<div class="banner" style="background:var(--done-bg);border-color:#BBD79A;color:var(--done-text)">
+      <strong>Created in Shopify as ${esc(p.shopify_name || p.shopify_order_id)}.</strong>
+      ${p.wrote_back ? ' Its id is recorded here, so it can\'t be pushed twice.' : ''}
+      ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
+    </div>`;
+  }
+  if (p.reasons && p.reasons.length && !p.preview) {
+    return `<div class="banner bad"><strong>${p.already_pushed ? 'Already pushed.'
+      : (p.uncertain ? 'Uncertain — read this.' : 'Not sent.')}</strong>
+      <ul style="margin:5px 0 0 16px">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
+  }
+
+  const sm = p.summary || {};
+  const warn = sm.addressConfident === false;
+  return `<div class="banner ${warn ? 'warn' : ''}">
+    <strong>This is what would be sent.</strong> Nothing has been created yet.
+    <table style="margin-top:6px;border-collapse:collapse">
+      <tr><td style="padding-right:10px;color:#8B7D72">Customer</td><td>${esc(sm.customer || '—')}</td></tr>
+      <tr><td style="padding-right:10px;color:#8B7D72">Contents</td>
+        <td>${esc(sm.spools)} spool(s) across ${esc(sm.lines)} line(s), $${esc(sm.value)}</td></tr>
+      <tr><td style="padding-right:10px;color:#8B7D72">Ship to</td><td>${esc(sm.address || '—')}</td></tr>
+      <tr><td style="padding-right:10px;color:#8B7D72">Weights</td>
+        <td>${esc(sm.weightsFromGrist)} of ${esc(sm.lines)} line(s) carry a Grist weight</td></tr>
+    </table>
+    ${warn ? `<div style="margin-top:6px"><strong>Check the address.</strong>
+      The city/state/ZIP column ${esc(sm.addressParse)}. Fix it on the customer record if that split is wrong —
+      a parcel goes where this says.</div>` : ''}
+    ${(p.notes || []).length ? `<div style="margin-top:6px;color:#8B7D72">
+      ${p.notes.map(esc).join('<br>')}</div>` : ''}
+    <div style="margin-top:8px">
+      <button class="btn" onclick="doPush(${o.id})">Send it</button>
+      <button class="btn secondary" onclick="S.push = null; render()">Cancel</button>
+    </div>
+  </div>`;
+}
+
 /* ── Render ─────────────────────────────────────────────────────────────── */
 
 function selectOrder(id) { S.selected = id; render(); }
@@ -671,13 +798,17 @@ function renderMain() {
       <button class="btn" onclick="addLine(${o.id})">Add</button>
     </div>
 
+    ${pushPanelHtml(o)}
+
     <div class="actions">
       ${building
         ? `<button class="btn" onclick="markReady(${o.id})">Release for production</button>`
         : `<button class="btn secondary" onclick="backToBuilding(${o.id})">Back to building</button>`}
-      <button class="btn secondary" disabled
-        title="Needs the write_orders scope on the Shopify custom app before this can be built">
-        Push to Shopify — not built yet</button>
+      <button class="btn secondary" onclick="previewPush(${o.id})"
+        ${building || pushed || S.pushBusy ? 'disabled' : ''}
+        title="${pushed ? 'Already in Shopify' : building
+          ? 'Release it for production first' : 'Shows what would be sent before anything is created'}">
+        ${pushed ? 'In Shopify' : 'Push to Shopify…'}</button>
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;
