@@ -315,12 +315,10 @@ const STORE_LABELS = {
      Retail never enters Grist, so having no work order is correct for these. */
   451515: { label: 'Retail', expectInGrist: false },
 
-  /* The vendor store id is still unknown — it had nothing in Awaiting Shipment
-     when this was written, so it never appeared. Get it from
-     GET https://ssapi.shipstation.com/stores and add it here as
-     { label: 'Vendor', expectInGrist: true }. Until then a vendor order whose
-     colourway is not yet in Recipes will fall back to the SKU guess and read
-     as retail, which is the one case the guess gets wrong. */
+  /* Confirmed 2026-09-28 from a test order placed on the vendor store. It does
+     not appear in a normal run because everything of its has already shipped —
+     an empty Awaiting Shipment is why this id could not be found by looking. */
+  523530: { label: 'Vendor', expectInGrist: true },
 };
 
 /* Does this order's contents look like something Grist ought to know about? */
