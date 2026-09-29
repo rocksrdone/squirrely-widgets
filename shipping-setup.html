@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shipping Setup</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --done-bg: #EAF3DE; --done-text: #27500A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.subtitle { font-size: 11.5px; color: #8B7D72; margin-bottom: 12px; }
+
+.btn { font-size: 11px; padding: 7px 11px; border-radius: 6px; border: 1px solid var(--teal);
+  background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn.secondary { background: white; color: var(--ink); border-color: var(--rule); font-weight: 500; }
+.btn.danger { background: white; color: var(--accent); border-color: var(--rule); font-weight: 500; }
+.btn.danger:hover { border-color: var(--accent); }
+.btn.tiny { font-size: 10px; padding: 3px 7px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.banner { margin-bottom: 12px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
+  background: white; border: 1px solid var(--rule); color: #6B5E52; }
+.banner.warn { background: var(--gold-light); border-color: #E4CF9E; color: #6E4C13; }
+.banner.bad { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.banner.good { background: var(--done-bg); border-color: #BBD79A; color: var(--done-text); }
+.banner code { font-family: 'DM Mono', monospace; background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 3px; }
+.banner ul { margin: 5px 0 0 16px; }
+.banner li { margin-bottom: 2px; }
+
+.panel { background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.panel h3 { font-family: 'Libre Baskerville', serif; font-size: 15px; }
+.panel .sub { font-size: 11px; color: #8B7D72; margin-bottom: 10px; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72;
+  text-align: left; padding: 4px 5px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.grid td { padding: 3px 5px; border-bottom: 1px solid #F0EAE2; vertical-align: middle; }
+table.grid tr.off { opacity: .5; }
+table.grid input[type=text], table.grid input[type=number] {
+  width: 100%; padding: 5px 6px; border: 1px solid transparent; border-radius: 4px;
+  font-size: 12px; font-family: 'Inter', sans-serif; background: #FBF9F6; color: var(--ink);
+}
+table.grid input:focus { outline: none; border-color: var(--teal); background: white; }
+table.grid input.mono { font-family: 'DM Mono', monospace; font-size: 11.5px; }
+table.grid input.num { text-align: right; font-family: 'DM Mono', monospace; }
+table.grid input.missing { background: var(--accent-light); }
+table.grid select { padding: 5px 6px; border: 1px solid transparent; border-radius: 4px;
+  font-size: 12px; background: #FBF9F6; color: var(--ink); }
+.w-xs { width: 62px; } .w-sm { width: 88px; } .w-md { width: 130px; }
+.cell-note { font-size: 9.5px; color: var(--accent); }
+
+.calc { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; }
+.calc label { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: #8B7D72; margin-bottom: 3px; }
+.calc select, .calc input { padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px;
+  font-size: 12.5px; background: white; color: var(--ink); }
+.calc input { width: 80px; font-family: 'DM Mono', monospace; }
+.calc-out { font-size: 13px; }
+.calc-out .big { font-family: 'DM Mono', monospace; font-size: 20px; font-weight: 600; }
+.calc-out .work { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 3px; }
+.calc-out .cant { color: var(--accent); font-style: italic; }
+.calc-line { display: flex; gap: 8px; align-items: center; margin-bottom: 5px; flex-wrap: wrap; }
+
+.empty { color: #8B7D72; font-style: italic; padding: 18px; text-align: center; }
+.toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 9px 16px; border-radius: 6px; font-size: 12px;
+  opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div><span class="title">Shipping Setup</span></div>
+  <button class="btn secondary" onclick="loadAll()">↻ Reload</button>
+</div>
+<div class="subtitle">
+  The boxes you ship in and what goes inside them. Between them they decide every parcel weight,
+  so the calculator at the bottom is the quickest way to tell whether they are right.
+</div>
+
+<div id="banners"></div>
+<div id="calc"></div>
+<div id="boxes"></div>
+<div id="items"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Shipping Setup ────────────────────────────────────────────────────────
+   A front end for Packaging and Item_Weights, kept together because they are
+   not really two subjects — a parcel weight is contents plus the box it sits
+   in, and you cannot tell whether either table is right by looking at it
+   alone. The calculator is the point of the screen: it closes the loop between
+   typing a number and seeing what that number does to a real parcel.
+
+   NEW ROWS ARE ALWAYS WRITTEN WITH Active: true. Grist gives a new Toggle cell
+   `false`, so a row added by hand is invisible to every tool that reads these
+   tables — which is exactly what happened when these tables were first set up,
+   twice, across several runs of the ship preview. A row created here cannot
+   land in that state.
+
+   THE CALCULATOR MUST AGREE WITH ship-preview.html. Same precedence for
+   resolving a spool weight (SKU prefix, then fibre, then SPOOL_<FIBRE>), same
+   smallest-box-that-fits rule, same round-up. If one changes, change both —
+   a setup screen that disagrees with the screen it is setting up is worse than
+   no setup screen. */
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function columnAsArray(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, candidates) {
+  const keys = Object.keys(t);
+  for (const cand of candidates) {
+    const hit = keys.find(k =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '') === cand.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function up(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+
+/* Kept identical to ship-preview.html — see the note at the top. */
+const ROUND_UP_TO_OZ = 1;
+function roundUpOz(oz) {
+  if (!(ROUND_UP_TO_OZ > 0)) return Math.round(oz * 100) / 100;
+  return Math.ceil((oz - 1e-9) / ROUND_UP_TO_OZ) * ROUND_UP_TO_OZ;
+}
+
+const PACKAGING_TABLE = 'Packaging';
+const ITEM_WEIGHTS_TABLE = 'Item_Weights';
+const CATEGORIES = ['Spool', 'Insert', 'Other'];
+
+const S = {
+  boxes: [], items: [],
+  boxCols: {}, itemCols: {},
+  boxTableMissing: false, itemTableMissing: false,
+  error: '', loading: true,
+  calc: { fiber: '', spools: 6 },
+};
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+/* ── Load ───────────────────────────────────────────────────────────────── */
+
+async function loadAll() {
+  S.loading = true; S.error = ''; render();
+  try {
+    await Promise.all([loadBoxes(), loadItems()]);
+  } catch (e) {
+    console.error('Shipping Setup failed to load:', e);
+    S.error = (e && e.message) || String(e);
+  }
+  S.loading = false;
+  if (!S.calc.fiber) {
+    const first = S.items.find(i => /spool/i.test(i.category) && i.fiber);
+    S.calc.fiber = first ? first.fiber : '';
+  }
+  render();
+}
+
+async function loadBoxes() {
+  S.boxTableMissing = false;
+  try {
+    const t = await grist.docApi.fetchTable(PACKAGING_TABLE);
+    const c = (cands) => findColumn(t, cands);
+    S.boxCols = {
+      name: c(['Name']), code: c(['Package_Code', 'PackageCode']),
+      l: c(['Length_In', 'Length']), w: c(['Width_In', 'Width']), h: c(['Height_In', 'Height']),
+      tare: c(['Tare_Oz', 'Tare']), max: c(['Max_Spools', 'MaxSpools']),
+      active: c(['Active']), notes: c(['Notes']),
+    };
+    S.boxes = (t.id || []).map((id, i) => ({
+      id,
+      name: columnAsArray(t, S.boxCols.name)[i] || '',
+      code: columnAsArray(t, S.boxCols.code)[i] || '',
+      l: num(columnAsArray(t, S.boxCols.l)[i]),
+      w: num(columnAsArray(t, S.boxCols.w)[i]),
+      h: num(columnAsArray(t, S.boxCols.h)[i]),
+      tare: num(columnAsArray(t, S.boxCols.tare)[i]),
+      max: num(columnAsArray(t, S.boxCols.max)[i]),
+      active: S.boxCols.active ? columnAsArray(t, S.boxCols.active)[i] !== false : true,
+      notes: columnAsArray(t, S.boxCols.notes)[i] || '',
+    })).sort((a, b) => (a.max || 1e9) - (b.max || 1e9));
+  } catch (e) {
+    console.warn(PACKAGING_TABLE + ' not available', e);
+    S.boxTableMissing = true; S.boxes = [];
+  }
+}
+
+async function loadItems() {
+  S.itemTableMissing = false;
+  try {
+    const t = await grist.docApi.fetchTable(ITEM_WEIGHTS_TABLE);
+    const c = (cands) => findColumn(t, cands);
+    S.itemCols = {
+      key: c(['Item_Key', 'Key']), category: c(['Category']),
+      fiber: c(['Fiber', 'Fibre', 'Fiber_Type']),
+      prefixes: c(['SKU_Prefixes', 'SKU_Prefix', 'Prefixes']),
+      label: c(['Label', 'Name']), weight: c(['Weight_Oz', 'Weight']),
+      perOrder: c(['Per_Order', 'PerOrder']), active: c(['Active']), notes: c(['Notes']),
+    };
+    S.items = (t.id || []).map((id, i) => ({
+      id,
+      key: columnAsArray(t, S.itemCols.key)[i] || '',
+      category: String(columnAsArray(t, S.itemCols.category)[i] || ''),
+      fiber: columnAsArray(t, S.itemCols.fiber)[i] || '',
+      prefixes: columnAsArray(t, S.itemCols.prefixes)[i] || '',
+      label: columnAsArray(t, S.itemCols.label)[i] || '',
+      weight: num(columnAsArray(t, S.itemCols.weight)[i]),
+      perOrder: S.itemCols.perOrder ? columnAsArray(t, S.itemCols.perOrder)[i] === true : false,
+      active: S.itemCols.active ? columnAsArray(t, S.itemCols.active)[i] !== false : true,
+      notes: columnAsArray(t, S.itemCols.notes)[i] || '',
+    }));
+  } catch (e) {
+    console.warn(ITEM_WEIGHTS_TABLE + ' not available', e);
+    S.itemTableMissing = true; S.items = [];
+  }
+}
+
+/* ── Writes ─────────────────────────────────────────────────────────────── */
+
+async function saveCell(table, cols, rowId, key, value) {
+  const col = cols[key];
+  if (!col) { toast('No column for ' + key); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', table, rowId, { [col]: value }]]);
+    await loadAll();
+  } catch (e) {
+    console.error('Could not save:', e);
+    alert('Could not save that — this widget needs Full document access.');
+    await loadAll();
+  }
+}
+
+const saveBox = (id, key, v) => saveCell(PACKAGING_TABLE, S.boxCols, id, key, v);
+const saveItem = (id, key, v) => saveCell(ITEM_WEIGHTS_TABLE, S.itemCols, id, key, v);
+
+async function addBox() {
+  const fields = {};
+  const set = (k, v) => { if (S.boxCols[k]) fields[S.boxCols[k]] = v; };
+  set('name', 'New box'); set('code', 'package');
+  set('l', 0); set('w', 0); set('h', 0); set('tare', 0); set('max', 0);
+  // Always explicit — see the note at the top of this file.
+  set('active', true);
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', PACKAGING_TABLE, null, fields]]);
+    await loadAll();
+    toast('Box added — give it a name, a tare and a spool capacity');
+  } catch (e) {
+    console.error('Could not add a box:', e);
+    alert('Could not add a box.');
+  }
+}
+
+async function addItem() {
+  const fields = {};
+  const set = (k, v) => { if (S.itemCols[k]) fields[S.itemCols[k]] = v; };
+  set('key', 'SPOOL_NEW'); set('category', 'Spool'); set('fiber', '');
+  set('prefixes', ''); set('label', 'New item'); set('weight', 0);
+  set('perOrder', false); set('active', true);
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', ITEM_WEIGHTS_TABLE, null, fields]]);
+    await loadAll();
+    toast('Item added — set its fibre, prefixes and weight');
+  } catch (e) {
+    console.error('Could not add an item:', e);
+    alert('Could not add an item.');
+  }
+}
+
+/* Deleting loses history. Retiring keeps the row and stops it counting, which
+   is what Active is for and almost always what is actually wanted. */
+async function retireRow(table, cols, id, label) {
+  if (!cols.active) { alert('This table has no Active column to untick.'); return; }
+  await saveCell(table, cols, id, 'active', false);
+  toast(label + ' retired — it stops counting but stays on the record');
+}
+
+async function deleteRow(table, id, label) {
+  if (!confirm(`Delete "${label}" outright?\n\n` +
+      `Retiring it instead (the ⊘ button) keeps it on the record and stops it counting, ` +
+      `which is usually what you want. This cannot be undone.`)) return;
+  try {
+    await grist.docApi.applyUserActions([['RemoveRecord', table, id]]);
+    await loadAll();
+    toast('Deleted ' + label);
+  } catch (e) {
+    console.error('Could not delete:', e);
+    alert('Could not delete that row.');
+  }
+}
+
+/* ── The calculation, kept in step with ship-preview.html ────────────────── */
+
+function activeItems() { return S.items.filter(i => i.active); }
+function activeBoxes() { return S.boxes.filter(b => b.active); }
+
+function prefixList(item) {
+  return String(item.prefixes || '').split(/[,;\s]+/).map(x => up(x).replace(/_+$/, '')).filter(Boolean);
+}
+
+function weightForFiber(fiber) {
+  const f = up(fiber);
+  const row = activeItems().find(i => /spool/i.test(i.category) && up(i.fiber) === f && i.weight > 0)
+    || activeItems().find(i => up(i.key) === 'SPOOL_' + f && i.weight > 0);
+  return row ? row.weight : null;
+}
+
+function perOrderExtrasOz() {
+  return activeItems().filter(i => i.perOrder).reduce((n, i) => n + i.weight, 0);
+}
+
+function boxFor(spools) {
+  const sized = activeBoxes().filter(b => b.max > 0);
+  if (!sized.length) return { box: null, why: 'no active box has a spool capacity set' };
+  const fits = sized.find(b => spools <= b.max);
+  if (fits) return { box: fits, why: '' };
+  const biggest = sized[sized.length - 1];
+  return { box: biggest, oversize: true,
+           why: `more than the largest box holds (${biggest.max}) — this would ship as more than one parcel` };
+}
+
+function calcParcel(fiber, spools) {
+  const per = weightForFiber(fiber);
+  if (per == null) {
+    return { ok: false, why: `no active spool weight recorded for ${fiber || 'that fibre'}` };
+  }
+  const pick = boxFor(spools);
+  if (!pick.box) return { ok: false, why: pick.why };
+  if (!(pick.box.tare > 0)) {
+    return { ok: false, why: `"${pick.box.name}" has no tare weight, so a parcel in it cannot be weighed` };
+  }
+  const contents = per * spools;
+  const extras = perOrderExtrasOz();
+  const raw = contents + pick.box.tare + extras;
+  const oz = roundUpOz(raw);
+  return {
+    ok: true, oz, raw, box: pick.box, oversize: !!pick.oversize, oversizeWhy: pick.why,
+    work: `${spools} × ${per} oz = ${Math.round(contents * 100) / 100} oz` +
+          `, + ${pick.box.tare} oz for "${pick.box.name}"` +
+          (extras ? `, + ${extras} oz per-parcel items` : '') +
+          (Math.abs(oz - raw) > 0.001 ? `, rounded up from ${Math.round(raw * 100) / 100}` : ''),
+  };
+}
+
+/* ── Problems ───────────────────────────────────────────────────────────── */
+
+function problems() {
+  const out = [];
+  if (S.boxTableMissing) out.push(`There is no <code>${esc(PACKAGING_TABLE)}</code> table.`);
+  if (S.itemTableMissing) out.push(`There is no <code>${esc(ITEM_WEIGHTS_TABLE)}</code> table.`);
+  if (S.boxTableMissing || S.itemTableMissing) return out;
+
+  if (!activeBoxes().length && S.boxes.length) {
+    out.push(`Every box is retired, so no parcel can be sized. Tick <strong>Active</strong> on the ones you use.`);
+  }
+  if (!activeItems().length && S.items.length) {
+    out.push(`Every item is retired, so no weight can be computed.`);
+  }
+  activeBoxes().filter(b => !(b.max > 0)).forEach(b =>
+    out.push(`<strong>${esc(b.name || 'An unnamed box')}</strong> has no spool capacity, so it is never chosen.`));
+  activeBoxes().filter(b => b.max > 0 && !(b.tare > 0)).forEach(b =>
+    out.push(`<strong>${esc(b.name)}</strong> has no tare, so any parcel that lands in it has no weight.`));
+  activeItems().filter(i => /spool/i.test(i.category) && !(i.weight > 0)).forEach(i =>
+    out.push(`<strong>${esc(i.label || i.key)}</strong> has no weight, so orders containing it are blocked.`));
+  activeItems().filter(i => /spool/i.test(i.category) && !prefixList(i).length).forEach(i =>
+    out.push(`<strong>${esc(i.label || i.key)}</strong> has no SKU prefixes. Retail orders have no recipe ` +
+      `behind them, so without a prefix their weight cannot be found at all.`));
+
+  /* Two rows claiming the same prefix is silent corruption: whichever is found
+     first wins and the other never applies, with nothing to show for it. */
+  const seen = {};
+  activeItems().forEach(i => prefixList(i).forEach(p => {
+    (seen[p] = seen[p] || []).push(i.label || i.key);
+  }));
+  Object.entries(seen).filter(([, who]) => who.length > 1).forEach(([p, who]) =>
+    out.push(`Prefix <code>${esc(p)}</code> is claimed by ${who.length} rows (${esc(who.join(', '))}). ` +
+      `Only one of them will ever be used.`));
+
+  return out;
+}
+
+/* ── Render ─────────────────────────────────────────────────────────────── */
+
+function renderBanners() {
+  const out = [];
+  if (S.error) out.push(`<div class="banner bad"><strong>Couldn't load.</strong> ${esc(S.error)}</div>`);
+  const probs = problems();
+  if (probs.length) {
+    out.push(`<div class="banner warn"><strong>${probs.length} thing(s) to finish.</strong>
+      <ul>${probs.map(p => `<li>${p}</li>`).join('')}</ul></div>`);
+  } else if (!S.loading && !S.boxTableMissing && !S.itemTableMissing) {
+    out.push(`<div class="banner good">Everything needed to weigh a parcel is filled in.</div>`);
+  }
+  document.getElementById('banners').innerHTML = out.join('');
+}
+
+function txt(onSave, value, cls, extra) {
+  return `<input type="text" class="${cls || ''}" value="${esc(value)}"
+    onchange="${onSave}" ${extra || ''}>`;
+}
+function numIn(onSave, value, cls, step) {
+  return `<input type="number" step="${step || 'any'}" min="0" class="num ${cls || ''}"
+    value="${esc(value)}" onchange="${onSave}">`;
+}
+
+function renderBoxes() {
+  const box = document.getElementById('boxes');
+  if (S.boxTableMissing) {
+    box.innerHTML = `<div class="panel"><div class="empty">
+      No <code>${esc(PACKAGING_TABLE)}</code> table in this document.</div></div>`;
+    return;
+  }
+  const rows = S.boxes.map(b => `<tr class="${b.active ? '' : 'off'}">
+    <td>${txt(`saveBox(${b.id},'name',this.value)`, b.name, '', 'placeholder="Name"')}</td>
+    <td>${txt(`saveBox(${b.id},'code',this.value)`, b.code, 'mono w-sm', 'placeholder="package"')}</td>
+    <td>${numIn(`saveBox(${b.id},'l',Number(this.value))`, b.l, 'w-xs', '0.1')}</td>
+    <td>${numIn(`saveBox(${b.id},'w',Number(this.value))`, b.w, 'w-xs', '0.1')}</td>
+    <td>${numIn(`saveBox(${b.id},'h',Number(this.value))`, b.h, 'w-xs', '0.1')}</td>
+    <td>${numIn(`saveBox(${b.id},'tare',Number(this.value))`, b.tare, 'w-xs' + (b.active && !(b.tare > 0) ? ' missing' : ''), '0.1')}</td>
+    <td>${numIn(`saveBox(${b.id},'max',Number(this.value))`, b.max, 'w-xs' + (b.active && !(b.max > 0) ? ' missing' : ''), '1')}</td>
+    <td><input type="checkbox" ${b.active ? 'checked' : ''}
+      onchange="saveBox(${b.id},'active',this.checked)"></td>
+    <td style="text-align:right;white-space:nowrap">
+      ${b.active ? `<button class="btn tiny secondary" title="Retire — stops counting, stays on the record"
+        onclick="retireRow('${PACKAGING_TABLE}', S.boxCols, ${b.id}, ${esc(JSON.stringify(b.name))})">⊘</button>` : ''}
+      <button class="btn tiny danger"
+        onclick="deleteRow('${PACKAGING_TABLE}', ${b.id}, ${esc(JSON.stringify(b.name))})">✕</button></td>
+  </tr>`).join('');
+
+  box.innerHTML = `<div class="panel">
+    <div class="panel-head">
+      <div><h3>Boxes and mailers</h3>
+        <div class="sub">The smallest active box whose capacity fits the order is the one chosen.</div></div>
+      <button class="btn" onclick="addBox()">+ Add box</button>
+    </div>
+    <table class="grid">
+      <thead><tr><th>Name</th><th>Package code</th><th>L</th><th>W</th><th>H</th>
+        <th>Tare oz</th><th>Max spools</th><th>Active</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="9" class="empty">No boxes yet.</td></tr>`}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderItems() {
+  const box = document.getElementById('items');
+  if (S.itemTableMissing) {
+    box.innerHTML = `<div class="panel"><div class="empty">
+      No <code>${esc(ITEM_WEIGHTS_TABLE)}</code> table in this document.</div></div>`;
+    return;
+  }
+  const rows = S.items.map(i => {
+    const isSpool = /spool/i.test(i.category);
+    return `<tr class="${i.active ? '' : 'off'}">
+      <td>${txt(`saveItem(${i.id},'key',this.value)`, i.key, 'mono w-md')}</td>
+      <td><select onchange="saveItem(${i.id},'category',this.value)">
+        ${CATEGORIES.map(c => `<option ${c === i.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+      </select></td>
+      <td>${txt(`saveItem(${i.id},'fiber',this.value)`, i.fiber, 'mono w-xs')}</td>
+      <td>${txt(`saveItem(${i.id},'prefixes',this.value)`, i.prefixes,
+        'mono w-md' + (i.active && isSpool && !prefixList(i).length ? ' missing' : ''),
+        'placeholder="FFN, NFF"')}</td>
+      <td>${txt(`saveItem(${i.id},'label',this.value)`, i.label)}</td>
+      <td>${numIn(`saveItem(${i.id},'weight',Number(this.value))`, i.weight,
+        'w-xs' + (i.active && !(i.weight > 0) ? ' missing' : ''), '0.1')}</td>
+      <td><input type="checkbox" ${i.perOrder ? 'checked' : ''}
+        onchange="saveItem(${i.id},'perOrder',this.checked)"
+        title="On = counted once per parcel. Off = counted per spool."></td>
+      <td><input type="checkbox" ${i.active ? 'checked' : ''}
+        onchange="saveItem(${i.id},'active',this.checked)"></td>
+      <td style="text-align:right;white-space:nowrap">
+        ${i.active ? `<button class="btn tiny secondary" title="Retire"
+          onclick="retireRow('${ITEM_WEIGHTS_TABLE}', S.itemCols, ${i.id}, ${esc(JSON.stringify(i.label || i.key))})">⊘</button>` : ''}
+        <button class="btn tiny danger"
+          onclick="deleteRow('${ITEM_WEIGHTS_TABLE}', ${i.id}, ${esc(JSON.stringify(i.label || i.key))})">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  box.innerHTML = `<div class="panel">
+    <div class="panel-head">
+      <div><h3>What goes in the box</h3>
+        <div class="sub">Prefixes are how a SKU finds its weight — list every spelling both stores use,
+          e.g. <code>FFN, NFF</code>.</div></div>
+      <button class="btn" onclick="addItem()">+ Add item</button>
+    </div>
+    <table class="grid">
+      <thead><tr><th>Key</th><th>Category</th><th>Fibre</th><th>SKU prefixes</th><th>Label</th>
+        <th>Oz each</th><th>Per parcel</th><th>Active</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="9" class="empty">No items yet.</td></tr>`}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderCalc() {
+  const box = document.getElementById('calc');
+  const fibers = [...new Set(activeItems().filter(i => /spool/i.test(i.category) && i.fiber)
+    .map(i => i.fiber))].sort();
+  if (!fibers.length) {
+    box.innerHTML = `<div class="panel"><div class="empty">
+      Add a spool row with a fibre and a weight, and this will show what a parcel comes to.</div></div>`;
+    return;
+  }
+  const f = S.calc.fiber || fibers[0];
+  const n = Math.max(1, Math.round(num(S.calc.spools) || 1));
+  const r = calcParcel(f, n);
+
+  box.innerHTML = `<div class="panel">
+    <h3>What would a parcel weigh?</h3>
+    <div class="sub">The same rules the ship preview uses, so what you see here is what it will say.</div>
+    <div class="calc">
+      <div><label>Fibre</label>
+        <select onchange="S.calc.fiber = this.value; renderCalc()">
+          ${fibers.map(x => `<option ${x === f ? 'selected' : ''}>${esc(x)}</option>`).join('')}
+        </select></div>
+      <div><label>Spools</label>
+        <input type="number" min="1" value="${n}"
+          onchange="S.calc.spools = this.value; renderCalc()"></div>
+      <div class="calc-out">
+        ${r.ok
+          ? `<div class="calc-line"><span class="big">${esc(r.oz)} oz</span>
+               <span>in a <strong>${esc(r.box.name)}</strong></span>
+               ${r.oversize ? `<span class="cant">${esc(r.oversizeWhy)}</span>` : ''}</div>
+             <div class="work">${esc(r.work)}</div>`
+          : `<div class="cant">Can't weigh this — ${esc(r.why)}.</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  renderBanners();
+  if (S.loading) {
+    document.getElementById('calc').innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
+    document.getElementById('boxes').innerHTML = '';
+    document.getElementById('items').innerHTML = '';
+    return;
+  }
+  renderCalc();
+  renderBoxes();
+  renderItems();
+}
+
+grist.ready({ requiredAccess: 'full' });
+loadAll();
+</script>
+</body>
+</html>
