@@ -84,6 +84,12 @@
   .put-go { padding: 9px 12px; border: none; border-radius: 5px; background: var(--teal);
     color: white; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .put-bin { width: 96px; padding: 7px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px; }
+  .plan-line { display: flex; align-items: center; gap: 8px; font-size: 11px;
+    color: var(--teal); font-weight: 600; margin-bottom: 8px; }
+  .file-all { margin-left: auto; padding: 6px 11px; border: 1px solid var(--teal);
+    background: white; color: var(--teal); border-radius: 5px; font-size: 11px;
+    font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .file-all:hover { background: var(--teal-light); }
   .put-done { margin-top: 14px; }
   .put-done-head { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
     color: var(--teal); margin-bottom: 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rule); }
@@ -203,11 +209,24 @@ function binLoad() {
   return out;
 }
 
-function suggestBinForLot(lot) {
+/* `pending` carries what earlier lots in the SAME pass have been assigned but
+   not yet saved. Without it every card on the put-away list is computed against
+   an identical, unchanged shelf — so forty unfiled lots all get told the same
+   bin, and the screen looks like it wants to pack everything into one place.
+   It balanced correctly one click at a time and looked broken as a list, which
+   is the worst way for a bug to present. */
+function suggestBinForLot(lot, pending) {
   if (!S.locations.length) {
     return { bin: '', note: 'no Storage_Locations table, so there is no bin list to choose from' };
   }
   const load = binLoad();
+  if (pending) {
+    Object.entries(pending).forEach(([k, v]) => {
+      if (!load[k]) load[k] = { spools: 0, colours: new Set() };
+      load[k].spools += v.spools;
+      v.colours.forEach(c => load[k].colours.add(c));
+    });
+  }
   const at = (code) => load[normalize(code)] || { spools: 0, colours: new Set() };
   const room = (loc) => {
     const cap = binCapacity(loc);
@@ -501,6 +520,46 @@ function putCandidates() {
     .slice(0, 12);
 }
 
+/* One coherent plan for a whole box, rather than the same answer N times. */
+function planPutAway(lots) {
+  const pending = {};
+  return lots.map(l => {
+    if (l.bin) return { lot: l, bin: l.bin, note: '', filed: true };
+    const sug = suggestBinForLot(l, pending);
+    if (sug.bin) {
+      const k = normalize(sug.bin);
+      if (!pending[k]) pending[k] = { spools: 0, colours: new Set() };
+      pending[k].spools += l.stock;
+      pending[k].colours.add(l.recipeId);
+    }
+    return { lot: l, bin: sug.bin, note: sug.note, filed: false };
+  });
+}
+
+async function fileAllSuggested() {
+  const plan = planPutAway(allLots().filter(l => !l.bin)).filter(p => p.bin);
+  if (!plan.length) { showToast('Nothing with a bin to file'); return; }
+  const bins = [...new Set(plan.map(p => p.bin))];
+  if (!confirm(`File ${plan.length} lot${plan.length === 1 ? '' : 's'} across ${bins.length} bin${bins.length === 1 ? '' : 's'}?\n\n` +
+      plan.slice(0, 12).map(p => `${p.lot.recipeName} (${p.lot.stock}) → ${p.bin}`).join('\n') +
+      (plan.length > 12 ? `\n…and ${plan.length - 12} more` : '') +
+      `\n\nThis only records where they go. Put the spools there too.`)) return;
+  try {
+    await grist.docApi.applyUserActions(
+      plan.map(p => ['UpdateRecord', 'Production_Lots', p.lot.lotId, { [S.binCol]: p.bin }]));
+    plan.forEach(p => {
+      p.lot.bin = p.bin;
+      S.putDone.unshift({ name: p.lot.recipeName, lot: p.lot.lotNumber, spools: p.lot.stock, bin: p.bin });
+    });
+    S.putDone = S.putDone.slice(0, 40);
+    showToast(`Filed ${plan.length} lot${plan.length === 1 ? '' : 's'} ✓`);
+    renderPutAway();
+  } catch (e) {
+    console.error('Failed to file all:', e);
+    showToast('Failed — check Production_Lots');
+  }
+}
+
 async function putLotAway(lotId, bin) {
   if (!S.binCol) { showToast('Production_Lots has no Storage_Bin column'); return; }
   const lot = allLots().find(l => l.lotId === lotId);
@@ -525,9 +584,14 @@ async function putLotAway(lotId, bin) {
 function renderPutAway() {
   const waiting = unbinnedCount();
   const cands = S.putQuery ? putCandidates() : allLots().filter(l => !l.bin).slice(0, 12);
+  /* How many bins the whole queue would land in — the quickest way to see at a
+     glance that it is spreading rather than piling everything in one place. */
+  const planSpread = new Set(planPutAway(allLots().filter(l => !l.bin))
+    .map(p => p.bin).filter(Boolean)).size;
 
-  const cards = cands.map(l => {
-    const sug = l.bin ? null : suggestBinForLot(l);
+  const plan = planPutAway(cands);
+  const cards = plan.map(({ lot: l, bin: planned, note }) => {
+    const sug = l.bin ? null : { bin: planned, note };
     return `<div class="put-card ${l.bin ? 'filed' : ''}">
       <div style="flex:1;min-width:0">
         <div class="put-name">${esc(l.recipeName)}${l.fiber ? ` <span class="put-fib">${esc(l.fiber)}</span>` : ''}</div>
@@ -558,9 +622,13 @@ function renderPutAway() {
       placeholder="Colorway, lot number or fibre…" oninput="onPutQuery(this.value)">
     <datalist id="binList">${S.locations.map(l =>
       `<option value="${esc(l.code)}">${esc([l.fiber, l.reservedFor].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>
-    <div class="total-line">${waiting
-      ? `${waiting} lot${waiting === 1 ? '' : 's'} with no bin`
-      : 'Every lot has a bin.'}${S.locations.length ? '' : ' · no Storage_Locations table, so nothing can be suggested'}</div>
+    <div class="plan-line">
+      <span>${waiting
+        ? `${waiting} lot${waiting === 1 ? '' : 's'} with no bin${planSpread > 1 ? ` · spread over ${planSpread} bins` : ''}`
+        : 'Every lot has a bin.'}${S.locations.length ? '' : ' · no Storage_Locations table, so nothing can be suggested'}</span>
+      ${waiting && S.locations.length
+        ? `<button class="file-all" onclick="fileAllSuggested()">File all ${waiting}</button>` : ''}
+    </div>
     ${cards || `<div class="empty-state">${S.putQuery
       ? 'No back stock matches that.'
       : 'Nothing waiting. Search to move something that has already been filed.'}</div>`}
