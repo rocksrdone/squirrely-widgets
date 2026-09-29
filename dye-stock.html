@@ -98,6 +98,40 @@ table.stock-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); 
 .seq-section-title:first-child { margin-top: 0; }
 .seq-hint { font-size: 11px; color: #8B7D72; font-style: italic; margin-top: 4px; }
 
+.stock-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.stock-search { flex: 1; min-width: 180px; padding: 7px 10px; border: 1px solid var(--rule);
+  border-radius: 6px; font-size: 12.5px; font-family: 'Inter', sans-serif; outline: none; }
+.stock-search:focus { border-color: var(--teal); }
+.chip { font-size: 11px; padding: 5px 10px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--rule); background: white; color: #6B5E52; white-space: nowrap; }
+.chip.on { background: var(--ink); border-color: var(--ink); color: white; }
+.chip.warn:not(.on) { border-color: var(--gold); color: var(--gold); }
+.chip.bad:not(.on) { border-color: var(--accent); color: var(--accent); }
+.chip-n { font-family: 'DM Mono', monospace; opacity: .7; }
+.stock-sort { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px;
+  font-size: 11.5px; background: white; color: var(--ink); }
+.stock-count { font-size: 11px; color: #8B7D72; margin-left: auto; white-space: nowrap; }
+.put-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.put-search { flex: 1; min-width: 220px; padding: 11px 13px; border: 1.5px solid var(--rule);
+  border-radius: 7px; font-size: 15px; font-family: 'Inter', sans-serif; outline: none; }
+.put-search:focus { border-color: var(--teal); }
+.put-waiting { font-size: 11px; color: #8B7D72; white-space: nowrap; }
+.put-waiting.on { color: var(--gold); font-weight: 600; }
+.put-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 7px;
+  background: var(--gold-light); border: 1px solid #E4CF9E; margin-bottom: 6px; flex-wrap: wrap; }
+.put-card.done { background: var(--paper); border-color: var(--rule); }
+.put-go { font-size: 13px; padding: 9px 14px; white-space: nowrap; }
+.put-done { margin-top: 16px; }
+.put-done-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px;
+  padding: 3px 0; border-bottom: 1px solid #F0EAE2; }
+.put-done-bin { font-family: 'DM Mono', monospace; margin-left: auto; color: var(--teal); font-weight: 600; }
+.bin-group { margin-bottom: 14px; }
+.bin-group-head { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 600;
+  padding: 5px 8px; background: var(--warm); border-radius: 5px 5px 0 0;
+  display: flex; align-items: baseline; gap: 8px; }
+.bin-group-head.none { background: var(--gold-light); color: #6E4C13; }
+.bin-group-n { font-family: 'Inter', sans-serif; font-size: 10.5px; color: #8B7D72; margin-left: auto; }
+
 .empty-state { color: #8B7D72; font-style: italic; padding: 30px; text-align: center; }
 .toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -114,10 +148,12 @@ table.stock-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); 
 </div>
 <div class="tabs">
   <button class="tab-btn active" id="tabStock" onclick="setView('stock')">Current Stock</button>
+  <button class="tab-btn" id="tabPut" onclick="setView('putaway')">Put Away</button>
   <button class="tab-btn" id="tabSeq" onclick="setView('sequence')">Suggested Sequence</button>
 </div>
 
 <div id="stockPanel" class="panel"></div>
+<div id="putPanel" class="panel" style="display:none;"></div>
 <div id="seqPanel" class="panel" style="display:none;"></div>
 
 <div class="toast" id="toast"></div>
@@ -203,7 +239,26 @@ function resolvedColor(dye) {
   if (!dye) return '#888780';
   return dye.Swatch_Hex || guessColor(dye.Dye_Name);
 }
-function normalize(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+/* Accent folding — KEEP BYTE-IDENTICAL ACROSS WIDGETS.
+   normalize() strips anything outside a-z0-9, which DELETES accented letters
+   rather than folding them: "Pathétique" became "pathtique" while the file
+   "Pathetique.jpg" became "pathetique", so the two never matched and the widget
+   reported nothing found. NFD splits a letter from its diacritic so the
+   diacritic can be dropped and the base letter kept; the map handles the
+   characters that have no decomposition (ß, ø, æ and friends).
+   Display is untouched — this only ever builds comparison keys. */
+const ACCENT_FOLD_MAP = { 'æ':'ae','Æ':'ae','œ':'oe','Œ':'oe','ø':'o','Ø':'o',
+  'ß':'ss','đ':'d','Đ':'d','ð':'d','Ð':'d','ł':'l','Ł':'l','þ':'th','Þ':'th' };
+function foldAccents(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[æÆœŒøØßđĐðÐłŁþÞ]/g, c => ACCENT_FOLD_MAP[c] || c);
+}
+function normalize(s) { return foldAccents(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 function columnAsArray(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
 function findColumn(t, candidates) {
   const keys = Object.keys(t);
@@ -322,6 +377,84 @@ function suggestBinForDye(dyeId) {
 let newStockDyeId = null;
 let currentView = 'stock';
 
+/* ── Finding one jar among many ───────────────────────────────────────────
+   This screen was built to be read top to bottom, which is the wrong shape
+   for the job it actually gets used for: standing at the shelf holding a jar
+   that needs putting back. You do not arrive knowing which row you want, you
+   arrive knowing which dye is in your hand — so the list has to be searchable,
+   and better still, there has to be a way to work jar-first instead of
+   list-first. Hence the filter bar below and the Put Away tab. */
+let stockSearch = '';
+let stockFilter = 'all';     // all | needsbin | stale | binned
+let stockSort = 'name';      // name | bin | age | qty
+let stockGroupByBin = false;
+
+/* Re-rendering the whole panel on every save throws away whatever was typed
+   and wherever the caret was. Saving a bin from the table does exactly that,
+   so without this the search box empties itself the moment you use it. */
+let restoreFocus = null;
+function captureFocus() {
+  const el = document.activeElement;
+  if (!el || !el.id) { restoreFocus = null; return; }
+  restoreFocus = { id: el.id,
+    start: el.selectionStart == null ? null : el.selectionStart,
+    end: el.selectionEnd == null ? null : el.selectionEnd };
+}
+function applyFocus() {
+  if (!restoreFocus) return;
+  const el = document.getElementById(restoreFocus.id);
+  if (el) {
+    el.focus();
+    try { if (restoreFocus.start != null) el.setSelectionRange(restoreFocus.start, restoreFocus.end); }
+    catch (e) { /* not a text input */ }
+  }
+  restoreFocus = null;
+}
+
+function stockHaystack(s) {
+  const d = dyeFor(s.dyeId) || {};
+  return normalize([d.Dye_Name, d.Brand, d.Serial, d.Dye_Type, s.Bin_Location].join(' '));
+}
+function isStaleRow(s) {
+  const d = dyeFor(s.dyeId);
+  const age = daysAgo(s.Mixed_Date);
+  const shelf = d && d.Shelf_Life_days ? Number(d.Shelf_Life_days) : null;
+  return !!(shelf && age !== null && age > shelf);
+}
+
+function visibleStockRows() {
+  const q = normalize(stockSearch);
+  let rows = stockRows.filter(s => {
+    if (stockFilter === 'needsbin' && s.Bin_Location) return false;
+    if (stockFilter === 'binned' && !s.Bin_Location) return false;
+    if (stockFilter === 'stale' && !isStaleRow(s)) return false;
+    if (q && !stockHaystack(s).includes(q)) return false;
+    return true;
+  });
+  const nameOf = (s) => ((dyeFor(s.dyeId) || {}).Dye_Name || '');
+  rows.sort((a, b) => {
+    /* Whatever the sort, a jar with nowhere to go comes first — that is the
+       pile you are actually working through. */
+    const au = !a.Bin_Location, bu = !b.Bin_Location;
+    if (au !== bu) return au ? -1 : 1;
+    if (stockSort === 'bin') {
+      const d = binSortFn(a.Bin_Location, b.Bin_Location);
+      if (d !== 0) return d;
+    } else if (stockSort === 'age') {
+      return (dateSort(a.Mixed_Date) || 0) - (dateSort(b.Mixed_Date) || 0);
+    } else if (stockSort === 'qty') {
+      return (Number(a.Quantity_mL) || 0) - (Number(b.Quantity_mL) || 0);
+    }
+    return nameOf(a).localeCompare(nameOf(b));
+  });
+  return rows;
+}
+
+function setStockSearch(v) { stockSearch = v; captureFocus(); renderStockPanel(); }
+function setStockFilter(v) { stockFilter = v; captureFocus(); renderStockPanel(); }
+function setStockSort(v) { stockSort = v; captureFocus(); renderStockPanel(); }
+function toggleGroupByBin() { stockGroupByBin = !stockGroupByBin; captureFocus(); renderStockPanel(); }
+
 async function loadAll() {
   try {
     const dyesTable = await grist.docApi.fetchTable('Dyes');
@@ -383,6 +516,7 @@ async function loadAll() {
     });
 
     renderStockPanel();
+    if (currentView === 'putaway') renderPutAwayPanel();
     renderSeqPanel();
   } catch (e) {
     console.error('Failed to load:', e);
@@ -393,10 +527,13 @@ async function loadAll() {
 function setView(view) {
   currentView = view;
   document.getElementById('stockPanel').style.display = view === 'stock' ? 'block' : 'none';
+  document.getElementById('putPanel').style.display = view === 'putaway' ? 'block' : 'none';
   document.getElementById('seqPanel').style.display = view === 'sequence' ? 'block' : 'none';
   document.getElementById('tabStock').classList.toggle('active', view === 'stock');
+  document.getElementById('tabPut').classList.toggle('active', view === 'putaway');
   document.getElementById('tabSeq').classList.toggle('active', view === 'sequence');
   if (view === 'sequence') renderSeqPanel();
+  if (view === 'putaway') { renderPutAwayPanel(); focusPutAway(); }
 }
 
 function dyeFor(id) { return allDyes.find(d => d.id === id); }
@@ -428,8 +565,37 @@ function renderStockPanel() {
       ${newStockDyeId && stockRows.some(r => r.dyeId === newStockDyeId)
         ? `<div style="font-size:10px;color:#8B7D72;flex-basis:100%;margin-top:-4px;">This dye already has a jar \u2014 logging replaces it. One jar per dye; use Bin Audit to reconcile what is already doubled up.</div>` : ''}
     </div>
+    ${renderStockToolbar()}
     ${renderStockTable()}
   `;
+  applyFocus();
+}
+
+function renderStockToolbar() {
+  const needsBin = stockRows.filter(s => !s.Bin_Location).length;
+  const stale = stockRows.filter(isStaleRow).length;
+  const shown = visibleStockRows().length;
+  const chip = (v, label, n, cls) =>
+    `<button class="chip ${stockFilter === v ? 'on' : ''} ${cls || ''}" onclick="setStockFilter('${v}')">` +
+    `${label}${n != null ? ` <span class="chip-n">${n}</span>` : ''}</button>`;
+
+  return `<div class="stock-toolbar">
+    <input class="stock-search" id="stockSearchBox" type="text" value="${esc(stockSearch)}"
+      placeholder="Search dye, brand, serial, bin…" oninput="setStockSearch(this.value)">
+    ${chip('all', 'All', stockRows.length)}
+    ${chip('needsbin', 'Needs a bin', needsBin, needsBin ? 'warn' : '')}
+    ${chip('binned', 'Put away', stockRows.length - needsBin)}
+    ${chip('stale', 'Past shelf life', stale, stale ? 'bad' : '')}
+    <select class="stock-sort" onchange="setStockSort(this.value)">
+      <option value="name" ${stockSort === 'name' ? 'selected' : ''}>Sort: dye name</option>
+      <option value="bin" ${stockSort === 'bin' ? 'selected' : ''}>Sort: bin order</option>
+      <option value="age" ${stockSort === 'age' ? 'selected' : ''}>Sort: oldest first</option>
+      <option value="qty" ${stockSort === 'qty' ? 'selected' : ''}>Sort: least left</option>
+    </select>
+    <button class="chip ${stockGroupByBin ? 'on' : ''}" onclick="toggleGroupByBin()"
+      title="Group the list by bin, so you can walk the shelf once instead of hunting jar by jar">Group by bin</button>
+    <span class="stock-count">${shown} of ${stockRows.length}</span>
+  </div>`;
 }
 
 function renderNewStockDyePicker() {
@@ -474,48 +640,68 @@ function searchNewStockDye(query) {
   box.style.display = 'block';
 }
 
+function stockRowHtml(s) {
+  const d = dyeFor(s.dyeId);
+  const age = daysAgo(s.Mixed_Date);
+  const isStale = isStaleRow(s);
+  const needsBin = !s.Bin_Location;
+  const suggestion = needsBin ? suggestBinForDye(s.dyeId) : null;
+  const binCell = needsBin
+    ? `<input class="bin-input" type="text" value="" placeholder="none yet"
+         onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">
+       ${suggestion.bin
+         ? `<button class="btn btn-small" onclick="useSuggestedBin(${s.id})" style="margin-top:3px;">Use bin ${esc(suggestion.bin)}</button>`
+         : ''}
+       <div style="font-size:9px; color:#8B7D72; margin-top:2px;">${esc(suggestion.note)}</div>`
+    : `<input class="bin-input" type="text" value="${esc(s.Bin_Location)}"
+         onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">`;
+  return `
+    <tr ${needsBin ? 'style="background: var(--gold-light);"' : ''}>
+      <td><span class="swatch-dot" style="background:${resolvedColor(d)}"></span></td>
+      <td>${esc(d ? d.Dye_Name : '(unknown dye)')}<div style="font-size:10px;color:#8B7D72;">${esc(d ? dyeDetailLine(d) : '')}</div></td>
+      <td><input class="qty-input" type="number" value="${esc(s.Quantity_mL)}" onchange="updateStockField(${s.id}, 'Quantity_mL', this.value)"> mL</td>
+      <td><input class="date-input" type="date" value="${toDateInputValue(s.Mixed_Date)}" onchange="updateStockField(${s.id}, 'Mixed_Date', this.value)"></td>
+      <td>${age !== null ? `<span class="age-tag ${isStale ? 'stale' : ''}">${age}d ago${isStale ? ' \u00b7 past shelf life' : ''}</span>` : '\u2014'}</td>
+      <td>${binCell}</td>
+      <td class="row-actions"><button class="btn btn-small" onclick="deleteStock(${s.id})">Remove</button></td>
+    </tr>
+  `;
+}
+
+const STOCK_HEAD = `<thead><tr><th></th><th>Dye</th><th>Quantity</th><th>Mixed Date</th>
+  <th>Age</th><th>Bin</th><th></th></tr></thead>`;
+
 function renderStockTable() {
   if (!stockRows.length) {
     return `<div class="empty-state">No premade stock logged yet. Add some above.</div>`;
   }
-  const sorted = [...stockRows].sort((a, b) => {
-    const aUnbinned = !a.Bin_Location, bUnbinned = !b.Bin_Location;
-    if (aUnbinned !== bUnbinned) return aUnbinned ? -1 : 1;
-    return 0;
-  });
-  const rows = sorted.map(s => {
-    const d = dyeFor(s.dyeId);
-    const age = daysAgo(s.Mixed_Date);
-    const shelf = d && d.Shelf_Life_days ? Number(d.Shelf_Life_days) : null;
-    const isStale = shelf && age !== null && age > shelf;
-    const needsBin = !s.Bin_Location;
-    const suggestion = needsBin ? suggestBinForDye(s.dyeId) : null;
-    const binCell = needsBin
-      ? `<input class="bin-input" type="text" value="" placeholder="none yet" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">
-         <button class="btn btn-small" onclick="useSuggestedBin(${s.id})" style="margin-top:3px;">Use bin ${suggestion.bin}</button>
-         <div style="font-size:9px; color:#8B7D72; margin-top:2px;">${suggestion.note}</div>`
-      : `<input class="bin-input" type="text" value="${s.Bin_Location}" onchange="updateStockField(${s.id}, 'Bin_Location', this.value)">`;
-    return `
-      <tr ${needsBin ? 'style="background: var(--gold-light);"' : ''}>
-        <td><span class="swatch-dot" style="background:${resolvedColor(d)}"></span></td>
-        <td>${d ? d.Dye_Name : '(unknown dye)'}<div style="font-size:10px;color:#8B7D72;">${d ? dyeDetailLine(d) : ''}</div></td>
-        <td><input class="qty-input" type="number" value="${s.Quantity_mL}" onchange="updateStockField(${s.id}, 'Quantity_mL', this.value)"> mL</td>
-        <td><input class="date-input" type="date" value="${toDateInputValue(s.Mixed_Date)}" onchange="updateStockField(${s.id}, 'Mixed_Date', this.value)"></td>
-        <td>${age !== null ? `<span class="age-tag ${isStale ? 'stale' : ''}">${age}d ago${isStale ? ' · past shelf life' : ''}</span>` : '—'}</td>
-        <td>${binCell}</td>
-        <td class="row-actions"><button class="btn btn-small" onclick="deleteStock(${s.id})">Remove</button></td>
-      </tr>
-    `;
-  }).join('');
+  const rows = visibleStockRows();
+  if (!rows.length) {
+    return `<div class="empty-state">Nothing matches${stockSearch ? ` \u201c${esc(stockSearch)}\u201d` : ''}.
+      ${stockFilter !== 'all' ? ' Try the All filter.' : ''}</div>`;
+  }
 
-  return `
-    <table class="stock-table">
-      <thead>
-        <tr><th></th><th>Dye</th><th>Quantity</th><th>Mixed Date</th><th>Age</th><th>Bin</th><th></th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+  /* Grouped by bin, this becomes a shelf walk rather than a hunt: sort the box
+     into piles once, then visit each bin a single time. Jars with nowhere to go
+     lead, because they are the ones that need a decision. */
+  if (stockGroupByBin) {
+    const groups = {};
+    rows.forEach(s => { (groups[binLabel(s.Bin_Location)] = groups[binLabel(s.Bin_Location)] || []).push(s); });
+    const keys = Object.keys(groups).sort((a, b) => {
+      if (a === NO_BIN) return -1;
+      if (b === NO_BIN) return 1;
+      return binSortFn(a, b);
+    });
+    return keys.map(k => `
+      <div class="bin-group">
+        <div class="bin-group-head ${k === NO_BIN ? 'none' : ''}">${esc(k)}
+          <span class="bin-group-n">${groups[k].length} jar${groups[k].length === 1 ? '' : 's'}${
+            k !== NO_BIN && groups[k].length > BIN_CAPACITY ? ' \u00b7 over capacity' : ''}</span></div>
+        <table class="stock-table">${STOCK_HEAD}<tbody>${groups[k].map(stockRowHtml).join('')}</tbody></table>
+      </div>`).join('');
+  }
+
+  return `<table class="stock-table">${STOCK_HEAD}<tbody>${rows.map(stockRowHtml).join('')}</tbody></table>`;
 }
 
 // One jar per dye is a hard rule: a fresh mix is used up or dumped, it never
@@ -577,7 +763,8 @@ async function updateStockField(id, field, value) {
     const row = stockRows.find(s => s.id === id);
     if (row) row[field] = fields[field];
     showToast('Saved.');
-    if (field === 'Bin_Location') renderStockPanel();
+    if (field === 'Bin_Location') { captureFocus(); renderStockPanel(); }
+    if (currentView === 'putaway') renderPutAwayPanel();
     if (currentView === 'sequence') renderSeqPanel();
   } catch (e) {
     console.error(e);
@@ -596,6 +783,99 @@ async function deleteStock(id) {
     console.error(e);
     showToast('Could not remove — check the console.');
   }
+}
+
+// ── PUT AWAY TAB ──
+/* The list view answers "what is in this bin". Standing at the shelf with a
+   jar in your hand you need the opposite — "where does THIS go" — and no
+   amount of sorting a list makes that a one-step question.
+
+   So: type two or three letters of the dye, see the jar, press the button.
+   The field clears and refocuses, so a boxful can be worked through without
+   touching the mouse. Everything it writes goes through updateStockField, the
+   same door the table uses, so bin codes are normalised identically. */
+let putQuery = '';
+let putDone = [];   // {name, bin} — this session only, as a running tally
+
+function focusPutAway() {
+  setTimeout(() => {
+    const el = document.getElementById('putSearch');
+    if (el) { el.focus(); el.select(); }
+  }, 30);
+}
+
+function setPutQuery(v) { putQuery = v; renderPutAwayPanel(); }
+
+function putMatches() {
+  const q = normalize(putQuery);
+  if (!q) return [];
+  return stockRows
+    .filter(s => stockHaystack(s).includes(q))
+    .sort((a, b) => {
+      // Jars with no bin first — those are the ones being put away.
+      const au = !a.Bin_Location, bu = !b.Bin_Location;
+      if (au !== bu) return au ? -1 : 1;
+      return ((dyeFor(a.dyeId) || {}).Dye_Name || '').localeCompare((dyeFor(b.dyeId) || {}).Dye_Name || '');
+    })
+    .slice(0, 8);
+}
+
+async function putAway(stockId, bin) {
+  const row = stockRows.find(s => s.id === stockId);
+  const d = row ? dyeFor(row.dyeId) : null;
+  await updateStockField(stockId, 'Bin_Location', bin);
+  putDone.unshift({ name: d ? d.Dye_Name : 'Jar', bin: normBin(bin) || bin });
+  putDone = putDone.slice(0, 12);
+  putQuery = '';
+  renderPutAwayPanel();
+  focusPutAway();
+}
+
+function renderPutAwayPanel() {
+  const panel = document.getElementById('putPanel');
+  const waiting = stockRows.filter(s => !s.Bin_Location).length;
+  const matches = putMatches();
+
+  const cards = matches.map(s => {
+    const d = dyeFor(s.dyeId);
+    const sug = suggestBinForDye(s.dyeId);
+    const target = s.Bin_Location || sug.bin;
+    return `<div class="put-card ${s.Bin_Location ? 'done' : ''}">
+      <span class="seq-swatch" style="background:${resolvedColor(d)}"></span>
+      <div style="flex:1">
+        <div class="seq-name">${esc(d ? d.Dye_Name : '(unknown dye)')}</div>
+        <div class="seq-meta">${esc(dyeDetailLine(d || {}))}${
+          s.Quantity_mL !== '' ? ` \u00b7 ${esc(s.Quantity_mL)} mL` : ''}</div>
+        <div class="seq-meta">${s.Bin_Location
+          ? `already recorded in <strong>${esc(s.Bin_Location)}</strong> \u2014 set it again only if it has moved`
+          : esc(sug.note)}</div>
+      </div>
+      ${target
+        ? `<button class="btn btn-teal put-go" onclick="putAway(${s.id}, ${esc(JSON.stringify(target))})">
+             ${s.Bin_Location ? 'Back to' : 'Put in'} ${esc(target)}</button>`
+        : `<span class="seq-meta" style="color:var(--accent)">${esc(sug.note)}</span>`}
+      <input class="bin-input" type="text" placeholder="or type a bin"
+        onchange="if (this.value.trim()) putAway(${s.id}, this.value)">
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="put-head">
+      <input class="put-search" id="putSearch" type="text" value="${esc(putQuery)}"
+        placeholder="Type the dye on the jar in your hand…" oninput="setPutQuery(this.value)">
+      <span class="put-waiting ${waiting ? 'on' : ''}">${waiting} jar${waiting === 1 ? '' : 's'} with no bin</span>
+    </div>
+    ${putQuery
+      ? (cards || `<div class="empty-state">No jar logged for \u201c${esc(putQuery)}\u201d.
+           If it is a new mix, log it on the Current Stock tab first.</div>`)
+      : `<div class="empty-state">Start typing a dye name. The field clears itself after each one,
+           so you can work straight through a box without reaching for the mouse.</div>`}
+    ${putDone.length ? `<div class="put-done">
+      <div class="seq-section-title">Put away just now</div>
+      ${putDone.map(x => `<div class="put-done-row">${esc(x.name)}
+        <span class="put-done-bin">${esc(x.bin)}</span></div>`).join('')}
+    </div>` : ''}
+  `;
 }
 
 // ── SEQUENCE TAB ──
