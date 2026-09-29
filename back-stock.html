@@ -80,6 +80,9 @@
   .put-card.filed { background: white; border-color: var(--rule); }
   .put-name { font-weight: 700; font-size: 13px; }
   .put-fib { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8B7D72; font-weight: 400; }
+  .who { display: inline-block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .03em; padding: 1px 6px; border-radius: 9px; margin-left: 5px;
+    background: var(--done-bg); color: var(--done-text); }
   .put-meta { font-size: 10px; color: #8B7D72; }
   .put-go { padding: 9px 12px; border: none; border-radius: 5px; background: var(--teal);
     color: white; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
@@ -157,7 +160,9 @@ function fiberCode(v) {
 }
 
 let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false,
-  binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [] };
+  binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [], reservedFor: {} };
+
+function customersFor(lot) { return [...(S.reservedFor[lot.lotId] || [])]; }
 
 function allLots() { return S.colors.flatMap(c => c.lots); }
 
@@ -202,9 +207,10 @@ function binLoad() {
   allLots().forEach(l => {
     if (!l.bin) return;
     const k = normalize(l.bin);
-    if (!out[k]) out[k] = { spools: 0, colours: new Set() };
+    if (!out[k]) out[k] = { spools: 0, colours: new Set(), customers: new Set() };
     out[k].spools += l.stock;
     out[k].colours.add(l.recipeId);
+    (l.customers || []).forEach(c => out[k].customers.add(normalize(c)));
   });
   return out;
 }
@@ -222,12 +228,13 @@ function suggestBinForLot(lot, pending) {
   const load = binLoad();
   if (pending) {
     Object.entries(pending).forEach(([k, v]) => {
-      if (!load[k]) load[k] = { spools: 0, colours: new Set() };
+      if (!load[k]) load[k] = { spools: 0, colours: new Set(), customers: new Set() };
       load[k].spools += v.spools;
       v.colours.forEach(c => load[k].colours.add(c));
+      (v.customers || new Set()).forEach(c => load[k].customers.add(c));
     });
   }
-  const at = (code) => load[normalize(code)] || { spools: 0, colours: new Set() };
+  const at = (code) => load[normalize(code)] || { spools: 0, colours: new Set(), customers: new Set() };
   const room = (loc) => {
     const cap = binCapacity(loc);
     if (!cap) return Infinity;            // no cap recorded — treated as open
@@ -269,12 +276,44 @@ function suggestBinForLot(lot, pending) {
     }
   }
 
-  // 2. A bin set aside for this colourway by name.
+  /* ── Spoken-for stock travels together ──────────────────────────────────
+     Picking for a customer who has reserved several colourways is one trip if
+     they are in one bin and several if they are scattered — so for a reserved
+     lot, clustering beats spreading outright. Balancing only governs stock
+     nobody has claimed yet, which is the stock you search by colourway.
+
+     Note Storage_Locations.Reserved_For is a CUSTOMER here, not a colourway:
+     Bin Audit renders it as "<name> box", which is what it has always meant.
+     The colourway reading further down is kept only as a fallback, for a bin
+     genuinely set aside for one colour. */
+  const mine = (lot.customers || []);
+  if (mine.length) {
+    // 2. Their box, if they have one. A named box beats a fibre rule — it is
+    //    about whose it is, not what it is made of.
+    for (const who of mine) {
+      const box = S.locations.find(L => L.reservedFor && normalize(L.reservedFor) === normalize(who));
+      if (box) {
+        const tight = room(box) < lot.stock;
+        return { bin: box.code,
+                 note: `${who}'s box${tight ? ' — but it looks full, check it fits' : ''}` };
+      }
+    }
+    // 3. Otherwise, wherever that customer's other reserved lots already are.
+    const withThem = S.locations.filter(L => mine.some(w => at(L.code).customers.has(normalize(w))));
+    const join = withThem.find(L => room(L) >= lot.stock) || withThem[0];
+    if (join) {
+      return { bin: join.code,
+               note: `${mine[0]}'s other reserved lots are in ${join.code} — picked together` };
+    }
+  }
+
+  // 4. A bin set aside for this colourway by name (the older reading).
   const reserved = prefer(S.locations.filter(L =>
     L.reservedFor && normalize(L.reservedFor) === normalize(lot.recipeName)));
   if (reserved) return { bin: reserved.code, note: `reserved for ${lot.recipeName}` };
 
-  // 3. A bin for this fibre, tidiest first.
+  // 5. A bin for this fibre, tidiest first. Named boxes are excluded — an
+  //    unclaimed lot must not wander into somebody's pick.
   const fibreBin = prefer(S.locations.filter(L => L.fiber && fibreOk(L) && !L.reservedFor));
   if (fibreBin) {
     const n = colours(fibreBin);
@@ -282,7 +321,7 @@ function suggestBinForLot(lot, pending) {
              note: `${lot.fiber || 'this fibre'} bin, ${n === 0 ? 'currently empty' : `only ${n} colourway${n === 1 ? '' : 's'} in it`}` };
   }
 
-  // 4. Any unrestricted bin, tidiest first.
+  // 6. Any unrestricted bin, tidiest first.
   const open = prefer(S.locations.filter(L => !L.fiber && !L.reservedFor));
   if (open) {
     const n = colours(open);
@@ -359,6 +398,46 @@ async function loadStock() {
       console.warn('Storage_Locations unavailable — no bin suggestions', e);
     }
 
+    /* Who a lot is spoken for. Picking for a reserved customer means grabbing
+       several lots at once, so those want to travel together — one bin, one
+       trip — while everything unspoken-for is better spread out. Optional:
+       without allocations the suggestion just loses the customer rules. */
+    S.reservedFor = {};
+    try {
+      const [allocT, custT] = await Promise.all([
+        grist.docApi.fetchTable('Lot_Allocations'),
+        grist.docApi.fetchTable('Customers').catch(() => null),
+      ]);
+      const A = resolveCols(allocT, 'Lot_Allocations', {
+        lot: ['Lot'], qty: opt(['Qty_Spools']), status: opt(['Status']), customer: opt(['Customer']),
+      }, []);
+      const custName = {};
+      if (custT) {
+        const C = resolveCols(custT, 'Customers', { name: ['Customer_Name'] }, []);
+        if (C.name) (custT.id || []).forEach((id, i) => {
+          custName[id] = (columnAsArray(custT, C.name)[i] || '').toString().trim();
+        });
+      }
+      if (A.lot && A.customer) {
+        (allocT.id || []).forEach((id, i) => {
+          const lotId = getRefId(columnAsArray(allocT, A.lot)[i]);
+          if (!lotId) return;
+          const status = (A.status ? columnAsArray(allocT, A.status)[i] : '') || '';
+          // Packed or shipped has physically left; it reserves nothing.
+          if (/packed|shipped|sent|delivered/i.test(status.toString())) return;
+          const raw = columnAsArray(allocT, A.customer)[i];
+          /* The column is a Ref in some docs and plain text in others — bin
+             audit only ever handled the text case, which is why its "who"
+             column can read empty. Handle both. */
+          const name = typeof raw === 'string' ? raw.trim() : (custName[getRefId(raw)] || '');
+          if (!name) return;
+          (S.reservedFor[lotId] = S.reservedFor[lotId] || new Set()).add(name);
+        });
+      }
+    } catch (e) {
+      console.warn('Lot_Allocations unavailable — no customer grouping', e);
+    }
+
     const recipeById = {};
     const allRecipes = [];
     (recipesT.id || []).forEach((id, i) => {
@@ -391,6 +470,8 @@ async function loadStock() {
         stock,
         bin: LOT.bin ? (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim() : '',
         recipeId, recipeName: recipe.name,
+        // filled in after allocations load, below
+        customers: [],
       });
       byRecipe[recipeId].total += stock;
     });
@@ -398,6 +479,7 @@ async function loadStock() {
     S.colors = Object.values(byRecipe)
       .map(c => { c.lots.sort((a, b) => (a.date || 0) - (b.date || 0)); return c; })
       .sort((a, b) => a.recipe.name.localeCompare(b.recipe.name));
+    allLots().forEach(l => { l.customers = customersFor(l); });
 
     render();
   } catch (e) {
@@ -426,7 +508,8 @@ function colorCard(c) {
   const lotRows = c.lots.map(l => `
     <div class="lot-row${l.bin ? '' : ' nobin'}">
       <div class="lot-info">
-        <div class="lot-no">${esc(l.lotNumber)} ${binChip(l)}</div>
+        <div class="lot-no">${esc(l.lotNumber)} ${binChip(l)}${
+          (l.customers || []).length ? `<span class="who">${esc(l.customers.join(', '))}</span>` : ''}</div>
         <div class="lot-sub">${l.fiber ? esc(l.fiber) : ''}${l.date ? (l.fiber ? ' · ' : '') + 'made ' + fmtDate(l.date) : ''}</div>
       </div>
       <div class="lot-adjust">
@@ -528,9 +611,10 @@ function planPutAway(lots) {
     const sug = suggestBinForLot(l, pending);
     if (sug.bin) {
       const k = normalize(sug.bin);
-      if (!pending[k]) pending[k] = { spools: 0, colours: new Set() };
+      if (!pending[k]) pending[k] = { spools: 0, colours: new Set(), customers: new Set() };
       pending[k].spools += l.stock;
       pending[k].colours.add(l.recipeId);
+      (l.customers || []).forEach(c => pending[k].customers.add(normalize(c)));
     }
     return { lot: l, bin: sug.bin, note: sug.note, filed: false };
   });
@@ -594,7 +678,8 @@ function renderPutAway() {
     const sug = l.bin ? null : { bin: planned, note };
     return `<div class="put-card ${l.bin ? 'filed' : ''}">
       <div style="flex:1;min-width:0">
-        <div class="put-name">${esc(l.recipeName)}${l.fiber ? ` <span class="put-fib">${esc(l.fiber)}</span>` : ''}</div>
+        <div class="put-name">${esc(l.recipeName)}${l.fiber ? ` <span class="put-fib">${esc(l.fiber)}</span>` : ''}${
+          (l.customers || []).length ? `<span class="who">${esc(l.customers.join(', '))}</span>` : ''}</div>
         <div class="put-meta">${esc(l.lotNumber)} · ${l.stock} spool${l.stock === 1 ? '' : 's'}${
           l.date ? ' · made ' + fmtDate(l.date) : ''}</div>
         <div class="put-meta">${l.bin
