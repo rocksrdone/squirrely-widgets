@@ -78,6 +78,7 @@
   .put-card { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 6px;
     background: var(--warn-bg); border: 1px solid #E8D3B8; margin-bottom: 5px; flex-wrap: wrap; }
   .put-card.filed { background: white; border-color: var(--rule); }
+  .put-card.fresh { border: 2px solid var(--teal); }
   .put-name { font-weight: 700; font-size: 13px; }
   .put-fib { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8B7D72; font-weight: 400; }
   .who { display: inline-block; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
@@ -158,9 +159,13 @@ function fiberCode(v) {
   const up = s.toUpperCase();
   return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
 }
+// Names can come back as numbers (limited editions are bare codes), so never
+// call string methods on them directly.
+function byName(a, b) { return String(a == null ? '' : a).localeCompare(String(b == null ? '' : b)); }
 
 let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false,
-  binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [], reservedFor: {} };
+  binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [], reservedFor: {},
+  justAdded: null };
 
 function customersFor(lot) { return [...(S.reservedFor[lot.lotId] || [])]; }
 
@@ -443,20 +448,20 @@ async function loadStock() {
     (recipesT.id || []).forEach((id, i) => {
       const rec = {
         id,
-        name: columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`,
+        name: String(columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`),
         fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
         method: columnAsArray(recipesT, REC.method)[i] || '',
       };
       recipeById[id] = rec;
       allRecipes.push(rec);
     });
-    S.allRecipes = allRecipes.sort((a, b) => a.name.localeCompare(b.name));
+    S.allRecipes = allRecipes.sort((a, b) => byName(a.name, b.name));
 
     // Group lots that hold back stock, by colorway
     const byRecipe = {};
     (lotsT.id || []).forEach((id, i) => {
-      const stock = (Number(columnAsArray(lotsT, LOT.store)[i]) || 0)
-        + (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0)
+      const stock = (LOT.store ? (Number(columnAsArray(lotsT, LOT.store)[i]) || 0) : 0)
+        + (LOT.vendor ? (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0) : 0)
         + (LOT.general ? (Number(columnAsArray(lotsT, LOT.general)[i]) || 0) : 0);
       if (stock <= 0) return;
       const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
@@ -464,12 +469,12 @@ async function loadStock() {
       (byRecipe[recipeId] = byRecipe[recipeId] || { recipeId, recipe, lots: [], total: 0 });
       byRecipe[recipeId].lots.push({
         lotId: id,
-        lotNumber: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
+        lotNumber: String(columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`),
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         stock,
         bin: LOT.bin ? (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim() : '',
-        recipeId, recipeName: recipe.name,
+        recipeId, recipeName: String(recipe.name),
         // filled in after allocations load, below
         customers: [],
       });
@@ -478,10 +483,10 @@ async function loadStock() {
 
     S.colors = Object.values(byRecipe)
       .map(c => { c.lots.sort((a, b) => (a.date || 0) - (b.date || 0)); return c; })
-      .sort((a, b) => a.recipe.name.localeCompare(b.recipe.name));
+      .sort((a, b) => byName(a.recipe.name, b.recipe.name));
     allLots().forEach(l => { l.customers = customersFor(l); });
 
-    render();
+    if (S.view === 'putaway') renderPutAway(); else render();
   } catch (e) {
     console.error('Failed to load back stock:', e);
     const msg = (e && e.message ? e.message : String(e)).replace(/[<>]/g, '');
@@ -528,7 +533,7 @@ function colorCard(c) {
           <div class="color-name">${esc(c.recipe.name)}</div>
           <div class="color-meta">${c.lots.length} lot${c.lots.length === 1 ? '' : 's'}${fibers ? ' · ' + esc(fibers) : ''}${/hand/i.test(c.recipe.method) ? ' · hand-dye' : (/kettle/i.test(c.recipe.method) ? ' · kettle' : '')}</div>
           <div class="color-bins">${bins.length ? bins.map(b => `<span class="bin-chip">${esc(b)}</span>`).join('')
-            : (S.binCol ? '' : '')}${loose ? `<span class="bin-chip none">${loose} loose</span>` : ''}</div>
+            : ''}${loose ? `<span class="bin-chip none">${loose} loose</span>` : ''}</div>
         </div>
         <span class="color-total">${c.total} spool${c.total === 1 ? '' : 's'}</span>
       </div>
@@ -568,7 +573,7 @@ function render() {
         <button class="add-btn" id="add-btn" onclick="addStock()" disabled>+ Add</button>
       </div>
       <datalist id="recipeList">${recipeOptions}</datalist>
-      <div class="add-hint" id="add-hint">Pick any colorway — no order needed. Creates a lot in back stock.</div>
+      <div class="add-hint" id="add-hint">Pick any colorway — no order needed. Creates a lot in back stock, then takes you to Put Away to bin it.</div>
     </div>
     <input class="search-input" id="searchBox" placeholder="Search colorway or bin..." value="${esc(S.search)}" oninput="onSearch(this.value)">
     <div class="total-line" id="total"></div>
@@ -582,7 +587,7 @@ function unbinnedCount() {
 }
 function setBsView(v) {
   S.view = v;
-  if (v === 'putaway') { renderPutAway(); focusPut(); } else { render(); }
+  if (v === 'putaway') { renderPutAway(); focusPut(); } else { S.justAdded = null; render(); }
 }
 function focusPut() {
   setTimeout(() => { const el = document.getElementById('putBox'); if (el) { el.focus(); el.select(); } }, 30);
@@ -590,7 +595,11 @@ function focusPut() {
 function onPutQuery(v) { S.putQuery = v; renderPutAway(); }
 
 /* Same shape as the dye put-away: you are holding spools, not reading a list.
-   Unbinned lots lead, because those are the ones in the box. */
+   Unbinned lots lead, because those are the ones in the box.
+
+   No cap on the list. It used to stop at 12 cards, and because the queue is
+   alphabetical that meant anything past about P never appeared — including a
+   lot you had just added. */
 function putCandidates() {
   const q = normalize(S.putQuery);
   return allLots()
@@ -598,9 +607,17 @@ function putCandidates() {
       || (l.fiber && normalize(l.fiber) === q))
     .sort((a, b) => {
       if (!a.bin !== !b.bin) return a.bin ? 1 : -1;
-      return a.recipeName.localeCompare(b.recipeName) || (a.date || 0) - (b.date || 0);
-    })
-    .slice(0, 12);
+      return byName(a.recipeName, b.recipeName) || (a.date || 0) - (b.date || 0);
+    });
+}
+
+/* The waiting queue with no search typed. A lot added a moment ago goes to the
+   top so it is the first thing you see; the rest stay alphabetical. */
+function waitingLots() {
+  const list = allLots().filter(l => !l.bin);
+  if (!S.justAdded) return list;
+  const fresh = list.filter(l => l.lotNumber === S.justAdded);
+  return [...fresh, ...list.filter(l => l.lotNumber !== S.justAdded)];
 }
 
 /* One coherent plan for a whole box, rather than the same answer N times. */
@@ -652,6 +669,7 @@ async function putLotAway(lotId, bin) {
   try {
     await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.binCol]: code }]]);
     if (lot) lot.bin = code;
+    if (lot && lot.lotNumber === S.justAdded) S.justAdded = null;
     S.putDone.unshift({ name: lot ? lot.recipeName : 'Lot', lot: lot ? lot.lotNumber : '',
       spools: lot ? lot.stock : 0, bin: code });
     S.putDone = S.putDone.slice(0, 15);
@@ -667,7 +685,7 @@ async function putLotAway(lotId, bin) {
 
 function renderPutAway() {
   const waiting = unbinnedCount();
-  const cands = S.putQuery ? putCandidates() : allLots().filter(l => !l.bin).slice(0, 12);
+  const cands = S.putQuery ? putCandidates() : waitingLots();
   /* How many bins the whole queue would land in — the quickest way to see at a
      glance that it is spreading rather than piling everything in one place. */
   const planSpread = new Set(planPutAway(allLots().filter(l => !l.bin))
@@ -676,9 +694,11 @@ function renderPutAway() {
   const plan = planPutAway(cands);
   const cards = plan.map(({ lot: l, bin: planned, note }) => {
     const sug = l.bin ? null : { bin: planned, note };
-    return `<div class="put-card ${l.bin ? 'filed' : ''}">
+    const fresh = !l.bin && l.lotNumber === S.justAdded;
+    return `<div class="put-card ${l.bin ? 'filed' : ''} ${fresh ? 'fresh' : ''}">
       <div style="flex:1;min-width:0">
         <div class="put-name">${esc(l.recipeName)}${l.fiber ? ` <span class="put-fib">${esc(l.fiber)}</span>` : ''}${
+          fresh ? `<span class="who">just added</span>` : ''}${
           (l.customers || []).length ? `<span class="who">${esc(l.customers.join(', '))}</span>` : ''}</div>
         <div class="put-meta">${esc(l.lotNumber)} · ${l.stock} spool${l.stock === 1 ? '' : 's'}${
           l.date ? ' · made ' + fmtDate(l.date) : ''}</div>
@@ -742,7 +762,7 @@ function onAddColorInput() {
     hint.textContent = `${r.name}${r.fiber ? ' · ' + fiberCode(r.fiber) : ''}${/hand/i.test(r.method) ? ' · hand-dye (own lot)' : ''}`;
     hint.style.color = 'var(--teal)';
   } else {
-    hint.textContent = 'Pick any colorway — no order needed. Creates a lot in back stock.';
+    hint.textContent = 'Pick any colorway — no order needed. Creates a lot in back stock, then takes you to Put Away to bin it.';
     hint.style.color = '#8B7D72';
   }
   if (btn) btn.disabled = !(r && qty > 0);
@@ -782,7 +802,13 @@ async function addStock() {
     if (LOT.date) fields[LOT.date] = Math.floor(Date.now() / 1000);
     await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, fields]]);
     showToast(`Added ${qty} ${r.name} → ${lotNumber} ✓`);
+    // Spools you just added are in your hand with no bin — go straight to
+    // Put Away with this lot at the top, rather than leaving it to be found.
+    S.justAdded = lotNumber;
+    S.putQuery = '';
+    S.view = S.binCol ? 'putaway' : 'stock';
     await loadStock();
+    if (S.view === 'putaway') focusPut();
   } catch (e) {
     console.error('Failed to add stock:', e);
     showToast('Failed to add — check Production_Lots');
