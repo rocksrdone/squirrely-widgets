@@ -41,6 +41,13 @@
   .lot-rows { border-top: 1px solid var(--rule); padding: 4px 9px 8px; }
   .lot-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F0EAE1; }
   .lot-row:last-child { border-bottom: none; }
+  .lot-row.nobin { background: var(--warn-bg); margin: 0 -9px; padding-left: 9px; padding-right: 9px; }
+  .bin-chip { display: inline-block; font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 10px; padding: 1px 6px; border-radius: 9px; background: var(--teal-light);
+    color: var(--teal); font-weight: 700; margin-left: 4px; }
+  .bin-chip.none { background: var(--warn-bg); color: var(--warn-text); }
+  .color-bins { margin-top: 3px; }
+  .color-bins .bin-chip { margin-left: 0; margin-right: 4px; }
   .lot-info { flex: 1; min-width: 0; }
   .lot-no { font-weight: 600; font-size: 12px; }
   .lot-sub { font-size: 10px; color: #8B7D72; }
@@ -59,6 +66,31 @@
     background: var(--teal); color: white; border: none;
   }
   .lot-adjust .save:disabled { background: #C3BCB2; cursor: default; }
+
+  .bs-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .bs-tab { flex: 1; padding: 7px 10px; border: 1px solid var(--rule); background: white;
+    border-radius: 6px; font-size: 12px; cursor: pointer; color: var(--ink); }
+  .bs-tab.on { background: var(--ink); border-color: var(--ink); color: white; }
+  .bs-tab-n { font-weight: 700; opacity: .75; }
+  .put-search { width: 100%; padding: 11px 12px; border: 1.5px solid var(--rule);
+    border-radius: 7px; font-size: 15px; margin-bottom: 8px; }
+  .put-search:focus { outline: none; border-color: var(--teal); }
+  .put-card { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 6px;
+    background: var(--warn-bg); border: 1px solid #E8D3B8; margin-bottom: 5px; flex-wrap: wrap; }
+  .put-card.filed { background: white; border-color: var(--rule); }
+  .put-name { font-weight: 700; font-size: 13px; }
+  .put-fib { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8B7D72; font-weight: 400; }
+  .put-meta { font-size: 10px; color: #8B7D72; }
+  .put-go { padding: 9px 12px; border: none; border-radius: 5px; background: var(--teal);
+    color: white; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .put-bin { width: 96px; padding: 7px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px; }
+  .put-done { margin-top: 14px; }
+  .put-done-head { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--teal); margin-bottom: 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rule); }
+  .put-done-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px;
+    padding: 3px 0; border-bottom: 1px solid #F0EAE1; }
+  .put-done-meta { font-size: 10px; color: #8B7D72; margin-left: auto; }
+  .put-done-bin { font-family: ui-monospace, Menlo, monospace; font-weight: 700; color: var(--teal); }
 
   .empty-state { text-align: center; color: #8B7D72; padding: 24px 12px; font-size: 12px; line-height: 1.6; }
   #toast {
@@ -118,7 +150,89 @@ function fiberCode(v) {
   return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s;
 }
 
-let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false };
+let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false,
+  binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [] };
+
+function allLots() { return S.colors.flatMap(c => c.lots); }
+
+/* Spools already sitting in each bin, so a suggestion can tell a full bin from
+   an empty one. Keyed case-folded because the rack codes are typed by hand;
+   the code WRITTEN is always the one Storage_Locations holds. */
+function spoolsByBin() {
+  const out = {};
+  allLots().forEach(l => {
+    if (!l.bin) return;
+    const k = normalize(l.bin);
+    out[k] = (out[k] || 0) + l.stock;
+  });
+  return out;
+}
+function binCapacity(loc) { return loc.max > 0 ? loc.max : (loc.target > 0 ? loc.target : 0); }
+
+/* ── Where should this lot go? ─────────────────────────────────────────────
+   There was nothing doing this for thread. The made-dye shelf has had
+   suggestBinForDye since it was built, but back stock has only ever let you
+   type a bin in Bin Audit — which is fine for correcting one lot and useless
+   for a box of forty.
+
+   Storage_Locations already carries everything needed: which fibre a bin is
+   for, what it is reserved for, and how much it holds. The order below is
+   deliberate — keeping one colourway together beats filling a bin evenly,
+   because finding stock later is the thing that actually costs time. */
+function suggestBinForLot(lot) {
+  if (!S.locations.length) {
+    return { bin: '', note: 'no Storage_Locations table, so there is no bin list to choose from' };
+  }
+  const used = spoolsByBin();
+  const room = (loc) => {
+    const cap = binCapacity(loc);
+    if (!cap) return Infinity;            // no cap recorded — treat as open
+    return cap - (used[normalize(loc.code)] || 0);
+  };
+  const fibreOk = (loc) => !loc.fiber || !lot.fiber || fiberCode(loc.fiber) === fiberCode(lot.fiber);
+
+  // 1. Wherever this colourway already lives, if it still has room.
+  const sameColour = allLots().filter(l => l.recipeId === lot.recipeId && l.bin && l.lotId !== lot.lotId);
+  for (const other of sameColour) {
+    const loc = S.locations.find(L => normalize(L.code) === normalize(other.bin));
+    if (loc && room(loc) >= lot.stock) {
+      return { bin: loc.code, note: `${lot.recipeName} is already in ${loc.code}` };
+    }
+    if (!loc) {
+      // The bin is not in Storage_Locations, but the colourway is demonstrably
+      // there — still the right answer, just say the code is unrecognised.
+      return { bin: other.bin, note: `${lot.recipeName} is already in ${other.bin} (not a listed bin code)` };
+    }
+  }
+
+  // 2. A bin set aside for this colourway by name.
+  const reserved = S.locations.find(L =>
+    L.reservedFor && normalize(L.reservedFor) === normalize(lot.recipeName) && room(L) >= lot.stock);
+  if (reserved) return { bin: reserved.code, note: `reserved for ${lot.recipeName}` };
+
+  // 3. A bin for this fibre with room. Emptiest first, so one fibre spreads
+  //    evenly rather than packing one bin and overflowing into the wrong one.
+  const fibreBins = S.locations
+    .filter(L => L.fiber && fibreOk(L) && room(L) >= lot.stock && !L.reservedFor)
+    .sort((a, b) => room(b) - room(a));
+  if (fibreBins.length) {
+    return { bin: fibreBins[0].code, note: `${lot.fiber || 'this fibre'} bin with room` };
+  }
+
+  // 4. Any unrestricted bin with room.
+  const open = S.locations
+    .filter(L => !L.fiber && !L.reservedFor && room(L) >= lot.stock)
+    .sort((a, b) => room(b) - room(a));
+  if (open.length) return { bin: open[0].code, note: 'open bin with room' };
+
+  /* 5. Nothing fits. Saying which constraint bit is the difference between a
+        useful answer and a shrug. */
+  const anyFibre = S.locations.some(L => fibreOk(L));
+  if (!anyFibre) {
+    return { bin: '', note: `no bin is set up for ${lot.fiber || 'this fibre'}` };
+  }
+  return { bin: '', note: `every ${lot.fiber || ''} bin is full — ${lot.stock} spools need space` };
+}
 
 async function loadStock() {
   try {
@@ -135,6 +249,10 @@ async function loadStock() {
       fiber: opt(['Fiber']), date: opt(['Date_Dyed']),
       drying: opt(['Drying_Status']), spoolsMade: opt(['Spools_Made']),
       yardsMade: opt(['Total_Yards_Made']),
+      /* Where the spools physically are. Back-stock bins are the bare A1..D7
+         rack — a DIFFERENT rack from the made-dye M- shelf, not being renamed,
+         and never passed through the M- normaliser. Compared case-folded only. */
+      bin: opt(['Storage_Bin']),
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']),
@@ -147,6 +265,35 @@ async function loadStock() {
     // Single back-stock bucket (you collapsed store/vendor into General_Stock_Spools).
     S.stockCol = LOT.general || LOT.store || LOT.vendor;
     S.lotCols = LOT;
+    S.binCol = LOT.bin;
+
+    /* Storage_Locations is the bin list, and it carries the two things that
+       make a suggestion possible rather than a guess: which fibre a bin is for,
+       and how much it holds. Optional — without it the screen still shows where
+       things are, it just cannot propose anywhere to put them. */
+    S.locations = [];
+    try {
+      const locT = await grist.docApi.fetchTable('Storage_Locations');
+      const LOC = resolveCols(locT, 'Storage_Locations', {
+        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']),
+        target: opt(['Target_Spools']), max: opt(['Max_Spools']),
+      }, []);
+      if (LOC.code) {
+        (locT.id || []).forEach((id, i) => {
+          const code = (columnAsArray(locT, LOC.code)[i] || '').toString().trim();
+          if (!code) return;
+          S.locations.push({
+            code,
+            fiber: fiberCode((columnAsArray(locT, LOC.fiber)[i] || '').toString().trim()),
+            reservedFor: (columnAsArray(locT, LOC.reserved)[i] || '').toString().trim(),
+            target: Number(columnAsArray(locT, LOC.target)[i]) || 0,
+            max: Number(columnAsArray(locT, LOC.max)[i]) || 0,
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('Storage_Locations unavailable — no bin suggestions', e);
+    }
 
     const recipeById = {};
     const allRecipes = [];
@@ -178,6 +325,8 @@ async function loadStock() {
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         stock,
+        bin: LOT.bin ? (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim() : '',
+        recipeId, recipeName: recipe.name,
       });
       byRecipe[recipeId].total += stock;
     });
@@ -197,13 +346,23 @@ async function loadStock() {
 function onSearch(v) { S.search = v; renderList(); }
 function toggle(rid) { S.open[rid] = !S.open[rid]; renderList(); }
 
+/* The bin, where you look for it: on the lot. Without it this screen could tell
+   you that you own 40 spools of something and nothing about where they are. */
+function binChip(l) {
+  if (!S.binCol) return '';
+  if (l.bin) return `<span class="bin-chip">${esc(l.bin)}</span>`;
+  return `<span class="bin-chip none">no bin</span>`;
+}
+
 function colorCard(c) {
   const isOpen = !!S.open[c.recipeId];
   const fibers = [...new Set(c.lots.map(l => l.fiber).filter(Boolean))].join(', ');
+  const bins = [...new Set(c.lots.map(l => l.bin).filter(Boolean))];
+  const loose = c.lots.filter(l => !l.bin).reduce((n, l) => n + l.stock, 0);
   const lotRows = c.lots.map(l => `
-    <div class="lot-row">
+    <div class="lot-row${l.bin ? '' : ' nobin'}">
       <div class="lot-info">
-        <div class="lot-no">${esc(l.lotNumber)}</div>
+        <div class="lot-no">${esc(l.lotNumber)} ${binChip(l)}</div>
         <div class="lot-sub">${l.fiber ? esc(l.fiber) : ''}${l.date ? (l.fiber ? ' · ' : '') + 'made ' + fmtDate(l.date) : ''}</div>
       </div>
       <div class="lot-adjust">
@@ -221,6 +380,8 @@ function colorCard(c) {
         <div>
           <div class="color-name">${esc(c.recipe.name)}</div>
           <div class="color-meta">${c.lots.length} lot${c.lots.length === 1 ? '' : 's'}${fibers ? ' · ' + esc(fibers) : ''}${/hand/i.test(c.recipe.method) ? ' · hand-dye' : (/kettle/i.test(c.recipe.method) ? ' · kettle' : '')}</div>
+          <div class="color-bins">${bins.length ? bins.map(b => `<span class="bin-chip">${esc(b)}</span>`).join('')
+            : (S.binCol ? '' : '')}${loose ? `<span class="bin-chip none">${loose} loose</span>` : ''}</div>
         </div>
         <span class="color-total">${c.total} spool${c.total === 1 ? '' : 's'}</span>
       </div>
@@ -230,7 +391,8 @@ function colorCard(c) {
 
 function renderList() {
   const q = normalize(S.search);
-  const list = S.colors.filter(c => !q || normalize(c.recipe.name).includes(q));
+  const list = S.colors.filter(c => !q || normalize(c.recipe.name).includes(q)
+    || c.lots.some(l => l.bin && normalize(l.bin).includes(q)));
   const total = list.reduce((s, c) => s + c.total, 0);
   const el = document.getElementById('list');
   const totalEl = document.getElementById('total');
@@ -246,7 +408,12 @@ function render() {
     `<option value="${esc(r.name)}${r.fiber ? ' — ' + esc(fiberCode(r.fiber)) : ''}">`).join('');
   document.getElementById('content').innerHTML = `
     <div class="header-title">Back Stock</div>
-    <div class="header-sub">Unassigned spools in the bin. Tap a colorway to see and fix lot counts.</div>
+    <div class="header-sub">What is on the shelf and where. Tap a colorway to see its lots, bins and counts.</div>
+    <div class="bs-tabs">
+      <button class="bs-tab ${S.view === 'stock' ? 'on' : ''}" onclick="setBsView('stock')">Stock</button>
+      <button class="bs-tab ${S.view === 'putaway' ? 'on' : ''}" onclick="setBsView('putaway')">Put Away${
+        unbinnedCount() ? ` <span class="bs-tab-n">${unbinnedCount()}</span>` : ''}</button>
+    </div>
     <div class="add-panel">
       <div class="add-row">
         <input list="recipeList" id="add-color" class="add-color" placeholder="Colorway to add stock for..." oninput="onAddColorInput()">
@@ -256,11 +423,109 @@ function render() {
       <datalist id="recipeList">${recipeOptions}</datalist>
       <div class="add-hint" id="add-hint">Pick any colorway — no order needed. Creates a lot in back stock.</div>
     </div>
-    <input class="search-input" id="searchBox" placeholder="Search colorway..." value="${esc(S.search)}" oninput="onSearch(this.value)">
+    <input class="search-input" id="searchBox" placeholder="Search colorway or bin..." value="${esc(S.search)}" oninput="onSearch(this.value)">
     <div class="total-line" id="total"></div>
     <div id="list"></div>
   `;
   renderList();
+}
+
+function unbinnedCount() {
+  return allLots().filter(l => !l.bin).length;
+}
+function setBsView(v) {
+  S.view = v;
+  if (v === 'putaway') { renderPutAway(); focusPut(); } else { render(); }
+}
+function focusPut() {
+  setTimeout(() => { const el = document.getElementById('putBox'); if (el) { el.focus(); el.select(); } }, 30);
+}
+function onPutQuery(v) { S.putQuery = v; renderPutAway(); }
+
+/* Same shape as the dye put-away: you are holding spools, not reading a list.
+   Unbinned lots lead, because those are the ones in the box. */
+function putCandidates() {
+  const q = normalize(S.putQuery);
+  return allLots()
+    .filter(l => !q || normalize(l.recipeName).includes(q) || normalize(l.lotNumber).includes(q)
+      || (l.fiber && normalize(l.fiber) === q))
+    .sort((a, b) => {
+      if (!a.bin !== !b.bin) return a.bin ? 1 : -1;
+      return a.recipeName.localeCompare(b.recipeName) || (a.date || 0) - (b.date || 0);
+    })
+    .slice(0, 12);
+}
+
+async function putLotAway(lotId, bin) {
+  if (!S.binCol) { showToast('Production_Lots has no Storage_Bin column'); return; }
+  const lot = allLots().find(l => l.lotId === lotId);
+  const code = (bin || '').trim();
+  if (!code) { showToast('Enter a bin first'); return; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.binCol]: code }]]);
+    if (lot) lot.bin = code;
+    S.putDone.unshift({ name: lot ? lot.recipeName : 'Lot', lot: lot ? lot.lotNumber : '',
+      spools: lot ? lot.stock : 0, bin: code });
+    S.putDone = S.putDone.slice(0, 15);
+    S.putQuery = '';
+    showToast(`${lot ? lot.recipeName : 'Lot'} → ${code} ✓`);
+    renderPutAway();
+    focusPut();
+  } catch (e) {
+    console.error('Failed to set the bin:', e);
+    showToast('Failed to save the bin — check Production_Lots');
+  }
+}
+
+function renderPutAway() {
+  const waiting = unbinnedCount();
+  const cands = S.putQuery ? putCandidates() : allLots().filter(l => !l.bin).slice(0, 12);
+
+  const cards = cands.map(l => {
+    const sug = l.bin ? null : suggestBinForLot(l);
+    return `<div class="put-card ${l.bin ? 'filed' : ''}">
+      <div style="flex:1;min-width:0">
+        <div class="put-name">${esc(l.recipeName)}${l.fiber ? ` <span class="put-fib">${esc(l.fiber)}</span>` : ''}</div>
+        <div class="put-meta">${esc(l.lotNumber)} · ${l.stock} spool${l.stock === 1 ? '' : 's'}${
+          l.date ? ' · made ' + fmtDate(l.date) : ''}</div>
+        <div class="put-meta">${l.bin
+          ? `already in <strong>${esc(l.bin)}</strong> — set it again only if it has moved`
+          : esc(sug.note)}</div>
+      </div>
+      ${(l.bin || (sug && sug.bin))
+        ? `<button class="put-go" onclick="putLotAway(${l.lotId}, ${esc(JSON.stringify(l.bin || sug.bin))})">
+             ${l.bin ? 'Back to' : 'Put in'} ${esc(l.bin || sug.bin)}</button>`
+        : ''}
+      <input class="put-bin" placeholder="or a bin" list="binList"
+        onchange="if (this.value.trim()) putLotAway(${l.lotId}, this.value)">
+    </div>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="header-title">Back Stock</div>
+    <div class="header-sub">Spools in your hand, not a list to read. Type a colorway; the field clears after each one.</div>
+    <div class="bs-tabs">
+      <button class="bs-tab" onclick="setBsView('stock')">Stock</button>
+      <button class="bs-tab on" onclick="setBsView('putaway')">Put Away${
+        waiting ? ` <span class="bs-tab-n">${waiting}</span>` : ''}</button>
+    </div>
+    <input class="put-search" id="putBox" value="${esc(S.putQuery)}"
+      placeholder="Colorway, lot number or fibre…" oninput="onPutQuery(this.value)">
+    <datalist id="binList">${S.locations.map(l =>
+      `<option value="${esc(l.code)}">${esc([l.fiber, l.reservedFor].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>
+    <div class="total-line">${waiting
+      ? `${waiting} lot${waiting === 1 ? '' : 's'} with no bin`
+      : 'Every lot has a bin.'}${S.locations.length ? '' : ' · no Storage_Locations table, so nothing can be suggested'}</div>
+    ${cards || `<div class="empty-state">${S.putQuery
+      ? 'No back stock matches that.'
+      : 'Nothing waiting. Search to move something that has already been filed.'}</div>`}
+    ${S.putDone.length ? `<div class="put-done">
+      <div class="put-done-head">Put away just now</div>
+      ${S.putDone.map(x => `<div class="put-done-row">${esc(x.name)}
+        <span class="put-done-meta">${x.spools} sp</span>
+        <span class="put-done-bin">${esc(x.bin)}</span></div>`).join('')}
+    </div>` : ''}
+  `;
 }
 
 // Match the typed value ("Fern Green — FFN") back to a recipe.
