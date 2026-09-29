@@ -172,63 +172,108 @@ function binCapacity(loc) { return loc.max > 0 ? loc.max : (loc.target > 0 ? loc
 /* ── Where should this lot go? ─────────────────────────────────────────────
    There was nothing doing this for thread. The made-dye shelf has had
    suggestBinForDye since it was built, but back stock has only ever let you
-   type a bin in Bin Audit — which is fine for correcting one lot and useless
-   for a box of forty.
+   type a bin in Bin Audit — fine for correcting one lot, useless for a box of
+   forty.
 
-   Storage_Locations already carries everything needed: which fibre a bin is
-   for, what it is reserved for, and how much it holds. The order below is
-   deliberate — keeping one colourway together beats filling a bin evenly,
-   because finding stock later is the thing that actually costs time. */
+   WHAT "EVENLY DISTRIBUTED" ACTUALLY MEANS HERE. The first version balanced on
+   spool count, which is the wrong quantity. Digging through a bin is caused by
+   the number of DIFFERENT colourways in it, not the number of spools: sixty
+   spools that are all Laguna is a bin you can read at a glance, while sixty
+   spools across twelve colourways is a rummage every single time.
+
+   So the thing spread evenly is colourways per bin, and lots of the same
+   colourway still land together. Those two goals only look opposed — balancing
+   on the right quantity satisfies both. Spool capacity stays a hard limit on
+   top, so a balanced bin still cannot be overfilled. */
+
+/* Above this, a bin starts to feel like a rummage. Bins under the figure are
+   always preferred; when every eligible bin is over it, the emptiest still
+   wins rather than the suggestion giving up. */
+const COMFORTABLE_COLOURWAYS_PER_BIN = 4;
+
+function binLoad() {
+  const out = {};
+  allLots().forEach(l => {
+    if (!l.bin) return;
+    const k = normalize(l.bin);
+    if (!out[k]) out[k] = { spools: 0, colours: new Set() };
+    out[k].spools += l.stock;
+    out[k].colours.add(l.recipeId);
+  });
+  return out;
+}
+
 function suggestBinForLot(lot) {
   if (!S.locations.length) {
     return { bin: '', note: 'no Storage_Locations table, so there is no bin list to choose from' };
   }
-  const used = spoolsByBin();
+  const load = binLoad();
+  const at = (code) => load[normalize(code)] || { spools: 0, colours: new Set() };
   const room = (loc) => {
     const cap = binCapacity(loc);
-    if (!cap) return Infinity;            // no cap recorded — treat as open
-    return cap - (used[normalize(loc.code)] || 0);
+    if (!cap) return Infinity;            // no cap recorded — treated as open
+    return cap - at(loc.code).spools;
   };
+  const colours = (loc) => at(loc.code).colours.size;
   const fibreOk = (loc) => !loc.fiber || !lot.fiber || fiberCode(loc.fiber) === fiberCode(lot.fiber);
 
-  // 1. Wherever this colourway already lives, if it still has room.
-  const sameColour = allLots().filter(l => l.recipeId === lot.recipeId && l.bin && l.lotId !== lot.lotId);
-  for (const other of sameColour) {
-    const loc = S.locations.find(L => normalize(L.code) === normalize(other.bin));
-    if (loc && room(loc) >= lot.stock) {
-      return { bin: loc.code, note: `${lot.recipeName} is already in ${loc.code}` };
-    }
-    if (!loc) {
-      // The bin is not in Storage_Locations, but the colourway is demonstrably
-      // there — still the right answer, just say the code is unrecognised.
+  /* Fewest colourways first — that is the whole point. Room breaks a tie, so
+     between two equally tidy bins the emptier one still wins. A bin that
+     already holds this colourway counts as tidier by one, because adding to it
+     does not make the bin any harder to read. */
+  const tidiest = (list) => [...list].sort((a, b) => {
+    const ca = colours(a) - (at(a.code).colours.has(lot.recipeId) ? 1 : 0);
+    const cb = colours(b) - (at(b.code).colours.has(lot.recipeId) ? 1 : 0);
+    if (ca !== cb) return ca - cb;
+    return room(b) - room(a);
+  });
+  const prefer = (list) => {
+    const fits = list.filter(L => room(L) >= lot.stock);
+    if (!fits.length) return null;
+    const comfy = fits.filter(L => colours(L) < COMFORTABLE_COLOURWAYS_PER_BIN
+      || at(L.code).colours.has(lot.recipeId));
+    return tidiest(comfy.length ? comfy : fits)[0];
+  };
+
+  // 1. Wherever this colourway already lives — it adds no clutter there.
+  const homes = S.locations.filter(L => at(L.code).colours.has(lot.recipeId));
+  const home = prefer(homes);
+  if (home) {
+    return { bin: home.code,
+             note: `${lot.recipeName} is already in ${home.code} — keeping it together adds no clutter` };
+  }
+  if (homes.length) {
+    // Its home bins are all too full for this lot; say so before moving on.
+    const other = allLots().find(l => l.recipeId === lot.recipeId && l.bin && l.lotId !== lot.lotId);
+    if (other && !S.locations.some(L => normalize(L.code) === normalize(other.bin))) {
       return { bin: other.bin, note: `${lot.recipeName} is already in ${other.bin} (not a listed bin code)` };
     }
   }
 
   // 2. A bin set aside for this colourway by name.
-  const reserved = S.locations.find(L =>
-    L.reservedFor && normalize(L.reservedFor) === normalize(lot.recipeName) && room(L) >= lot.stock);
+  const reserved = prefer(S.locations.filter(L =>
+    L.reservedFor && normalize(L.reservedFor) === normalize(lot.recipeName)));
   if (reserved) return { bin: reserved.code, note: `reserved for ${lot.recipeName}` };
 
-  // 3. A bin for this fibre with room. Emptiest first, so one fibre spreads
-  //    evenly rather than packing one bin and overflowing into the wrong one.
-  const fibreBins = S.locations
-    .filter(L => L.fiber && fibreOk(L) && room(L) >= lot.stock && !L.reservedFor)
-    .sort((a, b) => room(b) - room(a));
-  if (fibreBins.length) {
-    return { bin: fibreBins[0].code, note: `${lot.fiber || 'this fibre'} bin with room` };
+  // 3. A bin for this fibre, tidiest first.
+  const fibreBin = prefer(S.locations.filter(L => L.fiber && fibreOk(L) && !L.reservedFor));
+  if (fibreBin) {
+    const n = colours(fibreBin);
+    return { bin: fibreBin.code,
+             note: `${lot.fiber || 'this fibre'} bin, ${n === 0 ? 'currently empty' : `only ${n} colourway${n === 1 ? '' : 's'} in it`}` };
   }
 
-  // 4. Any unrestricted bin with room.
-  const open = S.locations
-    .filter(L => !L.fiber && !L.reservedFor && room(L) >= lot.stock)
-    .sort((a, b) => room(b) - room(a));
-  if (open.length) return { bin: open[0].code, note: 'open bin with room' };
+  // 4. Any unrestricted bin, tidiest first.
+  const open = prefer(S.locations.filter(L => !L.fiber && !L.reservedFor));
+  if (open) {
+    const n = colours(open);
+    return { bin: open.code,
+             note: n === 0 ? 'empty bin' : `open bin, only ${n} colourway${n === 1 ? '' : 's'} in it` };
+  }
 
-  /* 5. Nothing fits. Saying which constraint bit is the difference between a
-        useful answer and a shrug. */
-  const anyFibre = S.locations.some(L => fibreOk(L));
-  if (!anyFibre) {
+  /* Nothing fits. Saying which constraint bit is the difference between a
+     useful answer and a shrug. */
+  if (!S.locations.some(L => fibreOk(L))) {
     return { bin: '', note: `no bin is set up for ${lot.fiber || 'this fibre'}` };
   }
   return { bin: '', note: `every ${lot.fiber || ''} bin is full — ${lot.stock} spools need space` };
