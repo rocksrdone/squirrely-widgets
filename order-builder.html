@@ -106,6 +106,11 @@ table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); bord
 .st-bins.held { color: var(--teal); background: var(--teal-light); font-weight: 500; }
 .st-actions { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .st-why { font-size: 10px; color: var(--gold); text-decoration: underline dotted; cursor: help; }
+.st-live { color: var(--teal); font-weight: 700; background: var(--teal-light);
+  padding: 2px 7px; border-radius: 9px; font-size: 10px; }
+.st-live.pending { color: #8B7D72; background: var(--warm); font-weight: 500; }
+.st-live.bad { color: var(--accent); background: var(--accent-light); }
+.st-live.none { color: #8B7D72; background: var(--warm); }
 .st-fresh { color: var(--accent); font-weight: 700; text-transform: uppercase;
   font-size: 9.5px; letter-spacing: .04em; background: var(--accent-light);
   padding: 2px 7px; border-radius: 9px; }
@@ -303,6 +308,13 @@ const ADJUSTED_COL = ['Storefront_Adjusted', 'Retail_Delisted', 'Delisted'];
 
 const RESERVE_STATUS_FALLBACK = 'Wound - Needs Labels';
 
+/* Live retail inventory. Store_Stock_Spools is a number nobody updates when a
+   retail customer buys something — a starting guess, not a fact — so reserving
+   against it means reserving spools that may have sold last week. This asks
+   the storefront what it actually holds, at the moment of reserving. */
+const RETAIL_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-inventory';
+const RETAIL_TIMEOUT_MS = 30000;
+
 const S = {
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
@@ -323,6 +335,8 @@ const S = {
   reserveStatus: RESERVE_STATUS_FALLBACK,
   stockNote: '',       // why reserving is unavailable, when it is
   stockBusy: false,
+  live: {},            // recipeId -> { at, qty, notes, error, listed } from the storefront
+  prefixGroups: [],    // [['FFN','NFF'], ...] — every spelling of one fibre
   todoQueue: [],       // storefront quantities still needing a manual change
 };
 
@@ -528,7 +542,13 @@ async function loadStock() {
       const recipeId = getRefId(columnAsArray(lotT, LOT.recipe)[i]);
       if (!recipeId) return;
       const by = S.lotStock[id] || {};
-      if (!SOURCES.some(s => by[s] > 0)) return;
+      /* Empty lots are kept. A lot reading zero everywhere is still a lot of
+         this colourway, and a storefront reserve needs one to hang the
+         allocation on — Grist's storefront count being zero is precisely the
+         case where the spools are on the shop floor anyway. Dropping them here
+         made "reserve from retail" impossible exactly when it was needed.
+         Nothing displays them: the availability figures are sums, and the bin
+         chip only lists lots with shelf stock. */
       (S.stockByRecipe[recipeId] = S.stockByRecipe[recipeId] || []).push({
         lotId: id,
         lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
@@ -541,11 +561,31 @@ async function loadStock() {
     Object.values(S.stockByRecipe).forEach(list =>
       list.sort((a, b) => a.sortAt - b.sortAt || a.lotId - b.lotId));
 
+    await loadPrefixGroups();
     buildTodoQueue();
   } catch (e) {
     console.warn('Stock unavailable:', e);
     S.stockFailed = true;
     S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so stock is not shown.';
+  }
+}
+
+/* Which SKU prefixes mean the same fibre. Optional and entirely additive: with
+   no Item_Weights table a SKU is simply looked up under the one spelling it
+   already has, which is right for a catalogue that does not transpose. */
+async function loadPrefixGroups() {
+  S.prefixGroups = [];
+  try {
+    const t = await grist.docApi.fetchTable('Item_Weights');
+    const col = findColumn(t, ['SKU_Prefixes', 'SKU_Prefix', 'Prefixes']);
+    if (!col) return;
+    (t.id || []).forEach((id, i) => {
+      const group = String(columnAsArray(t, col)[i] || '')
+        .split(/[,;\s]+/).map(x => x.trim().toUpperCase().replace(/_+$/, '')).filter(Boolean);
+      if (group.length > 1) S.prefixGroups.push([...new Set(group)]);
+    });
+  } catch (e) {
+    console.warn('Item_Weights unavailable — SKUs looked up under one spelling', e);
   }
 }
 
@@ -613,9 +653,20 @@ function lineStock(line) {
 
   /* A line marked make-fresh offers no stock at all, whatever is on the
      shelf. That is the whole point of the flag: the spools were looked at and
-     turned down, and without this the next click would reserve them again. */
-  const canReserve = (s) => !!(S.allocCols && S.allocCols.source && S.stockCols[s]
-    && avail[s] > 0 && short > 0 && !line.makeFresh);
+     turned down, and without this the next click would reserve them again.
+
+     A STOREFRONT SOURCE IS NOT GATED ON THE GRIST COUNT. That number is only
+     ever a guess — retail sells without telling Grist — so hiding the button
+     when it reads zero would hide the option exactly when the shelf might
+     actually have stock, and offering it at five says nothing about whether
+     five are there. The count decides nothing; the person does, after looking.
+     General is different: nothing sells out of it behind your back, so its
+     number is authoritative and gating on it is right. */
+  const canReserve = (s) => {
+    if (!(S.allocCols && S.allocCols.source && S.stockCols[s])) return false;
+    if (short <= 0 || line.makeFresh) return false;
+    return SOURCE_META[s].listed ? true : avail[s] > 0;
+  };
   return { allocs, reserved, bySource, produced, lots, avail, short, canReserve,
     anySource: SOURCES.some(s => canReserve(s)) };
 }
@@ -881,29 +932,84 @@ function orderForLine(lineId) {
 
 /* Draw oldest lot first, the same rotation batch-assignment uses. Returns the
    draws without writing, so the confirmation can name real lots and bins. */
-function planDraw(line, source) {
+function planDraw(line, source, wantOverride) {
   const st = lineStock(line);
-  let want = Math.min(st.short, st.avail[source] || 0);
+  const listed = SOURCE_META[source].listed;
+  /* For General the Grist count is the limit. For a storefront it is not a
+     limit at all, only a hint, so an explicit quantity wins. */
+  let want = wantOverride != null ? Math.max(0, Math.round(wantOverride))
+    : (listed ? st.short : Math.min(st.short, st.avail[source] || 0));
+
   const draws = [];
   for (const lot of st.lots) {
     if (want <= 0) break;
     const have = num(lot.by[source]);
     const take = Math.min(want, have);
     if (take <= 0) continue;
-    draws.push({ lot, take });
+    draws.push({ lot, take, counted: true });
     want -= take;
   }
-  return { draws, total: draws.reduce((n, d) => n + d.take, 0), st };
+
+  /* Still short on a storefront source: the spools are on the shop floor even
+     though Grist's number says otherwise, so the remainder is hung on the
+     oldest lot of this colourway. The allocation is the truth — these spools
+     are committed to this order — and the lot's column, already wrong, is left
+     at zero rather than driven negative. */
+  let unbacked = 0;
+  if (want > 0 && listed) {
+    const anchor = st.lots[0] || null;
+    if (anchor) {
+      /* Folded into the draw already on that lot rather than added as a second
+         one. Two rows for one lot on one line say nothing extra and show up
+         twice on the storefront reminder list. */
+      const existing = draws.find(d => d.lot.lotId === anchor.lotId);
+      if (existing) existing.take += want;
+      else draws.push({ lot: anchor, take: want, counted: false });
+    }
+    unbacked = want;
+    want = 0;
+  }
+  return { draws, total: draws.reduce((n, d) => n + d.take, 0), st, unbacked,
+           noLot: unbacked > 0 && !st.lots.length };
 }
 
-async function reserveFromStock(lineId, source) {
+async function reserveFromStock(lineId, source, qtyOverride) {
   if (S.stockBusy) return;
   if (!SOURCE_META[source]) return;
   const line = lineById(lineId);
   if (!line) return;
   const order = orderForLine(lineId);
-  const { draws, total, st } = planDraw(line, source);
+  const listed = SOURCE_META[source].listed;
 
+  /* A storefront count cannot be trusted, so the number is asked for rather
+     than assumed. The live check, if it has been run, supplies the default. */
+  let want = qtyOverride;
+  if (want == null && listed) {
+    const pre = lineStock(line);
+    const live = S.live[line.recipeId];
+    const suggested = Math.min(pre.short,
+      (live && live.ok && live.qty > 0) ? live.qty : pre.short);
+    const said = prompt(
+      `How many of ${line.recipeName || line.sku} are you taking from ` +
+      `${SOURCE_META[source].store}?\n\n` +
+      (live && live.ok
+        ? `The storefront reported ${live.qty} when checked at ${live.at}.`
+        : `Nothing has been checked — Grist says ${pre.avail[source]}, but that number ` +
+          `is only a guess. Look before you commit.`) +
+      `\n\nThis line still needs ${pre.short}.`,
+      String(Math.max(1, suggested)));
+    if (said === null) return;
+    want = Math.max(0, Math.round(Number(said)));
+    if (!(want > 0)) { alert('Nothing reserved — that was not a quantity.'); return; }
+  }
+
+  const { draws, total, st, unbacked, noLot } = planDraw(line, source, want);
+
+  if (noLot) {
+    alert(`${line.recipeName || line.sku} has no production lot in Grist, so there is ` +
+      `nothing to record a reservation against.\n\nAdd a lot for it first.`);
+    return;
+  }
   if (!st.canReserve(source) || !total) {
     alert(`Nothing available to reserve from ${SOURCE_META[source].label} for this line.`);
     return;
@@ -917,6 +1023,11 @@ async function reserveFromStock(lineId, source) {
      click, not only afterwards in a list. Nothing here reaches Shopify —
      unless that storefront's own checkout already did it, in which case
      warning would talk you into decrementing the same spools twice. */
+  const unbackedNote = unbacked > 0
+    ? `\n\n${unbacked} of these are not reflected in Grist's count for that pile — it ` +
+      `reads lower than what you are taking. The reservation records all ${total}; the ` +
+      `count stays at zero rather than going negative.`
+    : '';
   const already = orderCameFrom(order) === source;
   const warning = !SOURCE_META[source].listed ? ''
     : already
@@ -928,7 +1039,7 @@ async function reserveFromStock(lineId, source) {
         `yourself. They stay listed on this screen until you have done that and ticked them off.`;
   if (!confirm(
     `Reserve ${total} spool(s) of ${line.recipeName || line.sku} from ${SOURCE_META[source].label}?` +
-    `\n\n${where}${warning}`)) return;
+    `\n\n${where}${unbackedNote}${warning}`)) return;
 
   S.stockBusy = true; render();
   try {
@@ -1020,6 +1131,72 @@ async function releaseReservation(lineId, skipConfirm) {
     return false;
   } finally {
     S.stockBusy = false; render();
+  }
+}
+
+/* ── Asking the storefront what it actually holds ─────────────────────────
+   Every spelling of the SKU goes in one request. The two catalogues transpose
+   the fibre prefix — Grist FFC_LE1, retail CFF_LE1 — and which is which is
+   not recorded anywhere, so asking about both removes the need to know. Only
+   one will match, and that is the answer.
+
+   The aliases come from Item_Weights.SKU_Prefixes, the same table ship-preview
+   resolves weights from, so the mapping stays data rather than a rule baked
+   into three widgets. */
+function skuSpellings(sku) {
+  const s = String(sku || '').trim();
+  if (!s) return [];
+  const i = s.indexOf('_');
+  if (i < 0) return [s];
+  const head = s.slice(0, i).toUpperCase(), tail = s.slice(i);
+  const row = S.prefixGroups.find(g => g.includes(head));
+  const out = row ? row.map(p => p + tail) : [s];
+  return [...new Set([s, ...out])];
+}
+
+async function checkRetail(lineId) {
+  const line = lineById(lineId);
+  if (!line || !line.recipeId) return;
+  const skus = skuSpellings(line.sku);
+  if (!skus.length) { alert('That line has no SKU to look up.'); return; }
+
+  S.live[line.recipeId] = { pending: true, skus };
+  render();
+
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), RETAIL_TIMEOUT_MS) : null;
+  try {
+    const res = await fetch(RETAIL_WEBHOOK_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skus }), cache: 'no-store',
+      ...(ctrl ? { signal: ctrl.signal } : {}),
+    });
+    if (!res.ok) throw new Error(`the lookup answered ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    if (data && data.ok === false) throw new Error(data.error || 'the lookup failed');
+
+    const variants = (data && data.variants) || [];
+    const qty = variants.reduce((n, v) => n + num(v.onHand), 0);
+    S.live[line.recipeId] = {
+      ok: true, qty, skus,
+      /* Only the spelling the store actually uses comes back, which is worth
+         showing: it confirms the lookup found the right product. */
+      matched: variants.map(v => v.sku).filter(Boolean),
+      listed: variants.length > 0,
+      oversell: variants.some(v => v.oversellAllowed),
+      notes: (data && data.notes) || [],
+      at: new Date().toLocaleTimeString(),
+    };
+  } catch (e) {
+    console.error('Retail lookup failed:', e);
+    S.live[line.recipeId] = { ok: false, skus,
+      error: (e && e.name === 'AbortError')
+        ? `the retail store didn't answer within ${Math.round(RETAIL_TIMEOUT_MS / 1000)}s`
+        : ((e && e.message) || String(e)),
+      at: new Date().toLocaleTimeString() };
+  } finally {
+    if (timer) clearTimeout(timer);
+    render();
   }
 }
 
@@ -1429,8 +1606,13 @@ function stockLineHtml(l) {
   const anyAvail = SOURCES.some(s => st.avail[s] > 0);
   /* A make-fresh line always shows its marker, even with an empty shelf —
      otherwise the decision becomes invisible the moment stock runs out, and
-     reappears as a surprise when the next lot is dyed. */
-  if (!st.reserved && !anyAvail && !l.makeFresh) return '';
+     reappears as a surprise when the next lot is dyed.
+
+     And a storefront pull no longer depends on a count, so a line with nothing
+     showing anywhere must still offer it. Suppressing the row here took the
+     retail button away in exactly the case it was built for. */
+  const storefrontPossible = SOURCES.some(x => SOURCE_META[x].listed && st.canReserve(x));
+  if (!st.reserved && !anyAvail && !l.makeFresh && !storefrontPossible) return '';
 
   const busy0 = S.stockBusy ? 'disabled' : '';
   if (l.makeFresh) {
@@ -1462,8 +1644,21 @@ function stockLineHtml(l) {
   } else if (!st.reserved) {
     bits.push(`<span class="st-none">none on the shelf</span>`);
   }
+  /* Grist's storefront numbers are labelled as the guesses they are, so they
+     are never read as an amount you can count on. */
   SOURCES.filter(s => SOURCE_META[s].listed && st.avail[s] > 0).forEach(s =>
-    bits.push(`<span class="st-listed">${st.avail[s]} in ${SOURCE_META[s].short}, listed</span>`));
+    bits.push(`<span class="st-listed" title="Grist's own figure — nothing updates it when a customer buys">${
+      st.avail[s]} in ${SOURCE_META[s].short} per Grist</span>`));
+
+  const live = S.live[l.recipeId];
+  if (live) {
+    if (live.pending) bits.push(`<span class="st-live pending">checking the store…</span>`);
+    else if (!live.ok) bits.push(`<span class="st-live bad" title="${esc(live.error || '')}">${
+      esc('retail check failed')}</span>`);
+    else if (!live.listed) bits.push(`<span class="st-live none">not on the retail store</span>`);
+    else bits.push(`<span class="st-live" title="${esc((live.matched || []).join(', '))}">${
+      live.qty} on the retail store at ${esc(live.at)}${live.oversell ? ' · oversell on' : ''}</span>`);
+  }
 
   const stillShort = st.short - Math.min(st.short, st.avail.General || 0);
   if (stillShort > 0) bits.push(`<span class="st-short">${stillShort} to dye</span>`);
@@ -1493,16 +1688,27 @@ function stockLineHtml(l) {
   const actions = [];
   SOURCES.forEach(s => {
     if (!st.canReserve(s)) return;
-    const n = Math.min(st.short, st.avail[s]);
-    /* A listed source gets the quieter button and says which store it is, so
-       the two are never confused at a glance. */
+    /* A storefront button names no quantity: it asks. Printing a number there
+       would be quoting Grist's guess back as though it were an amount on the
+       shelf, which is the whole thing this is trying to stop. */
+    const label = SOURCE_META[s].listed
+      ? `take from ${SOURCE_META[s].short}…`
+      : `reserve ${Math.min(st.short, st.avail[s])} from ${SOURCE_META[s].short}`;
     actions.push(`<button class="btn small ${SOURCE_META[s].listed ? 'listed' : ''}" ${busy}
       onclick="reserveFromStock(${l.id}, '${s}')"
       title="${esc(SOURCE_META[s].listed
-        ? 'Still on sale on ' + SOURCE_META[s].store + ' until you adjust it there'
+        ? 'Asks how many you are taking, then leaves it on the list to change in ' + SOURCE_META[s].store
         : 'Held back, listed nowhere — no storefront to adjust')}"
-      >reserve ${n} from ${esc(SOURCE_META[s].short)}</button>`);
+      >${esc(label)}</button>`);
   });
+  /* Offered whenever a storefront pull is possible, because the answer is the
+     only reliable input to that decision. */
+  if (SOURCES.some(x => SOURCE_META[x].listed && st.canReserve(x))) {
+    actions.push(`<button class="btn secondary small" ${busy}
+      onclick="checkRetail(${l.id})"
+      title="Ask the retail store what it holds right now">${
+        S.live[l.recipeId] ? 're-check store' : 'check store'}</button>`);
+  }
   if (st.reserved > 0) {
     actions.push(`<button class="btn secondary small" ${busy}
       onclick="releaseReservation(${l.id})">release ${st.reserved}</button>`);
