@@ -92,6 +92,9 @@ table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); bord
   background: rgba(0,0,0,.035); padding: 1px 6px; border-radius: 3px; }
 .st-actions { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .st-why { font-size: 10px; color: var(--gold); text-decoration: underline dotted; cursor: help; }
+.st-fresh { color: var(--accent); font-weight: 700; text-transform: uppercase;
+  font-size: 9.5px; letter-spacing: .04em; background: var(--accent-light);
+  padding: 2px 7px; border-radius: 9px; }
 /* A pull from a listed source carries an obligation, so its button never looks
    like the consequence-free one next to it. */
 .btn.listed { background: var(--gold); border-color: var(--gold); }
@@ -339,6 +342,11 @@ async function loadAll() {
       dyed: lc(['Qty_Dyed']), recipe: lc(['Recipe']), queue: lc(['Queue_Status']),
       priority: lc(['Production_Priority']), notes: lc(['Notes']),
       price: lc(['Unit_Price', 'Price']),
+      /* Set when the spools on the shelf were looked at and judged not good
+         enough for THIS customer. It only ever restricts — a line without it
+         behaves exactly as before — so the Toggle default of false is the
+         safe one, and an older doc without the column simply never overrides. */
+      makeFresh: lc(['Make_Fresh', 'Dye_Fresh', 'No_Stock']),
     };
 
     /* Writing to a column that does not exist 400s the whole request, so the
@@ -386,6 +394,8 @@ async function loadAll() {
         recipeId,
         recipeName: recipeId && S.recipesById[recipeId] ? S.recipesById[recipeId].name : '',
         price: S.lineCols.price ? num(columnAsArray(wolT, S.lineCols.price)[i]) : 0,
+        makeFresh: S.lineCols.makeFresh
+          ? !!columnAsArray(wolT, S.lineCols.makeFresh)[i] : false,
       });
     });
 
@@ -576,8 +586,11 @@ function lineStock(line) {
   SOURCES.forEach(s => { avail[s] = lots.reduce((n, l) => n + num(l.by[s]), 0); });
   const short = Math.max(0, line.qty - reserved - produced);
 
+  /* A line marked make-fresh offers no stock at all, whatever is on the
+     shelf. That is the whole point of the flag: the spools were looked at and
+     turned down, and without this the next click would reserve them again. */
   const canReserve = (s) => !!(S.allocCols && S.allocCols.source && S.stockCols[s]
-    && avail[s] > 0 && short > 0);
+    && avail[s] > 0 && short > 0 && !line.makeFresh);
   return { allocs, reserved, bySource, produced, lots, avail, short, canReserve,
     anySource: SOURCES.some(s => canReserve(s)) };
 }
@@ -927,6 +940,65 @@ async function releaseReservation(lineId, skipConfirm) {
   }
 }
 
+/* ── Make fresh instead ───────────────────────────────────────────────────
+   The spools on the shelf were looked at and turned down for this customer.
+   Two things have to happen together: the reservation goes back, and the line
+   remembers the decision — otherwise the next click reserves the same spools
+   again, and batch-assignment's stock pull would grab them the next time this
+   colourway is batched.
+
+   Both writes go in ONE applyUserActions call. Split in two, a failure between
+   them leaves spools back on the shelf with the line still inviting a pull, or
+   a line refusing stock while still holding it. */
+async function makeFreshInstead(lineId) {
+  if (S.stockBusy) return;
+  const line = lineById(lineId);
+  if (!line) return;
+  if (!S.lineCols.makeFresh) {
+    alert('Add a Toggle column Make_Fresh to Work_Order_Lines to use this.');
+    return;
+  }
+  const { acts, total } = S.allocCols ? releaseActions(line) : { acts: [], total: 0 };
+  const name = line.recipeName || line.sku;
+  if (!confirm(
+    `Dye ${name} fresh for this order?\n\n` +
+    (total
+      ? `The ${total} spool(s) reserved for it go back to stock — they stay perfectly ` +
+        `sellable, just not to this customer.\n\n`
+      : '') +
+    `This line will stop offering stock and shows as needing production. ` +
+    `You can put it back with "allow stock".`)) return;
+
+  S.stockBusy = true; render();
+  try {
+    acts.push(['UpdateRecord', 'Work_Order_Lines', lineId, { [S.lineCols.makeFresh]: true }]);
+    await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    toast(total ? `Released ${total} — ${name} will be dyed fresh` : `${name} will be dyed fresh`);
+  } catch (e) {
+    console.error('Could not switch to fresh:', e);
+    alert('Could not change that line. Nothing was changed.');
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
+async function allowStock(lineId) {
+  if (S.stockBusy || !S.lineCols.makeFresh) return;
+  S.stockBusy = true; render();
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Work_Order_Lines', lineId, { [S.lineCols.makeFresh]: false }]]);
+    await loadAll();
+    toast('Stock offered again');
+  } catch (e) {
+    console.error('Could not allow stock:', e);
+    alert('Could not change that line.');
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
 /* Records that the human has been to Shopify and changed the number. It does
    NOT touch the allocation, the lot, or Shopify — the spools stay reserved and
    the storefront is whatever the person made it. All that changes is that the
@@ -1248,7 +1320,22 @@ function stockLineHtml(l) {
   if (!Object.keys(S.stockCols).length) return '';
   const st = lineStock(l);
   const anyAvail = SOURCES.some(s => st.avail[s] > 0);
-  if (!st.reserved && !anyAvail) return '';
+  /* A make-fresh line always shows its marker, even with an empty shelf —
+     otherwise the decision becomes invisible the moment stock runs out, and
+     reappears as a surprise when the next lot is dyed. */
+  if (!st.reserved && !anyAvail && !l.makeFresh) return '';
+
+  const busy0 = S.stockBusy ? 'disabled' : '';
+  if (l.makeFresh) {
+    return `<div class="stock-line">
+      <span class="st-fresh">dyeing fresh</span>
+      <span class="st-sep">·</span>
+      <span class="st-short">${st.short} to dye</span>
+      ${anyAvail ? `<span class="st-none">stock on hand, not offered</span>` : ''}
+      <span class="st-actions"><button class="btn secondary small" ${busy0}
+        onclick="allowStock(${l.id})"
+        title="Offer stock for this line again">allow stock</button></span></div>`;
+  }
 
   const bits = [];
   if (st.reserved) {
@@ -1294,6 +1381,15 @@ function stockLineHtml(l) {
   }
   if (!st.anySource && !st.reserved && anyAvail && st.short > 0 && S.stockNote) {
     actions.push(`<span class="st-why" title="${esc(S.stockNote)}">why can't I reserve?</span>`);
+  }
+  /* Offered whenever stock is in play for this line — before reserving as much
+     as after, since the spools can be judged on the shelf as easily as in the
+     hand. */
+  if (S.lineCols.makeFresh && (st.reserved > 0 || st.anySource)) {
+    actions.push(`<button class="btn secondary small" ${busy}
+      onclick="makeFreshInstead(${l.id})"
+      title="Send the spools back and dye this line new">make fresh${
+        st.reserved ? ' instead' : ''}</button>`);
   }
 
   return `<div class="stock-line">${bits.join('<span class="st-sep">·</span>')}

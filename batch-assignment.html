@@ -289,7 +289,7 @@ function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : In
 // Pots logged for the currently-selected colorway this session (for running total + undo).
 let sessionPots = [];
 // Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
-let RC_STOCKBUCKET = null;
+let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '';
 let RC_ALLOC = null, RC_WOL = null;
 let S_COLS = { ALLOC: {} };  // resolved Lot_Allocations column ids for stock fulfillment
 let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status string
@@ -411,7 +411,7 @@ async function loadForRecipe(record) {
     // been allocated to them, minus unwound spools still sitting in lots. A stored
     // "dyed" guess made at the kettle goes stale the moment winding assigns the
     // spools differently, so we compute it from physical records instead.
-    let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null;
+    let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null, stockSourceName = '';
     const clampRecipeTotals = m => { Object.keys(m).forEach(k => { if (m[k] < 0) m[k] = 0; }); };
     try {
       const [lotsT, allocT] = await Promise.all([
@@ -423,16 +423,21 @@ async function loadForRecipe(record) {
       const aLot = findColumn(allocT, ['Lot']);
       const aStatus = findColumn(allocT, ['Status']);
       const aCustomer = findColumn(allocT, ['Customer']);
-      /* Marks an allocation as spools taken OFF THE SHELF rather than newly
-         wound. Both write the same Status, so without this flag the two are
-         indistinguishable and a stock pull can never be handed back — the
-         order builder refuses to release it, because releasing a wound
-         allocation would credit the shelf with stock that was never on it.
-         Optional: an older doc without the column still pulls from stock,
-         those pulls just cannot be released automatically. */
-      const aFromStock = findColumn(allocT, ['From_Stock', 'Reserved_From_Stock', 'From_Back_Stock']);
+      /* Records WHICH pile an allocation's spools came off, rather than merely
+         that they came off one. Winding new production writes the same Status
+         as a stock pull, so without this the two are indistinguishable and the
+         pull can never be handed back — the order builder refuses to release
+         it, because releasing a wound allocation would credit a lot with stock
+         that was never there. And a bare yes/no would not be enough either:
+         General, Store and Vendor are three states of one pile, so releasing
+         has to credit the column the spools actually left.
+
+         This screen only ever pulls from the General bucket, so it only ever
+         writes 'General'. Optional: an older doc without the column still
+         pulls from stock, those pulls just cannot be released automatically. */
+      const aSource = findColumn(allocT, ['Stock_Source', 'Stock_Bucket', 'Reserved_From']);
       S_COLS = { ALLOC: { lot: aLot, qty: aQty, status: aStatus, customer: aCustomer,
-                          line: aLine, fromStock: aFromStock } };
+                          line: aLine, source: aSource } };
       // Pick the "boxed" status the doc already uses, else the live default.
       const seen = new Set();
       if (aStatus) (allocT.id || []).forEach((id, i) => { const v = columnAsArray(allocT, aStatus)[i]; if (v) seen.add(v.toString()); });
@@ -456,6 +461,12 @@ async function loadForRecipe(record) {
       const lBroken = findColumn(lotsT, ['Broken_Spools']);
       const lFiber = findColumn(lotsT, ['Fiber']);
       stockColId = lGeneral || lStore; // the single back-stock bucket we read/write
+      /* Name the bucket actually chosen, not the one usually chosen. On a doc
+         with no General column this falls back to Store, and labelling that
+         pull 'General' would send the spools back to the wrong pile when the
+         order builder releases them — quietly moving stock off a storefront. */
+      stockSourceName = (stockColId && stockColId === lGeneral) ? 'General'
+        : (stockColId && stockColId === lStore) ? 'Store' : '';
       const num = (col, i) => col ? (Number(columnAsArray(lotsT, col)[i]) || 0) : 0;
       (lotsT.id || []).forEach((id, i) => {
         const rid = lRecipe ? getRefId(columnAsArray(lotsT, lRecipe)[i]) : null;
@@ -486,6 +497,7 @@ async function loadForRecipe(record) {
       console.warn('Lots/allocations unavailable — coverage will show needs only', err);
     }
     RC_STOCKBUCKET = stockColId;
+    RC_STOCKSOURCE = stockSourceName;
 
     // ── Resolve every column id up front (rename-proofing) ──────────────
     // Required columns missing => named banner, not a silently-empty widget.
@@ -510,11 +522,17 @@ async function loadForRecipe(record) {
     const WOL = resolveCols(wolTable, 'Work_Order_Lines', {
       workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
       recipe: opt(['Recipe']), sku: opt(['SKU']),
+      /* Set on the order builder when the spools on the shelf were looked at
+         and judged not good enough for that customer. The line still needs
+         making — it just must not be filled from stock, or the next stock pull
+         hands back the very spools that were turned down. */
+      makeFresh: opt(['Make_Fresh', 'Dye_Fresh', 'No_Stock']),
     }, missing);
     const STOCK = resolveCols(stockTableUpfront, 'Dye_Stock', {
       dye: ['Dye'], quantity: ['Quantity_mL'], bin: opt(['Bin_Location']), mixedDate: opt(['Mixed_Date']),
     }, missing);
     RC_STOCK = STOCK; // used later by put/hold/dump/undo
+    RC_WOL = WOL;     // used later by fulfillFromStock
 
     if (missing.length) {
       document.getElementById('content').innerHTML =
@@ -633,6 +651,8 @@ async function loadForRecipe(record) {
         qtyNeeded,
         allocated,
         dueDate: info.dueDate,
+        makeFresh: WOL.makeFresh
+          ? !!columnAsArray(wolTable, WOL.makeFresh)[i] : false,
       });
     }
 
@@ -1004,8 +1024,18 @@ async function fulfillFromStock() {
   const need = e.orders
     .map(o => ({ ...o, want: Math.max(0, o.qtyNeeded - o.allocated) }))
     .filter(o => o.want > 0)
+    /* A line marked make-fresh is deliberately excluded. Someone looked at
+       these spools and turned them down for that customer; filling the line
+       from stock here would quietly hand the same spools straight back. */
+    .filter(o => !o.makeFresh)
     .sort((a, b) => dueValue(a.dueDate) - dueValue(b.dueDate));
-  if (!need.length) { showToast('No open orders to fill'); return; }
+  const freshOnly = e.orders.filter(o => o.makeFresh && (o.qtyNeeded - o.allocated) > 0).length;
+  if (!need.length) {
+    showToast(freshOnly
+      ? `${freshOnly} line(s) are set to dye fresh — stock not used`
+      : 'No open orders to fill');
+    return;
+  }
   const noCust = need.find(o => !o.customerId && !o.customerName);
   // (allocations still work off the line link; customer is set if the column exists)
 
@@ -1032,9 +1062,9 @@ async function fulfillFromStock() {
       f[ALLOC.status] = S.woundStatus || 'Wound - Needs Labels';
       if (ALLOC.customer && o.customerId) f[ALLOC.customer] = o.customerId;
       if (ALLOC.line) f[ALLOC.line] = o.lineId;
-      /* Written explicitly rather than left to the Toggle default of false,
-         which would silently mark these shelf spools as new production. */
-      if (ALLOC.fromStock) f[ALLOC.fromStock] = true;
+      /* Written explicitly rather than left blank, which would silently mark
+         these shelf spools as new production and make them unreleasable. */
+      if (ALLOC.source && RC_STOCKSOURCE) f[ALLOC.source] = RC_STOCKSOURCE;
       allocActions.push(['AddRecord', 'Lot_Allocations', null, f]);
       lotDelta[lot.lotId] = (lotDelta[lot.lotId] || 0) + take;
       lot.left -= take;
