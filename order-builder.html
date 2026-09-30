@@ -76,6 +76,22 @@ table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); bord
 .badge.pushed { background: var(--done-bg); color: var(--done-text); }
 
 .empty { color: #8B7D72; font-style: italic; padding: 24px; text-align: center; }
+
+/* Back stock, under each line. Deliberately quiet: it is context for a
+   decision, not the decision. */
+.stock-line { margin-top: 5px; font-size: 10.5px; line-height: 1.7; color: #6B5E52;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.st-sep { color: #C4B8AB; }
+.st-ok { color: var(--teal); font-weight: 600; }
+.st-some { color: var(--gold); font-weight: 600; }
+.st-none { color: #A89B8F; }
+.st-short { color: var(--accent); font-weight: 600; }
+.st-res { color: var(--teal); font-weight: 700; }
+.st-listed { color: #A89B8F; font-style: italic; }
+.st-bins { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72;
+  background: rgba(0,0,0,.035); padding: 1px 6px; border-radius: 3px; }
+.st-actions { display: inline-flex; gap: 5px; }
+.st-why { font-size: 10px; color: var(--gold); text-decoration: underline dotted; cursor: help; }
 .toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: white; padding: 9px 16px; border-radius: 6px; font-size: 12px;
   opacity: 0; transition: opacity .2s; pointer-events: none; }
@@ -205,6 +221,33 @@ const BUILDING_STATUS = 'Building';
 const READY_STATUS = 'Active';
 const MANUAL_TYPE = 'Manual';
 
+/* ── Reserving from back stock ─────────────────────────────────────────────
+   Pulling spools off the shelf for an order means two writes, the same pair
+   batch-assignment already makes: an allocation row against the line, and the
+   lot's stock column down by what was taken.
+
+   RELEASING IT AGAIN IS THE HARD PART, and it is why this needs a column of
+   its own. Winding new production writes an allocation with exactly the same
+   Status as a stock pull does ('Wound - Needs Labels' in both), so status
+   cannot tell the two apart. Releasing a wound allocation would credit the
+   shelf with spools that were never on it — inventing stock out of nothing.
+
+   So a reservation is marked at the moment it is made. Lot_Allocations needs
+   a Toggle column From_Stock. The Toggle default of false, which has bitten
+   this stack twice by silently hiding rows, is for once exactly right: an
+   allocation nobody marked is NOT a reservation and will never be released.
+
+   Without the column the shelf is still shown — that part is only reading —
+   but reserving is refused rather than made irreversible. */
+const FROM_STOCK_COL = ['From_Stock', 'Reserved_From_Stock', 'From_Back_Stock'];
+
+/* Reserve out of General only. Per stock-model.md the three columns are three
+   states of one pile: General is on hand and listed nowhere, while Vendor and
+   Store are on hand AND live for sale on a storefront. Drawing from those two
+   would quietly sell a spool that a customer can still add to their cart, so
+   they are shown for context and never touched. */
+const RESERVE_STATUS_FALLBACK = 'Wound - Needs Labels';
+
 const S = {
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
@@ -215,6 +258,15 @@ const S = {
   missing: [],
   push: null,        // the last preview or push response
   pushBusy: false,
+
+  stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, avail, listed, bin, sortAt }]
+  allocByLine: {},     // lineId  -> [{ id, lotId, qty, fromStock }]
+  allocCols: null,     // resolved Lot_Allocations columns, null when unreadable
+  stockCol: null,      // the Production_Lots column reservations draw down
+  stockColName: '',
+  reserveStatus: RESERVE_STATUS_FALLBACK,
+  stockNote: '',       // why reserving is unavailable, when it is
+  stockBusy: false,
 };
 
 function toast(msg) {
@@ -300,6 +352,7 @@ async function loadAll() {
 
     await loadCustomers();
     await loadPricing();
+    await loadStock();
 
     // Keep the selection across a reload if it still exists.
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
@@ -312,6 +365,128 @@ async function loadAll() {
     S.loading = false;
     render();
   }
+}
+
+/* ── Back stock ───────────────────────────────────────────────────────────
+   Entirely optional. Every failure in here leaves S.stockNote explaining what
+   is missing and leaves the rest of the builder working — an order can always
+   be built and pushed without ever touching the shelf. */
+async function loadStock() {
+  S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
+  S.stockCol = null; S.stockColName = ''; S.stockNote = '';
+  try {
+    const [lotT, allocT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Lot_Allocations'),
+    ]);
+
+    const lc = (cands) => findColumn(lotT, cands);
+    const LOT = {
+      recipe: lc(['Recipe']), number: lc(['Lot_Number']), date: lc(['Date_Dyed']),
+      general: lc(['General_Stock_Spools']), vendor: lc(['Vendor_Stock_Spools']),
+      store: lc(['Store_Stock_Spools']), bin: lc(['Storage_Bin']),
+    };
+    /* General is the unlisted pile and the only one safe to draw from. The
+       fallback order matches stock-model.md, but a fallback means the shelf is
+       a storefront's stock, so it is said out loud rather than assumed. */
+    S.stockCol = LOT.general || LOT.store || LOT.vendor;
+    S.stockColName = S.stockCol || '';
+    if (!S.stockCol) { S.stockNote = 'Production_Lots has no stock column, so there is nothing to reserve from.'; return; }
+    if (!LOT.general) {
+      S.stockNote = `No General_Stock_Spools column — reserving would draw from ${S.stockCol}, which is stock listed for sale.`;
+    }
+    if (!LOT.recipe) { S.stockNote = 'Production_Lots has no Recipe column, so lots cannot be matched to a colourway.'; return; }
+
+    const ac = (cands) => findColumn(allocT, cands);
+    const ALLOC = {
+      lot: ac(['Lot']), qty: ac(['Qty_Spools']), status: ac(['Status']),
+      customer: ac(['Customer']), line: ac(['Work_Order_Line']),
+      fromStock: ac(FROM_STOCK_COL),
+    };
+    if (ALLOC.lot && ALLOC.qty && ALLOC.line) S.allocCols = ALLOC;
+
+    /* Reuse whatever status the doc already uses rather than inventing one —
+       an unknown value in a Choice column renders as invalid. */
+    if (ALLOC.status) {
+      const seen = new Set();
+      (allocT.id || []).forEach((id, i) => {
+        const v = columnAsArray(allocT, ALLOC.status)[i];
+        if (v) seen.add(String(v));
+      });
+      S.reserveStatus = ['Wound - Needs Labels', 'Wound', 'Packed', 'Packaged - Shipped']
+        .find(v => seen.has(v)) || RESERVE_STATUS_FALLBACK;
+    }
+
+    if (S.allocCols) {
+      (allocT.id || []).forEach((id, i) => {
+        const lineId = getRefId(columnAsArray(allocT, ALLOC.line)[i]);
+        if (!lineId) return;
+        (S.allocByLine[lineId] = S.allocByLine[lineId] || []).push({
+          id,
+          lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
+          qty: num(columnAsArray(allocT, ALLOC.qty)[i]),
+          fromStock: ALLOC.fromStock ? !!columnAsArray(allocT, ALLOC.fromStock)[i] : false,
+        });
+      });
+    }
+    if (!ALLOC.fromStock) {
+      S.stockNote = 'Add a Toggle column From_Stock to Lot_Allocations to reserve. '
+        + 'Without it a reservation could not be told apart from newly wound spools, '
+        + 'and releasing one would credit the shelf with stock that was never there.';
+    }
+
+    /* Every lot's current bucket value, including the ones with nothing left.
+       A lot reserved down to zero drops out of the display below, and release
+       still has to add its spools back — reading the value from the display
+       list would find nothing and silently release zero. */
+    S.lotStock = {};
+    (lotT.id || []).forEach((id, i) => {
+      S.lotStock[id] = num(columnAsArray(lotT, S.stockCol)[i]);
+    });
+
+    (lotT.id || []).forEach((id, i) => {
+      const recipeId = getRefId(columnAsArray(lotT, LOT.recipe)[i]);
+      if (!recipeId) return;
+      const avail = num(columnAsArray(lotT, S.stockCol)[i]);
+      const listed = (LOT.general ? num(columnAsArray(lotT, LOT.vendor)[i])
+        + num(columnAsArray(lotT, LOT.store)[i]) : 0);
+      if (avail <= 0 && listed <= 0) return;
+      (S.stockByRecipe[recipeId] = S.stockByRecipe[recipeId] || []).push({
+        lotId: id,
+        lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
+        avail, listed,
+        bin: String(columnAsArray(lotT, LOT.bin)[i] || '').trim(),
+        sortAt: num(columnAsArray(lotT, LOT.date)[i]) || id,
+      });
+    });
+    /* Oldest first, so the shelf rotates rather than growing a stale layer. */
+    Object.values(S.stockByRecipe).forEach(list =>
+      list.sort((a, b) => a.sortAt - b.sortAt || a.lotId - b.lotId));
+  } catch (e) {
+    console.warn('Back stock unavailable:', e);
+    S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so the shelf is not shown.';
+  }
+}
+
+/* What a line already holds, split by where it came from. `reserved` is the
+   only part this screen is entitled to hand back. */
+function lineStock(line) {
+  const allocs = S.allocCols ? (S.allocByLine[line.id] || []) : [];
+  const reserved = allocs.filter(a => a.fromStock).reduce((n, a) => n + a.qty, 0);
+  /* Qty_Dyed is the guard the delete paths have always used, and it holds even
+     when Lot_Allocations cannot be read at all. Taking the larger of the two
+     means an unreadable allocation table, or a Qty_Dyed maintained by some
+     route this widget does not know about, still stops a destructive click —
+     the old refusal survives rather than being replaced by a better-informed
+     one that happens to know nothing. */
+  const fromAllocs = allocs.filter(a => !a.fromStock).reduce((n, a) => n + a.qty, 0);
+  const produced = Math.max(fromAllocs, num(line.dyed) - reserved);
+  const lots = line.recipeId ? (S.stockByRecipe[line.recipeId] || []) : [];
+  const avail = lots.reduce((n, l) => n + l.avail, 0);
+  const listed = lots.reduce((n, l) => n + l.listed, 0);
+  const short = Math.max(0, line.qty - reserved - produced);
+  return { allocs, reserved, produced, lots, avail, listed, short,
+    canReserve: !!(S.allocCols && S.allocCols.fromStock && S.stockCol && avail > 0 && short > 0) };
 }
 
 /* Customers and pricing are both optional — the builder works without either,
@@ -494,18 +669,162 @@ async function setLineQty(lineId, qty) {
   }
 }
 
+/* ── Reserve / release ───────────────────────────────────────────────────── */
+
+function lineById(lineId) {
+  return Object.values(S.lines).flat().find(l => l.id === lineId) || null;
+}
+function orderForLine(lineId) {
+  const entry = Object.entries(S.lines).find(([, arr]) => arr.some(l => l.id === lineId));
+  return entry ? S.orders.find(o => o.id === Number(entry[0])) : null;
+}
+
+/* Draw oldest lot first, the same rotation batch-assignment uses. Returns the
+   draws without writing, so the confirmation can name real lots and bins. */
+function planDraw(line) {
+  const st = lineStock(line);
+  let want = Math.min(st.short, st.avail);
+  const draws = [];
+  for (const lot of st.lots) {
+    if (want <= 0) break;
+    const take = Math.min(want, lot.avail);
+    if (take <= 0) continue;
+    draws.push({ lot, take });
+    want -= take;
+  }
+  return { draws, total: draws.reduce((n, d) => n + d.take, 0), st };
+}
+
+async function reserveFromStock(lineId) {
+  if (S.stockBusy) return;
+  const line = lineById(lineId);
+  if (!line) return;
+  const order = orderForLine(lineId);
+  const { draws, total, st } = planDraw(line);
+
+  if (!st.canReserve || !total) { alert('Nothing available to reserve for this line.'); return; }
+  const A = S.allocCols;
+
+  const where = draws.map(d =>
+    `  ${d.take} from ${d.lot.lotNumber}${d.lot.bin ? ' (bin ' + d.lot.bin + ')' : ''}`).join('\n');
+  if (!confirm(
+    `Reserve ${total} spool(s) of ${line.recipeName || line.sku} from back stock?\n\n${where}\n\n` +
+    `The shelf goes down by ${total} and these spools are committed to this order. ` +
+    `You can hand them back with Release while the order is still building.`)) return;
+
+  S.stockBusy = true; render();
+  try {
+    const acts = [];
+    draws.forEach(d => {
+      const f = {};
+      f[A.lot] = d.lot.lotId;
+      f[A.qty] = d.take;
+      if (A.status) f[A.status] = S.reserveStatus;
+      if (A.customer && order && order.customerId) f[A.customer] = order.customerId;
+      f[A.line] = line.id;
+      /* Written explicitly. A Toggle left unset defaults to false, which would
+         make this reservation permanently unreleasable. */
+      f[A.fromStock] = true;
+      acts.push(['AddRecord', 'Lot_Allocations', null, f]);
+    });
+    draws.forEach(d => {
+      acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId,
+        { [S.stockCol]: Math.max(0, num(S.lotStock[d.lot.lotId]) - d.take) }]);
+    });
+    await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    toast(`Reserved ${total} from stock`);
+  } catch (e) {
+    console.error('Could not reserve from stock:', e);
+    alert('Could not reserve those spools. Nothing was changed.');
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
+/* Build the exact reversal of whatever this screen reserved against a line.
+   Only rows carrying the From_Stock flag are touched, so an allocation made by
+   winding real production can never be turned back into shelf stock. */
+function releaseActions(line) {
+  const allocs = (S.allocByLine[line.id] || []).filter(a => a.fromStock);
+  const backToLot = {};
+  const acts = [];
+  allocs.forEach(a => {
+    acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+    if (a.lotId) backToLot[a.lotId] = (backToLot[a.lotId] || 0) + a.qty;
+  });
+  Object.entries(backToLot).forEach(([lotId, qty]) => {
+    acts.push(['UpdateRecord', 'Production_Lots', Number(lotId),
+      { [S.stockCol]: num(S.lotStock[lotId]) + qty }]);
+  });
+  return { acts, total: allocs.reduce((n, a) => n + a.qty, 0), backToLot };
+}
+
+async function releaseReservation(lineId, skipConfirm) {
+  if (S.stockBusy) return;
+  const line = lineById(lineId);
+  if (!line || !S.stockCol) return;
+  const { acts, total, backToLot } = releaseActions(line);
+  if (!total) { alert('Nothing on this line is reserved from stock.'); return; }
+
+  const lotName = (id) => {
+    const lot = (S.stockByRecipe[line.recipeId] || []).find(l => l.lotId === Number(id));
+    return lot ? lot.lotNumber : 'lot ' + id;
+  };
+  const where = Object.entries(backToLot)
+    .map(([id, q]) => `  ${q} back to ${lotName(id)}`).join('\n');
+  if (!skipConfirm && !confirm(
+    `Release ${total} spool(s) of ${line.recipeName || line.sku} back to the shelf?\n\n${where}\n\n` +
+    `Only spools this screen reserved are handed back — anything wound in production stays put.`)) return;
+
+  S.stockBusy = true; render();
+  try {
+    await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    toast(`Released ${total} back to stock`);
+    return true;
+  } catch (e) {
+    console.error('Could not release the reservation:', e);
+    alert('Could not release those spools. Nothing was changed.');
+    return false;
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
 async function removeLine(lineId, label) {
-  const line = Object.values(S.lines).flat().find(l => l.id === lineId);
+  const line = lineById(lineId);
   /* A line with dyed spools against it has real production behind it.
      Removing it would orphan whatever was made, so say so plainly rather
-     than letting a click throw work away. */
-  if (line && line.dyed > 0) {
-    alert(`${label} already has ${line.dyed} spool(s) recorded as dyed.\n\n` +
-      `Removing the line would leave those unaccounted for. Set the quantity to 0 instead, ` +
-      `or sort out the allocation first.`);
-    return;
+     than letting a click throw work away.
+
+     Unless what is against it is a reservation THIS screen made, in which
+     case refusing would be a dead end of our own making: the line cannot be
+     removed and the only thing standing in the way is undoable right here.
+     So offer the undo instead of the refusal. */
+  let asked = false;
+  const st = line ? lineStock(line) : null;
+  /* Gated on the reservation as well as Qty_Dyed. Qty_Dyed is usually a
+     formula over the allocations, but if it is ever maintained some other way
+     a reservation would slip past this check entirely — the line would go and
+     its allocation rows would stay, holding spools off the shelf and pointing
+     at a line that no longer exists. */
+  if (line && (line.dyed > 0 || st.reserved > 0)) {
+    if (st.reserved > 0 && st.produced === 0) {
+      if (!confirm(`${label} has ${st.reserved} spool(s) reserved from back stock.\n\n` +
+        `Release them to the shelf and remove the line?`)) return;
+      const ok = await releaseReservation(lineId, true);
+      if (!ok) return;
+      asked = true;   // that prompt covered the removal too
+    } else {
+      alert(`${label} already has ${line.dyed} spool(s) recorded as dyed` +
+        (st.reserved ? `, ${st.reserved} of which is reserved back stock` : '') + `.\n\n` +
+        `Removing the line would leave those unaccounted for. Set the quantity to 0 instead, ` +
+        `or sort out the allocation first.`);
+      return;
+    }
   }
-  if (!confirm(`Remove ${label} from this order?`)) return;
+  if (!asked && !confirm(`Remove ${label} from this order?`)) return;
   try {
     await grist.docApi.applyUserActions([['RemoveRecord', 'Work_Order_Lines', lineId]]);
     await loadAll();
@@ -550,13 +869,30 @@ async function deleteOrder(id) {
     alert('This order has already been pushed to Shopify. Cancel it there rather than deleting it here.');
     return;
   }
-  if (lines.some(l => l.dyed > 0)) {
-    alert('Some lines already have dyed spools recorded. Sort those out before deleting the order.');
+  /* Same reasoning as removeLine: a reservation this screen made is not a
+     reason to refuse, it is a thing to hand back on the way out. Real
+     production still stops the delete. */
+  const withStock = lines.map(l => ({ l, st: lineStock(l) }));
+  if (withStock.some(x => x.st.produced > 0)) {
+    const made = withStock.filter(x => x.st.produced > 0)
+      .map(x => `${x.l.recipeName || x.l.sku}: ${x.st.produced}`).join(', ');
+    alert(`Some lines already have wound spools against them (${made}).\n\n` +
+      `Sort those out before deleting the order.`);
     return;
   }
-  if (!confirm(`Delete ${o.number} and its ${lines.length} line(s)?\n\nThis cannot be undone.`)) return;
+  const reserved = withStock.reduce((n, x) => n + x.st.reserved, 0);
+  if (!confirm(`Delete ${o.number} and its ${lines.length} line(s)?\n\n` +
+    (reserved ? `${reserved} spool(s) reserved from back stock will be released to the shelf first.\n\n` : '') +
+    `This cannot be undone.`)) return;
   try {
-    const acts = lines.map(l => ['RemoveRecord', 'Work_Order_Lines', l.id]);
+    const acts = [];
+    /* Release before removing the lines. A Work_Order_Line removed while
+       allocations still point at it would orphan them, and orphaned rows are
+       exactly the unaccounted spools the arithmetic in stock-model.md is
+       meant to surface. */
+    withStock.filter(x => x.st.reserved > 0)
+      .forEach(x => acts.push(...releaseActions(x.l).acts));
+    lines.forEach(l => acts.push(['RemoveRecord', 'Work_Order_Lines', l.id]));
     acts.push(['RemoveRecord', 'Work_Orders', id]);
     await grist.docApi.applyUserActions(acts);
     S.selected = null;
@@ -697,6 +1033,13 @@ function renderBanners() {
     out.push(`<div class="banner warn">No <code>Customers</code> table found, so the customer has to be
       typed by hand and won't be linked to a customer record.</div>`);
   }
+  /* Only worth saying once the shelf is readable and something is on it —
+     otherwise this is a setup note for a feature nobody is reaching for. */
+  if (!S.loading && !S.error && S.stockNote && S.stockCol
+      && Object.keys(S.stockByRecipe).length) {
+    out.push(`<div class="banner warn"><strong>Back stock is shown but can't be reserved.</strong>
+      ${esc(S.stockNote)}</div>`);
+  }
   document.getElementById('banners').innerHTML = out.join('');
 }
 
@@ -730,6 +1073,52 @@ function renderSide() {
   }).join('');
 }
 
+/* The shelf, per line. Reading only — every write is behind a button and a
+   confirmation that names the lots. */
+function stockLineHtml(l) {
+  if (!S.stockCol) return '';
+  const st = lineStock(l);
+  if (!st.reserved && !st.avail && !st.listed) return '';
+
+  const bins = st.lots.filter(x => x.avail > 0)
+    .map(x => `${esc(x.lotNumber)}${x.bin ? ' · ' + esc(x.bin) : ''} (${x.avail})`)
+    .slice(0, 4).join(', ');
+
+  const bits = [];
+  if (st.reserved) bits.push(`<span class="st-res">${st.reserved} reserved</span>`);
+  if (st.avail) {
+    bits.push(`<span class="${st.avail >= st.short && st.short ? 'st-ok' : 'st-some'}">${
+      st.avail} on the shelf</span>`);
+  } else if (!st.reserved) {
+    bits.push(`<span class="st-none">none on the shelf</span>`);
+  }
+  if (st.short > 0 && st.avail < st.short) {
+    bits.push(`<span class="st-short">${st.short - st.avail} to dye</span>`);
+  }
+  /* Vendor and store counts are shown so the number is not a surprise, and
+     marked as untouchable so it is never read as reservable. */
+  if (st.listed) bits.push(`<span class="st-listed">${st.listed} listed for sale</span>`);
+
+  const busy = S.stockBusy ? 'disabled' : '';
+  const actions = [];
+  if (st.canReserve) {
+    const n = Math.min(st.short, st.avail);
+    actions.push(`<button class="btn small" ${busy}
+      onclick="reserveFromStock(${l.id})">reserve ${n}</button>`);
+  }
+  if (st.reserved > 0) {
+    actions.push(`<button class="btn secondary small" ${busy}
+      onclick="releaseReservation(${l.id})">release ${st.reserved}</button>`);
+  }
+  if (!st.canReserve && !st.reserved && st.avail > 0 && st.short > 0 && S.stockNote) {
+    actions.push(`<span class="st-why" title="${esc(S.stockNote)}">why can't I reserve?</span>`);
+  }
+
+  return `<div class="stock-line">${bits.join('<span class="st-sep">·</span>')}
+    ${bins ? `<span class="st-bins">${bins}</span>` : ''}
+    ${actions.length ? `<span class="st-actions">${actions.join('')}</span>` : ''}</div>`;
+}
+
 function renderMain() {
   const box = document.getElementById('main');
   if (S.loading) { box.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`; return; }
@@ -757,7 +1146,7 @@ function renderMain() {
 
   const lineRows = lines.length
     ? lines.map(l => `<tr>
-        <td>${esc(l.recipeName || l.sku)}</td>
+        <td>${esc(l.recipeName || l.sku)}${stockLineHtml(l)}</td>
         <td class="sku">${esc(l.sku)}</td>
         <td class="num"><input type="number" min="0" value="${l.qty}"
           onchange="setLineQty(${l.id}, this.value)"></td>
