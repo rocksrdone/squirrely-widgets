@@ -157,7 +157,12 @@ function emailKey(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
 
 const LOOKUP_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/customer-lookup';
 const LOOKUP_TIMEOUT_MS = 60000;
-const BATCH = 25;   // customers per call; keeps the search string a sane length
+/* Customers per call. Each one contributes up to TWO search terms (an email and
+   a quoted company), so 12 means at most 24 OR-terms and a search string well
+   under a kilobyte. Shopify's search parser gets unhappy long before that, and
+   a refused search fails the whole batch rather than one name — cheaper to make
+   one extra round trip than to lose 25 customers to one long query. */
+const BATCH = 12;
 
 const S = {
   customers: [], unlinkedOrders: [],
