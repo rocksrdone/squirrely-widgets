@@ -2010,7 +2010,19 @@ function renderMain() {
     ${(() => {
       /* An order at 0.00 is only obvious at the push preview, by which point
          you are one click from an invoice you would have to void. Say it here. */
-      if (!lines.length || !S.lineCols.price) return '';
+      if (!lines.length) return '';
+      /* NO PRICE COLUMN AT ALL is the loudest version of this problem, not a
+         reason to stay quiet. Every Value cell reads '—', the total reads '—',
+         and the push still goes over at 0.00 because the workflow reads a
+         field that is not there. Silence here was indistinguishable from an
+         order that happens to be priced. */
+      if (!S.lineCols.price) {
+        return `<div class="banner bad" style="margin-top:10px">
+          <strong>Work_Order_Lines has no price column</strong>, so every line here would go
+          to Shopify at $0.00 and there is nowhere to put a rate. Add a Numeric column
+          <code>Unit_Price</code> to <code>Work_Order_Lines</code> — the push workflow already
+          reads that name — then reload and press <strong>apply pricing</strong>.</div>`;
+      }
       const noPrice = lines.filter(l => !num(l.price));
       if (!noPrice.length) return '';
       const linked = !!o.customerId;
@@ -2055,11 +2067,13 @@ function renderMain() {
         title="${pushed ? 'Already in Shopify' : building
           ? 'Release it for production first' : 'Shows what would be sent before anything is created'}">
         ${pushed ? 'In Shopify' : 'Push to Shopify…'}</button>
-      ${S.lineCols.price && lines.length ? `<button class="btn secondary" onclick="applyPricing(${o.id})"
+      ${lines.length ? `<button class="btn secondary" onclick="applyPricing(${o.id})"
         ${S.stockBusy || pushed ? 'disabled' : ''}
         title="${pushed
           ? 'Already in Shopify — changing a price here would not change it there'
-          : 'Fill in blank prices from this customer\'s rates'}">apply pricing</button>` : ''}
+          : !S.lineCols.price
+            ? 'Work_Order_Lines has no price column — press this to see what to add'
+            : 'Fill in blank prices from this customer\'s rates'}">apply pricing</button>` : ''}
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;
