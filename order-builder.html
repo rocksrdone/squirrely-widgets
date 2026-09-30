@@ -329,6 +329,8 @@ const S = {
   stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, bin, sortAt, by: {source: n} }]
   lotStock: {},        // lotId    -> { General, Store, Vendor } as they stand now
   lotInfo: {},         // lotId    -> { lotNumber, bin } for every lot, empty or not
+  lotCols: {},         // resolved Production_Lots columns, for creating one
+  freshLot: null,      // a lot created moments ago, still awaiting its made count
   allocByLine: {},     // lineId   -> [{ id, lotId, qty, source, adjusted }]
   allocCols: null,     // resolved Lot_Allocations columns, null when unreadable
   stockCols: {},       // source -> the Production_Lots column it draws down
@@ -461,7 +463,9 @@ async function loadStock() {
 
     const lc = (cands) => findColumn(lotT, cands);
     const LOT = { recipe: lc(['Recipe']), number: lc(['Lot_Number']),
-                  date: lc(['Date_Dyed']), bin: lc(['Storage_Bin']) };
+                  date: lc(['Date_Dyed']), bin: lc(['Storage_Bin']),
+                  made: lc(['Spools_Made']), notes: lc(['Notes']) };
+    S.lotCols = LOT;
     SOURCES.forEach(s => {
       const col = lc(SOURCE_META[s].col);
       if (col) S.stockCols[s] = col;
@@ -1005,10 +1009,26 @@ async function reserveFromStock(lineId, source, qtyOverride) {
 
   const { draws, total, st, unbacked, noLot } = planDraw(line, source, want);
 
+  /* NO LOT AT ALL. Common for a colourway that was dyed before Grist tracked
+     it, and near-universal for limited editions: the spools are on the shop
+     floor, Grist has simply never had a row for them. Refusing here made the
+     storefront pull useless for exactly the case it was built for, so the lot
+     is offered instead — an honest record of spools that existed and went to
+     this order. */
   if (noLot) {
-    alert(`${line.recipeName || line.sku} has no production lot in Grist, so there is ` +
-      `nothing to record a reservation against.\n\nAdd a lot for it first.`);
-    return;
+    if (!listed) {
+      alert(`${line.recipeName || line.sku} has no production lot in Grist, so there is ` +
+        `nothing to record a reservation against.\n\nAdd a lot for it first.`);
+      return;
+    }
+    const made = await createLotFor(line, source, want);
+    if (!made) return;
+    /* Remembered across the reload so the write below knows this lot still
+       has no made count. A property on the lot object would not survive
+       loadAll rebuilding them. */
+    S.freshLot = made;
+    await loadAll();
+    return reserveFromStock(lineId, source, want);   // the lot exists now
   }
   if (!st.canReserve(source) || !total) {
     alert(`Nothing available to reserve from ${SOURCE_META[source].label} for this line.`);
@@ -1060,10 +1080,14 @@ async function reserveFromStock(lineId, source, qtyOverride) {
     });
     draws.forEach(d => {
       const now = num((S.lotStock[d.lot.lotId] || {})[source]);
-      acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId,
-        { [col]: Math.max(0, now - d.take) }]);
+      const fields = { [col]: Math.max(0, now - d.take) };
+      /* A lot this screen just created carries no made count yet — it is set
+         here so the row only ever claims spools it can also account for. */
+      if (d.lot.lotId === S.freshLot && S.lotCols.made) fields[S.lotCols.made] = d.take;
+      acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId, fields]);
     });
     await grist.docApi.applyUserActions(acts);
+    S.freshLot = null;
     await loadAll();
     toast(`Reserved ${total} from ${SOURCE_META[source].short}`);
   } catch (e) {
@@ -1072,6 +1096,71 @@ async function reserveFromStock(lineId, source, qtyOverride) {
   } finally {
     S.stockBusy = false; render();
   }
+}
+
+/* A lot for a colourway Grist has never recorded, created at the moment its
+   spools are taken off a storefront.
+
+   THE ARITHMETIC HAS TO BALANCE. stock-model.md:
+     Spools_Made - allocations - (General+Vendor+Store) - Broken = unaccounted
+   So the lot is written with Spools_Made equal to what is being taken and the
+   stock columns at zero: made N, allocated N, nothing left over, balance zero.
+   Writing Spools_Made as zero instead would leave every one of these lots
+   permanently short by the amount taken.
+
+   Spools_Made is set in the SECOND call, alongside the allocation, so a
+   failure between the two leaves a lot reading 0 made and 0 allocated — which
+   still balances — rather than one claiming spools that nothing accounts for. */
+async function createLotFor(line, source, want) {
+  const L = S.lotCols || {};
+  if (!L.recipe) { alert('Production_Lots has no Recipe column, so a lot cannot be created.'); return null; }
+
+  const name = line.recipeName || line.sku;
+  if (!confirm(
+    `${name} has no production lot in Grist.\n\n` +
+    `Create one for the ${want} spool(s) you are taking from ${SOURCE_META[source].store}?\n\n` +
+    `It records that these spools existed and went to this order. It does NOT invent ` +
+    `shelf stock — the lot is created with nothing left on it.`)) return null;
+
+  const fields = { [L.recipe]: line.recipeId };
+  if (L.number) fields[L.number] = nextLotNumber();
+  /* Grist Date columns hold epoch SECONDS at UTC midnight. A local-midnight
+     value lands on the previous day for anyone west of UTC. */
+  if (L.date) {
+    const d = new Date();
+    fields[L.date] = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000;
+  }
+  if (L.made) fields[L.made] = 0;
+  Object.values(S.stockCols).forEach(col => { fields[col] = 0; });
+  if (L.notes) fields[L.notes] = `Created by the order builder for a ${SOURCE_META[source].short} pull — `
+    + `this colourway had no lot.`;
+
+  try {
+    const res = await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, fields]]);
+    const id = res && res.retValues && res.retValues[0];
+    if (!id) throw new Error('no row id came back');
+    return id;
+  } catch (e) {
+    console.error('Could not create a lot:', e);
+    alert('Could not create a production lot. Nothing was changed.');
+    return null;
+  }
+}
+
+/* LOT-YYMMDD-NN, continuing the day's numbering rather than restarting it. */
+function nextLotNumber() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const prefix = 'LOT-' + String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()) + '-';
+  let max = 0;
+  Object.values(S.lotInfo || {}).forEach(info => {
+    const s = String(info.lotNumber || '');
+    if (s.indexOf(prefix) === 0) {
+      const n = parseInt(s.slice(prefix.length), 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+  });
+  return prefix + p(max + 1);
 }
 
 /* Build the exact reversal of whatever this screen reserved against a line.
