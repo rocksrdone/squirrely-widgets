@@ -90,8 +90,21 @@ table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); bord
 .st-listed { color: #A89B8F; font-style: italic; }
 .st-bins { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72;
   background: rgba(0,0,0,.035); padding: 1px 6px; border-radius: 3px; }
-.st-actions { display: inline-flex; gap: 5px; }
+.st-actions { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .st-why { font-size: 10px; color: var(--gold); text-decoration: underline dotted; cursor: help; }
+/* A pull from a listed source carries an obligation, so its button never looks
+   like the consequence-free one next to it. */
+.btn.listed { background: var(--gold); border-color: var(--gold); }
+.btn.tiny { font-size: 9.5px; padding: 3px 7px; }
+
+.banner.todo { border-width: 1.5px; }
+.todo-rows { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
+.todo-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  background: rgba(255,255,255,.6); padding: 4px 8px; border-radius: 4px; }
+.todo-qty { font-weight: 700; font-family: 'DM Mono', monospace; }
+.todo-name { font-weight: 600; }
+.todo-where { font-size: 10px; font-style: italic; }
+.todo-row .btn { margin-left: auto; }
 .toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: white; padding: 9px 16px; border-radius: 6px; font-size: 12px;
   opacity: 0; transition: opacity .2s; pointer-events: none; }
@@ -221,31 +234,56 @@ const BUILDING_STATUS = 'Building';
 const READY_STATUS = 'Active';
 const MANUAL_TYPE = 'Manual';
 
-/* ── Reserving from back stock ─────────────────────────────────────────────
-   Pulling spools off the shelf for an order means two writes, the same pair
-   batch-assignment already makes: an allocation row against the line, and the
-   lot's stock column down by what was taken.
+/* ── Reserving stock ───────────────────────────────────────────────────────
+   Pulling spools for an order means two writes, the same pair batch-assignment
+   makes: an allocation row against the line, and the source lot's stock column
+   down by what was taken.
 
    RELEASING IT AGAIN IS THE HARD PART, and it is why this needs a column of
    its own. Winding new production writes an allocation with exactly the same
    Status as a stock pull does ('Wound - Needs Labels' in both), so status
-   cannot tell the two apart. Releasing a wound allocation would credit the
-   shelf with spools that were never on it — inventing stock out of nothing.
+   cannot tell the two apart. Releasing a wound allocation would credit a lot
+   with spools that were never on the shelf — inventing stock out of nothing.
 
-   So a reservation is marked at the moment it is made. Lot_Allocations needs
-   a Toggle column From_Stock. The Toggle default of false, which has bitten
-   this stack twice by silently hiding rows, is for once exactly right: an
-   allocation nobody marked is NOT a reservation and will never be released.
+   So a reservation records WHERE IT CAME FROM, not merely that it came from
+   somewhere. Lot_Allocations needs a Choice column Stock_Source holding
+   exactly General, Store or Vendor; blank means wound production. A boolean
+   would not do: per stock-model.md those are three states of one pile, and
+   releasing has to credit the column the spools actually left. A retail pull
+   handed back into General would quietly move stock between storefronts.
 
-   Without the column the shelf is still shown — that part is only reading —
-   but reserving is refused rather than made irreversible. */
-const FROM_STOCK_COL = ['From_Stock', 'Reserved_From_Stock', 'From_Back_Stock'];
+   Blank as the safe default is the point — an allocation nobody marked is not
+   a reservation and will never be released. Without the column the shelf is
+   still shown, because reading was never the risky part; only reserving is
+   refused, so nothing irreversible can be made. */
+const STOCK_SOURCE_COL = ['Stock_Source', 'Stock_Bucket', 'Reserved_From'];
 
-/* Reserve out of General only. Per stock-model.md the three columns are three
-   states of one pile: General is on hand and listed nowhere, while Vendor and
-   Store are on hand AND live for sale on a storefront. Drawing from those two
-   would quietly sell a spool that a customer can still add to their cart, so
-   they are shown for context and never touched. */
+/* The three sources, in the order they should be offered. General first
+   because it is the only one with no consequence outside Grist. */
+const SOURCES = ['General', 'Store', 'Vendor'];
+const SOURCE_META = {
+  General: { label: 'back stock', col: ['General_Stock_Spools'], listed: false,
+             short: 'shelf' },
+  Store:   { label: 'retail stock', col: ['Store_Stock_Spools'], listed: true,
+             short: 'retail', store: 'the retail store' },
+  Vendor:  { label: 'vendor stock', col: ['Vendor_Stock_Spools'], listed: true,
+             short: 'vendor', store: 'the vendor store' },
+};
+
+/* Pulling from a LISTED source is not finished when Grist is updated.
+   Nothing in this stack writes inventory to Shopify — stock-model.md is
+   explicit that Grist is deliberately not the master — so a spool taken out
+   of Store stock here is still on sale on the storefront until someone
+   adjusts it there by hand. That gap is how the same spool gets sold twice,
+   and the only defence is that the gap stays visible until it is closed.
+
+   This column records ONLY that the human has been to Shopify and changed the
+   number. It has no effect on anything: not on the allocation, not on the lot,
+   not on Shopify. It is a tick on a to-do list and nothing more, which is why
+   it is named for what the person did rather than for what the storefront
+   shows. Toggle default false = not adjusted yet = still on the list. */
+const ADJUSTED_COL = ['Storefront_Adjusted', 'Retail_Delisted', 'Delisted'];
+
 const RESERVE_STATUS_FALLBACK = 'Wound - Needs Labels';
 
 const S = {
@@ -259,14 +297,15 @@ const S = {
   push: null,        // the last preview or push response
   pushBusy: false,
 
-  stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, avail, listed, bin, sortAt }]
-  allocByLine: {},     // lineId  -> [{ id, lotId, qty, fromStock }]
+  stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, bin, sortAt, by: {source: n} }]
+  lotStock: {},        // lotId    -> { General, Store, Vendor } as they stand now
+  allocByLine: {},     // lineId   -> [{ id, lotId, qty, source, adjusted }]
   allocCols: null,     // resolved Lot_Allocations columns, null when unreadable
-  stockCol: null,      // the Production_Lots column reservations draw down
-  stockColName: '',
+  stockCols: {},       // source -> the Production_Lots column it draws down
   reserveStatus: RESERVE_STATUS_FALLBACK,
   stockNote: '',       // why reserving is unavailable, when it is
   stockBusy: false,
+  todoQueue: [],       // storefront quantities still needing a manual change
 };
 
 function toast(msg) {
@@ -373,7 +412,7 @@ async function loadAll() {
    be built and pushed without ever touching the shelf. */
 async function loadStock() {
   S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
-  S.stockCol = null; S.stockColName = ''; S.stockNote = '';
+  S.stockCols = {}; S.lotStock = {}; S.stockNote = ''; S.todoQueue = [];
   try {
     const [lotT, allocT] = await Promise.all([
       grist.docApi.fetchTable('Production_Lots'),
@@ -381,27 +420,26 @@ async function loadStock() {
     ]);
 
     const lc = (cands) => findColumn(lotT, cands);
-    const LOT = {
-      recipe: lc(['Recipe']), number: lc(['Lot_Number']), date: lc(['Date_Dyed']),
-      general: lc(['General_Stock_Spools']), vendor: lc(['Vendor_Stock_Spools']),
-      store: lc(['Store_Stock_Spools']), bin: lc(['Storage_Bin']),
-    };
-    /* General is the unlisted pile and the only one safe to draw from. The
-       fallback order matches stock-model.md, but a fallback means the shelf is
-       a storefront's stock, so it is said out loud rather than assumed. */
-    S.stockCol = LOT.general || LOT.store || LOT.vendor;
-    S.stockColName = S.stockCol || '';
-    if (!S.stockCol) { S.stockNote = 'Production_Lots has no stock column, so there is nothing to reserve from.'; return; }
-    if (!LOT.general) {
-      S.stockNote = `No General_Stock_Spools column — reserving would draw from ${S.stockCol}, which is stock listed for sale.`;
+    const LOT = { recipe: lc(['Recipe']), number: lc(['Lot_Number']),
+                  date: lc(['Date_Dyed']), bin: lc(['Storage_Bin']) };
+    SOURCES.forEach(s => {
+      const col = lc(SOURCE_META[s].col);
+      if (col) S.stockCols[s] = col;
+    });
+    if (!Object.keys(S.stockCols).length) {
+      S.stockNote = 'Production_Lots has no stock columns, so there is nothing to reserve from.';
+      return;
     }
-    if (!LOT.recipe) { S.stockNote = 'Production_Lots has no Recipe column, so lots cannot be matched to a colourway.'; return; }
+    if (!LOT.recipe) {
+      S.stockNote = 'Production_Lots has no Recipe column, so lots cannot be matched to a colourway.';
+      return;
+    }
 
     const ac = (cands) => findColumn(allocT, cands);
     const ALLOC = {
       lot: ac(['Lot']), qty: ac(['Qty_Spools']), status: ac(['Status']),
       customer: ac(['Customer']), line: ac(['Work_Order_Line']),
-      fromStock: ac(FROM_STOCK_COL),
+      source: ac(STOCK_SOURCE_COL), adjusted: ac(ADJUSTED_COL),
     };
     if (ALLOC.lot && ALLOC.qty && ALLOC.line) S.allocCols = ALLOC;
 
@@ -421,72 +459,116 @@ async function loadStock() {
       (allocT.id || []).forEach((id, i) => {
         const lineId = getRefId(columnAsArray(allocT, ALLOC.line)[i]);
         if (!lineId) return;
+        /* Only a value this widget understands counts as a reservation. An
+           unrecognised one is treated as production — the cautious reading,
+           since it means release leaves it alone rather than crediting a
+           column it guessed at. */
+        const raw = ALLOC.source ? String(columnAsArray(allocT, ALLOC.source)[i] || '').trim() : '';
+        const source = SOURCES.find(s => s.toLowerCase() === raw.toLowerCase()) || '';
         (S.allocByLine[lineId] = S.allocByLine[lineId] || []).push({
-          id,
+          id, source,
           lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
           qty: num(columnAsArray(allocT, ALLOC.qty)[i]),
-          fromStock: ALLOC.fromStock ? !!columnAsArray(allocT, ALLOC.fromStock)[i] : false,
+          adjusted: ALLOC.adjusted ? !!columnAsArray(allocT, ALLOC.adjusted)[i] : false,
         });
       });
     }
-    if (!ALLOC.fromStock) {
-      S.stockNote = 'Add a Toggle column From_Stock to Lot_Allocations to reserve. '
-        + 'Without it a reservation could not be told apart from newly wound spools, '
-        + 'and releasing one would credit the shelf with stock that was never there.';
+    if (!ALLOC.source) {
+      S.stockNote = 'Add a Choice column Stock_Source to Lot_Allocations, with the values '
+        + 'General, Store and Vendor, to reserve. Without it a reservation could not be '
+        + 'told apart from newly wound spools, and releasing one would credit a lot with '
+        + 'stock that was never there.';
     }
 
-    /* Every lot's current bucket value, including the ones with nothing left.
-       A lot reserved down to zero drops out of the display below, and release
-       still has to add its spools back — reading the value from the display
-       list would find nothing and silently release zero. */
-    S.lotStock = {};
+    /* Every lot's current values, including lots with nothing left. A lot
+       reserved down to zero drops out of the display below, and release still
+       has to add its spools back — reading from the display list would find
+       nothing and silently release zero. */
     (lotT.id || []).forEach((id, i) => {
-      S.lotStock[id] = num(columnAsArray(lotT, S.stockCol)[i]);
+      const by = {};
+      Object.entries(S.stockCols).forEach(([s, col]) => { by[s] = num(columnAsArray(lotT, col)[i]); });
+      S.lotStock[id] = by;
     });
 
     (lotT.id || []).forEach((id, i) => {
       const recipeId = getRefId(columnAsArray(lotT, LOT.recipe)[i]);
       if (!recipeId) return;
-      const avail = num(columnAsArray(lotT, S.stockCol)[i]);
-      const listed = (LOT.general ? num(columnAsArray(lotT, LOT.vendor)[i])
-        + num(columnAsArray(lotT, LOT.store)[i]) : 0);
-      if (avail <= 0 && listed <= 0) return;
+      const by = S.lotStock[id] || {};
+      if (!SOURCES.some(s => by[s] > 0)) return;
       (S.stockByRecipe[recipeId] = S.stockByRecipe[recipeId] || []).push({
         lotId: id,
         lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
-        avail, listed,
         bin: String(columnAsArray(lotT, LOT.bin)[i] || '').trim(),
         sortAt: num(columnAsArray(lotT, LOT.date)[i]) || id,
+        by,
       });
     });
-    /* Oldest first, so the shelf rotates rather than growing a stale layer. */
+    /* Oldest first, so stock rotates rather than growing a stale layer. */
     Object.values(S.stockByRecipe).forEach(list =>
       list.sort((a, b) => a.sortAt - b.sortAt || a.lotId - b.lotId));
+
+    buildTodoQueue();
   } catch (e) {
-    console.warn('Back stock unavailable:', e);
-    S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so the shelf is not shown.';
+    console.warn('Stock unavailable:', e);
+    S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so stock is not shown.';
   }
 }
 
-/* What a line already holds, split by where it came from. `reserved` is the
-   only part this screen is entitled to hand back. */
+/* Spools pulled out of a storefront's stock whose quantity has not yet been
+   changed on that storefront by hand. Built across every order, not just the
+   selected one: the obligation belongs to the storefront, and an order you
+   are not currently looking at is exactly the one whose pull gets forgotten. */
+function buildTodoQueue() {
+  S.todoQueue = [];
+  if (!S.allocCols || !S.allocCols.source) return;
+  const lineIndex = {};
+  Object.entries(S.lines).forEach(([woId, arr]) =>
+    arr.forEach(l => { lineIndex[l.id] = { line: l, orderId: Number(woId) }; }));
+
+  Object.entries(S.allocByLine).forEach(([lineId, allocs]) => {
+    allocs.forEach(a => {
+      if (!a.source || !SOURCE_META[a.source].listed || a.adjusted) return;
+      const found = lineIndex[Number(lineId)];
+      const order = found ? S.orders.find(o => o.id === found.orderId) : null;
+      S.todoQueue.push({
+        allocId: a.id, qty: a.qty, source: a.source,
+        sku: found ? (found.line.sku || '') : '',
+        name: found ? (found.line.recipeName || found.line.sku) : ('line ' + lineId),
+        orderNumber: order ? order.number : '',
+        orderId: order ? order.id : null,
+      });
+    });
+  });
+  S.todoQueue.sort((a, b) => String(a.orderNumber).localeCompare(String(b.orderNumber)));
+}
+
+/* What a line already holds, split by where it came from. Only the reserved
+   part is this screen's to hand back. */
 function lineStock(line) {
   const allocs = S.allocCols ? (S.allocByLine[line.id] || []) : [];
-  const reserved = allocs.filter(a => a.fromStock).reduce((n, a) => n + a.qty, 0);
+  const bySource = {};
+  SOURCES.forEach(s => { bySource[s] = 0; });
+  let reserved = 0;
+  allocs.forEach(a => { if (a.source) { bySource[a.source] += a.qty; reserved += a.qty; } });
+
   /* Qty_Dyed is the guard the delete paths have always used, and it holds even
      when Lot_Allocations cannot be read at all. Taking the larger of the two
      means an unreadable allocation table, or a Qty_Dyed maintained by some
      route this widget does not know about, still stops a destructive click —
      the old refusal survives rather than being replaced by a better-informed
      one that happens to know nothing. */
-  const fromAllocs = allocs.filter(a => !a.fromStock).reduce((n, a) => n + a.qty, 0);
+  const fromAllocs = allocs.filter(a => !a.source).reduce((n, a) => n + a.qty, 0);
   const produced = Math.max(fromAllocs, num(line.dyed) - reserved);
+
   const lots = line.recipeId ? (S.stockByRecipe[line.recipeId] || []) : [];
-  const avail = lots.reduce((n, l) => n + l.avail, 0);
-  const listed = lots.reduce((n, l) => n + l.listed, 0);
+  const avail = {};
+  SOURCES.forEach(s => { avail[s] = lots.reduce((n, l) => n + num(l.by[s]), 0); });
   const short = Math.max(0, line.qty - reserved - produced);
-  return { allocs, reserved, produced, lots, avail, listed, short,
-    canReserve: !!(S.allocCols && S.allocCols.fromStock && S.stockCol && avail > 0 && short > 0) };
+
+  const canReserve = (s) => !!(S.allocCols && S.allocCols.source && S.stockCols[s]
+    && avail[s] > 0 && short > 0);
+  return { allocs, reserved, bySource, produced, lots, avail, short, canReserve,
+    anySource: SOURCES.some(s => canReserve(s)) };
 }
 
 /* Customers and pricing are both optional — the builder works without either,
@@ -681,13 +763,14 @@ function orderForLine(lineId) {
 
 /* Draw oldest lot first, the same rotation batch-assignment uses. Returns the
    draws without writing, so the confirmation can name real lots and bins. */
-function planDraw(line) {
+function planDraw(line, source) {
   const st = lineStock(line);
-  let want = Math.min(st.short, st.avail);
+  let want = Math.min(st.short, st.avail[source] || 0);
   const draws = [];
   for (const lot of st.lots) {
     if (want <= 0) break;
-    const take = Math.min(want, lot.avail);
+    const have = num(lot.by[source]);
+    const take = Math.min(want, have);
     if (take <= 0) continue;
     draws.push({ lot, take });
     want -= take;
@@ -695,22 +778,33 @@ function planDraw(line) {
   return { draws, total: draws.reduce((n, d) => n + d.take, 0), st };
 }
 
-async function reserveFromStock(lineId) {
+async function reserveFromStock(lineId, source) {
   if (S.stockBusy) return;
+  if (!SOURCE_META[source]) return;
   const line = lineById(lineId);
   if (!line) return;
   const order = orderForLine(lineId);
-  const { draws, total, st } = planDraw(line);
+  const { draws, total, st } = planDraw(line, source);
 
-  if (!st.canReserve || !total) { alert('Nothing available to reserve for this line.'); return; }
+  if (!st.canReserve(source) || !total) {
+    alert(`Nothing available to reserve from ${SOURCE_META[source].label} for this line.`);
+    return;
+  }
   const A = S.allocCols;
+  const col = S.stockCols[source];
 
   const where = draws.map(d =>
     `  ${d.take} from ${d.lot.lotNumber}${d.lot.bin ? ' (bin ' + d.lot.bin + ')' : ''}`).join('\n');
+  /* A listed source needs the consequence spelled out at the moment of the
+     click, not only afterwards in a list. Nothing here reaches Shopify. */
+  const warning = SOURCE_META[source].listed
+    ? `\n\nThese spools are LISTED FOR SALE on ${SOURCE_META[source].store}. Grist does not ` +
+      `write inventory to Shopify, so they stay on sale until you adjust the listing there ` +
+      `yourself. They stay listed on this screen until you have done that and ticked them off.`
+    : '';
   if (!confirm(
-    `Reserve ${total} spool(s) of ${line.recipeName || line.sku} from back stock?\n\n${where}\n\n` +
-    `The shelf goes down by ${total} and these spools are committed to this order. ` +
-    `You can hand them back with Release while the order is still building.`)) return;
+    `Reserve ${total} spool(s) of ${line.recipeName || line.sku} from ${SOURCE_META[source].label}?` +
+    `\n\n${where}${warning}`)) return;
 
   S.stockBusy = true; render();
   try {
@@ -722,20 +816,23 @@ async function reserveFromStock(lineId) {
       if (A.status) f[A.status] = S.reserveStatus;
       if (A.customer && order && order.customerId) f[A.customer] = order.customerId;
       f[A.line] = line.id;
-      /* Written explicitly. A Toggle left unset defaults to false, which would
-         make this reservation permanently unreleasable. */
-      f[A.fromStock] = true;
+      /* Written explicitly. A blank Stock_Source would make this reservation
+         permanently unreleasable, and a wrong one would credit the wrong
+         storefront when it is released. */
+      f[A.source] = source;
+      if (A.adjusted) f[A.adjusted] = false;   // the pull itself changes nothing on Shopify
       acts.push(['AddRecord', 'Lot_Allocations', null, f]);
     });
     draws.forEach(d => {
+      const now = num((S.lotStock[d.lot.lotId] || {})[source]);
       acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId,
-        { [S.stockCol]: Math.max(0, num(S.lotStock[d.lot.lotId]) - d.take) }]);
+        { [col]: Math.max(0, now - d.take) }]);
     });
     await grist.docApi.applyUserActions(acts);
     await loadAll();
-    toast(`Reserved ${total} from stock`);
+    toast(`Reserved ${total} from ${SOURCE_META[source].short}`);
   } catch (e) {
-    console.error('Could not reserve from stock:', e);
+    console.error('Could not reserve:', e);
     alert('Could not reserve those spools. Nothing was changed.');
   } finally {
     S.stockBusy = false; render();
@@ -743,38 +840,48 @@ async function reserveFromStock(lineId) {
 }
 
 /* Build the exact reversal of whatever this screen reserved against a line.
-   Only rows carrying the From_Stock flag are touched, so an allocation made by
-   winding real production can never be turned back into shelf stock. */
+   Only rows carrying a Stock_Source are touched, so an allocation made by
+   winding real production can never be turned back into stock — and each one
+   is credited to the column it actually left, so a retail pull does not come
+   back as back stock. */
 function releaseActions(line) {
-  const allocs = (S.allocByLine[line.id] || []).filter(a => a.fromStock);
-  const backToLot = {};
+  const allocs = (S.allocByLine[line.id] || []).filter(a => a.source && S.stockCols[a.source]);
+  const backTo = {};   // lotId -> source -> qty
   const acts = [];
   allocs.forEach(a => {
     acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
-    if (a.lotId) backToLot[a.lotId] = (backToLot[a.lotId] || 0) + a.qty;
+    if (!a.lotId) return;
+    backTo[a.lotId] = backTo[a.lotId] || {};
+    backTo[a.lotId][a.source] = (backTo[a.lotId][a.source] || 0) + a.qty;
   });
-  Object.entries(backToLot).forEach(([lotId, qty]) => {
-    acts.push(['UpdateRecord', 'Production_Lots', Number(lotId),
-      { [S.stockCol]: num(S.lotStock[lotId]) + qty }]);
+  /* One UpdateRecord per lot even when several sources are credited, so two
+     draws on one lot cannot each overwrite the other's column. */
+  Object.entries(backTo).forEach(([lotId, bySource]) => {
+    const fields = {};
+    Object.entries(bySource).forEach(([source, qty]) => {
+      fields[S.stockCols[source]] = num((S.lotStock[lotId] || {})[source]) + qty;
+    });
+    acts.push(['UpdateRecord', 'Production_Lots', Number(lotId), fields]);
   });
-  return { acts, total: allocs.reduce((n, a) => n + a.qty, 0), backToLot };
+  return { acts, total: allocs.reduce((n, a) => n + a.qty, 0), backTo };
 }
 
 async function releaseReservation(lineId, skipConfirm) {
   if (S.stockBusy) return;
   const line = lineById(lineId);
-  if (!line || !S.stockCol) return;
-  const { acts, total, backToLot } = releaseActions(line);
+  if (!line) return;
+  const { acts, total, backTo } = releaseActions(line);
   if (!total) { alert('Nothing on this line is reserved from stock.'); return; }
 
   const lotName = (id) => {
     const lot = (S.stockByRecipe[line.recipeId] || []).find(l => l.lotId === Number(id));
     return lot ? lot.lotNumber : 'lot ' + id;
   };
-  const where = Object.entries(backToLot)
-    .map(([id, q]) => `  ${q} back to ${lotName(id)}`).join('\n');
+  const where = Object.entries(backTo).flatMap(([id, bySource]) =>
+    Object.entries(bySource).map(([s, q]) =>
+      `  ${q} back to ${lotName(id)} · ${SOURCE_META[s].label}`)).join('\n');
   if (!skipConfirm && !confirm(
-    `Release ${total} spool(s) of ${line.recipeName || line.sku} back to the shelf?\n\n${where}\n\n` +
+    `Release ${total} spool(s) of ${line.recipeName || line.sku}?\n\n${where}\n\n` +
     `Only spools this screen reserved are handed back — anything wound in production stays put.`)) return;
 
   S.stockBusy = true; render();
@@ -791,6 +898,37 @@ async function releaseReservation(lineId, skipConfirm) {
     S.stockBusy = false; render();
   }
 }
+
+/* Records that the human has been to Shopify and changed the number. It does
+   NOT touch the allocation, the lot, or Shopify — the spools stay reserved and
+   the storefront is whatever the person made it. All that changes is that the
+   reminder stops. */
+async function markAdjusted(allocId) {
+  if (S.stockBusy) return;
+  const A = S.allocCols;
+  if (!A || !A.adjusted) {
+    alert('Add a Toggle column Storefront_Adjusted to Lot_Allocations to tick these off.');
+    return;
+  }
+  const item = S.todoQueue.find(x => x.allocId === allocId);
+  if (item && !confirm(
+    `Mark ${item.qty} × ${item.name} as already adjusted on ${SOURCE_META[item.source].store}?\n\n` +
+    `This only stops the reminder. Nothing here reaches Shopify — tick it once you have ` +
+    `changed the quantity there yourself.`)) return;
+  S.stockBusy = true; render();
+  try {
+    await grist.docApi.applyUserActions([
+      ['UpdateRecord', 'Lot_Allocations', allocId, { [A.adjusted]: true }]]);
+    await loadAll();
+    toast('Reminder cleared');
+  } catch (e) {
+    console.error('Could not mark it adjusted:', e);
+    alert('Could not update that row.');
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
 
 async function removeLine(lineId, label) {
   const line = lineById(lineId);
@@ -1035,11 +1173,14 @@ function renderBanners() {
   }
   /* Only worth saying once the shelf is readable and something is on it —
      otherwise this is a setup note for a feature nobody is reaching for. */
-  if (!S.loading && !S.error && S.stockNote && S.stockCol
+  if (!S.loading && !S.error && S.stockNote && Object.keys(S.stockCols).length
       && Object.keys(S.stockByRecipe).length) {
-    out.push(`<div class="banner warn"><strong>Back stock is shown but can't be reserved.</strong>
+    out.push(`<div class="banner warn"><strong>Stock is shown but can't be reserved.</strong>
       ${esc(S.stockNote)}</div>`);
   }
+  /* Last, so it sits closest to the work — and it is the one banner that is
+     about physical spools rather than about setting something up. */
+  out.push(todoPanelHtml());
   document.getElementById('banners').innerHTML = out.join('');
 }
 
@@ -1076,41 +1217,54 @@ function renderSide() {
 /* The shelf, per line. Reading only — every write is behind a button and a
    confirmation that names the lots. */
 function stockLineHtml(l) {
-  if (!S.stockCol) return '';
+  if (!Object.keys(S.stockCols).length) return '';
   const st = lineStock(l);
-  if (!st.reserved && !st.avail && !st.listed) return '';
-
-  const bins = st.lots.filter(x => x.avail > 0)
-    .map(x => `${esc(x.lotNumber)}${x.bin ? ' · ' + esc(x.bin) : ''} (${x.avail})`)
-    .slice(0, 4).join(', ');
+  const anyAvail = SOURCES.some(s => st.avail[s] > 0);
+  if (!st.reserved && !anyAvail) return '';
 
   const bits = [];
-  if (st.reserved) bits.push(`<span class="st-res">${st.reserved} reserved</span>`);
-  if (st.avail) {
-    bits.push(`<span class="${st.avail >= st.short && st.short ? 'st-ok' : 'st-some'}">${
-      st.avail} on the shelf</span>`);
+  if (st.reserved) {
+    /* Named by source, because "4 reserved" tells you nothing about whether a
+       storefront still has them on sale. */
+    const parts = SOURCES.filter(s => st.bySource[s] > 0)
+      .map(s => `${st.bySource[s]} from ${SOURCE_META[s].short}`);
+    bits.push(`<span class="st-res">${esc(parts.join(' + '))} reserved</span>`);
+  }
+  if (st.avail.General) {
+    bits.push(`<span class="${st.avail.General >= st.short && st.short ? 'st-ok' : 'st-some'}">${
+      st.avail.General} on the shelf</span>`);
   } else if (!st.reserved) {
     bits.push(`<span class="st-none">none on the shelf</span>`);
   }
-  if (st.short > 0 && st.avail < st.short) {
-    bits.push(`<span class="st-short">${st.short - st.avail} to dye</span>`);
-  }
-  /* Vendor and store counts are shown so the number is not a surprise, and
-     marked as untouchable so it is never read as reservable. */
-  if (st.listed) bits.push(`<span class="st-listed">${st.listed} listed for sale</span>`);
+  SOURCES.filter(s => SOURCE_META[s].listed && st.avail[s] > 0).forEach(s =>
+    bits.push(`<span class="st-listed">${st.avail[s]} in ${SOURCE_META[s].short}, listed</span>`));
+
+  const stillShort = st.short - Math.min(st.short, st.avail.General || 0);
+  if (stillShort > 0) bits.push(`<span class="st-short">${stillShort} to dye</span>`);
+
+  const bins = st.lots.filter(x => num(x.by.General) > 0)
+    .map(x => `${esc(x.lotNumber)}${x.bin ? ' · ' + esc(x.bin) : ''} (${num(x.by.General)})`)
+    .slice(0, 4).join(', ');
 
   const busy = S.stockBusy ? 'disabled' : '';
   const actions = [];
-  if (st.canReserve) {
-    const n = Math.min(st.short, st.avail);
-    actions.push(`<button class="btn small" ${busy}
-      onclick="reserveFromStock(${l.id})">reserve ${n}</button>`);
-  }
+  SOURCES.forEach(s => {
+    if (!st.canReserve(s)) return;
+    const n = Math.min(st.short, st.avail[s]);
+    /* A listed source gets the quieter button and says which store it is, so
+       the two are never confused at a glance. */
+    actions.push(`<button class="btn small ${SOURCE_META[s].listed ? 'listed' : ''}" ${busy}
+      onclick="reserveFromStock(${l.id}, '${s}')"
+      title="${esc(SOURCE_META[s].listed
+        ? 'Still on sale on ' + SOURCE_META[s].store + ' until you adjust it there'
+        : 'Held back, listed nowhere — no storefront to adjust')}"
+      >reserve ${n} from ${esc(SOURCE_META[s].short)}</button>`);
+  });
   if (st.reserved > 0) {
     actions.push(`<button class="btn secondary small" ${busy}
       onclick="releaseReservation(${l.id})">release ${st.reserved}</button>`);
   }
-  if (!st.canReserve && !st.reserved && st.avail > 0 && st.short > 0 && S.stockNote) {
+  if (!st.anySource && !st.reserved && anyAvail && st.short > 0 && S.stockNote) {
     actions.push(`<span class="st-why" title="${esc(S.stockNote)}">why can't I reserve?</span>`);
   }
 
@@ -1118,6 +1272,38 @@ function stockLineHtml(l) {
     ${bins ? `<span class="st-bins">${bins}</span>` : ''}
     ${actions.length ? `<span class="st-actions">${actions.join('')}</span>` : ''}</div>`;
 }
+
+/* The de-list list. Deliberately at the top of the screen and deliberately
+   not per-order: the spools are off the shelf in Grist but still on sale on a
+   storefront, and that is true whichever order you happen to be looking at. */
+function todoPanelHtml() {
+  if (!S.todoQueue.length) return '';
+  const total = S.todoQueue.reduce((n, x) => n + x.qty, 0);
+  const canTick = !!(S.allocCols && S.allocCols.adjusted);
+  const busy = S.stockBusy ? 'disabled' : '';
+  return `<div class="banner warn todo">
+    <strong>Change these quantities in Shopify — ${total} spool(s).</strong>
+    They are reserved here but still for sale on the storefront, because nothing in this
+    stack writes inventory to Shopify. Until you change the number there, the same spool
+    can be sold twice. Ticking a row only stops the reminder; it changes nothing by itself.
+    <div class="todo-rows">
+      ${S.todoQueue.map(x => `<div class="todo-row">
+        <span class="todo-qty">${x.qty}×</span>
+        <span class="todo-name">${esc(x.name)}</span>
+        ${x.sku ? `<span class="code">${esc(x.sku)}</span>` : ''}
+        <span class="todo-where">${esc(SOURCE_META[x.source].store)}</span>
+        ${x.orderNumber ? `<span class="code">${esc(x.orderNumber)}</span>` : ''}
+        ${canTick
+          ? `<button class="btn secondary tiny" ${busy}
+              onclick="markAdjusted(${x.allocId})">done</button>`
+          : ''}
+      </div>`).join('')}
+    </div>
+    ${canTick ? '' : `<div style="margin-top:6px">Add a Toggle column
+      <code>Storefront_Adjusted</code> to <code>Lot_Allocations</code> to tick these off.</div>`}
+  </div>`;
+}
+
 
 function renderMain() {
   const box = document.getElementById('main');
