@@ -279,7 +279,7 @@ function fiberCode(v) {
   const up = s.toUpperCase();
   return ['FFN', 'FFC', 'EN', 'BW'].includes(up) ? up : s; // already a code, or unknown
 }
-// Spools -> yards. E Nylon is 150 yд/spool, the rest 100. Works off the CODE, so
+// Spools -> yards. E Nylon is 150 yd/spool, the rest 100. Works off the CODE, so
 // it's correct whether the recipe stored "E Nylon" or "EN".
 function yardsPerSpool(fiber) {
   return fiberCode(fiber) === 'EN' ? 150 : 100;
@@ -423,7 +423,16 @@ async function loadForRecipe(record) {
       const aLot = findColumn(allocT, ['Lot']);
       const aStatus = findColumn(allocT, ['Status']);
       const aCustomer = findColumn(allocT, ['Customer']);
-      S_COLS = { ALLOC: { lot: aLot, qty: aQty, status: aStatus, customer: aCustomer, line: aLine } };
+      /* Marks an allocation as spools taken OFF THE SHELF rather than newly
+         wound. Both write the same Status, so without this flag the two are
+         indistinguishable and a stock pull can never be handed back — the
+         order builder refuses to release it, because releasing a wound
+         allocation would credit the shelf with stock that was never on it.
+         Optional: an older doc without the column still pulls from stock,
+         those pulls just cannot be released automatically. */
+      const aFromStock = findColumn(allocT, ['From_Stock', 'Reserved_From_Stock', 'From_Back_Stock']);
+      S_COLS = { ALLOC: { lot: aLot, qty: aQty, status: aStatus, customer: aCustomer,
+                          line: aLine, fromStock: aFromStock } };
       // Pick the "boxed" status the doc already uses, else the live default.
       const seen = new Set();
       if (aStatus) (allocT.id || []).forEach((id, i) => { const v = columnAsArray(allocT, aStatus)[i]; if (v) seen.add(v.toString()); });
@@ -1023,6 +1032,9 @@ async function fulfillFromStock() {
       f[ALLOC.status] = S.woundStatus || 'Wound - Needs Labels';
       if (ALLOC.customer && o.customerId) f[ALLOC.customer] = o.customerId;
       if (ALLOC.line) f[ALLOC.line] = o.lineId;
+      /* Written explicitly rather than left to the Toggle default of false,
+         which would silently mark these shelf spools as new production. */
+      if (ALLOC.fromStock) f[ALLOC.fromStock] = true;
       allocActions.push(['AddRecord', 'Lot_Allocations', null, f]);
       lotDelta[lot.lotId] = (lotDelta[lot.lotId] || 0) + take;
       lot.left -= take;
