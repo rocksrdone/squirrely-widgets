@@ -1289,6 +1289,91 @@ async function checkRetail(lineId) {
   }
 }
 
+/* ── Applying customer pricing ────────────────────────────────────────────
+   A line's Unit_Price is written when the line is ADDED, from Customer_Pricing.
+   Set a customer's rates after their first order and every existing line keeps
+   the zero it was born with — and an order pushed at 0.00 has to be voided and
+   redone in Shopify, so this is worth a button rather than twelve hand edits.
+
+   IT FILLS BLANKS ONLY. A price already on a line may have been negotiated for
+   this order, and quietly replacing it with the standard rate would be the
+   expensive kind of helpful. Lines that disagree with the rate card are
+   reported instead, so the difference is visible without being acted on. */
+function pricingPlan(orderId) {
+  const o = S.orders.find(x => x.id === orderId);
+  const lines = S.lines[orderId] || [];
+  const fill = [], differ = [], unpriced = [];
+  lines.forEach(l => {
+    const p = priceFor(o && o.customerId, l.recipeId);
+    if (!p) { if (!l.price) unpriced.push(l); return; }
+    if (!l.price) fill.push({ l, p });
+    else if (Math.abs(num(l.price) - p) > 0.005) differ.push({ l, p });
+  });
+  return { o, lines, fill, differ, unpriced };
+}
+
+async function applyPricing(orderId) {
+  if (S.stockBusy) return;
+  const o = S.orders.find(x => x.id === orderId);
+  if (!o) return;
+  if (!S.lineCols.price) {
+    alert('Work_Order_Lines has no Unit_Price column, so there is nowhere to put a price.');
+    return;
+  }
+  /* The lookup keys on the customer REFERENCE, not the typed name. A name with
+     no link behind it silently prices everything at zero, which is exactly the
+     failure this button exists to clean up — so it is named rather than
+     producing an empty plan. */
+  if (!o.customerId) {
+    alert(`${o.customerName || 'This order'} is not linked to a row in Customers, and pricing ` +
+      `is looked up by that link rather than by the name.\n\nPick the customer from the ` +
+      `dropdown, then try again.`);
+    return;
+  }
+  if (!S.pricing[o.customerId]) {
+    alert(`No Customer_Pricing rows for ${o.customerName || 'this customer'}.\n\nAdd one with ` +
+      `a blank Recipe for their standard rate, and a row per colourway for anything that ` +
+      `differs from it.`);
+    return;
+  }
+
+  const { fill, differ, unpriced } = pricingPlan(orderId);
+  const name = (l) => l.recipeName || l.sku;
+  if (!fill.length) {
+    alert(`Nothing to fill in on ${o.number}.` +
+      (differ.length ? `\n\n${differ.length} line(s) already have a price that differs from the ` +
+        `rate card; those are left alone.` : '') +
+      (unpriced.length ? `\n\n${unpriced.length} line(s) have no rate for this customer: ` +
+        unpriced.map(name).join(', ') : ''));
+    return;
+  }
+
+  const money = (n) => '$' + num(n).toFixed(2);
+  const added = fill.reduce((t, f) => t + f.p * f.l.qty, 0);
+  if (!confirm(
+    `Price ${fill.length} line(s) on ${o.number}?\n\n` +
+    fill.map(f => `  ${name(f.l)}  ${money(f.p)} × ${f.l.qty} = ${money(f.p * f.l.qty)}`).join('\n') +
+    `\n\nOrder value goes up by ${money(added)}.` +
+    (differ.length ? `\n\nLEFT ALONE — these already have a price that differs from the rate ` +
+      `card, which may be deliberate:\n` +
+      differ.map(d => `  ${name(d.l)}  ${money(d.l.price)}, card says ${money(d.p)}`).join('\n') : '') +
+    (unpriced.length ? `\n\nNO RATE for this customer, so still unpriced: ` +
+      unpriced.map(name).join(', ') : ''))) return;
+
+  S.stockBusy = true; render();
+  try {
+    await grist.docApi.applyUserActions(fill.map(f =>
+      ['UpdateRecord', 'Work_Order_Lines', f.l.id, { [S.lineCols.price]: f.p }]));
+    await loadAll();
+    toast(`Priced ${fill.length} line(s)`);
+  } catch (e) {
+    console.error('Could not apply pricing:', e);
+    alert('Could not write those prices. Nothing was changed.');
+  } finally {
+    S.stockBusy = false; render();
+  }
+}
+
 /* ── Make fresh instead ───────────────────────────────────────────────────
    The spools on the shelf were looked at and turned down for this customer.
    Two things have to happen together: the reservation goes back, and the line
@@ -1922,6 +2007,23 @@ function renderMain() {
         <td class="num">${value ? '$' + value.toFixed(2) : '—'}</td><td></td></tr></tfoot>` : ''}
     </table>
 
+    ${(() => {
+      /* An order at 0.00 is only obvious at the push preview, by which point
+         you are one click from an invoice you would have to void. Say it here. */
+      if (!lines.length || !S.lineCols.price) return '';
+      const noPrice = lines.filter(l => !num(l.price));
+      if (!noPrice.length) return '';
+      const linked = !!o.customerId;
+      const haveRates = linked && !!S.pricing[o.customerId];
+      return `<div class="banner warn" style="margin-top:10px">
+        <strong>${noPrice.length} line(s) have no price</strong> and would go over at $0.00.
+        ${!linked
+          ? 'This order is not linked to a row in <code>Customers</code>, and pricing is looked up by that link rather than by the name — pick the customer from the dropdown above.'
+          : !haveRates
+            ? `No <code>Customer_Pricing</code> rows for ${esc(o.customerName || 'this customer')} yet. Add one with a blank Recipe for their standard rate.`
+            : 'Their rates are on file — use <strong>apply pricing</strong> to fill these in.'}
+      </div>`;
+    })()}
     <div class="add-row">
       <select id="addRecipe" class="grow" onchange="setAddRecipe(this.value)">
         <option value="">— add a colourway —</option>
@@ -1953,6 +2055,11 @@ function renderMain() {
         title="${pushed ? 'Already in Shopify' : building
           ? 'Release it for production first' : 'Shows what would be sent before anything is created'}">
         ${pushed ? 'In Shopify' : 'Push to Shopify…'}</button>
+      ${S.lineCols.price && lines.length ? `<button class="btn secondary" onclick="applyPricing(${o.id})"
+        ${S.stockBusy || pushed ? 'disabled' : ''}
+        title="${pushed
+          ? 'Already in Shopify — changing a price here would not change it there'
+          : 'Fill in blank prices from this customer\'s rates'}">apply pricing</button>` : ''}
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;
