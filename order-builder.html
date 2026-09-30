@@ -423,6 +423,7 @@ async function loadAll() {
 async function loadStock() {
   S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
   S.stockCols = {}; S.lotStock = {}; S.stockNote = ''; S.todoQueue = [];
+  S.stockFailed = false;
   try {
     const [lotT, allocT] = await Promise.all([
       grist.docApi.fetchTable('Production_Lots'),
@@ -520,6 +521,7 @@ async function loadStock() {
     buildTodoQueue();
   } catch (e) {
     console.warn('Stock unavailable:', e);
+    S.stockFailed = true;
     S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so stock is not shown.';
   }
 }
@@ -1273,9 +1275,15 @@ function renderBanners() {
   }
   /* Only worth saying once the shelf is readable and something is on it —
      otherwise this is a setup note for a feature nobody is reaching for. */
-  if (!S.loading && !S.error && S.stockNote && Object.keys(S.stockCols).length
-      && Object.keys(S.stockByRecipe).length) {
-    out.push(`<div class="banner warn"><strong>Stock is shown but can't be reserved.</strong>
+  /* A setup note is only worth raising once there is stock it would apply to.
+     A READ FAILURE is always worth raising: staying quiet there leaves an
+     empty screen that looks exactly like having no stock. */
+  if (!S.loading && !S.error && S.stockNote
+      && (S.stockFailed || (Object.keys(S.stockCols).length
+                            && Object.keys(S.stockByRecipe).length))) {
+    out.push(`<div class="banner warn"><strong>${S.stockFailed
+      ? "Couldn't read stock."
+      : "Stock is shown but can't be reserved."}</strong>
       ${esc(S.stockNote)}</div>`);
   }
   /* Last, so it sits closest to the work — and it is the one banner that is
@@ -1312,6 +1320,24 @@ function renderSide() {
       <div class="meta">${spools} spool(s) · ${lines.length} line(s)</div>
     </div>`;
   }).join('');
+}
+
+/* What is on hand for a colourway, said in the picker itself.
+
+   Without this you cannot tell which colourways have retail stock until after
+   the line exists — you add it, look, and delete it again if the answer is no.
+   That is the wrong way round when the whole reason for opening this screen
+   may be to build an order out of what is already sitting on a storefront.
+
+   A plain <option> cannot carry markup, so this is text only. */
+function stockHint(recipeId) {
+  const lots = S.stockByRecipe[recipeId] || [];
+  if (!lots.length) return '';
+  const by = {};
+  SOURCES.forEach(s => { by[s] = lots.reduce((n, l) => n + num(l.by[s]), 0); });
+  const parts = SOURCES.filter(s => by[s] > 0)
+    .map(s => `${by[s]} ${SOURCE_META[s].short}`);
+  return parts.length ? `  —  ${parts.join(', ')}` : '';
 }
 
 /* The shelf, per line. Reading only — every write is behind a button and a
@@ -1491,7 +1517,7 @@ function renderMain() {
       <select id="addRecipe" onchange="S.addRecipe = this.value">
         <option value="">— add a colourway —</option>
         ${S.recipes.map(r => `<option value="${r.id}" ${String(r.id) === String(S.addRecipe) ? 'selected' : ''}>
-          ${esc(r.name)} · ${esc(r.sku)}</option>`).join('')}
+          ${esc(r.name)} · ${esc(r.sku)}${esc(stockHint(r.id))}</option>`).join('')}
       </select>
       <input type="number" min="1" value="${esc(S.addQty)}" onchange="S.addQty = this.value">
       <button class="btn" onclick="addLine(${o.id})">Add</button>
