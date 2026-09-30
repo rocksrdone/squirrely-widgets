@@ -295,7 +295,7 @@ const S = {
   selected: null,
   cols: {}, lineCols: {},
   loading: true, error: '',
-  addRecipe: '', addQty: 1,
+  addRecipe: '', addQty: 1, addSource: '',
   missing: [],
   push: null,        // the last preview or push response
   pushBusy: false,
@@ -734,11 +734,18 @@ async function pickCustomer(id, customerId) {
   }
 }
 
+/* Where the spools for a NEW line should come from, chosen while adding it
+   rather than as a second step afterwards. '' means decide later: the line is
+   created and nothing is committed, which is what this screen did before. */
+function setAddRecipe(v) { S.addRecipe = v; S.addSource = ''; render(); }
+function setAddSource(v) { S.addSource = v; render(); }
+
 async function addLine(orderId) {
   const recipeId = Number(S.addRecipe);
   const qty = Math.max(1, Math.round(num(S.addQty)));
   const r = S.recipesById[recipeId];
   if (!r) { toast('Pick a colourway first'); return; }
+  const source = S.addSource;
 
   const o = S.orders.find(x => x.id === orderId);
   const existing = (S.lines[orderId] || []).find(l => l.recipeId === recipeId);
@@ -748,6 +755,10 @@ async function addLine(orderId) {
   if (existing) {
     await setLineQty(existing.id, existing.qty + qty);
     toast(`${r.name} → ${existing.qty + qty}`);
+    /* The merged quantity is now short by what was just added, so the chosen
+       source still applies — to the increase, not to the whole line. */
+    if (source === 'fresh') await makeFreshInstead(existing.id);
+    else if (source) await reserveFromStock(existing.id, source);
     return;
   }
 
@@ -765,14 +776,49 @@ async function addLine(orderId) {
     const p = priceFor(o.customerId, recipeId);
     if (p) fields[S.lineCols.price] = p;
   }
+  /* "make new" is set on the row itself, so the line is never briefly open to
+     a stock pull. A stock source cannot be: the allocation needs the line's
+     row id, which does not exist until this write returns. If that second step
+     fails the line is simply there unreserved — harmless, and the reserve
+     button on the line is right there. */
+  if (source === 'fresh' && S.lineCols.makeFresh) fields[S.lineCols.makeFresh] = true;
+
   try {
-    await grist.docApi.applyUserActions([['AddRecord', 'Work_Order_Lines', null, fields]]);
+    const res = await grist.docApi.applyUserActions([
+      ['AddRecord', 'Work_Order_Lines', null, fields]]);
+    const newId = (res && res.retValues && res.retValues[0]) || null;
     await loadAll();
-    toast(`Added ${qty}× ${r.name}`);
+    if (source && source !== 'fresh' && newId) {
+      await reserveFromStock(newId, source);
+    } else {
+      toast(source === 'fresh'
+        ? `Added ${qty}× ${r.name} — dyeing fresh`
+        : `Added ${qty}× ${r.name}`);
+    }
+    S.addSource = '';
   } catch (e) {
     console.error('Could not add the line:', e);
     alert('Could not add that line.');
   }
+}
+
+/* The options for the source picker, for whichever colourway is selected.
+   Only sources that actually hold something are offered — an empty choice
+   that silently does nothing would be worse than no choice at all. */
+function addSourceOptions() {
+  const r = S.recipesById[Number(S.addRecipe)];
+  if (!r) return [];
+  const lots = S.stockByRecipe[r.id] || [];
+  const out = [{ v: '', label: 'decide later' }];
+  if (S.allocCols && S.allocCols.source) {
+    SOURCES.forEach(s => {
+      if (!S.stockCols[s]) return;
+      const have = lots.reduce((n, l) => n + num(l.by[s]), 0);
+      if (have > 0) out.push({ v: s, label: `from ${SOURCE_META[s].short} (${have})` });
+    });
+  }
+  if (S.lineCols.makeFresh) out.push({ v: 'fresh', label: 'make new' });
+  return out;
 }
 
 async function setLineQty(lineId, qty) {
@@ -1514,11 +1560,22 @@ function renderMain() {
     </table>
 
     <div class="field-row" style="margin-top:12px">
-      <select id="addRecipe" onchange="S.addRecipe = this.value">
+      <select id="addRecipe" onchange="setAddRecipe(this.value)">
         <option value="">— add a colourway —</option>
         ${S.recipes.map(r => `<option value="${r.id}" ${String(r.id) === String(S.addRecipe) ? 'selected' : ''}>
           ${esc(r.name)} · ${esc(r.sku)}${esc(stockHint(r.id))}</option>`).join('')}
       </select>
+      ${(() => {
+        const opts = addSourceOptions();
+        /* Hidden until a colourway is picked, and when the only choice is
+           "decide later" — a select with one option is furniture. */
+        if (opts.length < 2) return '';
+        return `<select id="addSource" onchange="setAddSource(this.value)"
+          title="Where these spools come from">
+          ${opts.map(o => `<option value="${esc(o.v)}" ${
+            o.v === S.addSource ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+        </select>`;
+      })()}
       <input type="number" min="1" value="${esc(S.addQty)}" onchange="S.addQty = this.value">
       <button class="btn" onclick="addLine(${o.id})">Add</button>
     </div>
