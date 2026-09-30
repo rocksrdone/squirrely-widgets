@@ -530,6 +530,17 @@ function buildTodoQueue() {
       if (!a.source || !SOURCE_META[a.source].listed || a.adjusted) return;
       const found = lineIndex[Number(lineId)];
       const order = found ? S.orders.find(o => o.id === found.orderId) : null;
+      /* Shopify already did it. An order IMPORTED from a storefront was
+         decremented by that storefront at checkout, so pulling the matching
+         stock here is Grist catching up — not a change the storefront still
+         needs. Nagging about it would walk you into decrementing twice.
+
+         A manual order is the opposite case even after it is pushed: the push
+         runs orderCreate with inventoryBehaviour BYPASS, which tells Shopify
+         explicitly NOT to touch inventory. So it keeps its Shopify_Order_ID
+         and still needs the manual change — which is why this tests the order
+         TYPE and not merely the presence of an id. */
+      if (order && orderCameFrom(order) === a.source) return;
       S.todoQueue.push({
         allocId: a.id, qty: a.qty, source: a.source,
         sku: found ? (found.line.sku || '') : '',
@@ -635,6 +646,17 @@ function nextManualNumber() {
 function isManual(o) {
   return String(o.type || '') === MANUAL_TYPE ||
     /^M-\d+$/i.test(String(o.number || '').trim());
+}
+
+/* Which storefront's checkout has ALREADY decremented for this order, if any.
+   Only the vendor store's orders reach Grist — the importer reads
+   squirrelvender and nothing else, and retail orders are deliberately absent
+   — so an imported order can only have come from there. A manual order has
+   no storefront behind it whatever its id, because the push bypasses
+   inventory. Returns '' when no storefront has decremented anything. */
+function orderCameFrom(o) {
+  if (!o || isManual(o)) return '';
+  return String(o.shopifyId || '').trim() ? 'Vendor' : '';
 }
 
 /* ── Writes ─────────────────────────────────────────────────────────────── */
@@ -796,12 +818,18 @@ async function reserveFromStock(lineId, source) {
   const where = draws.map(d =>
     `  ${d.take} from ${d.lot.lotNumber}${d.lot.bin ? ' (bin ' + d.lot.bin + ')' : ''}`).join('\n');
   /* A listed source needs the consequence spelled out at the moment of the
-     click, not only afterwards in a list. Nothing here reaches Shopify. */
-  const warning = SOURCE_META[source].listed
-    ? `\n\nThese spools are LISTED FOR SALE on ${SOURCE_META[source].store}. Grist does not ` +
-      `write inventory to Shopify, so they stay on sale until you adjust the listing there ` +
-      `yourself. They stay listed on this screen until you have done that and ticked them off.`
-    : '';
+     click, not only afterwards in a list. Nothing here reaches Shopify —
+     unless that storefront's own checkout already did it, in which case
+     warning would talk you into decrementing the same spools twice. */
+  const already = orderCameFrom(order) === source;
+  const warning = !SOURCE_META[source].listed ? ''
+    : already
+      ? `\n\nThis order came from ${SOURCE_META[source].store}, so its checkout has already ` +
+        `taken these off that storefront. Nothing to change in Shopify — this is just Grist ` +
+        `catching up.`
+      : `\n\nThese spools are LISTED FOR SALE on ${SOURCE_META[source].store}. Grist does not ` +
+        `write inventory to Shopify, so they stay on sale until you change the quantity there ` +
+        `yourself. They stay listed on this screen until you have done that and ticked them off.`;
   if (!confirm(
     `Reserve ${total} spool(s) of ${line.recipeName || line.sku} from ${SOURCE_META[source].label}?` +
     `\n\n${where}${warning}`)) return;
