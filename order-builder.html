@@ -814,21 +814,33 @@ async function addLine(orderId) {
 }
 
 /* The options for the source picker, for whichever colourway is selected.
-   Only sources that actually hold something are offered — an empty choice
-   that silently does nothing would be worse than no choice at all. */
+
+   ALWAYS at least two entries, so the control never vanishes. Hiding it when
+   there was nothing to offer looked exactly like the feature being broken —
+   a colourway with no stock and a doc without Make_Fresh left one option, the
+   picker disappeared, and there was nothing on screen to explain why. A
+   disabled line that says what is missing is worth more than a clean gap. */
 function addSourceOptions() {
   const r = S.recipesById[Number(S.addRecipe)];
   if (!r) return [];
   const lots = S.stockByRecipe[r.id] || [];
   const out = [{ v: '', label: 'decide later' }];
+
+  let offered = 0;
   if (S.allocCols && S.allocCols.source) {
     SOURCES.forEach(s => {
       if (!S.stockCols[s]) return;
       const have = lots.reduce((n, l) => n + num(l.by[s]), 0);
-      if (have > 0) out.push({ v: s, label: `from ${SOURCE_META[s].short} (${have})` });
+      if (have > 0) { out.push({ v: s, label: `from ${SOURCE_META[s].short} (${have})` }); offered++; }
     });
+    if (!offered) out.push({ v: '', label: 'no stock for this colourway', off: true });
+  } else {
+    out.push({ v: '', label: 'add Stock_Source to reserve stock', off: true });
   }
-  if (S.lineCols.makeFresh) out.push({ v: 'fresh', label: 'make new' });
+
+  out.push(S.lineCols.makeFresh
+    ? { v: 'fresh', label: 'make new' }
+    : { v: '', label: 'make new — add Make_Fresh column', off: true });
   return out;
 }
 
@@ -1578,13 +1590,12 @@ function renderMain() {
       </select>
       ${(() => {
         const opts = addSourceOptions();
-        /* Hidden until a colourway is picked, and when the only choice is
-           "decide later" — a select with one option is furniture. */
-        if (opts.length < 2) return '';
+        if (!opts.length) return '';   // only before a colourway is picked
         return `<select id="addSource" class="src" onchange="setAddSource(this.value)"
           title="Where these spools come from">
-          ${opts.map(o => `<option value="${esc(o.v)}" ${
-            o.v === S.addSource ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+          ${opts.map((o, i) => `<option value="${esc(o.v)}" ${o.off ? 'disabled' : ''} ${
+            !o.off && o.v === S.addSource && !(o.v === '' && i > 0) ? 'selected' : ''
+          }>${esc(o.label)}</option>`).join('')}
         </select>`;
       })()}
       <input type="number" min="1" value="${esc(S.addQty)}" onchange="S.addQty = this.value">
