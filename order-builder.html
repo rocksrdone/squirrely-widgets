@@ -101,6 +101,9 @@ table.lines tfoot td { font-weight: 700; border-top: 2px solid var(--rule); bord
 .st-listed { color: #A89B8F; font-style: italic; }
 .st-bins { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72;
   background: rgba(0,0,0,.035); padding: 1px 6px; border-radius: 3px; }
+/* Where the RESERVED spools are — the picking information, so it reads louder
+   than the what-is-still-available list beside it. */
+.st-bins.held { color: var(--teal); background: var(--teal-light); font-weight: 500; }
 .st-actions { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .st-why { font-size: 10px; color: var(--gold); text-decoration: underline dotted; cursor: help; }
 .st-fresh { color: var(--accent); font-weight: 700; text-transform: uppercase;
@@ -313,6 +316,7 @@ const S = {
 
   stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, bin, sortAt, by: {source: n} }]
   lotStock: {},        // lotId    -> { General, Store, Vendor } as they stand now
+  lotInfo: {},         // lotId    -> { lotNumber, bin } for every lot, empty or not
   allocByLine: {},     // lineId   -> [{ id, lotId, qty, source, adjusted }]
   allocCols: null,     // resolved Lot_Allocations columns, null when unreadable
   stockCols: {},       // source -> the Production_Lots column it draws down
@@ -433,7 +437,7 @@ async function loadAll() {
    be built and pushed without ever touching the shelf. */
 async function loadStock() {
   S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
-  S.stockCols = {}; S.lotStock = {}; S.stockNote = ''; S.todoQueue = [];
+  S.stockCols = {}; S.lotStock = {}; S.lotInfo = {}; S.stockNote = ''; S.todoQueue = [];
   S.stockFailed = false;
   try {
     const [lotT, allocT] = await Promise.all([
@@ -510,6 +514,14 @@ async function loadStock() {
       const by = {};
       Object.entries(S.stockCols).forEach(([s, col]) => { by[s] = num(columnAsArray(lotT, col)[i]); });
       S.lotStock[id] = by;
+      /* Name and bin for EVERY lot, not just ones with stock left. A lot
+         reserved down to zero is exactly the one whose spools are in a box
+         waiting to be picked, and "where are they" is the question that
+         matters then. */
+      S.lotInfo[id] = {
+        lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
+        bin: String(columnAsArray(lotT, LOT.bin)[i] || '').trim(),
+      };
     });
 
     (lotT.id || []).forEach((id, i) => {
@@ -1433,16 +1445,20 @@ function stockLineHtml(l) {
   }
 
   const bits = [];
+  const RESERVED_HERE = '\u0000R';   // placeholder: the held chip goes here
+  const SHELF_HERE = '\u0000S';      // placeholder: the available chip goes here
   if (st.reserved) {
     /* Named by source, because "4 reserved" tells you nothing about whether a
        storefront still has them on sale. */
     const parts = SOURCES.filter(s => st.bySource[s] > 0)
       .map(s => `${st.bySource[s]} from ${SOURCE_META[s].short}`);
     bits.push(`<span class="st-res">${esc(parts.join(' + '))} reserved</span>`);
+    bits.push(RESERVED_HERE);
   }
   if (st.avail.General) {
     bits.push(`<span class="${st.avail.General >= st.short && st.short ? 'st-ok' : 'st-some'}">${
       st.avail.General} on the shelf</span>`);
+    bits.push(SHELF_HERE);
   } else if (!st.reserved) {
     bits.push(`<span class="st-none">none on the shelf</span>`);
   }
@@ -1452,6 +1468,23 @@ function stockLineHtml(l) {
   const stillShort = st.short - Math.min(st.short, st.avail.General || 0);
   if (stillShort > 0) bits.push(`<span class="st-short">${stillShort} to dye</span>`);
 
+  /* WHERE THE RESERVED SPOOLS ARE. Until now only shelf stock listed a bin, so
+     a retail pull said "2 from retail reserved" and nothing about where to go
+     and get them. The reservation knows its lot, and the lot knows its bin. */
+  const held = {};
+  st.allocs.filter(a => a.source).forEach(a => {
+    const k = a.lotId + '|' + a.source;
+    held[k] = held[k] || { lotId: a.lotId, source: a.source, qty: 0 };
+    held[k].qty += a.qty;
+  });
+  const heldList = Object.values(held).map(h => {
+    const info = S.lotInfo[h.lotId] || {};
+    const where = SOURCE_META[h.source].listed ? SOURCE_META[h.source].short : '';
+    return `${esc(info.lotNumber || ('lot ' + h.lotId))}${
+      info.bin ? ' · ' + esc(info.bin) : ''}${where ? ' · ' + esc(where) : ''} (${h.qty})`;
+  }).slice(0, 4).join(', ');
+
+  /* What is still ON the shelf, for deciding what to reserve next. */
   const bins = st.lots.filter(x => num(x.by.General) > 0)
     .map(x => `${esc(x.lotNumber)}${x.bin ? ' · ' + esc(x.bin) : ''} (${num(x.by.General)})`)
     .slice(0, 4).join(', ');
@@ -1487,8 +1520,20 @@ function stockLineHtml(l) {
         st.reserved ? ' instead' : ''}</button>`);
   }
 
-  return `<div class="stock-line">${bits.join('<span class="st-sep">·</span>')}
-    ${bins ? `<span class="st-bins">${bins}</span>` : ''}
+  /* Each chip sits next to the phrase it belongs to. Left to the end they
+     line up as two near-identical grey boxes and it stops being obvious which
+     is what you hold and which is what is left. */
+  const heldChip = heldList
+    ? `<span class="st-bins held" title="Where the reserved spools are">${heldList}</span>` : '';
+  const shelfChip = bins
+    ? `<span class="st-bins" title="Still on the shelf">${bins}</span>` : '';
+  const line = bits
+    .filter(b => (b !== RESERVED_HERE || heldChip) && (b !== SHELF_HERE || shelfChip))
+    .join('<span class="st-sep">·</span>')
+    .replace(RESERVED_HERE, heldChip)
+    .replace(SHELF_HERE, shelfChip);
+
+  return `<div class="stock-line">${line}
     ${actions.length ? `<span class="st-actions">${actions.join('')}</span>` : ''}</div>`;
 }
 
