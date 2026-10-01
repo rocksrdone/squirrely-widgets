@@ -322,7 +322,8 @@ async function loadBoard() {
       const al = allocByLot[id] || 0;
       S.binFill[bid] = (S.binFill[bid] || 0) + st + Math.max(0, t - al - st - br);
       const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
-      if (rid && !S.binMemory[rid]) S.binMemory[rid] = { id: bid, code: S.binCode[bid] || '' };
+      const ck = colourKeyOf((recipeById[rid] || {}).name);
+      if (ck && !S.binMemory[ck]) S.binMemory[ck] = { id: bid, code: S.binCode[bid] || '' };
     });
 
     render();
@@ -350,6 +351,13 @@ const BIN_CAPACITY = 60;
 
 function binFill(id) { return (S.binFill && S.binFill[id]) || 0; }
 
+/* Bagging groups on the COLOURWAY, which is the recipe NAME — FF and E are the
+   same dye in different geometry and belong in one bag, and cotton of the same
+   colour belongs with them. Keyed on recipeId they scattered across bins, which
+   is the opposite of what picking wants. Yarn gets separated later by the bin's
+   fibre class, not by this key. Must match colourKeyOf() in back-stock.html. */
+function colourKeyOf(name) { return normalize(name || ''); }
+
 function binsForFiber(fiberName) {
   const list = (S.stockBins && S.stockBins[fiberName]) || [];
   if (list.length) return list;
@@ -357,7 +365,7 @@ function binsForFiber(fiberName) {
 }
 
 function suggestBin(lot) {
-  const known = (S.binMemory && S.binMemory[lot.recipeId]) || null;
+  const known = (S.binMemory && S.binMemory[colourKeyOf(lot.name)]) || null;
   if (known && binFill(known.id) + lot.unwound <= BIN_CAPACITY) {
     return { bin: known, why: 'where this colourway already lives' };
   }

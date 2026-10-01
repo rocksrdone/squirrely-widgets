@@ -186,6 +186,22 @@ function spoolsByBin() {
 }
 function binCapacity(loc) { return loc.max > 0 ? loc.max : (loc.target > 0 ? loc.target : 0); }
 
+/* ── What counts as "the same colourway" for bagging ───────────────────────
+   The RECIPE NAME, not the recipe row.
+
+   FF and E are the same dye in different geometry — same pot, usually the same
+   day, different hanks. Cotton is a different recipe but the same colour on the
+   shelf. All three are named identically in Recipes and differ only by
+   Fiber_Type, which is exactly why two rows can be called "Sea Spray".
+
+   Keying the bin rules on recipeId therefore scattered one colourway across
+   three bins — the opposite of what you want when picking. Keyed on the folded
+   name they bag together, and cotton joins them for nothing.
+
+   Yarn will want separating later; that is a job for the bin's fibre class,
+   not for this key. Splitting here would scatter the thread again. */
+function colourKeyOf(lot) { return normalize(lot.recipeName || ''); }
+
 /* ── Storage_Bin is a REFERENCE, not text ─────────────────────────────────
    Production_Lots.Storage_Bin points at a Storage_Locations row, so Grist
    stores a row id there. Writing the bin CODE into it instead stores
@@ -292,7 +308,7 @@ function binLoad() {
     const k = normalize(l.bin);
     if (!out[k]) out[k] = { spools: 0, colours: new Set(), customers: new Set() };
     out[k].spools += l.stock;
-    out[k].colours.add(l.recipeId);
+    out[k].colours.add(colourKeyOf(l));
     (l.customers || []).forEach(c => out[k].customers.add(normalize(c)));
   });
   return out;
@@ -331,8 +347,8 @@ function suggestBinForLot(lot, pending) {
      already holds this colourway counts as tidier by one, because adding to it
      does not make the bin any harder to read. */
   const tidiest = (list) => [...list].sort((a, b) => {
-    const ca = colours(a) - (at(a.code).colours.has(lot.recipeId) ? 1 : 0);
-    const cb = colours(b) - (at(b.code).colours.has(lot.recipeId) ? 1 : 0);
+    const ca = colours(a) - (at(a.code).colours.has(colourKeyOf(lot)) ? 1 : 0);
+    const cb = colours(b) - (at(b.code).colours.has(colourKeyOf(lot)) ? 1 : 0);
     if (ca !== cb) return ca - cb;
     return room(b) - room(a);
   });
@@ -340,12 +356,12 @@ function suggestBinForLot(lot, pending) {
     const fits = list.filter(L => room(L) >= lot.stock);
     if (!fits.length) return null;
     const comfy = fits.filter(L => colours(L) < COMFORTABLE_COLOURWAYS_PER_BIN
-      || at(L.code).colours.has(lot.recipeId));
+      || at(L.code).colours.has(colourKeyOf(lot)));
     return tidiest(comfy.length ? comfy : fits)[0];
   };
 
   // 1. Wherever this colourway already lives — it adds no clutter there.
-  const homes = S.locations.filter(L => at(L.code).colours.has(lot.recipeId));
+  const homes = S.locations.filter(L => at(L.code).colours.has(colourKeyOf(lot)));
   const home = prefer(homes);
   if (home) {
     return { bin: home.code,
@@ -353,7 +369,7 @@ function suggestBinForLot(lot, pending) {
   }
   if (homes.length) {
     // Its home bins are all too full for this lot; say so before moving on.
-    const other = allLots().find(l => l.recipeId === lot.recipeId && l.bin && l.lotId !== lot.lotId);
+    const other = allLots().find(l => colourKeyOf(l) === colourKeyOf(lot) && l.bin && l.lotId !== lot.lotId);
     if (other && !S.locations.some(L => normalize(L.code) === normalize(other.bin))) {
       return { bin: other.bin, note: `${lot.recipeName} is already in ${other.bin} (not a listed bin code)` };
     }
@@ -723,7 +739,7 @@ function planPutAway(lots) {
       const k = normalize(sug.bin);
       if (!pending[k]) pending[k] = { spools: 0, colours: new Set(), customers: new Set() };
       pending[k].spools += l.stock;
-      pending[k].colours.add(l.recipeId);
+      pending[k].colours.add(colourKeyOf(l));
       (l.customers || []).forEach(c => pending[k].customers.add(normalize(c)));
     }
     return { lot: l, bin: sug.bin, note: sug.note, filed: false };
