@@ -3282,9 +3282,30 @@ async function saveRecipe() {
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
 
-    await grist.docApi.applyUserActions([
-      ['UpdateRecord', 'Recipes', currentRecipeId, recipeFields]
-    ]);
+    /* Which column failed, named. Grist rejects the WHOLE request when one
+       column does not exist, so a save that worked yesterday stops dead the
+       moment a column is renamed — and "check column names" does not say which
+       of twenty-four to check. On failure each is retried alone to find the
+       one that is actually refused. */
+    try {
+      await grist.docApi.applyUserActions([
+        ['UpdateRecord', 'Recipes', currentRecipeId, recipeFields]
+      ]);
+    } catch (err) {
+      const bad = [];
+      for (const [k, v] of Object.entries(recipeFields)) {
+        try {
+          await grist.docApi.applyUserActions([
+            ['UpdateRecord', 'Recipes', currentRecipeId, { [k]: v }]]);
+        } catch (e2) { bad.push(k); }
+      }
+      if (bad.length) {
+        const msg = `Recipes has no column named: ${bad.join(', ')}`;
+        console.error(msg, err);
+        throw new Error(msg);
+      }
+      throw err;
+    }
 
     const dyeActions = [];
     for (let i = 0; i < dyeRows.length; i++) {
@@ -3325,7 +3346,13 @@ async function saveRecipe() {
     renderSkuSuggestion();
   } catch (e) {
     console.error('Failed to save recipe:', e);
-    showToast('Save failed — check widget access level and column names');
+    const detail = (e && e.message) ? String(e.message) : String(e);
+    /* The reason, not a list of things it might be. A save that fails silently
+       on the same twenty-four columns every time teaches you to stop reading
+       the message. */
+    showToast('Save failed — ' + detail.slice(0, 160));
+    alert('The recipe was not saved.\n\n' + detail +
+      '\n\nIf this names a column, it no longer exists on Recipes under that name.');
   } finally {
     isSaving = false;
     saveBtn.disabled = false;
