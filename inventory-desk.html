@@ -87,6 +87,13 @@ select.pick {
 .arrow { color: var(--muted); font-size: 13px; }
 .hint { font-size: 10.5px; color: var(--muted); margin-top: 7px; line-height: 1.5; }
 
+.card.multi { border-color: #9ACFC7; }
+.fibre-block { border-top: 1px solid var(--rule); }
+.fibre-block:first-of-type { border-top: 1px solid var(--warm); }
+.fb-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px 2px; }
+.fb-fiber { font-weight: 600; font-size: 12.5px; color: var(--teal); }
+.fb-sku { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--muted); }
+.fiber-tag.multi { background: var(--gold-light); color: var(--gold); border-color: #D4B07A; }
 .lots { margin-top: 10px; border-top: 1px dotted var(--rule); padding-top: 8px; }
 .lot-line {
   display: flex; gap: 10px; align-items: center; font-size: 11.5px;
@@ -268,6 +275,10 @@ async function loadAll() {
         name: columnAsArray(recT, REC.name)[i] || `Recipe #${id}`,
         sku: columnAsArray(recT, REC.sku)[i] || '',
         fiber: fiberCode(columnAsArray(recT, REC.fiber)[i] || ''),
+        /* The CODE is for matching; the NAME is for reading. This screen lists
+           spools on live storefronts, and "FFN" beside "EN" is exactly the
+           glance-alike pair that gets the wrong product put on sale. */
+        fiberName: String(columnAsArray(recT, REC.fiber)[i] || '').trim(),
       };
     });
 
@@ -303,6 +314,39 @@ async function loadAll() {
     S.byRecipe = [...map.values()]
       .map(g => { g.onHand = g.held + g.vendor + g.retail; return g; })
       .sort((a, b) => String(a.recipe.name).localeCompare(String(b.recipe.name)));
+
+    /* ── One card per COLOURWAY, fibres as rows inside it ──────────────────
+       FF and E of one colour are separate recipes with separate SKUs, and they
+       sorted next to each other under the same name, told apart by a 9px tag.
+       Moving spools here is the act of LISTING them on a storefront, so a
+       mis-click puts the wrong product on sale and the first you hear of it is
+       from a customer.
+
+       Grouping them removes the error rather than warning about it: there is no
+       wrong card to click, because each fibre is a labelled row carrying its own
+       SKU beside its own buttons.
+
+       A colourway in ONE fibre renders exactly as before. Restructuring every
+       card to guard against an ambiguity most of them do not have would be
+       paying the cost everywhere to fix it in a few places. */
+    const cwMap = new Map();
+    S.byRecipe.forEach(g => {
+      const k = normalize(g.recipe.name) || ('r' + g.recipeId);
+      if (!cwMap.has(k)) cwMap.set(k, { key: k, name: g.recipe.name, members: [] });
+      cwMap.get(k).members.push(g);
+    });
+    S.byColourway = [...cwMap.values()].map(c => {
+      /* FF first, then E, then the rest. Alphabetical put EN above FFN, which
+         reads as though E were the primary — it is the variant. Stable, so a
+         row never moves under the pointer. */
+      const rank = (g) => ({ FFN: 0, EN: 1, FFC: 2 })[g.recipe.fiber] ?? 3;
+      c.members.sort((a, b) => rank(a) - rank(b)
+        || String(a.recipe.fiber).localeCompare(String(b.recipe.fiber)));
+      BUCKETS.forEach(b => { c[b.key] = c.members.reduce((t, g) => t + g[b.key], 0); });
+      c.onHand = c.members.reduce((t, g) => t + g.onHand, 0);
+      c.multi = c.members.length > 1;
+      return c;
+    }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     S.cols = { LOT };
     S.ready = true;
@@ -378,7 +422,7 @@ function storeBarHtml() {
   }
   if (!S.store) { el.innerHTML = ''; return; }
 
-  const rows = visible();
+  const rows = visibleRecipes();
   const diffs = rows.map(g => ({ g, c: storeCmp(g) })).filter(x => x.c && x.c.kind === 'bad');
   const c = S.store.counts || {};
   el.innerHTML = `<div class="store-bar">
@@ -393,11 +437,17 @@ function storeBarHtml() {
 
 function visible() {
   const q = normalize(S.search);
-  return S.byRecipe.filter(g => {
-    if (!S.showEmpty && g.onHand <= 0) return false;
+  return (S.byColourway || []).filter(c => {
+    if (!S.showEmpty && c.onHand <= 0) return false;
     if (!q) return true;
-    return normalize(g.recipe.name).includes(q) || normalize(g.recipe.sku).includes(q);
+    // A SKU search must find the colourway through ANY of its fibres.
+    return normalize(c.name).includes(q)
+      || c.members.some(g => normalize(g.recipe.sku).includes(q));
   });
+}
+/* The store comparison is per SKU, so it works on recipes, not colourways. */
+function visibleRecipes() {
+  return visible().reduce((a, c) => a.concat(c.members), []);
 }
 
 function bucketHtml(g, b) {
@@ -412,8 +462,9 @@ function cmpHtml(g) {
   return c ? `<span class="cmp ${c.kind}">${esc(c.text)}</span>` : '';
 }
 
-function cardHtml(g) {
-  const open = !!S.open[g.recipeId];
+/* The move controls and lot list for ONE recipe — one fibre of one colourway.
+   Unchanged in substance; it just no longer owns the card. */
+function fibreBlockHtml(g) {
   const r = g.recipe;
   const from = S.moveFrom[g.recipeId] || 'held';
   const to = S.moveTo[g.recipeId] || (from === 'held' ? 'vendor' : 'held');
@@ -433,11 +484,11 @@ function cardHtml(g) {
     </div>`;
   }).join('');
 
-  return `<div class="card">
-    <div class="card-head" data-toggle="${g.recipeId}">
+  return `<div class="fibre-block">
+    <div class="fb-head">
       <div>
-        <div class="cw-name">${esc(r.name)} ${r.fiber ? `<span class="fiber-tag">${esc(r.fiber)}</span>` : ''}</div>
-        <div class="cw-meta">${esc(r.sku || '')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}</div>
+        <div class="fb-fiber">${esc(r.fiberName || r.fiber || 'no fibre set')}</div>
+        <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}</div>
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => bucketHtml(g, b)).join('')}
@@ -445,7 +496,7 @@ function cardHtml(g) {
         <span class="onhand" title="On hand — the sum of all three">${g.onHand}</span>
       </div>
     </div>
-    ${open ? `<div class="body">
+    <div class="body">
       <div class="moverow">
         <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Move</span>
         <input class="qty-in" data-qty="${g.recipeId}" value="${esc(String(qty))}" placeholder="0">
@@ -471,7 +522,35 @@ function cardHtml(g) {
           <span class="lot-age"></span>
         </div>
         ${lotLines}</div>` : ''}
-    </div>` : ''}
+    </div>
+  </div>`;
+}
+
+/* The card is the colourway. With one fibre it reads as it always did; with
+   more, each fibre is its own labelled row carrying its own SKU. */
+function cardHtml(c) {
+  const open = !!S.open[c.key];
+  const fibres = c.members.map(g => g.recipe.fiberName || g.recipe.fiber || '?').join(' + ');
+  return `<div class="card${c.multi ? ' multi' : ''}">
+    <div class="card-head" data-toggle="${esc(c.key)}">
+      <div>
+        <div class="cw-name">${esc(c.name)}${c.multi
+          ? ` <span class="fiber-tag multi">${esc(fibres)}</span>`
+          : (c.members[0].recipe.fiberName || c.members[0].recipe.fiber
+              ? ` <span class="fiber-tag">${esc(c.members[0].recipe.fiberName || c.members[0].recipe.fiber)}</span>` : '')}</div>
+        <div class="cw-meta">${c.multi
+          ? `${c.members.length} fibres — ${esc(c.members.map(g => g.recipe.sku || '?').join(', '))}`
+          : esc(c.members[0].recipe.sku || '')}</div>
+      </div>
+      <div class="buckets">
+        ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
+          title="${c.multi ? 'Combined across ' + c.members.length + ' fibres — open to see the split' : esc(b.label)}">
+          <span class="n">${c[b.key]}</span><span class="l">${esc(b.short)}</span></div>`).join('')}
+        ${c.multi ? '' : cmpHtml(c.members[0])}
+        <span class="onhand" title="On hand">${c.onHand}</span>
+      </div>
+    </div>
+    ${open ? c.members.map(fibreBlockHtml).join('') : ''}
   </div>`;
 }
 
@@ -503,8 +582,8 @@ function render() {
 
 function wire() {
   document.querySelectorAll('[data-toggle]').forEach(el => el.addEventListener('click', () => {
-    const id = Number(el.dataset.toggle);
-    S.open[id] = !S.open[id];
+    const k = el.dataset.toggle;
+    S.open[k] = !S.open[k];
     render();
   }));
   document.querySelectorAll('[data-qty]').forEach(el => el.addEventListener('input', () => {
