@@ -605,6 +605,9 @@ async function loadStock() {
         const source = SOURCES.find(s => s.toLowerCase() === raw.toLowerCase()) || '';
         (S.allocByLine[lineId] = S.allocByLine[lineId] || []).push({
           id, source,
+          /* Carried so a SHIPPED allocation can never be handed back. See
+             releasable(). */
+          status: ALLOC.status ? String(columnAsArray(allocT, ALLOC.status)[i] || '') : '',
           lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
           qty: num(columnAsArray(allocT, ALLOC.qty)[i]),
           adjusted: ALLOC.adjusted ? !!columnAsArray(allocT, ALLOC.adjusted)[i] : false,
@@ -727,7 +730,7 @@ function buildTodoQueue() {
 
   Object.entries(S.allocByLine).forEach(([lineId, allocs]) => {
     allocs.forEach(a => {
-      if (!a.source || !SOURCE_META[a.source].listed || a.adjusted) return;
+      if (!releasable(a) || !SOURCE_META[a.source].listed || a.adjusted) return;
       const found = lineIndex[Number(lineId)];
       const order = found ? S.orders.find(o => o.id === found.orderId) : null;
       /* Shopify already did it. An order IMPORTED from a storefront was
@@ -753,6 +756,23 @@ function buildTodoQueue() {
   S.todoQueue.sort((a, b) => String(a.orderNumber).localeCompare(String(b.orderNumber)));
 }
 
+/* ── What may be handed back ───────────────────────────────────────────────
+   A Stock_Source was meant to be the whole test: blank meant wound production,
+   set meant a reservation this screen made. That rested on blank being the
+   resting state, and it is not — every one of the 239 allocations in this
+   document carries a source, 223 of them Packed. Releasing on the source alone
+   would therefore delete shipped history and credit a lot with spools that
+   left the building weeks ago.
+
+   So the status is a second, independent gate, and the dangerous direction is
+   the default: anything that reads as packed, shipped, sent or delivered is
+   production as far as this screen is concerned, whatever its source says.
+   A single wrong assumption should not be able to invent stock. */
+function releasable(a) {
+  if (!a.source || !S.stockCols[a.source]) return false;
+  return !/pack|ship|sent|deliver|complete|fulfil/i.test(String(a.status || ''));
+}
+
 /* What a line already holds, split by where it came from. Only the reserved
    part is this screen's to hand back. */
 function lineStock(line) {
@@ -760,7 +780,7 @@ function lineStock(line) {
   const bySource = {};
   SOURCES.forEach(s => { bySource[s] = 0; });
   let reserved = 0;
-  allocs.forEach(a => { if (a.source) { bySource[a.source] += a.qty; reserved += a.qty; } });
+  allocs.forEach(a => { if (releasable(a)) { bySource[a.source] += a.qty; reserved += a.qty; } });
 
   /* Qty_Dyed is the guard the delete paths have always used, and it holds even
      when Lot_Allocations cannot be read at all. Taking the larger of the two
@@ -768,7 +788,9 @@ function lineStock(line) {
      route this widget does not know about, still stops a destructive click —
      the old refusal survives rather than being replaced by a better-informed
      one that happens to know nothing. */
-  const fromAllocs = allocs.filter(a => !a.source).reduce((n, a) => n + a.qty, 0);
+  /* Anything NOT releasable is production — including a packed allocation that
+     happens to carry a source. */
+  const fromAllocs = allocs.filter(a => !releasable(a)).reduce((n, a) => n + a.qty, 0);
   const produced = Math.max(fromAllocs, num(line.dyed) - reserved);
 
   const lots = line.recipeId ? (S.stockByRecipe[line.recipeId] || []) : [];
@@ -1555,7 +1577,7 @@ function nextLotNumber() {
    is credited to the column it actually left, so a retail pull does not come
    back as back stock. */
 function releaseActions(line) {
-  const allocs = (S.allocByLine[line.id] || []).filter(a => a.source && S.stockCols[a.source]);
+  const allocs = (S.allocByLine[line.id] || []).filter(releasable);
   const backTo = {};   // lotId -> source -> qty
   const acts = [];
   allocs.forEach(a => {
