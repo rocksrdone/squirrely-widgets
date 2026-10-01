@@ -372,6 +372,40 @@ let COLS = {};
 let busy = false;
 let lastUndo = null;
 let loadError = null;
+/* Storage_Bin translation. See the note where these are populated. */
+let BIN_BY_ID = {}, BIN_BY_CODE = {}, BIN_IS_REF = false;
+
+/* A stored Storage_Bin value as a readable bin code: a row id resolves through
+   the map, anything else is the raw code the old write path left behind. */
+function binCodeOf(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'number') return BIN_BY_ID[raw] || '';
+  return raw.toString().trim();
+}
+
+/* Whether Storage_Bin is a reference, decided from the column rather than as a
+   side effect of reading rows. A document where EVERY value is already broken
+   has no numbers in it, and inferring from the rows would conclude "text" and
+   go on writing strings — the precise failure this exists to stop. A single
+   number settles it, because no bin code is a bare number; failing that, the
+   presence of a Storage_Locations bin list means the column is meant to point
+   at it. */
+function detectBinIsRef(lotsT, binCol) {
+  if (!binCol) return false;
+  const vals = columnAsArray(lotsT, binCol);
+  for (const v of vals) if (typeof v === 'number' && v > 0) return true;
+  return Object.keys(BIN_BY_CODE).length > 0;
+}
+
+/* What to WRITE for a bin code. On a reference column an unknown code returns
+   null and the caller refuses — storing it is what left 43 lots unresolvable. */
+function binRefFor(code) {
+  const c = (code || '').toString().trim();
+  if (!c) return null;
+  if (!BIN_IS_REF) return c;
+  return BIN_BY_CODE[normalize(c)] || null;
+}
+
 let D = null;   // made-dye audit model
 let T = null;   // thread / back-stock audit model
 
@@ -397,6 +431,23 @@ async function loadEverything() {
     // works, it just can't show empty bins or compare against a target.
     let locT = null;
     try { locT = await grist.docApi.fetchTable('Storage_Locations'); } catch (e) { locT = null; }
+    /* ── Storage_Bin is a REFERENCE to Storage_Locations ───────────────────
+       Grist stores a row id in it, so a lot filed correctly comes back as a
+       NUMBER and a lot filed by the old string-writing path comes back as the
+       bin code. Reading it raw meant this screen showed "32" as the bin for
+       every correctly-filed lot — and then reported those same lots under
+       "Bin code not in Storage_Locations", because 32 is not a bin code. The
+       audit was flagging the healthy rows and passing over the broken ones.
+       Both directions are translated below. */
+    BIN_BY_ID = {}; BIN_BY_CODE = {};
+    if (locT) {
+      const codeCol = findColumn(locT, ['Bin_Code']);
+      if (codeCol) (locT.id || []).forEach((id, i) => {
+        const c = (columnAsArray(locT, codeCol)[i] || '').toString().trim();
+        if (!c) return;
+        BIN_BY_ID[id] = c; BIN_BY_CODE[normalize(c)] = id;
+      });
+    }
 
     const missing = [];
     const opt = cands => ({ cands, required: false });
@@ -570,6 +621,7 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
   });
 
   const lots = [];
+  BIN_IS_REF = detectBinIsRef(lotsT, LOT.bin);
   (lotsT.id || []).forEach((id, i) => {
     const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
     const rec = recipe[recipeId] || { name: 'Recipe #' + recipeId, fiber: '' };
@@ -590,7 +642,8 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
       id, recipeId, recipe: rec,
       lotNumber: (columnAsArray(lotsT, LOT.lotNumber)[i] || 'Lot #' + id).toString(),
       fiber: (columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber || '').toString(),
-      bin: (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim(),
+      bin: binCodeOf(columnAsArray(lotsT, LOT.bin)[i]),
+      binRaw: columnAsArray(lotsT, LOT.bin)[i],
       date: columnAsArray(lotsT, LOT.date)[i],
       drying, onRack: /dry|wet|rack/i.test(drying),
       made, broken, packed, reserved, backStock, inBin, free,
@@ -796,9 +849,15 @@ function saveLotBin(id, prefix) {
   const bin = (el.value || '').trim();
   if (!bin) { showToast('Enter a bin first', false); return; }
   if (bin === l.bin) return;
-  runFix([['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: bin }]],
+  /* A code that names no bin is refused rather than stored as text. The undo
+     restores the ORIGINAL STORED VALUE, not the displayed code — handing back
+     the code would turn a working reference into a broken one on undo. */
+  const value = binRefFor(bin);
+  if (value == null) { showToast(`${bin} is not a bin in Storage_Locations`, false); return; }
+  const before = (l.binRaw == null || l.binRaw === '') ? null : l.binRaw;
+  runFix([['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: value }]],
     `${l.lotNumber} assigned to bin ${bin}`,
-    () => [['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: l.bin }]]);
+    () => [['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.bin]: before }]]);
 }
 
 // ── Fix controls ─────────────────────────────────────────────────
