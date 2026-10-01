@@ -403,6 +403,7 @@ const S = {
   pricingNote: '',       // why the rate card is thinner than expected, when it is
   pricingTable: '',      // which table the rates actually came from
   pricingRows: 0,        // how many rate rows were usable
+  pricingByName: 0,      // how many of those matched by NAME rather than by reference
   selected: null,
   cols: {}, lineCols: {},
   loading: true, error: '',
@@ -842,13 +843,14 @@ async function loadPricing() {
   const byName = {};
   S.customers.forEach(c => { byName[sortKey(c.name)] = c.id; });
 
-  let unresolved = 0;
+  let unresolved = 0, byNameHits = 0;
   const unresolvedNames = [];
   (t.id || []).forEach((id, i) => {
     const raw = columnAsArray(t, custCol)[i];
     let cid = getRefId(raw);
     if (!cid && typeof raw === 'string' && raw.trim()) {
       cid = byName[sortKey(raw)] || null;
+      if (cid) byNameHits++;
       /* Distinct names only. A rate card has a row per colourway, so one
          mistyped customer repeats as many times as they have rates and the
          list becomes the same name five times over. */
@@ -872,6 +874,15 @@ async function loadPricing() {
       `that doesn't point at any row in Customers, so their rates can't be used` +
       (unresolvedNames.length ? ` (${unresolvedNames.join(', ')})` : '') + '.';
   }
+
+  /* THE FALLBACK IS LOAD-BEARING WHEN IT FIRES, and that is worth saying out
+     loud. Matching a rate to a customer by name works until someone edits the
+     name in Customers — at which point the rates stop applying and nothing
+     announces it, because from the widget's side it looks exactly like a
+     customer who has no rates. A fallback that silently becomes the main path
+     is the kind of thing you want to find out about on a quiet evening rather
+     than mid-order. */
+  S.pricingByName = byNameHits;
 }
 
 function priceFor(customerId, recipeId) {
