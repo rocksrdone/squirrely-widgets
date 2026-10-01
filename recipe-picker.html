@@ -113,6 +113,30 @@ function isBrowsable(scope, showLE) {
   return showLE ? true : scopeKind(scope) !== 'le';
 }
 
+/* ── E Nylon is a catalogue entry, not a second recipe ─────────────────────
+   E and FF are the same dye wound onto a longer spool. The FF row is the master
+   for nylon; the E row exists only so the SKU, the 150-yard count and the stock
+   column have something to hang on. Browsing should never offer both.
+
+   Hidden the same way limited editions are — at the point of BROWSING only, and
+   opted back in through the filter that already exists rather than a new toggle.
+   Anything resolving a recipe by id still renders it.
+
+   ONLY WHEN THERE IS AN FF TWIN TO FIND INSTEAD. An E colourway with no FF row
+   is the only recipe for that colour, and hiding it would lose it rather than
+   de-duplicate it. */
+function isEVariant(r, ffNames) {
+  return /^e\s*nylon$/i.test(String(r.fiberType || '').trim())
+    && ffNames.has(normalize(r.name));
+}
+function ffNameSet(list) {
+  const out = new Set();
+  list.forEach(r => {
+    if (/^ff\s*nylon$/i.test(String(r.fiberType || '').trim())) out.add(normalize(r.name));
+  });
+  return out;
+}
+
 const DYE_COLORS = {
   red:'#C8294A',rhodamine:'#D83060',pink:'#E84080',fuschia:'#D83060',fuchsia:'#D83060',
   blue:'#2060C8',aqua:'#20A0C8',teal:'#20A890',turquoise:'#20B2A0',
@@ -276,9 +300,13 @@ function onFilterChange() {
   // Reusing the existing control rather than adding a toggle: "show me the
   // hidden ones" and "show me only the hidden ones" are the same intent here.
   const wantLE = scopeKind(scopeFilter) === 'le';
+  // Same intent, same control: asking for E Nylon in Fiber is asking to see them.
+  const wantE = /^e\s*nylon$/i.test(String(fiberFilter || '').trim());
+  const FF_NAMES = ffNameSet(allRecipes);
 
   let list = allRecipes.filter(r => {
     if (!isBrowsable(r.scope, wantLE)) return false;
+    if (!wantE && isEVariant(r, FF_NAMES)) return false;
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
     if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
     if (statusFilter === '__NONE__') { if (r.status) return false; }
@@ -302,11 +330,13 @@ function onFilterChange() {
 
   filteredCache = list;
   const hidden = wantLE ? 0 : allRecipes.filter(r => scopeKind(r.scope) === 'le').length;
+  const hiddenE = wantE ? 0 : allRecipes.filter(r => isEVariant(r, FF_NAMES)).length;
   const note = document.getElementById('leNote');
   if (note) {
-    note.textContent = hidden
-      ? `${hidden} limited edition${hidden === 1 ? '' : 's'} hidden \u2014 pick Limited Edition in Scope to see them`
-      : '';
+    note.textContent = [
+      hidden ? `${hidden} limited edition${hidden === 1 ? '' : 's'} hidden — pick Limited Edition in Scope to see them` : '',
+      hiddenE ? `${hiddenE} E Nylon version${hiddenE === 1 ? '' : 's'} hidden — the FF Nylon card is the recipe; pick E Nylon in Fiber to see them` : '',
+    ].filter(Boolean).join(' · ');
   }
   renderList();
 }
