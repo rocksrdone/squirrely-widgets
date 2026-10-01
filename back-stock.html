@@ -165,6 +165,7 @@ function byName(a, b) { return String(a == null ? '' : a).localeCompare(String(b
 
 let S = { colors: [], search: '', open: {}, stockCol: null, allRecipes: [], lotCols: null, adding: false,
   binCol: null, locations: [], view: 'stock', putQuery: '', putDone: [], reservedFor: {},
+  binById: {}, binByCode: {}, binIsRef: false,
   justAdded: null };
 
 function customersFor(lot) { return [...(S.reservedFor[lot.lotId] || [])]; }
@@ -184,6 +185,83 @@ function spoolsByBin() {
   return out;
 }
 function binCapacity(loc) { return loc.max > 0 ? loc.max : (loc.target > 0 ? loc.target : 0); }
+
+/* ── Storage_Bin is a REFERENCE, not text ─────────────────────────────────
+   Production_Lots.Storage_Bin points at a Storage_Locations row, so Grist
+   stores a row id there. Writing the bin CODE into it instead stores
+   unresolvable alt-text: the cell reads "#Invalid Ref: A6" even though A6 is a
+   perfectly good bin, and every screen that reads it gets an error where a
+   location should be. 43 lots holding 400 spools were written that way.
+
+   Read and write therefore both go through a translation, and the direction of
+   the column is detected from the data rather than assumed — a document whose
+   Storage_Bin really is a text column must keep working untouched. A single
+   numeric value settles it, because no bin code is a bare number. */
+function detectBinIsRef(lotsT, binCol) {
+  if (!binCol) return false;
+  const vals = columnAsArray(lotsT, binCol);
+  for (const v of vals) if (typeof v === 'number' && v > 0) return true;
+  return false;
+}
+
+/* A stored value as a human-readable bin code. Handles the row id (working),
+   the raw code left by the old write path (broken but readable), and Grist's
+   list form for a reference. */
+function binDisplay(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'number') return S.binById[raw] || '';
+  const viaRef = getRefId(raw);
+  if (typeof raw !== 'string' && viaRef) return S.binById[viaRef] || '';
+  return String(raw).trim();
+}
+
+/* What to WRITE for a bin code. Returns null when the column is a reference
+   and the code names no bin — refusing is the point, because writing it anyway
+   is exactly the bug. */
+function binWriteValue(code) {
+  const c = String(code || '').trim();
+  if (!c) return null;
+  if (!S.binIsRef) return c;
+  return S.binByCode[normalize(c)] || null;
+}
+
+/* Lots whose Storage_Bin holds a code rather than a reference. Repairable when
+   the code names a real bin; listed separately when it does not. */
+function brokenBinLots() {
+  if (!S.binIsRef) return { fixable: [], unknown: [] };
+  const fixable = [], unknown = [];
+  allLots().forEach(l => {
+    if (l.binRaw == null || l.binRaw === '') return;
+    if (typeof l.binRaw === 'number') return;             // already a reference
+    const code = String(l.binRaw).trim();
+    if (!code) return;
+    (S.binByCode[normalize(code)] ? fixable : unknown).push({ lot: l, code });
+  });
+  return { fixable, unknown };
+}
+
+async function repairBrokenBins() {
+  const { fixable, unknown } = brokenBinLots();
+  if (!fixable.length) { showToast(unknown.length ? 'None can be matched to a bin' : 'Nothing to repair'); return; }
+  const spools = fixable.reduce((n, x) => n + x.lot.stock, 0);
+  if (!confirm(
+    `Repair ${fixable.length} lot${fixable.length === 1 ? '' : 's'} (${spools} spools)?\n\n` +
+    `Their bin was saved as text instead of a link, so Grist shows an error instead of a location. ` +
+    `Each one is re-pointed at the bin it already names — nothing physically moves, and no bin changes.\n\n` +
+    fixable.slice(0, 10).map(x => `${x.lot.lotNumber} → ${x.code}`).join('\n') +
+    (fixable.length > 10 ? `\n…and ${fixable.length - 10} more` : '') +
+    (unknown.length ? `\n\n${unknown.length} cannot be matched to any bin and are left alone: ` +
+      unknown.map(x => `${x.lot.lotNumber} (${x.code})`).join(', ') : ''))) return;
+  try {
+    await grist.docApi.applyUserActions(fixable.map(x =>
+      ['UpdateRecord', 'Production_Lots', x.lot.lotId, { [S.binCol]: S.binByCode[normalize(x.code)] }]));
+    showToast(`Repaired ${fixable.length} bin link${fixable.length === 1 ? '' : 's'} ✓`);
+    await loadStock();
+  } catch (e) {
+    console.error('Failed to repair bins:', e);
+    showToast('Repair failed — nothing was changed');
+  }
+}
 
 /* ── Where should this lot go? ─────────────────────────────────────────────
    There was nothing doing this for thread. The made-dye shelf has had
@@ -374,6 +452,8 @@ async function loadStock() {
     S.stockCol = LOT.general || LOT.store || LOT.vendor;
     S.lotCols = LOT;
     S.binCol = LOT.bin;
+    /* Before any lot is read, so binDisplay() knows which way to translate. */
+    S.binIsRef = detectBinIsRef(lotsT, LOT.bin);
 
     /* Storage_Locations is the bin list, and it carries the two things that
        make a suggestion possible rather than a guess: which fibre a bin is for,
@@ -391,12 +471,22 @@ async function loadStock() {
           const code = (columnAsArray(locT, LOC.code)[i] || '').toString().trim();
           if (!code) return;
           S.locations.push({
+            /* The row id is kept now. Production_Lots.Storage_Bin is a
+               REFERENCE to this table, so writing the bare code into it stores
+               unresolvable alt-text — which is how 43 lots ended up reading
+               "#Invalid Ref: A6" while A6 existed all along. */
+            id,
             code,
             fiber: fiberCode((columnAsArray(locT, LOC.fiber)[i] || '').toString().trim()),
             reservedFor: (columnAsArray(locT, LOC.reserved)[i] || '').toString().trim(),
             target: Number(columnAsArray(locT, LOC.target)[i]) || 0,
             max: Number(columnAsArray(locT, LOC.max)[i]) || 0,
           });
+        });
+        S.binById = {}; S.binByCode = {};
+        S.locations.forEach(L => {
+          S.binById[L.id] = L.code;
+          S.binByCode[normalize(L.code)] = L.id;
         });
       }
     } catch (e) {
@@ -473,7 +563,10 @@ async function loadStock() {
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         stock,
-        bin: LOT.bin ? (columnAsArray(lotsT, LOT.bin)[i] || '').toString().trim() : '',
+        bin: binDisplay(LOT.bin ? columnAsArray(lotsT, LOT.bin)[i] : null),
+        /* The value exactly as stored, so a broken reference can be told from
+           a working one and repaired without guessing which it was. */
+        binRaw: LOT.bin ? columnAsArray(lotsT, LOT.bin)[i] : null,
         recipeId, recipeName: String(recipe.name),
         // filled in after allocations load, below
         customers: [],
@@ -646,14 +739,21 @@ async function fileAllSuggested() {
       (plan.length > 12 ? `\n…and ${plan.length - 12} more` : '') +
       `\n\nThis only records where they go. Put the spools there too.`)) return;
   try {
+    const writable = plan.filter(p => binWriteValue(p.bin) != null);
+    if (writable.length < plan.length) {
+      const bad = plan.filter(p => binWriteValue(p.bin) == null).map(p => p.bin);
+      showToast(`Skipped ${plan.length - writable.length} — not bins: ${[...new Set(bad)].join(', ')}`);
+    }
+    if (!writable.length) return;
     await grist.docApi.applyUserActions(
-      plan.map(p => ['UpdateRecord', 'Production_Lots', p.lot.lotId, { [S.binCol]: p.bin }]));
-    plan.forEach(p => {
+      writable.map(p => ['UpdateRecord', 'Production_Lots', p.lot.lotId,
+        { [S.binCol]: binWriteValue(p.bin) }]));
+    writable.forEach(p => {
       p.lot.bin = p.bin;
       S.putDone.unshift({ name: p.lot.recipeName, lot: p.lot.lotNumber, spools: p.lot.stock, bin: p.bin });
     });
     S.putDone = S.putDone.slice(0, 40);
-    showToast(`Filed ${plan.length} lot${plan.length === 1 ? '' : 's'} ✓`);
+    showToast(`Filed ${writable.length} lot${writable.length === 1 ? '' : 's'} ✓`);
     renderPutAway();
   } catch (e) {
     console.error('Failed to file all:', e);
@@ -666,8 +766,15 @@ async function putLotAway(lotId, bin) {
   const lot = allLots().find(l => l.lotId === lotId);
   const code = (bin || '').trim();
   if (!code) { showToast('Enter a bin first'); return; }
+  /* A code that names no bin is refused rather than stored. Storing it is what
+     produced 43 lots whose location Grist could not resolve. */
+  const value = binWriteValue(code);
+  if (value == null) {
+    showToast(`${code} is not a bin in Storage_Locations`);
+    return;
+  }
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.binCol]: code }]]);
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.binCol]: value }]]);
     if (lot) lot.bin = code;
     if (lot && lot.lotNumber === S.justAdded) S.justAdded = null;
     S.putDone.unshift({ name: lot ? lot.recipeName : 'Lot', lot: lot ? lot.lotNumber : '',
@@ -727,6 +834,20 @@ function renderPutAway() {
       placeholder="Colorway, lot number or fibre…" oninput="onPutQuery(this.value)">
     <datalist id="binList">${S.locations.map(l =>
       `<option value="${esc(l.code)}">${esc([l.fiber, l.reservedFor].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>
+    ${(() => {
+      const { fixable, unknown } = brokenBinLots();
+      if (!fixable.length && !unknown.length) return '';
+      const spools = fixable.reduce((n, x) => n + x.lot.stock, 0);
+      return `<div class="put-card" style="display:block">
+        <div class="put-name">${fixable.length + unknown.length} lot(s) have a bin Grist can't resolve</div>
+        <div class="put-meta">Their bin was saved as text rather than as a link, so these read as an error
+          instead of a location — on every screen, not just this one.${
+          unknown.length ? ` ${unknown.length} name no bin in Storage_Locations and need a decision: ` +
+            unknown.map(x => `${esc(x.lot.lotNumber)} (${esc(x.code)})`).join(', ') + '.' : ''}</div>
+        ${fixable.length ? `<button class="put-go" style="margin-top:7px" onclick="repairBrokenBins()">
+          Repair ${fixable.length} (${spools} spools)</button>` : ''}
+      </div>`;
+    })()}
     <div class="plan-line">
       <span>${waiting
         ? `${waiting} lot${waiting === 1 ? '' : 's'} with no bin${planSpread > 1 ? ` · spread over ${planSpread} bins` : ''}`
