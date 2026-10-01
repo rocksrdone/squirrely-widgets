@@ -58,6 +58,33 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .add-row .grow { flex: 1 1 140px; min-width: 0; }
 .add-row select { max-width: 100%; text-overflow: ellipsis; }
 .add-row .src { flex: 0 1 auto; min-width: 0; }
+
+/* ── The colourway search ─────────────────────────────────────────────────
+   A <select> of 130 colourways means scrolling to find one you can already
+   name. A text box with suggestions gets there in three keystrokes — and an
+   <option> cannot carry markup, which is why the stock summary used to be a
+   run-on string of plain text. In a suggestion row it can be chips. */
+.search-wrap { position: relative; }
+.search-wrap input { width: 100%; }
+.suggest { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 3px);
+  background: white; border: 1.5px solid var(--rule); border-radius: 7px;
+  box-shadow: 0 6px 20px rgba(26,22,20,.13); max-height: 268px; overflow-y: auto; }
+.sg { padding: 7px 10px; cursor: pointer; border-bottom: 1px solid #F3EDE5; }
+.sg:last-child { border-bottom: none; }
+.sg.on { background: var(--accent-light); }
+.sg .nm { font-weight: 600; font-size: 12.5px; }
+.sg .mt { font-family: 'DM Mono', monospace; font-size: 10px; color: #8B7D72; }
+.sg .st { font-size: 10px; margin-top: 2px; display: flex; gap: 5px; flex-wrap: wrap; }
+.sg .pill { padding: 1px 6px; border-radius: 9px; font-weight: 600;
+  background: var(--warm); color: #6B5E52; }
+.sg .pill.shelf { background: var(--teal-light); color: var(--teal); }
+.sg .pill.on-order { background: var(--gold-light); color: var(--gold); }
+.sg .none { color: #A89B8F; font-style: italic; }
+.sg mark { background: #FBE9A7; color: inherit; border-radius: 2px; padding: 0 1px; }
+.sg-empty { padding: 10px; color: #8B7D72; font-style: italic; font-size: 11.5px; }
+.picked { display: flex; align-items: center; gap: 6px; }
+.picked .x { cursor: pointer; color: #8B7D72; font-weight: 700; padding: 0 4px; }
+.picked .x:hover { color: var(--accent); }
 .add-row input[type=number] { flex: 0 0 64px; }
 .add-row .btn { flex: 0 0 auto; }
 label.lab { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 70px; }
@@ -315,6 +342,11 @@ const RESERVE_STATUS_FALLBACK = 'Wound - Needs Labels';
 const RETAIL_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-inventory';
 const RETAIL_TIMEOUT_MS = 30000;
 
+/* How many suggestions to show at once. Enough that the right one is nearly
+   always visible, few enough that the list never becomes the scrolling problem
+   it was built to replace. */
+const SUGGEST_MAX = 8;
+
 const S = {
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
@@ -325,6 +357,9 @@ const S = {
   cols: {}, lineCols: {},
   loading: true, error: '',
   addRecipe: '', addQty: 1, addSource: '',
+  addSearch: '',         // what is typed in the colourway box
+  addOpen: false,        // whether the suggestion list is showing
+  addHi: 0,              // which suggestion the keyboard is on
   missing: [],
   push: null,        // the last preview or push response
   pushBusy: false,
@@ -874,8 +909,144 @@ async function pickCustomer(id, customerId) {
 /* Where the spools for a NEW line should come from, chosen while adding it
    rather than as a second step afterwards. '' means decide later: the line is
    created and nothing is committed, which is what this screen did before. */
-function setAddRecipe(v) { S.addRecipe = v; S.addSource = ''; render(); }
+function setAddRecipe(v) {
+  S.addRecipe = v;
+  S.addSource = '';
+  const r = S.recipesById[Number(v)];
+  S.addSearch = r ? r.name : '';
+  S.addOpen = false;
+  S.addHi = 0;
+  render();
+  /* Focus lands on the quantity, which is the only thing left to decide. */
+  const q = document.getElementById('addQty');
+  if (q) { q.focus(); if (q.select) q.select(); }
+}
 function setAddSource(v) { S.addSource = v; render(); }
+
+/* ── Finding a colourway by typing ────────────────────────────────────────
+   Matches the name AND the SKU, so either way of thinking about a colourway
+   gets there. Prefix matches rank above interior ones — typing "em" should
+   reach Ember before Seductive Pear's "..em.." — and the fold is the same one
+   every other lookup here uses, so an accent never decides whether a colourway
+   can be found. */
+function recipeMatches(query) {
+  const q = sortKey(String(query || '').trim());
+  if (!q) return S.recipes.slice(0, SUGGEST_MAX);
+  const scored = [];
+  for (const r of S.recipes) {
+    const n = sortKey(r.name), s = sortKey(r.sku);
+    const ni = n.indexOf(q), si = s.indexOf(q);
+    if (ni < 0 && si < 0) continue;
+    // 0 = name prefix, 1 = sku prefix, 2 = name interior, 3 = sku interior
+    const rank = ni === 0 ? 0 : si === 0 ? 1 : ni > 0 ? 2 : 3;
+    scored.push({ r, rank, at: ni >= 0 ? ni : si });
+  }
+  scored.sort((a, b) => a.rank - b.rank || a.at - b.at ||
+    sortKey(a.r.name).localeCompare(sortKey(b.r.name)));
+  return scored.slice(0, SUGGEST_MAX).map(x => x.r);
+}
+
+/* The matched run, marked in place. Folding changes length for some
+   characters, so the match is found on the folded string and then applied to
+   the ORIGINAL by index — close enough for every Latin case here, and it
+   degrades to no highlight rather than to mangled text. */
+function markMatch(text, query) {
+  const q = sortKey(String(query || '').trim());
+  const t = String(text == null ? '' : text);
+  if (!q) return esc(t);
+  const i = sortKey(t).indexOf(q);
+  if (i < 0 || sortKey(t).length !== t.length) return esc(t);
+  return esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.length)) + '</mark>' +
+    esc(t.slice(i + q.length));
+}
+
+function suggestHtml() {
+  if (!S.addOpen) return '';
+  const hits = recipeMatches(S.addSearch);
+  if (!hits.length) {
+    return `<div class="sg-empty">Nothing matches “${esc(S.addSearch)}”.</div>`;
+  }
+  const onOrder = {};
+  (S.lines[S.selected] || []).forEach(l => { if (l.recipeId) onOrder[l.recipeId] = l.qty; });
+  return hits.map((r, i) => {
+    const lots = S.stockByRecipe[r.id] || [];
+    const pills = SOURCES.filter(s => S.stockCols[s])
+      .map(s => ({ s, n: lots.reduce((n, l) => n + num(l.by[s]), 0) }))
+      .filter(x => x.n > 0)
+      .map(x => `<span class="pill ${x.s === 'General' ? 'shelf' : ''}">${x.n} ${
+        esc(SOURCE_META[x.s].short)}</span>`);
+    /* Already on this order is the one fact that changes what the Add button
+       does — it merges rather than creating — so it is said before the click,
+       not after. */
+    if (onOrder[r.id]) pills.unshift(`<span class="pill on-order">already on this order (${
+      onOrder[r.id]})</span>`);
+    return `<div class="sg ${i === S.addHi ? 'on' : ''}" data-id="${r.id}"
+      onmousedown="event.preventDefault(); setAddRecipe('${r.id}')"
+      onmouseenter="S.addHi = ${i}; paintSuggest()">
+      <div class="nm">${markMatch(r.name, S.addSearch)}
+        <span class="mt">${markMatch(r.sku, S.addSearch)}</span></div>
+      ${Object.keys(S.stockCols).length
+        ? `<div class="st">${pills.length ? pills.join('')
+            : '<span class="none">nothing recorded in stock</span>'}</div>`
+        : ''}
+    </div>`;
+  }).join('');
+}
+
+/* Repainted WITHOUT a full render, because a full render replaces the input
+   and takes the caret with it — which is the whole reason the dropdown was
+   being replaced. Only the two parts that depend on the query are rewritten. */
+function paintSuggest() {
+  const box = document.getElementById('addSuggest');
+  if (box) {
+    box.innerHTML = suggestHtml();
+    box.style.display = S.addOpen ? '' : 'none';
+  }
+  const src = document.getElementById('addSourceWrap');
+  if (src) src.innerHTML = sourcePickerHtml();
+}
+
+function onAddSearch(v) {
+  S.addSearch = v;
+  S.addOpen = true;
+  S.addHi = 0;
+  /* Typing after a pick un-picks: the box no longer names what is selected,
+     and leaving the old selection armed is how you add the wrong colourway. */
+  if (S.addRecipe) { S.addRecipe = ''; S.addSource = ''; }
+  paintSuggest();
+}
+
+function addSearchKey(e) {
+  const hits = recipeMatches(S.addSearch);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!S.addOpen) { S.addOpen = true; S.addHi = 0; paintSuggest(); return; }
+    S.addHi = Math.max(0, Math.min(hits.length - 1,
+      S.addHi + (e.key === 'ArrowDown' ? 1 : -1)));
+    paintSuggest();
+    const on = document.querySelector('#addSuggest .sg.on');
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (S.addOpen && hits[S.addHi]) setAddRecipe(String(hits[S.addHi].id));
+    else if (S.addRecipe) addLine(S.selected);
+  } else if (e.key === 'Escape') {
+    S.addOpen = false;
+    paintSuggest();
+  }
+}
+
+function openSuggest() { S.addOpen = true; S.addHi = 0; paintSuggest(); }
+/* A click on a suggestion fires mousedown before blur, and that handler calls
+   preventDefault, so the list is never closed out from under the click. */
+function closeSuggest() { S.addOpen = false; paintSuggest(); }
+
+function clearAddRecipe() {
+  S.addRecipe = ''; S.addSearch = ''; S.addSource = ''; S.addOpen = false;
+  render();
+  const i = document.getElementById('addSearch');
+  if (i) i.focus();
+}
 
 async function addLine(orderId) {
   const recipeId = Number(S.addRecipe);
@@ -894,6 +1065,7 @@ async function addLine(orderId) {
     toast(`${r.name} → ${existing.qty + qty}`);
     /* The merged quantity is now short by what was just added, so the chosen
        source still applies — to the increase, not to the whole line. */
+    resetAddRow();
     if (source === 'fresh') await makeFreshInstead(existing.id);
     else if (source) await reserveFromStock(existing.id, source);
     return;
@@ -932,11 +1104,19 @@ async function addLine(orderId) {
         ? `Added ${qty}× ${r.name} — dyeing fresh`
         : `Added ${qty}× ${r.name}`);
     }
-    S.addSource = '';
+    resetAddRow();
+    render();
   } catch (e) {
     console.error('Could not add the line:', e);
     alert('Could not add that line.');
   }
+}
+
+/* Cleared after a line is added, so the next colourway can simply be typed.
+   Leaving the last one in the box invites adding it twice. */
+function resetAddRow() {
+  S.addRecipe = ''; S.addSearch = ''; S.addSource = '';
+  S.addOpen = false; S.addHi = 0;
 }
 
 /* The options for the source picker, for whichever colourway is selected.
@@ -968,6 +1148,19 @@ function addSourceOptions() {
     ? { v: 'fresh', label: 'make new' }
     : { v: '', label: 'make new — add Make_Fresh column', off: true });
   return out;
+}
+
+/* Its own function so the search box can repaint it in place. It depends on
+   which colourway is selected, and that changes on every keystroke. */
+function sourcePickerHtml() {
+  const opts = addSourceOptions();
+  if (!opts.length) return '';   // only before a colourway is picked
+  return `<select id="addSource" class="src" onchange="setAddSource(this.value)"
+    title="Where these spools come from">
+    ${opts.map((o, i) => `<option value="${esc(o.v)}" ${o.off ? 'disabled' : ''} ${
+      !o.off && o.v === S.addSource && !(o.v === '' && i > 0) ? 'selected' : ''
+    }>${esc(o.label)}</option>`).join('')}
+  </select>`;
 }
 
 async function setLineQty(lineId, qty) {
@@ -2029,6 +2222,15 @@ function todoPanelHtml() {
 
 function renderMain() {
   const box = document.getElementById('main');
+  /* A full render replaces the search input, and with it the caret and the
+     focus — so a reload landing mid-word would throw away what was typed and
+     drop you back out of the box. Where the caret WAS is captured first and
+     restored after, so an unrelated render is invisible to someone typing.
+     Checked against the live element rather than a flag, so focus is only ever
+     given back to a box that already had it. */
+  const act = document.activeElement;
+  const wasTyping = !!(act && act.id === 'addSearch');
+  const caret = wasTyping ? act.selectionStart : null;
   if (S.loading) { box.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`; return; }
   const o = S.selected ? S.orders.find(x => x.id === S.selected) : null;
   if (!o) {
@@ -2117,22 +2319,19 @@ function renderMain() {
       </div>`;
     })()}
     <div class="add-row">
-      <select id="addRecipe" class="grow" onchange="setAddRecipe(this.value)">
-        <option value="">— add a colourway —</option>
-        ${S.recipes.map(r => `<option value="${r.id}" ${String(r.id) === String(S.addRecipe) ? 'selected' : ''}>
-          ${esc(r.name)} · ${esc(r.sku)}${esc(stockHint(r.id))}</option>`).join('')}
-      </select>
-      ${(() => {
-        const opts = addSourceOptions();
-        if (!opts.length) return '';   // only before a colourway is picked
-        return `<select id="addSource" class="src" onchange="setAddSource(this.value)"
-          title="Where these spools come from">
-          ${opts.map((o, i) => `<option value="${esc(o.v)}" ${o.off ? 'disabled' : ''} ${
-            !o.off && o.v === S.addSource && !(o.v === '' && i > 0) ? 'selected' : ''
-          }>${esc(o.label)}</option>`).join('')}
-        </select>`;
-      })()}
-      <input type="number" min="1" value="${esc(S.addQty)}" onchange="S.addQty = this.value">
+      <div class="search-wrap grow">
+        <input type="text" id="addSearch" autocomplete="off" spellcheck="false"
+          placeholder="type a colourway or SKU…" value="${esc(S.addSearch)}"
+          oninput="onAddSearch(this.value)" onkeydown="addSearchKey(event)"
+          onfocus="openSuggest()" onblur="closeSuggest()">
+        <div class="suggest" id="addSuggest" style="${S.addOpen ? '' : 'display:none'}"
+          >${suggestHtml()}</div>
+      </div>
+      ${S.addRecipe ? `<span class="picked"><span class="x" title="Clear"
+        onclick="clearAddRecipe()">×</span></span>` : ''}
+      <span id="addSourceWrap">${sourcePickerHtml()}</span>
+      <input type="number" id="addQty" min="1" value="${esc(S.addQty)}"
+        onchange="S.addQty = this.value">
       <button class="btn" onclick="addLine(${o.id})">Add</button>
     </div>
 
@@ -2157,6 +2356,15 @@ function renderMain() {
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;
+
+  if (wasTyping) {
+    const again = document.getElementById('addSearch');
+    if (again) {
+      again.focus();
+      const at = caret == null ? again.value.length : caret;
+      if (again.setSelectionRange) { try { again.setSelectionRange(at, at); } catch (e) {} }
+    }
+  }
 }
 
 function render() {
