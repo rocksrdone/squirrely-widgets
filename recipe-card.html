@@ -528,9 +528,9 @@
 <button class="big-toggle-btn" id="bigViewToggle" onclick="toggleBigView()">⤢ Big View</button>
 
 <div class="empty" id="emptyState">
-  <div class="empty-icon">🧵</div>
-  <div class="empty-title">No recipe selected</div>
-  <div class="empty-sub">Click a row in the Recipes table to load its production card</div>
+  <div class="empty-icon" id="emptyIcon">🧵</div>
+  <div class="empty-title" id="emptyTitle">No recipe selected</div>
+  <div class="empty-sub" id="emptySub">Click a row in the Recipes table to load its production card</div>
 </div>
 
 <div class="card" id="cardView" style="display:none">
@@ -1530,12 +1530,39 @@ async function refreshPreviewAndRerender() {
 
 let loadGeneration = 0;
 
+function showEmpty(icon, title, sub) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+  set('emptyIcon', icon); set('emptyTitle', title); set('emptySub', sub);
+  document.getElementById('emptyState').style.display = 'flex';
+}
+
+/* ── The E Nylon row is a catalogue entry, not a recipe ───────────────────
+   E and FF are the same dye wound onto different spools, so the FF card IS the
+   nylon recipe. The E row exists because the SKU, the 150-yard count and the
+   stock column need something to hang on — it carries no instructions of its
+   own and is not meant to be opened here.
+
+   Rendering it as a card with no steps would read as a recipe somebody forgot
+   to write. So it says where the recipe actually is instead.
+
+   THE ESCAPE HATCH IS THE ABSENCE OF INSTRUCTIONS, not a flag. The moment an E
+   row is given components of its own — the rare case where E genuinely needs
+   something different — it stops being a pointer and renders as the recipe it
+   has become. Nothing to set, nothing to remember. */
+function eVariantNotice(record, components) {
+  const fib = String(rowField(record, ['Fiber_Type']) || '').trim();
+  if (!/^e\s*nylon$/i.test(fib)) return null;
+  if (components && components.length) return null;   // it has its own recipe now
+  return String(rowField(record, ['Recipe_Name']) || '').trim();
+}
+
 grist.onRecord(async (record) => {
   const myGeneration = ++loadGeneration;
 
   if (!record || !rowField(record, ['Recipe_Name'])) {
     if (myGeneration !== loadGeneration) return;
-    document.getElementById('emptyState').style.display = 'flex';
+    showEmpty('🧵', 'No recipe selected',
+      'Click a row in the Recipes table to load its production card');
     document.getElementById('cardView').style.display = 'none';
     return;
   }
@@ -1769,6 +1796,17 @@ grist.onRecord(async (record) => {
   currentProductPhotos = previewResult.candidates;
   currentPreviewUrl = previewResult.matchUrl;
   currentPreviewId = previewResult.matchId;
+
+  const eName = eVariantNotice(record, localComponents);
+  if (eName) {
+    if (myGeneration !== loadGeneration) return;
+    showEmpty('🧵', esc(eName) + ' — E Nylon',
+      'Same dye as the FF Nylon version, wound onto the longer spool, so the recipe lives on ' +
+      'the <strong>FF Nylon</strong> card for ' + esc(eName) + '.<br><br>' +
+      'If E ever needs something different, add its steps to this row and they will show here.');
+    document.getElementById('cardView').style.display = 'none';
+    return;
+  }
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('cardView').style.display = 'grid';

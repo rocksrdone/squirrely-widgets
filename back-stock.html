@@ -458,12 +458,14 @@ async function loadStock() {
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), method: opt(['Dye_Method']),
+      sku: opt(['SKU_Base']),
     }, missing);
     if (missing.length) {
       document.getElementById('content').innerHTML =
         `<div class="empty-state">Can't load — missing columns:<br><br><strong>${[...new Set(missing)].join('<br>')}</strong></div>`;
       return;
     }
+    S.recCols = REC;
     // Single back-stock bucket (you collapsed store/vendor into General_Stock_Spools).
     S.stockCol = LOT.general || LOT.store || LOT.vendor;
     S.lotCols = LOT;
@@ -557,6 +559,7 @@ async function loadStock() {
         name: String(columnAsArray(recipesT, REC.name)[i] || `Recipe #${id}`),
         fiber: columnAsArray(recipesT, REC.fiber)[i] || '',
         method: columnAsArray(recipesT, REC.method)[i] || '',
+        sku: REC.sku ? String(columnAsArray(recipesT, REC.sku)[i] || '') : '',
       };
       recipeById[id] = rec;
       allRecipes.push(rec);
@@ -665,8 +668,13 @@ function renderList() {
 }
 
 function render() {
+  /* Every real colourway, plus the E variant of any FF row that has none yet —
+     so "lagu" offers both "Laguna — FFN" and "Laguna — EN (new)" and the E
+     stock can be recorded without opening Grist first. */
   const recipeOptions = S.allRecipes.map(r =>
-    `<option value="${esc(r.name)}${r.fiber ? ' — ' + esc(fiberCode(r.fiber)) : ''}">`).join('');
+    `<option value="${esc(r.name)}${r.fiber ? ' — ' + esc(fiberCode(r.fiber)) : ''}">`).join('')
+    + ffRowsMissingE().map(r =>
+      `<option value="${esc(r.name)} — ${VARIANT_OF_FF.code}${NEW_SUFFIX}">`).join('');
   document.getElementById('content').innerHTML = `
     <div class="header-title">Back Stock</div>
     <div class="header-sub">What is on the shelf and where. Tap a colorway to see its lots, bins and counts.</div>
@@ -899,9 +907,62 @@ function renderPutAway() {
 
    Returns ALL matches rather than a best guess, because the failure being
    fixed is precisely the silent choice between two equally good ones. */
+/* ── Creating the E variant on the spot ───────────────────────────────────
+   E and FF are the same dye in different geometry, so an E colourway needs a
+   Recipes row only because the SKU, the yardage and the stock count hang off
+   one — not because there is a second recipe to write. Making that row by hand
+   in Grist before you can record five spools is the friction worth removing.
+
+   ONLY E. Cotton is a genuinely different recipe — different chemistry, its own
+   ratios — so offering to conjure one would be inventing a recipe nobody wrote.
+   An FFC row is authored deliberately or not at all.
+
+   The SKU is built by swapping the PREFIX on the FF row's own SKU_Base rather
+   than from the colourway name, because the name and the SKU body do not always
+   agree and the SKU is what Shopify matches on. */
+const VARIANT_OF_FF = { code: 'EN', fiberName: 'E Nylon' };
+
+function ffRowsMissingE() {
+  const byName = {};
+  S.allRecipes.forEach(r => {
+    const k = normalize(r.name);
+    (byName[k] = byName[k] || []).push(r);
+  });
+  return S.allRecipes.filter(r => {
+    if (fiberCode(r.fiber) !== 'FFN') return false;
+    if (!String(r.sku || '').trim()) return false;      // nothing to build a SKU from
+    return !(byName[normalize(r.name)] || []).some(x => fiberCode(x.fiber) === VARIANT_OF_FF.code);
+  });
+}
+
+/* FFN_LAGUNA -> EN_LAGUNA. The body is kept exactly as the FF row spells it. */
+function variantSku(ffSku) {
+  const s = String(ffSku || '').trim();
+  const i = s.indexOf('_');
+  if (i < 0) return '';
+  return VARIANT_OF_FF.code + s.slice(i);
+}
+
+const NEW_SUFFIX = ' (new)';
+
 function matchRecipes() {
-  const raw = (document.getElementById('add-color').value || '').trim();
+  let raw = (document.getElementById('add-color').value || '').trim();
   if (!raw) return [];
+  /* "Laguna — EN (new)" asks for a row that does not exist yet. It resolves to
+     a synthetic candidate carrying the FF row it will be built from, so every
+     check below — and the quantity rules — behave exactly as for a real one. */
+  if (raw.toLowerCase().endsWith(NEW_SUFFIX)) {
+    const want = raw.slice(0, -NEW_SUFFIX.length).trim();
+    const bits = want.split(' — ');
+    const nm = normalize(bits[0]);
+    const base = ffRowsMissingE().find(r => normalize(r.name) === nm);
+    if (base && normalize(bits[1] || '') === VARIANT_OF_FF.code) {
+      return [{ create: true, base, id: null, name: base.name,
+                fiber: VARIANT_OF_FF.fiberName, method: base.method,
+                sku: variantSku(base.sku) }];
+    }
+    return [];
+  }
   const parts = raw.split(' — ');
   const name = normalize(parts[0]);
   const hits = S.allRecipes.filter(r => normalize(r.name) === name);
@@ -932,7 +993,11 @@ function onAddColorInput() {
     if (btn) btn.disabled = true;
     return;
   }
-  if (r) {
+  if (r && r.create) {
+    hint.textContent = `Creates the ${r.fiber} version of ${r.name} (${r.sku}) and adds the stock to it. `
+      + `Same dye as the FF version — only the spool differs.`;
+    hint.style.color = 'var(--teal)';
+  } else if (r) {
     hint.textContent = `${r.name}${r.fiber ? ' · ' + fiberCode(r.fiber) : ''}${/hand/i.test(r.method) ? ' · hand-dye (own lot)' : ''}`;
     hint.style.color = 'var(--teal)';
   } else {
@@ -956,13 +1021,45 @@ function nextLotNumber(existing) {
 
 async function addStock() {
   const hits = matchRecipes();
-  const r = hits.length === 1 ? hits[0] : null;
+  let r = hits.length === 1 ? hits[0] : null;
   const qty = Math.max(0, Number((document.getElementById('add-qty') || {}).value) || 0);
   if (hits.length > 1) { showToast('Add the fibre — more than one colourway has that name'); return; }
   if (!r || qty <= 0) { showToast('Pick a colorway and a spool count'); return; }
   const LOT = S.lotCols;
   const bucket = S.stockCol;
   if (!bucket) { showToast('No stock column to write to'); return; }
+
+  /* ── The variant row, written before the lot that needs it ───────────────
+     Confirmed rather than silent: this adds a row to Recipes, which is the
+     catalogue the storefront SKUs come from, and that is worth a click. It is
+     written FIRST and separately, because the lot cannot point at a recipe that
+     does not exist yet and a half-done pair is worse than neither. */
+  if (r.create) {
+    const RC = S.recCols || {};
+    if (!RC.sku || !RC.fiber) {
+      showToast('Recipes has no SKU_Base or Fiber_Type column, so the E version cannot be made');
+      return;
+    }
+    if (!r.sku) { showToast(`${r.base.name} has no SKU to build an E version from`); return; }
+    if (!confirm(
+      `Create the ${r.fiber} version of ${r.name}?\n\n` +
+      `  Recipe_Name  ${r.name}\n  SKU_Base     ${r.sku}\n  Fiber_Type   ${r.fiber}\n\n` +
+      `It carries no dye instructions of its own — it is the same dye as ` +
+      `${r.base.sku}, wound onto the longer spool. Then ${qty} spool(s) go to back stock against it.`)) return;
+    try {
+      const fields = { [RC.name]: r.name, [RC.sku]: r.sku, [RC.fiber]: r.fiber };
+      if (RC.method && r.method) fields[RC.method] = r.method;
+      const res = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
+      const newId = res && res.retValues && res.retValues[0];
+      if (!newId) throw new Error('no row id came back');
+      r = { id: newId, name: r.name, fiber: r.fiber, method: r.method, sku: r.sku };
+    } catch (e) {
+      console.error('Could not create the variant:', e);
+      showToast('Could not create the E version — nothing was added');
+      return;
+    }
+  }
+
   try {
     // Need current lot numbers to mint the next one.
     const lotsT = await grist.docApi.fetchTable('Production_Lots');
