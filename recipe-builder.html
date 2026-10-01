@@ -2274,7 +2274,7 @@ function renderScopeHint() {
    piece is missing it says so instead of letting a plain SKU look finished. */
 function eduScopeHint() {
   const edu = eduSuffixParts();
-  const shape = 'An institution &mdash; SKU gains <code>_EDU_</code> plus state, city and their abbreviation, e.g. <code>FFN_UNIVERSITYOFIDAHO_EDU_ID_MOSCOW_UOFI</code>';
+  const shape = 'An institution &mdash; the SKU is <code>_EDU_</code> plus state, city and abbreviation, e.g. <code>FFN_EDU_ID_MOSCOW_UOFI</code>. The college name is NOT in it &mdash; those three identify the school, and the full name stays in the title where it is searched.';
   if (!edu.missing.length) return shape;
   return `${shape}<br><b>No suffix yet</b> &mdash; still needs ${edu.missing.join(', ')}. The SKU stays plain until all three are filled in, rather than emitting a partial one that would be read back wrongly.`;
 }
@@ -2368,7 +2368,7 @@ function slugifyForSku(name) {
 }
 
 /* The College/University suffix: _EDU_{STATE}_{CITY}_{CODE}
-   e.g. FFN_UNIVERSITYOFIDAHO_EDU_ID_MOSCOW_UOFI
+   e.g. FFN_EDU_ID_MOSCOW_UOFI  (the college name is deliberately absent)
 
    The three parts are columns on RECIPES — School_State, School_City and
    School_Code — which already existed in the table before this widget knew
@@ -2464,8 +2464,22 @@ function computeSuggestedSku() {
        12 recipes ended up stored as "Custom Retail" with no suffix at all —
        nobody noticed until the SKUs were already printed. So when something is
        missing the SKU stays plain and renderScopeHint() names what to fill in. */
+    /* ── The institution's name is NOT in the SKU ─────────────────────────
+       It used to be, and the result was FFN_UNIVERSITYOFIDAHO_EDU_ID_MOSCOW_UOFI
+       — which says the institution twice, once at full length and once as the
+       abbreviation that exists precisely to avoid writing it out. College names
+       are long, so that form was the longest SKU in the catalogue while
+       carrying the least extra information.
+
+       State, city and abbreviation identify the school on their own. The full
+       name stays on the recipe and in the product title, which is what anyone
+       actually searches.
+
+       A school with TWO colourways will now collide, and that is deliberate:
+       the clash is reported below rather than silently absorbed, so a second
+       design is a decision you make rather than a suffix that grew on its own. */
     const edu = eduSuffixParts();
-    if (edu.suffix) sku += edu.suffix;
+    if (edu.suffix) sku = `${fc}${edu.suffix}`;
   } else if (kind === 'le') {
     // Keep the number already on the recipe; only invent one for a new LE.
     // A code-named LE gets FFN_LE_2609_01, not FFN_LE260901_LE_2609_01 —
@@ -3282,11 +3296,30 @@ async function saveRecipe() {
       Inspiration_Hex_Codes: document.getElementById('inspirationHex').value,
     };
 
-    /* Which column failed, named. Grist rejects the WHOLE request when one
-       column does not exist, so a save that worked yesterday stops dead the
-       moment a column is renamed — and "check column names" does not say which
-       of twenty-four to check. On failure each is retried alone to find the
-       one that is actually refused. */
+    /* ── Only write columns the table actually has ──────────────────────────
+       Grist rejects the WHOLE request when one column is missing, so three
+       absent school fields stopped EVERY save — on recipes that have nothing to
+       do with a university, because the fields are written unconditionally and
+       empty.
+
+       Every other widget in this stack resolves its columns before writing and
+       skips what is not there. This one hardcoded twenty-four names, which held
+       until the table changed under it. The record's own keys are the column
+       list, so it is filtered against that and what was dropped is reported —
+       dropped silently, a renamed column would quietly stop saving.
+
+       Guarded on having a record with keys: filtering against an empty one
+       would drop everything and "save" nothing at all. */
+    const known = currentRecord && typeof currentRecord === 'object'
+      ? Object.keys(currentRecord) : [];
+    let skippedCols = [];
+    if (known.length > 3) {
+      skippedCols = Object.keys(recipeFields).filter(k => !known.includes(k));
+      skippedCols.forEach(k => { delete recipeFields[k]; });
+    }
+
+    /* Which column failed, named. On failure each is retried alone to find the
+       one that is actually refused, rather than listing all of them as suspects. */
     try {
       await grist.docApi.applyUserActions([
         ['UpdateRecord', 'Recipes', currentRecipeId, recipeFields]
@@ -3341,7 +3374,14 @@ async function saveRecipe() {
 
     deletedDyeIds = [];
     clearUnsaved();
-    showToast('Recipe saved ✓');
+    /* Saved, but say what did not go. A field that silently stops persisting is
+       worse than one that refuses: you keep typing into it. */
+    if (skippedCols.length) {
+      showToast(`Saved ✓ — but ${skippedCols.length} field(s) have no column on Recipes`);
+      console.warn('Not saved (no such column on Recipes):', skippedCols.join(', '));
+    } else {
+      showToast('Recipe saved ✓');
+    }
     await loadAllSkus();
     renderSkuSuggestion();
   } catch (e) {
