@@ -746,18 +746,55 @@ function renderPutAway() {
   `;
 }
 
-// Match the typed value ("Fern Green — FFN") back to a recipe.
-function matchedRecipe() {
+/* ── Matching the typed value back to a recipe ─────────────────────────────
+   ON NAME AND FIBRE, never the name alone.
+
+   Two colourways can share a name and differ only by fibre — Fern Green in FFN
+   and in FFC are different recipes, with different row ids and separate stock.
+   This used to split the typed value on the em dash, throw the fibre away, and
+   take the FIRST recipe with that name. So picking the FFC entry created the
+   lot against the FFN recipe: the spools landed under the wrong card, and that
+   card's total then silently claimed to cover both fibres.
+
+   Everything else in this file was unaffected — lots group by `recipeId`, the
+   bin suggestion compares `recipeId`. This one function reached for the name,
+   which is exactly what keying on the row id exists to prevent.
+
+   Returns ALL matches rather than a best guess, because the failure being
+   fixed is precisely the silent choice between two equally good ones. */
+function matchRecipes() {
   const raw = (document.getElementById('add-color').value || '').trim();
-  if (!raw) return null;
-  const name = raw.split(' — ')[0].trim().toUpperCase();
-  return S.allRecipes.find(r => r.name.toUpperCase() === name) || null;
+  if (!raw) return [];
+  const parts = raw.split(' — ');
+  const name = normalize(parts[0]);
+  const hits = S.allRecipes.filter(r => normalize(r.name) === name);
+  if (parts.length < 2 || hits.length < 2) return hits;
+  /* A fibre was typed and the name alone is ambiguous, so the fibre decides.
+     If it matches none of them the ambiguity STANDS rather than being resolved
+     by ignoring what was typed. */
+  const fib = normalize(fiberCode(parts.slice(1).join(' — ').trim()));
+  const exact = hits.filter(r => normalize(fiberCode(r.fiber)) === fib);
+  return exact.length ? exact : hits;
+}
+function matchedRecipe() {
+  const hits = matchRecipes();
+  return hits.length === 1 ? hits[0] : null;
 }
 function onAddColorInput() {
-  const r = matchedRecipe();
+  const hits = matchRecipes();
+  const r = hits.length === 1 ? hits[0] : null;
   const hint = document.getElementById('add-hint');
   const btn = document.getElementById('add-btn');
   const qty = Number((document.getElementById('add-qty') || {}).value) || 0;
+  if (hits.length > 1) {
+    /* Named, not guessed. Adding to the wrong fibre is only noticed much
+       later, when one card's total has quietly covered two different threads. */
+    hint.textContent = `${hits.length} colourways are called that — add the fibre to say which: `
+      + hits.map(x => `${x.name}${x.fiber ? ' — ' + fiberCode(x.fiber) : ' (no fibre set)'}`).join(', ');
+    hint.style.color = 'var(--warn-text)';
+    if (btn) btn.disabled = true;
+    return;
+  }
   if (r) {
     hint.textContent = `${r.name}${r.fiber ? ' · ' + fiberCode(r.fiber) : ''}${/hand/i.test(r.method) ? ' · hand-dye (own lot)' : ''}`;
     hint.style.color = 'var(--teal)';
@@ -781,8 +818,10 @@ function nextLotNumber(existing) {
 }
 
 async function addStock() {
-  const r = matchedRecipe();
+  const hits = matchRecipes();
+  const r = hits.length === 1 ? hits[0] : null;
   const qty = Math.max(0, Number((document.getElementById('add-qty') || {}).value) || 0);
+  if (hits.length > 1) { showToast('Add the fibre — more than one colourway has that name'); return; }
   if (!r || qty <= 0) { showToast('Pick a colorway and a spool count'); return; }
   const LOT = S.lotCols;
   const bucket = S.stockCol;
