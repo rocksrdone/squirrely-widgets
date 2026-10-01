@@ -225,9 +225,21 @@ async function loadBoard() {
         if (!codeV) return;
         S.binCode[id] = codeV;
         const fibV = BINC.fiber ? columnAsArray(binsT, BINC.fiber)[i] : '';
-        const resV = BINC.reserved ? getRefId(columnAsArray(binsT, BINC.reserved)[i]) : null;
-        if (!fibV || resV) return;
-        (S.stockBins[fibV] = S.stockBins[fibV] || []).push({ id, code: codeV });
+        const rawRes = BINC.reserved ? columnAsArray(binsT, BINC.reserved)[i] : null;
+        /* Reserved_For holds a NAME in this document ("RDG", "MMI"), not a
+           reference, and getRefId returns null for a string — so customer boxes
+           were being offered as general stock bins. Harmless while every bin
+           also carried a fibre and the rules rarely reached them; not harmless
+           now that bins are fibre-agnostic and every one is a candidate.
+           Unclaimed thread must not wander into somebody's pick. */
+        const reserved = typeof rawRes === 'string'
+          ? !!rawRes.trim() : !!getRefId(rawRes);
+        if (reserved) return;
+        /* A BLANK fibre means the bin takes anything, which is now the normal
+           case: FF, E and cotton of one colour bag together, so the bins stopped
+           being fibre-scoped. Skipping blanks here left stockBins empty and
+           suggestBin answering "no bins for this fibre" for every lot. */
+        (S.stockBins[fibV || '*'] = S.stockBins[fibV || '*'] || []).push({ id, code: codeV });
       });
     }
 
@@ -358,10 +370,14 @@ function binFill(id) { return (S.binFill && S.binFill[id]) || 0; }
    fibre class, not by this key. Must match colourKeyOf() in back-stock.html. */
 function colourKeyOf(name) { return normalize(name || ''); }
 
+/* Bins for this fibre, plus every bin that takes anything. The general ones are
+   always eligible — that is what "no fibre set" means — so a fibre-specific bin
+   never becomes the only option merely because it is labelled. */
 function binsForFiber(fiberName) {
-  const list = (S.stockBins && S.stockBins[fiberName]) || [];
+  const all = S.stockBins || {};
+  const list = (all[fiberName] || []).concat(all['*'] || []);
   if (list.length) return list;
-  return Object.values(S.stockBins || {}).reduce((a, b) => a.concat(b), []);
+  return Object.values(all).reduce((a, b) => a.concat(b), []);
 }
 
 function suggestBin(lot) {
