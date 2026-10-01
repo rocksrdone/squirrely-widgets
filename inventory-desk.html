@@ -54,10 +54,32 @@ body {
 .card-head:hover { background: var(--paper); }
 .cw-name { font-weight: 600; font-size: 13.5px; }
 .cw-meta { font-size: 10.5px; color: var(--muted); }
+/* ── One colour per fibre ─────────────────────────────────────────────────
+   Deliberately OUTSIDE the bucket palette. Teal already means "vendor store",
+   gold means "retail store" and brown means "held back", all of them in the
+   same row as the fibre tag — so a fibre borrowing one of those colours would
+   collide with the thing it sits beside. Blue, violet and magenta are free.
+
+   This matters most when a colourway is listed in ONE fibre: there is no second
+   row to compare against, so the colour is the only thing saying which spool
+   you are about to put on sale. */
 .fiber-tag {
-  font-size: 9px; font-weight: 600; letter-spacing: .04em; padding: 1px 5px;
-  border-radius: 3px; background: var(--teal-light); color: var(--teal); border: 1px solid #9ACFC7;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .03em; padding: 2px 7px;
+  border-radius: 4px; background: var(--warm); color: var(--held); border: 1px solid var(--rule);
+  white-space: nowrap;
 }
+.fib-ffn  { background: #E7EEFA; color: #2F5FA8; border-color: #A9C2E8; }
+.fib-en   { background: #F2E9F9; color: #7A3FA8; border-color: #CEB2E4; }
+.fib-ffc  { background: #FAE8F1; color: #A8366F; border-color: #E6B3CC; }
+.fib-bw   { background: #E8E6E3; color: #2A2A2A; border-color: #BDB8B2; }
+/* The same colour as a 4px edge, which is what you actually catch at a glance
+   when scanning a column of cards rather than reading one. */
+.edge-ffn { border-left: 4px solid #2F5FA8; }
+.edge-en  { border-left: 4px solid #7A3FA8; }
+.edge-ffc { border-left: 4px solid #A8366F; }
+.edge-bw  { border-left: 4px solid #2A2A2A; }
+.edge-other { border-left: 4px solid var(--rule); }
+.fb-head { border-left-width: 4px; border-left-style: solid; }
 .buckets { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .bucket {
   min-width: 62px; text-align: center; padding: 4px 8px; border-radius: 5px;
@@ -90,8 +112,8 @@ select.pick {
 .card.multi { border-color: #9ACFC7; }
 .fibre-block { border-top: 1px solid var(--rule); }
 .fibre-block:first-of-type { border-top: 1px solid var(--warm); }
-.fb-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px 2px; }
-.fb-fiber { font-weight: 600; font-size: 12.5px; color: var(--teal); }
+.fb-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px 4px; }
+.fb-fiber { font-weight: 700; font-size: 12.5px; }
 .fb-sku { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--muted); }
 .fiber-tag.multi { background: var(--gold-light); color: var(--gold); border-color: #D4B07A; }
 .lots { margin-top: 10px; border-top: 1px dotted var(--rule); padding-top: 8px; }
@@ -207,6 +229,18 @@ function fiberCode(f) {
   if (/NYLON/.test(s)) return 'FFN';
   return s;
 }
+/* Fibre -> css suffix. Unknown fibres get the neutral edge rather than an
+   invented colour, because a colour nobody assigned means nothing. */
+function fibClass(code) {
+  const c = (code || '').toString().toUpperCase();
+  return ['FFN', 'EN', 'FFC', 'BW'].includes(c) ? c.toLowerCase() : 'other';
+}
+function fiberTag(r) {
+  const name = r.fiberName || r.fiber;
+  if (!name) return '';
+  return `<span class="fiber-tag fib-${fibClass(r.fiber)}">${esc(name)}</span>`;
+}
+
 function daysSince(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -485,9 +519,10 @@ function fibreBlockHtml(g) {
   }).join('');
 
   return `<div class="fibre-block">
-    <div class="fb-head">
+    <div class="fb-head edge-${fibClass(r.fiber)}">
       <div>
-        <div class="fb-fiber">${esc(r.fiberName || r.fiber || 'no fibre set')}</div>
+        <div class="fb-fiber fib-${fibClass(r.fiber)}" style="background:none;border:none;padding:0">${
+          esc(r.fiberName || r.fiber || 'no fibre set')}</div>
         <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}</div>
       </div>
       <div class="buckets">
@@ -531,13 +566,15 @@ function fibreBlockHtml(g) {
 function cardHtml(c) {
   const open = !!S.open[c.key];
   const fibres = c.members.map(g => g.recipe.fiberName || g.recipe.fiber || '?').join(' + ');
-  return `<div class="card${c.multi ? ' multi' : ''}">
+  /* A single-fibre card wears the fibre's colour as its own left edge — the
+     only cue available when there is nothing beside it to compare with. A
+     multi-fibre card stays neutral at the top and colours each block instead,
+     so the edge never claims a fibre the card does not solely contain. */
+  const edge = c.multi ? 'edge-other' : `edge-${fibClass(c.members[0].recipe.fiber)}`;
+  return `<div class="card${c.multi ? ' multi' : ''} ${edge}">
     <div class="card-head" data-toggle="${esc(c.key)}">
       <div>
-        <div class="cw-name">${esc(c.name)}${c.multi
-          ? ` <span class="fiber-tag multi">${esc(fibres)}</span>`
-          : (c.members[0].recipe.fiberName || c.members[0].recipe.fiber
-              ? ` <span class="fiber-tag">${esc(c.members[0].recipe.fiberName || c.members[0].recipe.fiber)}</span>` : '')}</div>
+        <div class="cw-name">${esc(c.name)} ${c.members.map(g => fiberTag(g.recipe)).join(' ')}</div>
         <div class="cw-meta">${c.multi
           ? `${c.members.length} fibres — ${esc(c.members.map(g => g.recipe.sku || '?').join(', '))}`
           : esc(c.members[0].recipe.sku || '')}</div>
