@@ -628,9 +628,16 @@ function binForBatch(b) {
   return code;
 }
 
-function tag(b, n) {
-  if (b === 'blank') return blankTag(n);
-  if (!b) return '<div class="tag"></div>';
+function tag(g, n) {
+  if (g === 'blank') return blankTag(n);
+  if (!g) return '<div class="tag"></div>';
+  /* A group of one is the old single-recipe tag, unchanged. */
+  const members = g.members || [g];
+  const b = g.rep || g;
+  const multi = members.length > 1;
+  /* Only label the fibre when the tag actually covers more than one — a tag
+     for a single hank gains nothing from being told which hank it is. */
+  const fib = (m) => (multi ? ' ' + esc(fiberCode(m.fiber) || '') : '');
   // The tag is the record of INTENT at the kettle, and the only place the
   // physical thread meets the plan. It gets discarded once the lot is bagged, so
   // everything on it has to be actionable before that: which orders this pot is
@@ -639,26 +646,51 @@ function tag(b, n) {
   // Each order is a tick, not a write-in. One pot commonly covers several orders
   // plus a remainder, and deciding that at the kettle is the whole job — ticking
   // three boxes is fast enough to do with wet gloves, writing three names is not.
-  const planned = (b.orders || []).slice(0, 4);
-  const spare = Math.max(0, b.spools - planned.reduce((t, o) => t + o.qty, 0));
+  /* Orders from every hank this pot covers, each carrying its fibre so a tick
+     says which spool it is for. Still capped at four rows — the tag is a
+     physical card and a fifth line would not fit. */
+  const planned = [];
+  members.forEach(m => (m.orders || []).forEach(o => planned.push({ o, m })));
+  planned.sort((x, y) => (x.o.due || 0) - (y.o.due || 0));
+  /* The card is a fixed-height printed tag, six to a page, and it holds FIVE
+     rows. A second hank needs a second back-stock row, so the order rows give
+     one up rather than the tag overflowing its own border — which it did, and
+     a tag that prints past its cut line is worse than one that shows less. */
+  const ROWS = 5;
+  const orderRows = Math.max(1, ROWS - members.length);
+  const shown = planned.slice(0, orderRows);
+  const dropped = planned.length - shown.length;
   let rows = '';
-  for (let k = 0; k < 4; k++) {
-    const o = planned[k];
-    rows += `<tr><td class="c"><i></i></td><td>${o ? esc(o.customer) : ''}</td>` +
-            `<td class="on">${o ? esc(o.number) : ''}</td>` +
-            `<td class="q">${o ? o.qty : ''}</td></tr>`;
+  for (let k = 0; k < orderRows; k++) {
+    const e = shown[k];
+    rows += `<tr><td class="c"><i></i></td><td>${e ? esc(e.o.customer) : ''}</td>` +
+            `<td class="on">${e ? esc(e.o.number) : ''}</td>` +
+            `<td class="q">${e ? e.o.qty + fib(e.m) : ''}</td></tr>`;
   }
   // Remainder gets its own tickable row, so "extra left over" is a decision that
   // was made rather than a number discovered at the rack.
-  rows += `<tr class="bs"><td class="c"><i></i></td><td>back stock</td>` +
-          `<td class="on"></td><td class="q">${spare || ''}</td></tr>`;
+  /* A remainder row per hank. Summing them would hand the rack a number that
+     cannot be put anywhere, since the two wind onto different spools. */
+  members.forEach(m => {
+    const taken = (m.orders || []).reduce((t, o) => t + o.qty, 0);
+    const spare = Math.max(0, m.spools - taken);
+    rows += `<tr class="bs"><td class="c"><i></i></td><td>back stock${fib(m)}</td>` +
+            `<td class="on"></td><td class="q">${spare || ''}</td></tr>`;
+  });
 
   return `<div class="tag">
     <div class="r1">
       <div style="flex:1;min-width:0">
         <div class="code">${code(n)}</div>
         <div class="nameline">${esc(b.colorway)}</div>
-        <div class="cap">colorway</div>
+        <div class="cap">${[
+          multi ? members.map(m => `${esc(fiberCode(m.fiber) || '?')} ${m.spools}`).join(' &middot; ')
+                : 'colorway',
+          /* Truncation said out loud. The old tag silently dropped a fifth
+             order, which is the kind of omission you only discover at the
+             rack with wet gloves on. */
+          dropped > 0 ? `+${dropped} more on the pull sheet` : ''
+        ].filter(Boolean).join(' &middot; ')}</div>
       </div>
       <div class="r1-right">
         <div class="bin"><div class="l">lot #</div><div class="b"></div></div>
@@ -1403,13 +1435,40 @@ function render() {
   // the printed set, so a skipped batch never burns a bag code.
   BATCHES.forEach(b => { b.code = null; });
   const printable = skip ? BATCHES.filter(b => b.spools > 0) : BATCHES.slice();
-  printable.forEach((b, i) => { b.code = start + i; });
+
+  /* ── One tag per COLOURWAY, not per recipe row ───────────────────────────
+     FF and E are the same dye in different geometry: usually one pot, and they
+     travel together through drying and into one bag. Two tags for one pot is
+     paperwork, and the hanks are obviously different by eye so nothing is lost
+     by describing them on one card.
+
+     They are still counted apart — different hanks, different lots, and the
+     finished colour never quite matches — so the tag names each fibre with its
+     own quantity rather than summing them into a number nobody can act on.
+
+     The BAG CODE is assigned per group for the same reason: one bag, one code.
+     Every batch in the group carries it, so the pull sheets and the tag agree. */
+  const tagKey = (b) => normalize(b.colorway || ('#' + b.rid));
+  const groups = [];
+  const groupBy = {};
+  printable.forEach(b => {
+    const k = tagKey(b);
+    if (!groupBy[k]) { groupBy[k] = { key: k, members: [] }; groups.push(groupBy[k]); }
+    groupBy[k].members.push(b);
+  });
+  groups.forEach((g, i) => {
+    g.code = start + i;
+    g.members.forEach(b => { b.code = g.code; });
+    /* The representative carries the shared fields — colourway, bin, orders —
+       and `members` is what lets the tag show the split. */
+    g.rep = g.members[0];
+  });
 
   const nBlank = Math.max(0, Number(document.getElementById('blanks').value) || 0);
   // Blanks continue the sequence so no two bags can ever share a code, even if a
   // spare goes unused today and gets picked up next week.
-  const tagList = printable.concat(Array.from({ length: nBlank }, (_, k) =>
-    ({ blank: true, code: start + printable.length + k })));
+  const tagList = groups.concat(Array.from({ length: nBlank }, (_, k) =>
+    ({ blank: true, code: start + groups.length + k })));
 
   const n = printable.length;
   let html = '';
