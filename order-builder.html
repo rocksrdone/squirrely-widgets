@@ -318,6 +318,9 @@ const RETAIL_TIMEOUT_MS = 30000;
 const S = {
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
+  pricingNote: '',       // why the rate card is thinner than expected, when it is
+  pricingTable: '',      // which table the rates actually came from
+  pricingRows: 0,        // how many rate rows were usable
   selected: null,
   cols: {}, lineCols: {},
   loading: true, error: '',
@@ -693,24 +696,80 @@ async function loadCustomers() {
   }
 }
 
+/* Every way this can fail used to fail silently — a missing table, an
+   unresolved column, a row whose Customer did not resolve — and all three came
+   out the other end as \"no rates for this customer\", which is the one thing
+   they were not. S.pricingNote records what actually happened so the button
+   can say it instead of guessing.
+
+   THE ROW-LEVEL ONE IS THE TRAP. Customer_Pricing.Customer is meant to be a
+   Reference to Customers; if it is a plain Text column holding the name, every
+   row is dropped on the !cid check and a full rate card reports as empty. So a
+   name is matched against Customers rather than discarded — the table is
+   already loaded, the names are unique enough to match on, and the failure it
+   replaces is silent and total. */
 async function loadPricing() {
-  S.pricing = {};
-  try {
-    const t = await grist.docApi.fetchTable('Customer_Pricing');
-    const custCol = findColumn(t, ['Customer']);
-    const recCol = findColumn(t, ['Recipe']);
-    const priceCol = findColumn(t, ['Unit_Price', 'Price']);
-    if (!custCol || !priceCol) return;
-    (t.id || []).forEach((id, i) => {
-      const cid = getRefId(columnAsArray(t, custCol)[i]);
-      const rid = recCol ? getRefId(columnAsArray(t, recCol)[i]) : null;
-      if (!cid) return;
-      S.pricing[cid] = S.pricing[cid] || {};
-      // A row with no recipe is the customer's default rate.
-      S.pricing[cid][rid || 'default'] = num(columnAsArray(t, priceCol)[i]);
-    });
-  } catch (e) {
-    console.warn('Customer_Pricing unavailable — prices left blank', e);
+  S.pricing = {}; S.pricingNote = ''; S.pricingRows = 0;
+  const TABLES = ['Customer_Pricing', 'Customer_Prices', 'Pricing'];
+  let t = null, from = '';
+  for (const name of TABLES) {
+    try { t = await grist.docApi.fetchTable(name); from = name; break; }
+    catch (e) { /* try the next spelling */ }
+  }
+  if (!t) {
+    S.pricingNote = `No ${TABLES.map(n => n).join(' / ')} table was found in this document.`;
+    console.warn('Customer_Pricing unavailable — prices left blank');
+    return;
+  }
+  S.pricingTable = from;
+  const custCol = findColumn(t, ['Customer', 'Customer_Ref', 'Vendor', 'Customer_Name']);
+  const recCol = findColumn(t, ['Recipe', 'Colourway', 'Colorway']);
+  const priceCol = findColumn(t, ['Unit_Price', 'Price', 'Rate', 'Wholesale_Price', 'Price_Per_Spool']);
+  const cols = Object.keys(t).filter(k => k !== 'id');
+  if (!custCol || !priceCol) {
+    S.pricingNote = `${from} has ` +
+      (!custCol ? 'no Customer column' : '') +
+      (!custCol && !priceCol ? ' and ' : '') +
+      (!priceCol ? 'no price column (Unit_Price or Price)' : '') +
+      `. Its columns are: ${cols.join(', ')}.`;
+    return;
+  }
+
+  /* Name -> row id, for the text-column case. Folded the same way every other
+     lookup in this stack folds, so an accent or a stray capital does not
+     decide whether a customer gets priced. */
+  const byName = {};
+  S.customers.forEach(c => { byName[sortKey(c.name)] = c.id; });
+
+  let unresolved = 0;
+  const unresolvedNames = [];
+  (t.id || []).forEach((id, i) => {
+    const raw = columnAsArray(t, custCol)[i];
+    let cid = getRefId(raw);
+    if (!cid && typeof raw === 'string' && raw.trim()) {
+      cid = byName[sortKey(raw)] || null;
+      /* Distinct names only. A rate card has a row per colourway, so one
+         mistyped customer repeats as many times as they have rates and the
+         list becomes the same name five times over. */
+      if (!cid) {
+        const n = raw.trim();
+        unresolved++;
+        if (unresolvedNames.length < 5 && !unresolvedNames.includes(n)) unresolvedNames.push(n);
+        return;
+      }
+    }
+    if (!cid) { unresolved++; return; }
+    const rid = recCol ? getRefId(columnAsArray(t, recCol)[i]) : null;
+    S.pricing[cid] = S.pricing[cid] || {};
+    // A row with no recipe is the customer's default rate.
+    S.pricing[cid][rid || 'default'] = num(columnAsArray(t, priceCol)[i]);
+    S.pricingRows++;
+  });
+
+  if (unresolved) {
+    S.pricingNote = `${unresolved} of ${(t.id || []).length} rows in ${from} have a Customer ` +
+      `that doesn't point at any row in Customers, so their rates can't be used` +
+      (unresolvedNames.length ? ` (${unresolvedNames.join(', ')})` : '') + '.';
   }
 }
 
@@ -1331,11 +1390,30 @@ async function applyPricing(orderId) {
     return;
   }
   if (!S.pricing[o.customerId]) {
-    alert(`No Customer_Pricing rows for ${o.customerName || 'this customer'}.\n\nAdd one with ` +
-      `a blank Recipe for their standard rate, and a row per colourway for anything that ` +
-      `differs from it.`);
+    /* \"No rows\" is a conclusion, and it was being reported for at least three
+       causes that are not that. Whatever the load actually found gets said
+       here, because the fix is different for each one. */
+    alert(`No usable rates for ${o.customerName || 'this customer'}.\n\n` +
+      (S.pricingNote
+        ? S.pricingNote + '\n\n'
+        : `${S.pricingTable || 'Customer_Pricing'} loaded ${S.pricingRows} rate(s), but none ` +
+          `of them point at this customer.\n\n`) +
+      `A rate row needs: Customer pointing at the ${o.customerName || 'customer'} row in ` +
+      `Customers, a blank Recipe for their standard rate (or a Recipe for one colourway), ` +
+      `and a price.`);
     return;
   }
+
+  /* A pushed order is not a reason to disable this. The invoice in Shopify is
+     already wrong and nothing here can reach it — but leaving Grist at zero as
+     well means the order reads as free in every report that sums these lines.
+     A disabled button also looked exactly like a broken one. So: allowed, with
+     the limit stated plainly rather than implied by a greyed-out control. */
+  if (o.shopifyId && !confirm(
+    `${o.number} is already in Shopify.\n\n` +
+    `Writing prices here will NOT change the Shopify invoice — that has to be fixed ` +
+    `in Shopify itself.\n\n` +
+    `Fill them in here anyway, so Grist's record matches what you actually charge?`)) return;
 
   const { fill, differ, unpriced } = pricingPlan(orderId);
   const name = (l) => l.recipeName || l.sku;
@@ -2032,7 +2110,9 @@ function renderMain() {
         ${!linked
           ? 'This order is not linked to a row in <code>Customers</code>, and pricing is looked up by that link rather than by the name — pick the customer from the dropdown above.'
           : !haveRates
-            ? `No <code>Customer_Pricing</code> rows for ${esc(o.customerName || 'this customer')} yet. Add one with a blank Recipe for their standard rate.`
+            ? `No usable rates for ${esc(o.customerName || 'this customer')}. ${S.pricingNote
+                ? esc(S.pricingNote)
+                : `Add a row to <code>${esc(S.pricingTable || 'Customer_Pricing')}</code> with a blank Recipe for their standard rate.`}`
             : 'Their rates are on file — use <strong>apply pricing</strong> to fill these in.'}
       </div>`;
     })()}
@@ -2068,9 +2148,9 @@ function renderMain() {
           ? 'Release it for production first' : 'Shows what would be sent before anything is created'}">
         ${pushed ? 'In Shopify' : 'Push to Shopify…'}</button>
       ${lines.length ? `<button class="btn secondary" onclick="applyPricing(${o.id})"
-        ${S.stockBusy || pushed ? 'disabled' : ''}
+        ${S.stockBusy ? 'disabled' : ''}
         title="${pushed
-          ? 'Already in Shopify — changing a price here would not change it there'
+          ? 'Already in Shopify — this fixes Grist\'s record, not the Shopify invoice'
           : !S.lineCols.price
             ? 'Work_Order_Lines has no price column — press this to see what to add'
             : 'Fill in blank prices from this customer\'s rates'}">apply pricing</button>` : ''}
