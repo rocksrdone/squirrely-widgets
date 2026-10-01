@@ -743,6 +743,83 @@ async function runFix(actions, label, buildUndo) {
   }
 }
 
+/* ── Clearing a drying status that is no longer true ──────────────────────
+   Drying_Status is a STARTING value and nothing ever clears it. 278 of 283
+   lots carry one; seven have anything unwound. Lots dyed in July still read
+   "Drying - Dry Rack" weeks after shipping.
+
+   That is not merely untidy. `unbinned` excludes anything on a rack, so a lot
+   with spools, no bin and a stale rack status is hidden from the one list that
+   would tell you to go and put it away — ten lots and sixty spools of it, up
+   to two months old, while the audit reported three.
+
+   SPLIT BY WHAT IS KNOWABLE. A lot with nothing unaccounted for cannot still
+   be drying: every spool it made has shipped, sold or been counted into a bin.
+   Those are safe to clear in bulk. A lot that still shows unaccounted spools
+   might genuinely be on a rack, so it is listed and left alone — the same
+   shape as the bin repair, and for the same reason. */
+function offRackPlan() {
+  if (!T || !COLS.lot.dried) return { safe: [], keep: [] };
+  const safe = [], keep = [];
+  T.lots.forEach(l => {
+    if (!l.onRack) return;
+    (l.free > 0 ? keep : safe).push(l);
+  });
+  return { safe, keep };
+}
+
+/* No value is invented. Whatever is written has to be a choice the column
+   already offers, or Grist stores it as an invalid entry — so the value is
+   asked for, and what it must not contain is stated plainly. */
+/* NOT "Off rack" — that contains the very word every screen matches on, so it
+   would leave the lots reading as drying. The validation below rejects it, as
+   it rejected this constant's first value. */
+const OFF_RACK_DEFAULT = 'Finished';
+
+async function clearStaleDrying() {
+  const { safe, keep } = offRackPlan();
+  if (!safe.length) { showToast('No stale drying statuses to clear', false); return; }
+  const spools = safe.reduce((n, l) => n + l.inBin, 0);
+  const value = window.prompt(
+    `Mark ${safe.length} lot(s) as no longer on a rack.
+
+` +
+    `Type the Drying_Status value to use. It must already be a choice on that ` +
+    `column in Grist, and it must NOT contain the words "dry", "wet" or "rack" — ` +
+    `those are what every screen matches on to decide a lot is still drying.`,
+    OFF_RACK_DEFAULT);
+  if (value === null) return;
+  const v = value.trim();
+  if (!v) { showToast('Nothing entered — no change', false); return; }
+  if (/dry|wet|rack/i.test(v)) {
+    window.alert(`"${v}" still contains dry, wet or rack, so every screen would go on ` +
+      `treating these lots as drying. Nothing was changed.`);
+    return;
+  }
+  if (!window.confirm(
+    `Set Drying_Status to "${v}" on ${safe.length} lot(s), holding ${spools} spool(s)?
+
+` +
+    `Every one of these has nothing unaccounted for, so it cannot still be on a rack.
+
+` +
+    (keep.length
+      ? `${keep.length} lot(s) DO still show unaccounted spools and are left alone:
+` +
+        keep.slice(0, 8).map(l => `  ${l.lotNumber} — ${l.free} unaccounted`).join('\n') +
+        (keep.length > 8 ? `
+  …and ${keep.length - 8} more` : '') + '\n\n'
+      : '') +
+    `Nothing moves and no count changes. This only stops the racks hiding lots ` +
+    `that need a bin.`)) return;
+
+  const before = safe.map(l => [l.id, l.drying]);
+  runFix(
+    safe.map(l => ['UpdateRecord', 'Production_Lots', l.id, { [COLS.lot.dried]: v }]),
+    `${safe.length} lot(s) marked "${v}"`,
+    () => before.map(([id, old]) => ['UpdateRecord', 'Production_Lots', id, { [COLS.lot.dried]: old }]));
+}
+
 async function undoLast() {
   if (!lastUndo || busy) return;
   const u = lastUndo;
@@ -1147,9 +1224,18 @@ function renderThread(stamp) {
 
   // Drying thread hasn't reached a bin yet, so it isn't a fault — but it has
   // to be listed or the spool numbers won't reconcile against what's on the racks.
+  const OR = offRackPlan();
+  const staleNote = OR.safe.length ? `
+    <div class="prob-item" style="border:1px solid var(--warn-text);border-radius:6px;padding:8px 10px;margin-bottom:6px">
+      <strong>${OR.safe.length} of these have nothing unaccounted for</strong>, so they cannot still be
+      on a rack — the status was set when they were dyed and never cleared. While it stands, the
+      <em>Spools with no bin</em> list above skips them, because that list ignores anything on a rack.
+      ${OR.keep.length ? `${OR.keep.length} lot(s) do still show unaccounted spools and are left alone.` : ''}
+      <div class="fixrow"><button class="fixbtn" onclick="clearStaleDrying()">Mark ${OR.safe.length} as finished…</button></div>
+    </div>` : '';
   const drying = infoPanel('Still on the racks — not in a bin yet',
-    'Nothing to fix. These spools are drying, so they belong on the rack, not in a bin.',
-    [probGroup('Lots on the wet or dry rack', 'Count them on the racks, not in the bins.',
+    'Spools genuinely drying belong on the rack, not in a bin. A status nobody cleared does not.',
+    [staleNote, probGroup('Lots on the wet or dry rack', 'Count them on the racks, not in the bins.',
       P.stillDrying.slice(0, 40).map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.drying)}</div>`)
         .concat(P.stillDrying.length > 40 ? [`<div class="prob-item">…and ${P.stillDrying.length - 40} more</div>`] : []))]
   );
