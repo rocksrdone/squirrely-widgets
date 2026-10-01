@@ -418,6 +418,7 @@ const S = {
   stockByRecipe: {},   // recipeId -> [{ lotId, lotNumber, bin, sortAt, by: {source: n} }]
   lotStock: {},        // lotId    -> { General, Store, Vendor } as they stand now
   lotInfo: {},         // lotId    -> { lotNumber, bin } for every lot, empty or not
+  binById: {},         // Storage_Locations row id -> its bin code
   lotCols: {},         // resolved Production_Lots columns, for creating one
   freshLot: null,      // a lot created moments ago, still awaiting its made count
   allocByLine: {},     // lineId   -> [{ id, lotId, qty, source, adjusted }]
@@ -553,6 +554,7 @@ async function loadStock() {
       grist.docApi.fetchTable('Lot_Allocations'),
     ]);
 
+    await loadBinCodes();
     const lc = (cands) => findColumn(lotT, cands);
     const LOT = { recipe: lc(['Recipe']), number: lc(['Lot_Number']),
                   date: lc(['Date_Dyed']), bin: lc(['Storage_Bin']),
@@ -630,7 +632,7 @@ async function loadStock() {
          matters then. */
       S.lotInfo[id] = {
         lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
-        bin: String(columnAsArray(lotT, LOT.bin)[i] || '').trim(),
+        bin: binCode(columnAsArray(lotT, LOT.bin)[i]),
       };
     });
 
@@ -648,7 +650,7 @@ async function loadStock() {
       (S.stockByRecipe[recipeId] = S.stockByRecipe[recipeId] || []).push({
         lotId: id,
         lotNumber: String(columnAsArray(lotT, LOT.number)[i] || ('lot ' + id)),
-        bin: String(columnAsArray(lotT, LOT.bin)[i] || '').trim(),
+        bin: binCode(columnAsArray(lotT, LOT.bin)[i]),
         sortAt: num(columnAsArray(lotT, LOT.date)[i]) || id,
         by,
       });
@@ -664,6 +666,33 @@ async function loadStock() {
     S.stockFailed = true;
     S.stockNote = 'Could not read Production_Lots or Lot_Allocations, so stock is not shown.';
   }
+}
+
+/* ── Storage_Bin is a REFERENCE to Storage_Locations ───────────────────────
+   Grist stores a row id there, so reading it raw shows "32" where a picker
+   needs "A6". It read correctly for a long time only because the bins were
+   being written as unresolvable text — once that was repaired, every bin chip
+   on this screen became a row number. The bin list is loaded so ids can be
+   turned back into codes; without that table the raw value is shown, which is
+   still right for a document whose Storage_Bin is plain text. */
+async function loadBinCodes() {
+  S.binById = {};
+  try {
+    const t = await grist.docApi.fetchTable('Storage_Locations');
+    const col = findColumn(t, ['Bin_Code']);
+    if (!col) return;
+    (t.id || []).forEach((id, i) => {
+      const c = String(columnAsArray(t, col)[i] || '').trim();
+      if (c) S.binById[id] = c;
+    });
+  } catch (e) {
+    console.warn('Storage_Locations unavailable — bins shown as stored', e);
+  }
+}
+function binCode(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'number') return S.binById[raw] || '';
+  return String(raw).trim();
 }
 
 /* Which SKU prefixes mean the same fibre. Optional and entirely additive: with
@@ -1127,9 +1156,8 @@ function addSearchKey(e) {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (!S.addOpen) { S.addOpen = true; S.addHi = 0; paintSuggest(); return; }
-    S.addHi = Math.max(0, Math.min(hits.length - 1,
-      S.addHi + (e.key === 'ArrowDown' ? 1 : -1)));
-    paintSuggest();
+    highlightOnly(Math.max(0, Math.min(hits.length - 1,
+      S.addHi + (e.key === 'ArrowDown' ? 1 : -1))));
     const on = document.querySelector('#addSuggest .sg.on');
     if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter') {
