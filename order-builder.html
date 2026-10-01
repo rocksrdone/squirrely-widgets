@@ -1057,9 +1057,12 @@ function suggestHtml() {
        not after. */
     if (onOrder[r.id]) pills.unshift(`<span class="pill on-order">already on this order (${
       onOrder[r.id]})</span>`);
-    return `<div class="sg ${i === S.addHi ? 'on' : ''}" data-id="${r.id}"
-      onmousedown="event.preventDefault(); setAddRecipe('${r.id}')"
-      onmouseenter="S.addHi = ${i}; paintSuggest()">
+    /* No per-row handlers. The click is delegated to the container below, and
+       hovering only swaps a class — see highlightOnly(). Rebuilding this list
+       from a mouseenter put it in a loop: the rebuild destroyed the row under
+       the cursor, the new row fired mouseenter, and round it went, so a
+       mousedown kept landing on a node being replaced out from under it. */
+    return `<div class="sg ${i === S.addHi ? 'on' : ''}" data-id="${r.id}" data-i="${i}">
       <div class="nm">${markMatch(r.name, S.addSearch)}
         <span class="mt">${markMatch(r.sku, S.addSearch)}</span></div>
       ${Object.keys(S.stockCols).length
@@ -1073,6 +1076,32 @@ function suggestHtml() {
 /* Repainted WITHOUT a full render, because a full render replaces the input
    and takes the caret with it — which is the whole reason the dropdown was
    being replaced. Only the two parts that depend on the query are rewritten. */
+/* Moving the highlight touches CLASSES ONLY — never innerHTML. This is the
+   difference between a list you can click and one that rebuilds itself out
+   from under the pointer. */
+function highlightOnly(i) {
+  S.addHi = i;
+  const rows = document.querySelectorAll('#addSuggest .sg');
+  for (let k = 0; k < rows.length; k++) rows[k].classList.toggle('on', k === i);
+}
+
+/* One handler on the container, so a rebuilt list never orphans it. mousedown
+   rather than click: it fires before the input's blur, and preventDefault
+   stops the focus moving at all, so the list is never closed before the pick
+   is registered. A click would arrive after blur had already closed it. */
+function suggestMouseDown(e) {
+  const row = e.target && e.target.closest ? e.target.closest('.sg') : null;
+  if (!row) return;
+  e.preventDefault();
+  setAddRecipe(row.getAttribute('data-id'));
+}
+function suggestHover(e) {
+  const row = e.target && e.target.closest ? e.target.closest('.sg') : null;
+  if (!row) return;
+  const i = Number(row.getAttribute('data-i'));
+  if (i !== S.addHi) highlightOnly(i);
+}
+
 function paintSuggest() {
   const box = document.getElementById('addSuggest');
   if (box) {
@@ -2066,6 +2095,17 @@ function renderBanners() {
       : "Stock is shown but can't be reserved."}</strong>
       ${esc(S.stockNote)}</div>`);
   }
+  /* Working, but on the fallback rather than the real link. Said once at the
+     document level rather than per order, because it is a column to fix, not
+     an order to fix. */
+  if (!S.loading && !S.error && S.pricingByName) {
+    out.push(`<div class="banner warn"><strong>Rates are being matched by customer NAME.</strong>
+      ${S.pricingByName} rate row(s) in <code>${esc(S.pricingTable || 'Customer_Pricing')}</code>
+      hold the customer as text rather than as a link to <code>Customers</code>, so they are
+      matched on the name instead. It works, but renaming a customer would quietly stop their
+      rates applying. Changing that column's type to <strong>Reference → Customers</strong>
+      makes the link permanent.</div>`);
+  }
   /* Last, so it sits closest to the work — and it is the one banner that is
      about physical spools rather than about setting something up. */
   out.push(todoPanelHtml());
@@ -2441,6 +2481,7 @@ function renderMain() {
           oninput="onAddSearch(this.value)" onkeydown="addSearchKey(event)"
           onfocus="openSuggest()" onblur="closeSuggest()">
         <div class="suggest" id="addSuggest" style="${S.addOpen ? '' : 'display:none'}"
+          onmousedown="suggestMouseDown(event)" onmousemove="suggestHover(event)"
           >${suggestHtml()}</div>
       </div>
       ${S.addRecipe ? `<span class="picked"><span class="x" title="Clear"
