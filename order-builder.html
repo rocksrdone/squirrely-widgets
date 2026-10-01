@@ -347,6 +347,56 @@ const RETAIL_TIMEOUT_MS = 30000;
    it was built to replace. */
 const SUGGEST_MAX = 8;
 
+/* ── Payment terms ─────────────────────────────────────────────────────────
+   One customer is not one answer. A vendor on account pays after the parcel
+   lands; a one-off request pays before it ships; and the same vendor can be
+   either depending on the order. So terms live on the ORDER, with the
+   customer's usual as the default — blank on an order means \"whatever this
+   customer normally does\", which is the only value that stays right when
+   their terms change later.
+
+   These two are the whole list: nothing is invoiced on net-30 terms here, and
+   offering a value that is never used only invites picking it by accident. */
+const TERMS = {
+  'Due on receipt': {
+    short: 'due on receipt',
+    invoice: 'Payment due on receipt.',
+    /* The parcel goes before the money does. */
+    shipsFirst: true,
+  },
+  'Prepaid': {
+    short: 'prepaid',
+    invoice: 'Payment due before shipment.',
+    shipsFirst: false,
+  },
+};
+const TERMS_ORDER_COL = ['Payment_Terms', 'Terms'];
+const TERMS_CUST_COL = ['Default_Payment_Terms', 'Payment_Terms', 'Terms'];
+
+/* How they are paying, which changes what the invoice has to say. Wise needs
+   bank details on the invoice; a Shopify invoice needs its link; a check needs
+   an address. Separate from the terms because WHEN and HOW are independent —
+   a prepaid order can be paid by any of the three. */
+const PAY_METHODS = ['Wise', 'Check', 'Shopify invoice'];
+const PAYMETHOD_ORDER_COL = ['Payment_Method', 'Pay_By'];
+const PAYMETHOD_CUST_COL = ['Default_Payment_Method', 'Payment_Method', 'Invoice_Method'];
+
+/* What actually applies to an order: its own value, else the customer's. */
+function termsFor(o) {
+  const own = String((o && o.terms) || '').trim();
+  if (own) return { value: own, inherited: false };
+  const c = o && o.customerId ? S.customers.find(x => x.id === o.customerId) : null;
+  const def = String((c && c.terms) || '').trim();
+  return { value: def, inherited: !!def };
+}
+function payFor(o) {
+  const own = String((o && o.pay) || '').trim();
+  if (own) return { value: own, inherited: false };
+  const c = o && o.customerId ? S.customers.find(x => x.id === o.customerId) : null;
+  const def = String((c && c.pay) || '').trim();
+  return { value: def, inherited: !!def };
+}
+
 const S = {
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
@@ -404,6 +454,7 @@ async function loadAll() {
       customerName: c(['Customer_Name']), customer: c(['Customer']),
       status: c(['Status']), channel: c(['Channel']), type: c(['Order_Type']),
       orderDate: c(['Order_Date']), dueDate: c(['Due_Date']), notes: c(['Notes']),
+      terms: c(TERMS_ORDER_COL), pay: c(PAYMETHOD_ORDER_COL),
     };
     const lc = (cands) => findColumn(wolT, cands);
     S.lineCols = {
@@ -448,6 +499,8 @@ async function loadAll() {
       status: String(columnAsArray(woT, S.cols.status)[i] || ''),
       type: String(columnAsArray(woT, S.cols.type)[i] || ''),
       notes: columnAsArray(woT, S.cols.notes)[i] || '',
+      terms: S.cols.terms ? String(columnAsArray(woT, S.cols.terms)[i] || '').trim() : '',
+      pay: S.cols.pay ? String(columnAsArray(woT, S.cols.pay)[i] || '').trim() : '',
     }));
 
     S.lines = {};
@@ -721,10 +774,23 @@ async function loadCustomers() {
     const t = await grist.docApi.fetchTable('Customers');
     const nameCol = findColumn(t, ['Customer_Name', 'Name']);
     const codeCol = findColumn(t, ['Code']);
+    const termsCol = findColumn(t, TERMS_CUST_COL);
+    const payCol = findColumn(t, PAYMETHOD_CUST_COL);
+    const countryCol = findColumn(t, ['Ship_Country', 'Country']);
+    S.customerCols = { terms: termsCol, pay: payCol };
     S.customers = (t.id || []).map((id, i) => ({
       id,
       name: columnAsArray(t, nameCol)[i] || `Customer #${id}`,
       code: columnAsArray(t, codeCol)[i] || '',
+      terms: termsCol ? String(columnAsArray(t, termsCol)[i] || '').trim() : '',
+      pay: payCol ? String(columnAsArray(t, payCol)[i] || '').trim() : '',
+      /* Only used to decide whether to mention the commercial invoice. The
+         country string is free text ("US — United States"), so this tests for
+         the US rather than trying to identify which country it is. */
+      foreign: countryCol
+        ? !/^\s*(us\b|usa\b|united states)/i.test(
+            String(columnAsArray(t, countryCol)[i] || 'US').trim())
+        : false,
     })).sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
   } catch (e) {
     console.warn('Customers table unavailable — type the name instead', e);
@@ -2220,6 +2286,44 @@ function todoPanelHtml() {
 }
 
 
+/* Terms and pay method, side by side, each showing what it INHERITS rather
+   than only what is set. \"(RDG's usual)\" next to a blank value is the
+   difference between knowing the order is on account and having to go and look
+   at the customer record to find out. */
+function termsRowHtml(o) {
+  if (!S.cols.terms && !S.cols.pay) return '';
+  const t = termsFor(o), p = payFor(o);
+  const cust = o.customerId ? S.customers.find(x => x.id === o.customerId) : null;
+  const who = cust ? (cust.code || cust.name) : 'this customer';
+  const opt = (v, cur, label) =>
+    `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+
+  const termsSel = S.cols.terms ? `
+    <select onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.terms)}, this.value)"
+      title="Blank follows the customer's usual terms">
+      ${opt('', o.terms, t.inherited ? `${who}'s usual — ${TERMS[t.value] ? TERMS[t.value].short : t.value}` : '— terms —')}
+      ${Object.keys(TERMS).map(k => opt(k, o.terms, TERMS[k].short)).join('')}
+    </select>` : '';
+
+  const paySel = S.cols.pay ? `
+    <select onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.pay)}, this.value)"
+      title="How they are paying — it changes what the invoice has to carry">
+      ${opt('', o.pay, p.inherited ? `${who}'s usual — ${p.value}` : '— pay by —')}
+      ${PAY_METHODS.map(m => opt(m, o.pay, m)).join('')}
+    </select>` : '';
+
+  /* The one combination worth flagging: prepaid means the parcel waits, and
+     that is a packing instruction, not a billing detail. */
+  const prepaid = t.value === 'Prepaid';
+  return `<div class="field-row">
+    <label class="lab">Payment</label>${termsSel}${paySel}
+    ${prepaid ? `<span class="badge building" title="Don't ship until it is paid">hold until paid</span>` : ''}
+    ${cust && cust.foreign
+      ? `<span class="st-listed" title="Use split-shipment-invoice for the customs paperwork">international — commercial invoice needed</span>`
+      : ''}
+  </div>`;
+}
+
 function renderMain() {
   const box = document.getElementById('main');
   /* A full render replaces the search input, and with it the caret and the
@@ -2277,6 +2381,7 @@ function renderMain() {
     <div class="field-row">
       <label class="lab">Customer</label>${custOptions}
     </div>
+    ${termsRowHtml(o)}
 
     <table class="lines">
       <thead><tr><th>Colourway</th><th>SKU</th><th style="text-align:right">Spools</th>
