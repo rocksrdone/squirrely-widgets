@@ -2331,6 +2331,7 @@ function renderLinkedOrderBanner() {
 async function loadAllSkus() {
   try {
     const recipesTable = await grist.docApi.fetchTable('Recipes');
+    noteRecipesCols(recipesTable);   // free: keeps the real column list current
     const R = resolveCols(recipesTable, 'Recipes', { sku: ['SKU_Base'], name: ['Recipe_Name'] }, null);
     const ids = recipesTable.id || [];
     allOtherSkus = ids.map((id, i) => ({
@@ -2432,7 +2433,47 @@ function eduSuffixParts() {
    an empty one would report all three missing on a table that has them. */
 const SCHOOL_COLS = ['School_State', 'School_City', 'School_Code'];
 
+/* ── What columns Recipes ACTUALLY has ───────────────────────────────────────
+   Read from the table, not from currentRecord. The record Grist handed the
+   widget is a snapshot taken before the columns were added and it is not
+   re-sent just because the schema changed, so trusting its keys meant:
+
+     - "Add the columns" added them, then still believed they were missing, so
+       clicking again added School_State2, School_City2, School_Code2 — and
+       again, and again;
+     - the save filter went on dropping School_Code from the write even though
+       the column was sitting right there, empty.
+
+   One stale list, both symptoms. fetchTable returns an object keyed by the
+   real column id, which is the authority; loadAllSkus() already fetches the
+   table after every save, so keeping the keys from it costs nothing. */
+let recipesCols = null;        // Set of real colIds, or null while unknown
+let strandedCols = [];         // School_State2 and friends: duplicates, all empty
+
+function noteRecipesCols(table) {
+  if (!table || typeof table !== 'object') return;
+  const keys = Object.keys(table);
+  if (!keys.length) return;
+  recipesCols = new Set(keys);
+
+  /* A duplicate is only offered for removal if nothing was ever typed into it.
+     One with data in it is a column the user has used, whatever it is named. */
+  strandedCols = keys.filter(k => /^School_(State|City|Code)\d+$/.test(k))
+    .filter(k => {
+      const col = table[k];
+      return Array.isArray(col) && col.every(v => v === null || v === '' || v === undefined);
+    });
+}
+
+async function loadRecipesCols() {
+  try { noteRecipesCols(await grist.docApi.fetchTable('Recipes')); }
+  catch (e) { console.error('Could not read the Recipes column list:', e); }
+  try { renderSchoolColsWarn(); } catch (e) {}
+}
+
 function missingSchoolCols() {
+  if (recipesCols && recipesCols.size) return SCHOOL_COLS.filter(c => !recipesCols.has(c));
+  // Fallback only while the table has not been read yet.
   const known = currentRecord && typeof currentRecord === 'object'
     ? Object.keys(currentRecord) : [];
   if (known.length <= 3) return [];
@@ -2444,7 +2485,20 @@ function renderSchoolColsWarn() {
   if (!el) return;
   const isEdu = scopeKind((document.getElementById('recipeScope') || {}).value || '') === 'edu';
   const absent = isEdu ? missingSchoolCols() : [];
-  if (!absent.length) { el.className = ''; el.innerHTML = ''; return; }
+  const extra = isEdu ? strandedCols : [];
+
+  if (!absent.length) {
+    if (!extra.length) { el.className = ''; el.innerHTML = ''; return; }
+    /* The duplicates my own stale-list bug created. Named, and only offered
+       because every one of them is empty. */
+    el.className = 'review-banner';
+    el.innerHTML =
+      '<div class="review-hd">Duplicate columns on Recipes'
+      + '<button class="review-clear" onclick="removeStrandedSchoolCols()">Remove them</button></div>'
+      + `<div class="review-line">Recipes has <code>${extra.join('</code>, <code>')}</code> `
+      + 'left over from adding the columns more than once. They are empty and nothing reads them.</div>';
+    return;
+  }
 
   const parsed = eduPartsFromSku(document.getElementById('skuBase').value);
   el.className = 'review-banner';
@@ -2470,15 +2524,26 @@ function renderSchoolColsWarn() {
    filter reads it, and Grist will not re-send the record until it feels like
    it. */
 async function addSchoolColumns() {
+  /* Re-read the table FIRST. Grist happily creates School_State2 when asked for
+     a name that is taken, so a stale list turns a second click into a second
+     set of columns rather than a no-op. */
+  await loadRecipesCols();
   const absent = missingSchoolCols();
-  if (!absent.length) return;
+  if (!absent.length) {
+    showToast('Those columns are already on Recipes');
+    renderSchoolColsWarn();
+    return;
+  }
   if (!confirm(`Add ${absent.length} Text column${absent.length === 1 ? '' : 's'} to Recipes?\n\n`
       + absent.join('\n')
       + '\n\nWithout them the school state, city and code cannot be saved.')) return;
   try {
     await grist.docApi.applyUserActions(
       absent.map(c => ['AddColumn', 'Recipes', c, { type: 'Text', isFormula: false }]));
-    absent.forEach(c => { if (currentRecord) currentRecord[c] = ''; });
+    absent.forEach(c => {
+      if (currentRecord) currentRecord[c] = '';
+      if (recipesCols) recipesCols.add(c);
+    });
 
     const vals = {
       School_State: document.getElementById('schoolState').value.trim(),
@@ -2496,8 +2561,30 @@ async function addSchoolColumns() {
     console.error('Could not add the school columns:', e);
     showToast('Could not add the columns — check the widget access level');
   }
+  await loadRecipesCols();
   renderSchoolColsWarn();
   renderScopeHint();
+}
+
+/* Clearing up after the duplicate-adding bug. Only the numbered twins, only
+   when every one of them is empty — checked again here rather than trusting
+   the list from the last fetch, because dropping a column cannot be undone
+   from the widget. */
+async function removeStrandedSchoolCols() {
+  await loadRecipesCols();
+  const extra = strandedCols.slice();
+  if (!extra.length) { renderSchoolColsWarn(); return; }
+  if (!confirm(`Remove ${extra.length} empty duplicate column${extra.length === 1 ? '' : 's'} `
+      + `from Recipes?\n\n${extra.join('\n')}\n\nThey hold no data. This cannot be undone here.`)) return;
+  try {
+    await grist.docApi.applyUserActions(extra.map(c => ['RemoveColumn', 'Recipes', c]));
+    showToast(`${extra.length} duplicate column${extra.length === 1 ? '' : 's'} removed`);
+  } catch (e) {
+    console.error('Could not remove the duplicate columns:', e);
+    showToast('Could not remove them — delete them in Grist instead');
+  }
+  await loadRecipesCols();
+  renderSchoolColsWarn();
 }
 
 function getLinkedCustomerInitials() {
@@ -2664,8 +2751,15 @@ async function loadRecipe(record) {
 
   const createdLabel = document.getElementById('createdDateLabel');
   if (rowField(record, ['Created_Date'])) {
-    const d = new Date(Number(rowField(record, ['Created_Date'])) * 1000);
-    createdLabel.textContent = `Created ${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+    /* Seconds or milliseconds — some rows carry one, some the other, and a flat
+       *1000 on a millisecond value printed "Created March 58504". Same rule as
+       yearFromAnything(), and an impossible year prints nothing at all rather
+       than a number that looks like data. */
+    const raw = Number(rowField(record, ['Created_Date']));
+    const d = new Date(raw > 1e11 ? raw : raw * 1000);
+    const y = d.getFullYear();
+    createdLabel.textContent = (isFinite(y) && y > 1990 && y < 2100)
+      ? `Created ${d.toLocaleString('default', { month: 'long' })} ${y}` : '';
   } else {
     createdLabel.textContent = '';
   }
@@ -3398,8 +3492,12 @@ async function saveRecipe() {
 
        Guarded on having a record with keys: filtering against an empty one
        would drop everything and "save" nothing at all. */
-    const known = currentRecord && typeof currentRecord === 'object'
-      ? Object.keys(currentRecord) : [];
+    /* The table's own column list wins over the record's keys: a column added
+       since this record was handed over is real, and filtering it out dropped
+       School_Code from the write while the column sat there empty. */
+    const known = recipesCols && recipesCols.size
+      ? Array.from(recipesCols)
+      : (currentRecord && typeof currentRecord === 'object' ? Object.keys(currentRecord) : []);
     let skippedCols = [];
     const preFilter = Object.assign({}, recipeFields);  // for naming what was dropped
     if (known.length > 3) {
@@ -3498,6 +3596,8 @@ async function saveRecipe() {
 grist.ready({
   requiredAccess: 'full'
 });
+
+loadRecipesCols();   // the real column list, before anything is filtered against it
 
 grist.onRecord(async (record) => {
   if (isSaving) return;
