@@ -351,9 +351,10 @@
         <input class="field-input" id="schoolCode" placeholder="UOFI"
                oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
       </div>
+      <div class="field-wrap wide"><div id="schoolColsWarn"></div></div>
       <div class="field-wrap">
         <span class="field-label">SKU Base</span>
-        <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();">
+        <input class="field-input" id="skuBase" oninput="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate(); renderSchoolColsWarn();">
       </div>
       <div class="field-wrap wide" id="skuSuggestionWrap"></div>
       <div class="field-wrap wide">
@@ -2356,6 +2357,7 @@ function onScopeChange() {
     const el = document.getElementById(id);
     if (el) el.style.display = isEdu ? 'flex' : 'none';
   });
+  renderSchoolColsWarn();
 
   const linkedSelect = document.getElementById('linkedCustomer');
   linkedSelect.disabled = isReserved;
@@ -2370,9 +2372,11 @@ function slugifyForSku(name) {
 /* The College/University suffix: _EDU_{STATE}_{CITY}_{CODE}
    e.g. FFN_EDU_ID_MOSCOW_UOFI  (the college name is deliberately absent)
 
-   The three parts are columns on RECIPES — School_State, School_City and
-   School_Code — which already existed in the table before this widget knew
-   about them. They belong to the recipe rather than to the linked customer:
+   The three parts are meant to be columns on RECIPES — School_State,
+   School_City and School_Code. They are NOT there today, which this widget
+   wrongly assumed and then quietly worked around: the save dropped them and
+   the typed city vanished on the next open. See missingSchoolCols().
+   They belong to the recipe rather than to the linked customer:
    a school orders under its own name, and the same institution can appear
    without ever being a Customers row.
 
@@ -2411,6 +2415,89 @@ function eduSuffixParts() {
   if (!city)  missing.push('<b>School city</b>');
   if (!abbr)  missing.push('<b>School code</b> (e.g. UOFI)');
   return { state, city, abbr, missing, suffix: missing.length ? '' : `_EDU_${state}_${city}_${abbr}` };
+}
+
+/* ── The three school columns are not on Recipes ─────────────────────────────
+   Which is why the typed city disappeared. The save filter added for the
+   "cannot save at all" bug drops any field the table has no column for, so
+   these three went out silently — a field that stops persisting without saying
+   so is worse than one that refuses outright, and that is exactly what shipped.
+
+   Rather than leave three inputs that look savable and are not, say so where
+   they are, and offer to create them. Adding a column is the same AddColumn
+   call addStoreColumns() already uses on Product_Photos, so this needs no new
+   access level and no trip into Grist.
+
+   The record's own keys are the column list. Guarded on having a real record:
+   an empty one would report all three missing on a table that has them. */
+const SCHOOL_COLS = ['School_State', 'School_City', 'School_Code'];
+
+function missingSchoolCols() {
+  const known = currentRecord && typeof currentRecord === 'object'
+    ? Object.keys(currentRecord) : [];
+  if (known.length <= 3) return [];
+  return SCHOOL_COLS.filter(c => !known.includes(c));
+}
+
+function renderSchoolColsWarn() {
+  const el = document.getElementById('schoolColsWarn');
+  if (!el) return;
+  const isEdu = scopeKind((document.getElementById('recipeScope') || {}).value || '') === 'edu';
+  const absent = isEdu ? missingSchoolCols() : [];
+  if (!absent.length) { el.className = ''; el.innerHTML = ''; return; }
+
+  const parsed = eduPartsFromSku(document.getElementById('skuBase').value);
+  el.className = 'review-banner';
+  el.innerHTML =
+    '<div class="review-hd">Nowhere to save these'
+    + '<button class="review-clear" onclick="addSchoolColumns()">Add the columns</button></div>'
+    + `<div class="review-line">Recipes has no <code>${absent.join('</code>, <code>')}</code> `
+    + `column${absent.length === 1 ? '' : 's'}, so state, city and code are `
+    + '<b>not kept</b> when you save.</div>'
+    + '<div class="review-line">'
+    + (parsed
+        ? `Right now they are read back out of the SKU (<code>${esc(parsed.state)}</code> / `
+          + `<code>${esc(parsed.city)}</code> / <code>${esc(parsed.code)}</code>), which only works `
+          + 'once the SKU carries the suffix.'
+        : 'The SKU does not carry an <code>_EDU_</code> suffix yet either, so there is '
+          + 'nothing to read them back from.')
+    + '</div>';
+}
+
+/* Adds the three as Text and then writes what is currently typed into them, so
+   the value that prompted the warning is the first thing stored rather than
+   needing a second save. currentRecord is patched locally because the save
+   filter reads it, and Grist will not re-send the record until it feels like
+   it. */
+async function addSchoolColumns() {
+  const absent = missingSchoolCols();
+  if (!absent.length) return;
+  if (!confirm(`Add ${absent.length} Text column${absent.length === 1 ? '' : 's'} to Recipes?\n\n`
+      + absent.join('\n')
+      + '\n\nWithout them the school state, city and code cannot be saved.')) return;
+  try {
+    await grist.docApi.applyUserActions(
+      absent.map(c => ['AddColumn', 'Recipes', c, { type: 'Text', isFormula: false }]));
+    absent.forEach(c => { if (currentRecord) currentRecord[c] = ''; });
+
+    const vals = {
+      School_State: document.getElementById('schoolState').value.trim(),
+      School_City: document.getElementById('schoolCity').value.trim(),
+      School_Code: document.getElementById('schoolCode').value.trim(),
+    };
+    const fill = {};
+    absent.forEach(c => { if (vals[c]) fill[c] = vals[c]; });
+    if (currentRecipeId && Object.keys(fill).length) {
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId, fill]]);
+      Object.assign(currentRecord, fill);
+    }
+    showToast(`${absent.length} column${absent.length === 1 ? '' : 's'} added — these save now`);
+  } catch (e) {
+    console.error('Could not add the school columns:', e);
+    showToast('Could not add the columns — check the widget access level');
+  }
+  renderSchoolColsWarn();
+  renderScopeHint();
 }
 
 function getLinkedCustomerInitials() {
@@ -2601,6 +2688,7 @@ async function loadRecipe(record) {
         .forEach(([id, v]) => { const el = document.getElementById(id); if (el && !el.value.trim()) el.value = v; });
     }
   }
+  renderSchoolColsWarn();
   await setYearMade(record);
   document.getElementById('skuBase').value = rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']) || '';
   document.getElementById('generalNotes').value = rowField(record, ['Notes']) || '';
@@ -3313,6 +3401,7 @@ async function saveRecipe() {
     const known = currentRecord && typeof currentRecord === 'object'
       ? Object.keys(currentRecord) : [];
     let skippedCols = [];
+    const preFilter = Object.assign({}, recipeFields);  // for naming what was dropped
     if (known.length > 3) {
       skippedCols = Object.keys(recipeFields).filter(k => !known.includes(k));
       skippedCols.forEach(k => { delete recipeFields[k]; });
@@ -3377,7 +3466,12 @@ async function saveRecipe() {
     /* Saved, but say what did not go. A field that silently stops persisting is
        worse than one that refuses: you keep typing into it. */
     if (skippedCols.length) {
-      showToast(`Saved ✓ — but ${skippedCols.length} field(s) have no column on Recipes`);
+      /* Named, not counted. "3 field(s) have no column" told the user nothing
+         about WHICH three, so the city looked saved and was not. */
+      const typed = skippedCols.filter(k => String(preFilter[k] || '').trim());
+      showToast(typed.length
+        ? `Saved ✓ — but NOT ${typed.join(', ')}: no such column on Recipes`
+        : `Saved ✓ — ${skippedCols.length} field(s) have no column on Recipes (all empty)`);
       console.warn('Not saved (no such column on Recipes):', skippedCols.join(', '));
     } else {
       showToast('Recipe saved ✓');
