@@ -347,8 +347,8 @@
                oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
       </div>
       <div class="field-wrap" id="schoolCodeWrap" style="display:none">
-        <span class="field-label">School code</span>
-        <input class="field-input" id="schoolCode" placeholder="UOFI"
+        <span class="field-label">School code <span style="font-weight:400;text-transform:none">(if it has one)</span></span>
+        <input class="field-input" id="schoolCode" placeholder="UOFI — optional"
                oninput="markUnsaved(); renderSkuSuggestion(); renderScopeHint();">
       </div>
       <div class="field-wrap wide"><div id="schoolColsWarn"></div></div>
@@ -2275,9 +2275,21 @@ function renderScopeHint() {
    piece is missing it says so instead of letting a plain SKU look finished. */
 function eduScopeHint() {
   const edu = eduSuffixParts();
-  const shape = 'An institution &mdash; the SKU is <code>_EDU_</code> plus state, city and abbreviation, e.g. <code>FFN_EDU_ID_MOSCOW_UOFI</code>. The college name is NOT in it &mdash; those three identify the school, and the full name stays in the title where it is searched.';
-  if (!edu.missing.length) return shape;
-  return `${shape}<br><b>No suffix yet</b> &mdash; still needs ${edu.missing.join(', ')}. The SKU stays plain until all three are filled in, rather than emitting a partial one that would be read back wrongly.`;
+  const shape = 'An institution &mdash; the SKU is <code>_EDU_</code> plus state and city, '
+    + 'then the school\'s abbreviation if it has one: <code>FFN_EDU_ID_MOSCOW_UOFI</code>, '
+    + 'or <code>FFN_EDU_MI_TWINLAKE</code> without. The college name is NOT in it &mdash; '
+    + 'the full name stays in the title, where it is searched.';
+  if (edu.missing.length) {
+    return `${shape}<br><b>No suffix yet</b> &mdash; still needs ${edu.missing.join(', ')}. `
+      + 'The SKU stays plain until both are filled in, rather than emitting a partial one '
+      + 'that would be read back wrongly.';
+  }
+  if (!edu.abbr) {
+    return `${shape}<br><b>No abbreviation</b> &mdash; the suffix is state and city only, `
+      + 'which is correct for a school that has none. Add one later and the SKU changes, '
+      + 'so set it now if the school does have one.';
+  }
+  return shape;
 }
 
 function renderLinkedCustomerState() {
@@ -2396,11 +2408,20 @@ function slugifyForSku(name) {
    permanent SKU that is already printed on labels.
 
    Anchored at the end because the EDU suffix is always last, and the city is
-   already collapsed to one token (ANNARBOR, URBANACHAMPAIGN) so exactly three
-   segments follow _EDU_. Verified against all 13. */
+   already collapsed to one token (ANNARBOR, URBANACHAMPAIGN) so the segments
+   after _EDU_ are exactly state, city and — when the school has one — code.
+
+   The third segment is OPTIONAL. Not every institution has an official
+   abbreviation; a summer arts camp or a conservatory often has none, and
+   demanding one meant the SKU stayed plain and nothing round-tripped. Two
+   segments and three are told apart without ambiguity because a segment cannot
+   contain an underscore — the city is already collapsed to one token — so the
+   match is anchored and counted, never guessed. */
 function eduPartsFromSku(sku) {
-  const m = /_EDU_([A-Z0-9]+)_([A-Z0-9]+)_([A-Z0-9]+)$/i.exec(String(sku || '').trim());
-  return m ? { state: m[1].toUpperCase(), city: m[2].toUpperCase(), code: m[3].toUpperCase() } : null;
+  const m = /_EDU_([A-Z0-9]+)_([A-Z0-9]+)(?:_([A-Z0-9]+))?$/i.exec(String(sku || '').trim());
+  if (!m) return null;
+  return { state: m[1].toUpperCase(), city: m[2].toUpperCase(),
+           code: m[3] ? m[3].toUpperCase() : '' };
 }
 
 function eduSuffixParts() {
@@ -2411,11 +2432,16 @@ function eduSuffixParts() {
   const city  = val('schoolCity');
   const abbr  = val('schoolCode');
 
+  /* State and city identify the school; the code only sharpens it. Requiring
+     all three meant a college with no official abbreviation got no suffix at
+     all, which is the opposite of what the scope is for. */
   const missing = [];
   if (!state) missing.push('<b>School state</b>');
   if (!city)  missing.push('<b>School city</b>');
-  if (!abbr)  missing.push('<b>School code</b> (e.g. UOFI)');
-  return { state, city, abbr, missing, suffix: missing.length ? '' : `_EDU_${state}_${city}_${abbr}` };
+
+  const suffix = missing.length ? ''
+    : (abbr ? `_EDU_${state}_${city}_${abbr}` : `_EDU_${state}_${city}`);
+  return { state, city, abbr, missing, suffix };
 }
 
 /* ── The three school columns are not on Recipes ─────────────────────────────
