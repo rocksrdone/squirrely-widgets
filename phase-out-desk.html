@@ -540,11 +540,39 @@ function renderList() {
     : 'No dyes marked for phase-out yet — use "Phase out a brand…" or set a Status below.';
 
   const box = document.getElementById('list');
+
+  /* While searching, also show matching dyes that AREN'T outgoing yet, so a
+     dye can be found and marked from here instead of only via the table. */
+  const q = norm(state.q);
+  let extraHtml = '';
+  if (q) {
+    const extra = dyes.filter(d => !d.out && (!state.brand || d.brand === state.brand) &&
+      [d.name, d.serial, d.brand].some(x => norm(x).includes(q)))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.brand.localeCompare(b.brand));
+    if (extra.length) {
+      extraHtml = `<div class="cand-meta" style="padding:8px 8px 4px;font-weight:600">Not marked for phase-out (${extra.length}) — tap to open, then mark it</div>` +
+        extra.slice(0, 40).map(d => `
+        <div class="item ${d.id === state.sel ? 'sel' : ''}" onclick="selectDye(${d.id})">
+          <span class="dot" style="background:${safeHex(d.swatch)}"></span>
+          <div class="item-main">
+            <div class="item-name">${esc(d.name)}</div>
+            <div class="item-sub">${esc([d.brand, d.serial].filter(Boolean).join(' · '))}</div>
+          </div>
+          <div class="item-right">
+            <span class="badge b-acid">${esc(d.status || 'no status')}</span>
+            <div class="item-nums">${d.activeRecipes} rec</div>
+          </div>
+        </div>`).join('') +
+        (extra.length > 40 ? '<div class="cand-meta" style="padding:4px 8px">…keep typing to narrow it down</div>' : '');
+    }
+  }
+
   if (!list.length) {
-    box.innerHTML = `<div class="empty">${outN ? 'Nothing in this view.' : 'No outgoing dyes yet.'}</div>`;
+    box.innerHTML = (q ? '' : `<div class="empty">${outN ? 'Nothing in this view.' : 'No outgoing dyes yet. Search for a dye above to mark it, or use "Phase out a brand…".'}</div>`) +
+      (extraHtml || (q ? '<div class="empty">No dye matches that search.</div>' : ''));
     return;
   }
-  box.innerHTML = list.map(d => {
+  box.innerHTML = (q && extraHtml ? '<div class="cand-meta" style="padding:4px 8px 4px;font-weight:600">Marked for phase-out</div>' : '') + list.map(d => {
     const s = d.successor ? dyeById[d.successor] : null;
     const st = STAGES[d.stage];
     const nums = [`${d.activeRecipes} rec`, powderShort(d)].filter(Boolean).join(' · ');
@@ -561,7 +589,7 @@ function renderList() {
           <div class="item-nums">${esc(nums)}</div>
         </div>
       </div>`;
-  }).join('');
+  }).join('') + extraHtml;
 }
 
 /* ── detail ──────────────────────────────────────────────────────── */
@@ -599,6 +627,10 @@ function renderDetail() {
       <div class="stat"><div class="stat-k">Status</div>
         <select style="margin-top:2px" onchange="saveStatus(${d.id}, this.value)">${statusOpts}</select></div>
     </div>
+    ${!d.out ? `<div class="infobox" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="flex:1;min-width:180px">This dye isn't marked for phase-out, so it isn't on the to-do list.</span>
+        <button class="btn btn-primary" onclick="saveStatus(${d.id}, phaseChoice())">Mark for phase-out</button>
+      </div>` : ''}
     ${d.grams === 0 && d.mL === 0 && d.activeRecipes && d.stage !== 'done' && hasPowder
       ? '<div class="warnbox">Nothing left on hand and active recipes still use this dye — swap these first.</div>' : ''}
 
