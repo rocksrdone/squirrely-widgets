@@ -613,8 +613,6 @@ function renderDetail() {
     ${renderRecipes(d)}
     ${renderSwap(d, s)}
   `;
-  const pq = document.getElementById('pickQ');
-  if (pq && state.pickFocus) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
 }
 
 function renderSuccessorCard(d, s) {
@@ -642,19 +640,60 @@ function renderSuccessorCard(d, s) {
     </div>${warn}`;
 }
 
+/* A dye counts as PRO if its brand label, raw brand value, serial (OS…) or
+   product line says so — brand naming varies ("Pro", "PRO Chemical & Dye",
+   a Ref id), and a too-strict test silently empties the picker. */
+function isProDye(x) {
+  return PRO_RE.test(x.brand) || PRO_RE.test(String(x.brandRaw || '')) ||
+         /^OS\d/i.test(x.serial) || ONE_SHOT_RE.test(x.productLine) ||
+         /\b(WF|Sab)\b/.test(x.name);
+}
+function matchesQ(x, q) {
+  return [x.name, x.serial, x.productLine, x.brand].some(v => norm(v).includes(q));
+}
+
 function renderPicker(d) {
+  return `
+    <div class="row" style="margin-top:10px">
+      <input class="search" id="pickQ" autocomplete="off" placeholder="${d.successor ? 'Change replacement…' : 'Search replacement by name or serial (e.g. OS072)…'}"
+        value="${esc(state.pickQ)}" oninput="state.pickQ = this.value; renderCands()">
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <label class="check" style="margin:0"><input type="checkbox" id="pickAllBox" ${state.pickAll ? 'checked' : ''} onchange="state.pickAll = this.checked; renderCands()"> Search all brands (default: PRO only)</label>
+      <button class="link" onclick="state.showAdd = !state.showAdd; renderDetail()">${state.showAdd ? 'cancel new dye' : '+ not in the catalog? add it'}</button>
+    </div>
+    <div id="candBox">${candsHtml(d)}</div>
+    ${state.showAdd ? renderAddForm(d) : ''}`;
+}
+
+/* Redraws only the result list, so the search box keeps focus (and the
+   on-screen keyboard stays up) while typing. */
+function renderCands() {
+  const d = dyeById[state.sel];
+  const box = document.getElementById('candBox');
+  if (d && box) box.innerHTML = candsHtml(d);
+}
+
+function candsHtml(d) {
   const q = norm(state.pickQ);
   const nameKey = norm(d.name);
-  let pool = dyes.filter(x => x.id !== d.id && (state.pickAll || (!x.out && PRO_RE.test(x.brand))));
+  const others = dyes.filter(x => x.id !== d.id);
+  const proPool = others.filter(x => !x.out && isProDye(x));
+  // No PRO dyes recognised at all → don't hide everything; search all brands.
+  const fellBack = !state.pickAll && proPool.length === 0;
+  const pool = (state.pickAll || fellBack) ? others : proPool;
   const sameName = pool.filter(x => norm(x.name) === nameKey);
   let list;
   if (q) {
-    list = pool.filter(x => [x.name, x.serial, x.productLine, x.brand].some(v => norm(v).includes(q)));
+    list = pool.filter(x => matchesQ(x, q));
     list.sort((a, b) => (norm(b.name) === nameKey) - (norm(a.name) === nameKey) || a.name.localeCompare(b.name));
   } else {
     list = sameName;
   }
-  list = list.slice(0, 14);
+  const total = list.length;
+  list = list.slice(0, 25);
+  const elsewhere = (q && !state.pickAll && !fellBack && !total)
+    ? others.filter(x => matchesQ(x, q)).length : 0;
   const rows = list.map(x => `
     <div class="cand" onclick="setSuccessor(${d.id}, ${x.id})">
       <span class="dot" style="background:${safeHex(x.swatch)}"></span>
@@ -669,19 +708,16 @@ function renderPicker(d) {
         ${hasPowder && !x.powder ? '<span class="badge b-acid">none on hand</span>' : ''}
       </div>
     </div>`).join('');
-  const emptyMsg = q ? 'No matches.' : (sameName.length ? '' : 'Type to search the catalog.');
-  return `
-    <div class="row" style="margin-top:10px">
-      <input class="search" id="pickQ" placeholder="${d.successor ? 'Change replacement…' : 'Search replacement by name or serial (e.g. OS072)…'}"
-        value="${esc(state.pickQ)}" oninput="state.pickQ = this.value; state.pickFocus = true; renderDetail()">
-    </div>
-    <div class="row" style="justify-content:space-between">
-      <label class="check" style="margin:0"><input type="checkbox" ${state.pickAll ? 'checked' : ''} onchange="state.pickAll = this.checked; renderDetail()"> Search all brands (default: PRO only)</label>
-      <button class="link" onclick="state.showAdd = !state.showAdd; renderDetail()">${state.showAdd ? 'cancel new dye' : '+ not in the catalog? add it'}</button>
-    </div>
-    ${rows ? `<div class="cands">${!q ? '<div class="cand-meta" style="padding:5px 9px">Suggested — same name</div>' : ''}${rows}</div>`
-           : (emptyMsg ? `<div class="cand-meta" style="padding:6px 2px">${esc(emptyMsg)}</div>` : '')}
-    ${state.showAdd ? renderAddForm(d) : ''}`;
+  let note = '';
+  if (fellBack) note = '<div class="infobox">No dyes were recognised as PRO by brand, serial or product line, so all brands are shown.</div>';
+  if (rows) {
+    const head = !q ? 'Suggested — same name' : `${total} match${total === 1 ? '' : 'es'}${total > 25 ? ' (first 25 — keep typing)' : ''}`;
+    return note + `<div class="cands"><div class="cand-meta" style="padding:5px 9px">${esc(head)}</div>${rows}</div>`;
+  }
+  if (!q) return note + '<div class="cand-meta" style="padding:6px 2px">Type a name or serial to search the catalog.</div>';
+  if (elsewhere) return note + `<div class="infobox">No PRO matches for "${esc(state.pickQ)}" — ${elsewhere} in other brands.
+      <button class="link" onclick="state.pickAll = true; const b = document.getElementById('pickAllBox'); if (b) b.checked = true; renderCands()">Show them</button></div>`;
+  return note + `<div class="infobox">Nothing in the catalog matches "${esc(state.pickQ)}". Use <b>+ not in the catalog? add it</b> to create it.</div>`;
 }
 
 function brandOptionsHtml(selectedLabel) {
