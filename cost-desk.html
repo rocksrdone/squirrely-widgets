@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cost Desk</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.top-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.top-note { font-size: 11px; color: var(--muted); }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab-btn { font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); font-family: inherit; }
+.tab-btn.active { background: var(--ink); border-color: var(--ink); color: white; }
+.tab-btn .pip { font-size: 10px; color: var(--accent); margin-left: 5px; font-weight: 600; }
+.tab-btn.active .pip { color: #F0B8A8; }
+.btn { font-size: 12px; padding: 6px 11px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); font-family: inherit; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .tab-btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn[disabled] { opacity: .4; cursor: default; }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-ink { background: var(--ink); border-color: var(--ink); color: white; }
+.btn-small { font-size: 11px; padding: 3px 8px; }
+.btn-warn { color: var(--accent); }
+.panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.panel h2 { font-family: 'Libre Baskerville', serif; font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.panel .lead { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar .spacer { margin-left: auto; }
+input.search { flex: 1; min-width: 160px; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; font-family: inherit; }
+.f { padding: 4px 7px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12px; font-family: inherit; background: white; color: var(--ink); width: 100%; }
+.f.mono, .mono { font-family: 'DM Mono', monospace; }
+.f.num { text-align: right; font-family: 'DM Mono', monospace; }
+textarea.f { min-height: 160px; resize: vertical; line-height: 1.45; }
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid th { text-align: left; font-size: 10.5px; font-weight: 600; color: white; background: var(--ink); padding: 6px 8px; white-space: nowrap; }
+table.grid th.r, table.grid td.r { text-align: right; }
+table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--rule); font-size: 12px; vertical-align: middle; }
+table.grid tbody tr:nth-child(even) > td { background: #FBF9F6; }
+table.grid tr.click { cursor: pointer; }
+table.grid tr.click:hover > td { background: var(--warm); }
+table.grid tr.open > td { background: var(--teal-light) !important; }
+td.num, .num-t { font-family: 'DM Mono', monospace; text-align: right; white-space: nowrap; }
+.sub { font-size: 11px; color: var(--muted); }
+.chip { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--rule); background: white; white-space: nowrap; }
+.chip.up { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
+.chip.down { color: var(--teal); border-color: var(--teal); background: var(--teal-light); }
+.chip.warn { color: var(--gold); border-color: var(--gold); background: var(--gold-light); }
+.chip.ok { color: var(--teal); border-color: var(--teal); }
+.chip.est { color: var(--muted); font-style: italic; }
+.group-head { font-family: 'Libre Baskerville', serif; font-size: 13.5px; font-weight: 700; margin: 16px 0 6px; }
+.group-head:first-child { margin-top: 2px; }
+.editor { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; margin: 6px 0 12px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 9px 12px; margin-bottom: 10px; }
+.fields label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.fields label.wide { grid-column: 1 / -1; }
+.fields label.check { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); font-weight: 400; padding-top: 14px; }
+.totals { display: flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; margin: 8px 0 10px; flex-wrap: wrap; }
+.tot { flex: 1; min-width: 110px; padding: 7px 11px; background: white; border-right: 1px solid var(--rule); }
+.tot:last-child { border-right: none; }
+.tot .n { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; }
+.tot .l { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.tot.bad .n { color: var(--accent); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.card { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; }
+.card h3 { font-family: 'Libre Baskerville', serif; font-size: 15px; display: flex; align-items: baseline; gap: 8px; }
+.card .big { font-family: 'DM Mono', monospace; font-size: 22px; font-weight: 500; margin: 4px 0 8px; }
+.brk { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.brk td { padding: 3px 0; font-size: 12px; border-bottom: 1px dashed var(--rule); }
+.brk td.v { text-align: right; font-family: 'DM Mono', monospace; }
+.brk tr.total td { border-bottom: none; border-top: 1px solid var(--ink); font-weight: 600; padding-top: 5px; }
+.miss { font-size: 11px; color: var(--gold); margin-top: 6px; }
+.miss li { margin-left: 16px; }
+.setup-note { background: var(--gold-light); border: 1px solid var(--gold); border-radius: 7px; padding: 12px 14px; margin-bottom: 14px; font-size: 12px; }
+.setup-note h3 { font-family: 'Libre Baskerville', serif; font-size: 14px; margin-bottom: 6px; }
+.setup-note code, .panel code { font-family: 'DM Mono', monospace; background: white; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--rule); font-size: 11px; }
+.warn-banner { background: var(--accent-light); border: 1px solid var(--accent); border-radius: 7px; padding: 10px 13px; margin-bottom: 14px; font-size: 12px; }
+.empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
+.two { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.3fr); gap: 14px; align-items: start; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+pre.preview { white-space: pre-wrap; font-family: 'DM Mono', monospace; font-size: 11.5px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; min-height: 120px; }
+.qty-in { width: 70px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 90vw; }
+.toast.show { opacity: 1; }
+.toast.err { background: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="title">Cost Desk</div>
+  <div class="top-note" id="topNote"></div>
+</div>
+<div class="tabs" id="tabs"></div>
+<div id="content"><div class="empty">Loading…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   Cost Desk — supply prices, purchase history and cost per spool.
+
+   Derive, don't store: a supply's current cost is never typed into a price
+   column. It comes from its most recent Purchase_Lines row (landed: price +
+   tariff + its share of freight and tax), falling back to Manual_Price only
+   for things never ordered through the log. Freight is never entered — it is
+   whatever is left of the money actually paid (total − refund) after goods,
+   tariff and tax, which is exactly how the thread supplier's "estimate then
+   refund" freight comes out right without knowing how they calculate it.
+
+   Every cross-table link is a row-ID reference: a dye supply points at its
+   Dyes row, never its name (26 names are shared across brands); mailers and
+   boxes at Packaging; label stock at Label_Templates; thread at Products.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* SCHEMA_START */
+const SCHEMA = {
+  "Suppliers": [
+    {"id": "Name", "type": "Text"},
+    {"id": "Contact_Name", "type": "Text"},
+    {"id": "Email", "type": "Text"},
+    {"id": "Phone", "type": "Text"},
+    {"id": "Website", "type": "Text"},
+    {"id": "Account_No", "type": "Text"},
+    {"id": "Order_Subject", "type": "Text"},
+    {"id": "Order_Template", "type": "Text"},
+    {"id": "Notes", "type": "Text"},
+    {"id": "Last_Order", "type": "Date", "formula": "rows = Purchases.lookupRecords(Supplier=$id, order_by=\"-Order_Date\")\nreturn rows[0].Order_Date if rows else None"}
+  ],
+  "Supplies": [
+    {"id": "Name", "type": "Text"},
+    {"id": "Category", "type": "Choice", "choices": ["Thread", "Dye powder", "Dye auxiliary", "Spools", "Labels", "Paper", "Ink", "Mailers", "Bubble mailers", "Shipping boxes", "Packing supplies", "Equipment parts", "Services", "Other"]},
+    {"id": "Supplier", "type": "Ref:Suppliers"},
+    {"id": "Item_Code", "type": "Text"},
+    {"id": "Buy_Unit", "type": "Text"},
+    {"id": "Use_Unit", "type": "Text"},
+    {"id": "Use_Per_Buy", "type": "Numeric"},
+    {"id": "Manual_Price", "type": "Numeric", "money": true},
+    {"id": "Dye", "type": "Ref:Dyes"},
+    {"id": "Product", "type": "Ref:Products"},
+    {"id": "Label_Template", "type": "Ref:Label_Templates"},
+    {"id": "Packaging", "type": "Ref:Packaging"},
+    {"id": "Retired", "type": "Bool"},
+    {"id": "Notes", "type": "Text"},
+    {"id": "Last_Ordered", "type": "Date", "formula": "rows = Purchase_Lines.lookupRecords(Supply=$id, order_by=\"-Order_Date\")\nreturn rows[0].Order_Date if rows else None"},
+    {"id": "Last_Price", "type": "Numeric", "money": true, "formula": "rows = Purchase_Lines.lookupRecords(Supply=$id, order_by=\"-Order_Date\")\nreturn rows[0].Billed_Per_Unit if rows else None"},
+    {"id": "Landed_Per_Buy", "type": "Numeric", "money": true, "formula": "rows = Purchase_Lines.lookupRecords(Supply=$id, order_by=\"-Order_Date\")\n# An order with no total paid yet has no freight in it, so it would read cheap.\npaid = [r for r in rows if r.Purchase.Total_Paid and r.Landed_Per_Unit]\nif paid:\n  return paid[0].Landed_Per_Unit\nif rows and rows[0].Landed_Per_Unit:\n  return rows[0].Landed_Per_Unit\nreturn $Manual_Price or None"},
+    {"id": "Cost_Per_Use", "type": "Numeric", "formula": "if not $Landed_Per_Buy:\n  return None\nreturn $Landed_Per_Buy / ($Use_Per_Buy or 1)"},
+    {"id": "Price_Source", "type": "Text", "formula": "rows = Purchase_Lines.lookupRecords(Supply=$id, order_by=\"-Order_Date\")\nif rows and rows[0].Landed_Per_Unit:\n  return \"Order\"\nreturn \"Manual\" if $Manual_Price else \"\""},
+    {"id": "Change_Pct", "type": "Numeric", "formula": "rows = [r for r in Purchase_Lines.lookupRecords(Supply=$id, order_by=\"-Order_Date\") if r.Billed_Per_Unit]\nif len(rows) < 2:\n  return None\nnew, old = rows[0].Billed_Per_Unit, rows[1].Billed_Per_Unit\nreturn round((new - old) / old * 100.0, 1)"},
+    {"id": "Times_Ordered", "type": "Int", "formula": "len(Purchase_Lines.lookupRecords(Supply=$id))"}
+  ],
+  "Purchases": [
+    {"id": "Label", "type": "Text", "formula": "parts = [str($Order_Date) if $Order_Date else \"\", $Supplier.Name, $Invoice_No or \"\"]\nreturn \" · \".join(p for p in parts if p)"},
+    {"id": "Supplier", "type": "Ref:Suppliers"},
+    {"id": "Order_Date", "type": "Date"},
+    {"id": "Invoice_No", "type": "Text"},
+    {"id": "Paid_Date", "type": "Date"},
+    {"id": "Total_Paid", "type": "Numeric", "money": true},
+    {"id": "Sales_Tax", "type": "Numeric", "money": true},
+    {"id": "Expect_Refund", "type": "Bool"},
+    {"id": "Refund", "type": "Numeric", "money": true},
+    {"id": "Refund_Date", "type": "Date"},
+    {"id": "Invoice", "type": "Attachments"},
+    {"id": "Other_Docs", "type": "Attachments"},
+    {"id": "Notes", "type": "Text"},
+    {"id": "Goods", "type": "Numeric", "money": true, "formula": "SUM(Purchase_Lines.lookupRecords(Purchase=$id).Goods)"},
+    {"id": "Tariff", "type": "Numeric", "money": true, "formula": "SUM(Purchase_Lines.lookupRecords(Purchase=$id).Tariff)"},
+    {"id": "Net_Paid", "type": "Numeric", "money": true, "formula": "if not $Total_Paid:\n  return None\nreturn $Total_Paid - ($Refund or 0)"},
+    {"id": "Implied_Freight", "type": "Numeric", "money": true, "formula": "if not $Total_Paid:\n  return 0\nreturn round($Net_Paid - $Goods - $Tariff - ($Sales_Tax or 0), 2)"},
+    {"id": "Status", "type": "Text", "formula": "if not $Total_Paid:\n  return \"Total not entered\"\nif $Expect_Refund and not $Refund:\n  return \"Refund pending\"\nreturn \"Complete\""}
+  ],
+  "Purchase_Lines": [
+    {"id": "Purchase", "type": "Ref:Purchases"},
+    {"id": "Supply", "type": "Ref:Supplies"},
+    {"id": "Qty", "type": "Numeric"},
+    {"id": "Unit_Price", "type": "Numeric", "money": true},
+    {"id": "Tariff_Per_Unit", "type": "Numeric", "money": true},
+    {"id": "Notes", "type": "Text"},
+    {"id": "Order_Date", "type": "Date", "formula": "$Purchase.Order_Date"},
+    {"id": "Goods", "type": "Numeric", "money": true, "formula": "($Qty or 0) * ($Unit_Price or 0)"},
+    {"id": "Tariff", "type": "Numeric", "money": true, "formula": "($Qty or 0) * ($Tariff_Per_Unit or 0)"},
+    {"id": "Billed_Per_Unit", "type": "Numeric", "money": true, "formula": "($Unit_Price or 0) + ($Tariff_Per_Unit or 0)"},
+    {"id": "Freight_Share", "type": "Numeric", "money": true, "formula": "g = $Purchase.Goods\nreturn $Purchase.Implied_Freight * $Goods / g if g else 0"},
+    {"id": "Tax_Share", "type": "Numeric", "money": true, "formula": "g = $Purchase.Goods\nreturn ($Purchase.Sales_Tax or 0) * $Goods / g if g else 0"},
+    {"id": "Landed_Per_Unit", "type": "Numeric", "money": true, "formula": "if not $Qty:\n  return None\nreturn ($Goods + $Tariff + $Freight_Share + $Tax_Share) / $Qty"}
+  ],
+  "Cost_Components": [
+    {"id": "Product", "type": "Ref:Products"},
+    {"id": "Supply", "type": "Ref:Supplies"},
+    {"id": "Level", "type": "Choice", "choices": ["Per spool", "Per lot", "Per order", "Per month"]},
+    {"id": "Qty_Per", "type": "Numeric"},
+    {"id": "Loss_Pct", "type": "Numeric"},
+    {"id": "Notes", "type": "Text"},
+    {"id": "Unit_Cost", "type": "Numeric", "formula": "$Supply.Cost_Per_Use or None"},
+    {"id": "Line_Cost", "type": "Numeric", "money": true, "formula": "if not $Supply.Cost_Per_Use or not $Qty_Per:\n  return None\nloss = min(max($Loss_Pct or 0, 0), 95)\nreturn $Qty_Per * $Supply.Cost_Per_Use / (1 - loss / 100.0)"}
+  ],
+  "Cost_Settings": [
+    {"id": "Key", "type": "Text"},
+    {"id": "Value", "type": "Numeric"},
+    {"id": "Notes", "type": "Text"}
+  ]
+};
+/* What a reference column shows instead of a bare row number. */
+const VISIBLE = {
+  "Suppliers": "Name", "Supplies": "Name", "Purchases": "Label", "Dyes": "Dye_Name",
+  "Products": "Product_Code", "Label_Templates": "Stock_Code", "Packaging": "Name"
+};
+/* SCHEMA_END */
+
+const SETTINGS = [
+  ['Spools_Per_Lot', 'Typical spools per dye lot', 'spools', 'Spreads per-lot costs (auxiliaries, gas, water). Your minimum batch is 10–12.'],
+  ['Spools_Per_Order', 'Typical spools per order', 'spools', 'Spreads per-order costs: mailer, box, packing.'],
+  ['Spools_Per_Month', 'Spools finished per month', 'spools', 'Spreads monthly costs (winder motors, ink, subscriptions) and labor.'],
+  ['Labor_Hours_Per_Month', 'Paid labor hours per month on thread', 'hours', 'From payroll. Leave blank to leave labor out.'],
+  ['Labor_Rate', 'Labor rate', '$/hr', 'Blank uses the average Hourly_Rate of active Workers.'],
+  ['Payroll_Overhead_Pct', 'Payroll taxes and overhead', '%', 'Employer taxes and the like on top of wages.'],
+  ['Grams_Per_Tsp_Default', 'Grams per level tsp of dye powder', 'g', 'Used for any dye with no Std_Dry_Weight_g. Weigh a few to replace the guess.']
+];
+
+const LEVELS = ['Per spool', 'Per lot', 'Per order', 'Per month'];
+/* Sensible units per category for a new supply. Use_Per_Buy is the
+   conversion from what you buy to what you use (1 lb → 453.592 g). */
+const PRESETS = {
+  'Thread':           { buy: 'lb',   use: 'g',     per: 453.592 },
+  'Dye powder':       { buy: 'jar',  use: 'g',     per: 226.8 },
+  'Dye auxiliary':    { buy: 'lb',   use: 'g',     per: 453.592 },
+  'Spools':           { buy: 'pack', use: 'spool', per: 100 },
+  'Labels':           { buy: 'pack', use: 'label', per: 0 },
+  'Paper':            { buy: 'pack', use: 'sheet', per: 500 },
+  'Ink':              { buy: 'each', use: 'each',  per: 1 },
+  'Mailers':          { buy: 'pack', use: 'each',  per: 100 },
+  'Bubble mailers':   { buy: 'pack', use: 'each',  per: 100 },
+  'Shipping boxes':   { buy: 'pack', use: 'each',  per: 25 },
+  'Packing supplies': { buy: 'pack', use: 'each',  per: 1 },
+  'Equipment parts':  { buy: 'each', use: 'each',  per: 1 },
+  'Services':         { buy: 'month', use: 'month', per: 1 },
+  'Other':            { buy: 'each', use: 'each',  per: 1 }
+};
+const CATEGORIES = SCHEMA.Supplies.find(c => c.id === 'Category').choices;
+
+/* Jar sizes per brand, matching dye-powder.html. Stored as grams always. */
+const OZ_G = 28.3495, LB_G = 453.592;
+const oz = n => Math.round(n * OZ_G * 10) / 10;
+const lb = n => Math.round(n * LB_G * 10) / 10;
+const ozS = l => l.map(n => ({ g: oz(n), label: n + ' oz' }));
+const lbS = l => l.map(n => ({ g: lb(n), label: n + ' lb' }));
+const JAR_SIZES = {
+  pro: ozS([1, 2, 3, 8]).concat(lbS([1, 2, 5, 10])),
+  cc:  ozS([1, 2, 3, 8]).concat(lbS([1, 2, 5, 10])),
+  dh:  ozS([2, 8]).concat(lbS([1, 5, 10])),
+  j:   ozS([0.5, 8]).concat(lbS([1])),
+  pf:  [{ g: 10, label: '10 g' }, { g: 100, label: '100 g' }],
+  x:   [{ g: 10, label: '10 g' }, { g: 50, label: '50 g' }, { g: 100, label: '100 g' }]
+};
+function jarLadder(brand) { return JAR_SIZES[String(brand || '').toLowerCase()] || ozS([1, 2, 8]).concat(lbS([1])); }
+function jarLabel(g, brand) {
+  const v = Number(g) || 0;
+  if (!v) return '';
+  const hit = jarLadder(brand).find(s => Math.abs(s.g - v) < 0.7);
+  return hit ? hit.label : (Math.round(v * 10) / 10) + ' g';
+}
+
+const DEFAULT_TEMPLATE =
+`Hello {{contact}},
+
+I'd like to place the following order:
+
+{{items}}
+
+Account #: {{account}}
+
+Please send the invoice and tracking to this address when it ships.
+
+Thank you,
+Squirrely Stash`;
+const DEFAULT_SUBJECT = 'Order — Squirrely Stash — {{date}}';
+
+/* ── helpers ───────────────────────────────────────────────────────────── */
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fold(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function norm(s) { return fold(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1] || null;
+  if (ref && typeof ref === 'object' && 'rowId' in ref) return ref.rowId || null;
+  return null;
+}
+function money(n, dp) {
+  if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '—';
+  const v = Number(n);
+  return (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(dp == null ? 2 : dp);
+}
+/* Unit costs can be fractions of a cent (dye per gram, a label). Keep enough
+   digits that two different prices never print the same. */
+function unitMoney(n) {
+  if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '—';
+  const v = Math.abs(Number(n));
+  return money(n, v >= 1 || v === 0 ? 2 : v >= 0.1 ? 3 : 4);
+}
+function pct(n) { return (n === null || n === undefined || !isFinite(n)) ? '—' : (Math.round(n * 10) / 10) + '%'; }
+function todayEpoch() {
+  const d = new Date();
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000);
+}
+function epochToISO(v) {
+  if (!v) return '';
+  const d = new Date(Number(v) * 1000);
+  return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+}
+function isoToEpoch(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000 : null;
+}
+function shortDate(v) {
+  if (!v) return '';
+  const d = new Date(Number(v) * 1000);
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function toast(msg, err) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = 'toast'; }, err ? 4200 : 2200);
+}
+function toRows(t) {
+  if (!t || !t.id) return [];
+  const keys = Object.keys(t).filter(k => k !== 'id' && Array.isArray(t[k]));
+  return t.id.map((id, i) => { const o = { id }; keys.forEach(k => { o[k] = t[k][i]; }); return o; });
+}
+function pick(o, cands, dflt) {
+  if (!o) return dflt;
+  for (const c of cands) if (o[c] !== undefined && o[c] !== null && o[c] !== '') return o[c];
+  return dflt;
+}
+/* Fiber names differ table to table: Recipes say "FF Nylon", Customer_Pricing
+   and Products say FFN. Everything is compared on the short code. */
+function fiberCode(s) {
+  const n = norm(s);
+  if (!n) return '';
+  if (n === 'ffn' || n === 'ffnylon' || n === 'finefrenchnylon') return 'FFN';
+  if (n === 'en' || n === 'enylon') return 'EN';
+  if (n === 'ffc' || n === 'ffcotton' || n === 'finefrenchcotton') return 'FFC';
+  return String(s).trim().toUpperCase();
+}
+async function act(actions, okMsg) {
+  try {
+    const res = await grist.docApi.applyUserActions(actions);
+    if (okMsg) toast(okMsg);
+    return res;
+  } catch (e) {
+    console.error('Cost Desk write failed', e, actions);
+    toast('Could not save — ' + (e && e.message ? e.message : e), true);
+    return null;
+  }
+}
+/* applyUserActions returns {actionNum, retValues, ...}, not a bare array. */
+function newId(res, i) {
+  if (!res) return null;
+  const vals = Array.isArray(res) ? res : res.retValues;
+  return vals ? vals[i || 0] : null;
+}
+
+/* ── state ─────────────────────────────────────────────────────────────── */
+const S = {
+  tab: 'orders', ready: false, loadError: '',
+  missing: {},               // tableId -> [missing col ids]; tableId -> 'table' if absent
+  T: {},                     // our tables as row arrays
+  X: {},                     // existing tables as row arrays
+  openPurchase: null, orderSearch: '', orderSupplier: 0,
+  supSearch: '', supCat: '', openSupply: null, supMode: 'all',
+  dyeSearch: '', dyeBrand: '', openDye: null, bulk: { brand: '', size: '', price: '' },
+  recipeSearch: '',
+  emailSupplier: 0, emailQty: {}, editTemplate: false
+};
+
+const OPTIONAL_EXISTING = ['Dyes', 'Products', 'Packaging', 'Label_Templates', 'Recipes',
+  'Recipe_Dye_Components', 'Customer_Pricing', 'Customers', 'Workers'];
+
+async function fetchOpt(name) {
+  try { return await grist.docApi.fetchTable(name); } catch (e) { return null; }
+}
+
+async function load() {
+  S.loadError = '';
+  try {
+    const names = Object.keys(SCHEMA);
+    const ours = await Promise.all(names.map(fetchOpt));
+    const theirs = await Promise.all(OPTIONAL_EXISTING.map(fetchOpt));
+    S.missing = {};
+    names.forEach((n, i) => {
+      const t = ours[i];
+      if (!t) { S.missing[n] = 'table'; S.T[n] = []; return; }
+      const miss = SCHEMA[n].map(c => c.id).filter(c => !(c in t));
+      if (miss.length) S.missing[n] = miss;
+      S.T[n] = toRows(t);
+    });
+    OPTIONAL_EXISTING.forEach((n, i) => { S.X[n] = toRows(theirs[i]); S.X['has_' + n] = !!theirs[i]; });
+    index();
+    S.ready = true;
+    S.lastLoad = Date.now();
+  } catch (e) {
+    console.error(e);
+    S.loadError = 'Could not load: ' + (e && e.message ? e.message : e);
+  }
+  render();
+}
+
+/* Lookup maps rebuilt on every load. */
+const I = {};
+function index() {
+  const byId = arr => { const m = {}; arr.forEach(r => { m[r.id] = r; }); return m; };
+  I.supplier = byId(S.T.Suppliers);
+  I.supply = byId(S.T.Supplies);
+  I.purchase = byId(S.T.Purchases);
+  I.dye = byId(S.X.Dyes);
+  I.product = byId(S.X.Products);
+  I.packaging = byId(S.X.Packaging);
+  I.labelTpl = byId(S.X.Label_Templates);
+  I.customer = byId(S.X.Customers);
+  I.linesByPurchase = {};
+  I.linesBySupply = {};
+  S.T.Purchase_Lines.forEach(l => {
+    const p = getRefId(l.Purchase), s = getRefId(l.Supply);
+    if (p) (I.linesByPurchase[p] = I.linesByPurchase[p] || []).push(l);
+    if (s) (I.linesBySupply[s] = I.linesBySupply[s] || []).push(l);
+  });
+  // Newest first, matching the formulas' order_by="-Order_Date".
+  Object.values(I.linesBySupply).forEach(a => a.sort((x, y) => num(y.Order_Date) - num(x.Order_Date) || y.id - x.id));
+  Object.values(I.linesByPurchase).forEach(a => a.sort((x, y) => x.id - y.id));
+  I.supplyByDye = {};
+  S.T.Supplies.forEach(s => {
+    const d = getRefId(s.Dye);
+    if (!d || s.Retired) return;
+    // An ordered price beats a typed one; otherwise the newest row wins.
+    const cur = I.supplyByDye[d];
+    if (!cur || (s.Price_Source === 'Order' && cur.Price_Source !== 'Order') || (!cur.Cost_Per_Use && s.Cost_Per_Use)) I.supplyByDye[d] = s;
+  });
+  I.setting = {};
+  S.T.Cost_Settings.forEach(r => { if (r.Key) I.setting[r.Key] = r; });
+}
+function setting(key) { const r = I.setting[key]; return r && r.Value !== null && r.Value !== '' ? num(r.Value) : 0; }
+function supplierName(id) { const s = I.supplier[getRefId(id)]; return s ? (s.Name || '(unnamed supplier)') : ''; }
+function supplyName(id) { const s = I.supply[getRefId(id)]; return s ? (s.Name || '(unnamed)') : ''; }
+function dyeLabel(d) {
+  if (!d) return '';
+  return [d.Brand, d.Serial, d.Dye_Name].filter(Boolean).join(' ');
+}
+function productCode(p) { return fiberCode(pick(p, ['Product_Code', 'Fiber'], '')); }
+
+/* ── setup ─────────────────────────────────────────────────────────────── */
+function needsSetup() { return Object.keys(S.missing).length > 0; }
+function colInfo(c, existingTables) {
+  let type = c.type;
+  if (type.startsWith('Ref:') && !existingTables.has(type.slice(4))) type = 'Int'; // target missing in this doc
+  const opts = {};
+  if (c.choices) opts.choices = c.choices;
+  if (c.money) { opts.numMode = 'currency'; opts.decimals = 2; opts.maxDecimals = 4; }
+  return {
+    type, isFormula: !!c.formula, formula: c.formula || '',
+    widgetOptions: Object.keys(opts).length ? JSON.stringify(opts) : ''
+  };
+}
+async function runSetup() {
+  const btn = document.getElementById('setupBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting up…'; }
+  try {
+    let metaT = await grist.docApi.fetchTable('_grist_Tables');
+    const existing = new Set(metaT.tableId);
+    Object.keys(SCHEMA).forEach(n => existing.add(n));
+    const actions = [];
+    for (const [tname, cols] of Object.entries(SCHEMA)) {
+      if (S.missing[tname] === 'table') {
+        actions.push(['AddTable', tname, cols.map(c => Object.assign({ id: c.id }, colInfo(c, existing)))]);
+      } else if (Array.isArray(S.missing[tname])) {
+        cols.filter(c => S.missing[tname].includes(c.id))
+          .forEach(c => actions.push(['AddColumn', tname, c.id, colInfo(c, existing)]));
+      }
+    }
+    if (actions.length) {
+      const ok = await act(actions);
+      if (!ok) throw new Error('table creation was refused');
+    }
+    await setDisplayColumns();
+    await seedSettings();
+    toast('Tables ready');
+  } catch (e) {
+    console.error(e);
+    toast('Setup stopped — ' + (e && e.message ? e.message : e), true);
+  }
+  await load();
+}
+/* Without a visible column a reference shows "Suppliers[3]" in Grist's own
+   views, which matters for the Purchases card where invoices get attached. */
+async function setDisplayColumns() {
+  try {
+    const tabs = await grist.docApi.fetchTable('_grist_Tables');
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    const tableRef = {};
+    tabs.id.forEach((id, i) => { tableRef[tabs.tableId[i]] = id; });
+    const colRef = (t, c) => {
+      const tr = tableRef[t];
+      for (let i = 0; i < cols.id.length; i++) if (cols.parentId[i] === tr && cols.colId[i] === c) return { id: cols.id[i], i };
+      return null;
+    };
+    const actions = [];
+    for (const [tname, cdefs] of Object.entries(SCHEMA)) {
+      for (const c of cdefs) {
+        if (!c.type.startsWith('Ref:')) continue;
+        const target = c.type.slice(4), vis = VISIBLE[target];
+        const own = colRef(tname, c.id), tgt = vis && colRef(target, vis);
+        if (!own || !tgt || cols.visibleCol[own.i]) continue;
+        actions.push(['ModifyColumn', tname, c.id, { visibleCol: tgt.id }]);
+        actions.push(['SetDisplayFormula', tname, null, own.id, '$' + c.id + '.' + vis]);
+      }
+    }
+    if (actions.length) await grist.docApi.applyUserActions(actions);
+  } catch (e) {
+    // Cosmetic only — the widget itself never shows raw references.
+    console.warn('Cost Desk: could not set reference display columns', e);
+  }
+}
+async function seedSettings() {
+  const t = await fetchOpt('Cost_Settings');
+  const have = new Set(t ? t.Key : []);
+  const add = SETTINGS.filter(s => !have.has(s[0]));
+  if (add.length) {
+    await grist.docApi.applyUserActions([['BulkAddRecord', 'Cost_Settings', add.map(() => null),
+      { Key: add.map(s => s[0]), Notes: add.map(s => s[1] + ' (' + s[2] + '). ' + s[3]) }]]);
+  }
+}
+function setupPanel() {
+  const absent = Object.keys(S.missing).filter(n => S.missing[n] === 'table');
+  const partial = Object.keys(S.missing).filter(n => Array.isArray(S.missing[n]));
+  return '<div class="setup-note"><h3>One-time setup</h3>' +
+    (absent.length ? '<p>Creates ' + absent.map(n => '<code>' + esc(n) + '</code>').join(' ') + '.</p>' : '') +
+    (partial.length ? '<p>Adds missing columns to ' + partial.map(n => '<code>' + esc(n) + '</code> (' +
+      esc(S.missing[n].join(', ')) + ')').join(', ') + '.</p>' : '') +
+    '<p style="margin-top:6px">Nothing in your existing tables is changed. New tables link to <code>Dyes</code>, ' +
+    '<code>Products</code>, <code>Packaging</code> and <code>Label_Templates</code> by row ID. ' +
+    'The widget needs <strong>full document access</strong> for this.</p>' +
+    '<div style="margin-top:10px"><button class="btn btn-teal" id="setupBtn" onclick="runSetup()">Set up tables</button></div></div>';
+}
+
+/* ── generic writes ────────────────────────────────────────────────────── */
+function parseVal(kind, raw) {
+  if (kind === 'num') return raw === '' || raw === null ? null : num(String(raw).replace(/[$,\s]/g, ''));
+  if (kind === 'date') return isoToEpoch(raw);
+  if (kind === 'bool') return !!raw;
+  if (kind === 'ref') return Number(raw) || 0;
+  return raw == null ? '' : String(raw);
+}
+async function setField(table, id, col, raw, kind) {
+  await act([['UpdateRecord', table, id, { [col]: parseVal(kind, raw) }]]);
+  await load();
+}
+async function removeRow(table, id, what) {
+  if (!confirm('Delete this ' + (what || 'row') + '?')) return;
+  await act([['RemoveRecord', table, id]], 'Deleted');
+  await load();
+}
+function inp(table, id, col, val, kind, extra) {
+  const k = kind || 'text';
+  // Grist fills an empty Numeric with 0; show it blank so unfilled reads as unfilled.
+  const v = k === 'date' ? epochToISO(val) : (val === null || val === undefined || (k === 'num' && val === 0) ? '' : val);
+  const type = k === 'date' ? 'date' : 'text';
+  const cls = 'f' + (k === 'num' ? ' num' : '');
+  return '<input class="' + cls + '" type="' + type + '" value="' + esc(v) + '" ' + (extra || '') +
+    ' onchange="setField(\'' + table + '\',' + id + ',\'' + col + '\',this.value,\'' + k + '\')">';
+}
+function chk(table, id, col, val) {
+  return '<input type="checkbox" ' + (val ? 'checked' : '') +
+    ' onchange="setField(\'' + table + '\',' + id + ',\'' + col + '\',this.checked,\'bool\')">';
+}
+function sel(table, id, col, cur, options, blank) {
+  const c = getRefId(cur) || cur || '';
+  return '<select class="f" onchange="setField(\'' + table + '\',' + id + ',\'' + col + '\',this.value,\'' +
+    (options.kind || 'text') + '\')">' +
+    (blank !== undefined ? '<option value="">' + esc(blank) + '</option>' : '') +
+    options.list.map(o => '<option value="' + esc(o.v) + '"' + (String(o.v) === String(c) ? ' selected' : '') + '>' +
+      esc(o.t) + '</option>').join('') + '</select>';
+}
+function changeChip(p) {
+  if (p === null || p === undefined || p === '' || !isFinite(Number(p)) || Number(p) === 0) return '';
+  const v = Number(p);
+  return '<span class="chip ' + (v > 0 ? 'up' : 'down') + '">' + (v > 0 ? '▲ ' : '▼ ') + Math.abs(v) + '%</span>';
+}
+
+/* ════════════════════════════ ORDERS ════════════════════════════ */
+function purchasesSorted() {
+  return S.T.Purchases.slice().sort((a, b) => num(b.Order_Date) - num(a.Order_Date) || b.id - a.id);
+}
+async function newPurchase() {
+  const sup = S.orderSupplier || (S.T.Suppliers.length === 1 ? S.T.Suppliers[0].id : 0);
+  const res = await act([['AddRecord', 'Purchases', null, { Order_Date: todayEpoch(), Supplier: sup || 0 }]]);
+  const id = newId(res);
+  if (id) { S.openPurchase = id; }
+  await load();
+}
+async function addLine(pid) {
+  await act([['AddRecord', 'Purchase_Lines', null, { Purchase: pid }]]);
+  await load();
+}
+/* Picking a supply pre-fills last time's price and tariff, so a repeat order is
+   a quantity and a check of the invoice — and a changed price gets noticed. */
+async function setLineSupply(lineId, raw) {
+  const line = S.T.Purchase_Lines.find(l => l.id === lineId);
+  if (!line) return;
+  if (raw === '__new') {
+    const p = I.purchase[getRefId(line.Purchase)];
+    const name = prompt('Name of the new supply (as it appears on the invoice)');
+    if (!name) { render(); return; }
+    const cat = prompt('Category — one of: ' + CATEGORIES.join(', '), 'Other') || 'Other';
+    const category = CATEGORIES.find(c => norm(c) === norm(cat)) || 'Other';
+    const pr = PRESETS[category];
+    const res = await act([['AddRecord', 'Supplies', null, {
+      Name: name.trim(), Category: category, Supplier: p ? getRefId(p.Supplier) || 0 : 0,
+      Buy_Unit: pr.buy, Use_Unit: pr.use, Use_Per_Buy: pr.per || null
+    }]]);
+    const sid = newId(res);
+    if (!sid) return;
+    await act([['UpdateRecord', 'Purchase_Lines', lineId, { Supply: sid }]], 'Supply added — check its units on the Supplies tab');
+    await load();
+    return;
+  }
+  const sid = Number(raw) || 0;
+  const fields = { Supply: sid };
+  const prev = (I.linesBySupply[sid] || []).find(l => l.id !== lineId && (l.Unit_Price || l.Tariff_Per_Unit));
+  if (prev && !line.Unit_Price && !line.Tariff_Per_Unit) {
+    fields.Unit_Price = prev.Unit_Price || null;
+    fields.Tariff_Per_Unit = prev.Tariff_Per_Unit || null;
+  }
+  await act([['UpdateRecord', 'Purchase_Lines', lineId, fields]]);
+  await load();
+}
+/* The previous purchase of the same supply, for the price-change chip. */
+function previousLine(line) {
+  const sid = getRefId(line.Supply);
+  if (!sid) return null;
+  const d = num(line.Order_Date);
+  return (I.linesBySupply[sid] || []).find(l => l.id !== line.id && l.Billed_Per_Unit &&
+    (num(l.Order_Date) < d || (num(l.Order_Date) === d && l.id < line.id))) || null;
+}
+function supplyOptionsFor(supplierId) {
+  const all = S.T.Supplies.filter(s => !s.Retired);
+  const mine = all.filter(s => supplierId && getRefId(s.Supplier) === supplierId);
+  const rest = all.filter(s => !mine.includes(s));
+  const opt = s => '<option value="' + s.id + '">' + esc(s.Name || '(unnamed)') +
+    (s.Buy_Unit ? ' — per ' + esc(s.Buy_Unit) : '') + '</option>';
+  const byName = (a, b) => fold(a.Name).localeCompare(fold(b.Name));
+  return (mine.length ? '<optgroup label="' + esc(supplierName(supplierId)) + '">' + mine.sort(byName).map(opt).join('') + '</optgroup>' : '') +
+    (rest.length ? '<optgroup label="' + (mine.length ? 'Other supplies' : 'Supplies') + '">' + rest.sort(byName).map(opt).join('') + '</optgroup>' : '') +
+    '<option value="__new">+ New supply…</option>';
+}
+function attachCount(v) { return Array.isArray(v) ? v.filter(x => typeof x === 'number').length : 0; }
+
+function renderPurchaseEditor(p) {
+  const lines = I.linesByPurchase[p.id] || [];
+  const supId = getRefId(p.Supplier);
+  const supList = S.T.Suppliers.slice().sort((a, b) => fold(a.Name).localeCompare(fold(b.Name)))
+    .map(s => ({ v: s.id, t: s.Name || '(unnamed)' }));
+  const freightBad = num(p.Total_Paid) && num(p.Implied_Freight) < -0.005;
+  const rows = lines.map(l => {
+    const sp = I.supply[getRefId(l.Supply)];
+    const prev = previousLine(l);
+    const ch = prev && prev.Billed_Per_Unit ? (num(l.Billed_Per_Unit) - num(prev.Billed_Per_Unit)) / num(prev.Billed_Per_Unit) * 100 : null;
+    const selHtml = '<select class="f" onchange="setLineSupply(' + l.id + ',this.value)">' +
+      '<option value="">— pick a supply —</option>' +
+      supplyOptionsFor(supId).replace('value="' + getRefId(l.Supply) + '"', 'value="' + getRefId(l.Supply) + '" selected') +
+      '</select>';
+    return '<tr>' +
+      '<td style="min-width:200px">' + selHtml + '</td>' +
+      '<td style="width:80px">' + inp('Purchase_Lines', l.id, 'Qty', l.Qty, 'num') + '</td>' +
+      '<td class="sub">' + esc(sp && sp.Buy_Unit || '') + '</td>' +
+      '<td style="width:96px">' + inp('Purchase_Lines', l.id, 'Unit_Price', l.Unit_Price, 'num') + '</td>' +
+      '<td style="width:90px">' + inp('Purchase_Lines', l.id, 'Tariff_Per_Unit', l.Tariff_Per_Unit, 'num') + '</td>' +
+      '<td class="num">' + money(l.Goods) + '</td>' +
+      '<td class="num">' + unitMoney(l.Landed_Per_Unit) + '</td>' +
+      '<td>' + (ch !== null ? changeChip(Math.round(ch * 10) / 10) || '<span class="chip">same</span>' : '<span class="sub">first</span>') + '</td>' +
+      '<td><button class="btn btn-small btn-warn" onclick="removeRow(\'Purchase_Lines\',' + l.id + ',\'line\')" aria-label="Delete line">✕</button></td>' +
+      '</tr>';
+  }).join('');
+  const nAtt = attachCount(p.Invoice) + attachCount(p.Other_Docs);
+  return '<div class="editor">' +
+    '<div class="fields">' +
+      '<label>Supplier' + sel('Purchases', p.id, 'Supplier', p.Supplier, { list: supList, kind: 'ref' }, '— choose —') + '</label>' +
+      '<label>Order date' + inp('Purchases', p.id, 'Order_Date', p.Order_Date, 'date') + '</label>' +
+      '<label>Invoice / order #' + inp('Purchases', p.id, 'Invoice_No', p.Invoice_No) + '</label>' +
+      '<label>Total paid (card)' + inp('Purchases', p.id, 'Total_Paid', p.Total_Paid, 'num') + '</label>' +
+      '<label>Paid date' + inp('Purchases', p.id, 'Paid_Date', p.Paid_Date, 'date') + '</label>' +
+      '<label>Sales tax' + inp('Purchases', p.id, 'Sales_Tax', p.Sales_Tax, 'num') + '</label>' +
+      '<label class="check">' + chk('Purchases', p.id, 'Expect_Refund', p.Expect_Refund) + ' Expecting a refund (freight overage)</label>' +
+      '<label>Refund received' + inp('Purchases', p.id, 'Refund', p.Refund, 'num') + '</label>' +
+      '<label>Refund date' + inp('Purchases', p.id, 'Refund_Date', p.Refund_Date, 'date') + '</label>' +
+      '<label class="wide">Notes' + inp('Purchases', p.id, 'Notes', p.Notes) + '</label>' +
+    '</div>' +
+    '<table class="grid"><thead><tr><th>Supply</th><th>Qty</th><th></th><th>Price / unit</th><th>Tariff / unit</th>' +
+      '<th class="r">Goods</th><th class="r">Landed / unit</th><th>vs last</th><th></th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="9" class="sub">No lines yet.</td></tr>') + '</tbody></table>' +
+    '<div class="toolbar" style="margin-top:8px"><button class="btn btn-small" onclick="addLine(' + p.id + ')">+ Add line</button></div>' +
+    '<div class="totals">' +
+      '<div class="tot"><div class="n">' + money(p.Goods) + '</div><div class="l">Goods</div></div>' +
+      '<div class="tot"><div class="n">' + money(p.Tariff) + '</div><div class="l">Tariff</div></div>' +
+      '<div class="tot' + (freightBad ? ' bad' : '') + '"><div class="n">' + (num(p.Total_Paid) ? money(p.Implied_Freight) : '—') + '</div><div class="l">Freight (implied)</div></div>' +
+      '<div class="tot"><div class="n">' + (num(p.Total_Paid) ? money(p.Net_Paid) : '—') + '</div><div class="l">Net paid</div></div>' +
+    '</div>' +
+    (freightBad ? '<div class="warn-banner">Freight comes out negative — the lines add up to more than was paid. Check quantities, prices, or a missing refund/discount.</div>' : '') +
+    '<p class="sub">Freight is never typed in: it is what is left of the total after goods, tariff and tax, minus any refund, and it is shared across lines by value. ' +
+    'Invoice files: <strong>' + nAtt + ' attached</strong> — attach PDFs or screenshots in the Purchases card (the <code>Invoice</code> column) linked to this page.</p>' +
+    '<div class="toolbar" style="margin-top:8px"><span class="spacer"></span>' +
+      '<button class="btn btn-small btn-warn" onclick="deletePurchase(' + p.id + ')">Delete order</button>' +
+      '<button class="btn btn-small" onclick="S.openPurchase=null; render()">Close</button></div>' +
+    '</div>';
+}
+async function deletePurchase(id) {
+  const lines = I.linesByPurchase[id] || [];
+  if (!confirm('Delete this order' + (lines.length ? ' and its ' + lines.length + ' line(s)' : '') + '?')) return;
+  await act(lines.map(l => ['RemoveRecord', 'Purchase_Lines', l.id]).concat([['RemoveRecord', 'Purchases', id]]), 'Order deleted');
+  S.openPurchase = null;
+  await load();
+}
+async function openPurchaseRow(id) {
+  S.openPurchase = S.openPurchase === id ? null : id;
+  render();
+  // Tell Grist which row is selected, so a linked Purchases card follows along
+  // and the invoice can be attached right there.
+  if (S.openPurchase) { try { await grist.setCursorPos({ rowId: id }); } catch (e) { /* not linked */ } }
+}
+function renderOrders() {
+  const q = norm(S.orderSearch);
+  let list = purchasesSorted();
+  if (S.orderSupplier) list = list.filter(p => getRefId(p.Supplier) === S.orderSupplier);
+  if (q) list = list.filter(p => norm([p.Invoice_No, supplierName(p.Supplier), p.Notes,
+    (I.linesByPurchase[p.id] || []).map(l => supplyName(l.Supply)).join(' ')].join(' ')).includes(q));
+  const pending = S.T.Purchases.filter(p => p.Status === 'Refund pending').length;
+  const supOpts = '<option value="0">All suppliers</option>' + S.T.Suppliers.slice()
+    .sort((a, b) => fold(a.Name).localeCompare(fold(b.Name)))
+    .map(s => '<option value="' + s.id + '"' + (S.orderSupplier === s.id ? ' selected' : '') + '>' + esc(s.Name || '(unnamed)') + '</option>').join('');
+  const rows = list.map(p => {
+    const lines = I.linesByPurchase[p.id] || [];
+    const st = p.Status === 'Refund pending' ? '<span class="chip warn">refund pending</span>'
+      : p.Status === 'Total not entered' ? '<span class="chip est">total not entered</span>'
+      : '<span class="chip ok">complete</span>';
+    const att = attachCount(p.Invoice) + attachCount(p.Other_Docs);
+    const ups = lines.filter(l => { const pv = previousLine(l); return pv && num(l.Billed_Per_Unit) > num(pv.Billed_Per_Unit) + 1e-9; }).length;
+    const open = S.openPurchase === p.id;
+    return '<tr class="click' + (open ? ' open' : '') + '" onclick="openPurchaseRow(' + p.id + ')">' +
+      '<td class="mono">' + esc(epochToISO(p.Order_Date)) + '</td>' +
+      '<td>' + esc(supplierName(p.Supplier) || '—') + '</td>' +
+      '<td class="mono">' + esc(p.Invoice_No || '') + '</td>' +
+      '<td class="sub">' + esc(lines.map(l => supplyName(l.Supply)).filter(Boolean).slice(0, 3).join(', ')) +
+        (lines.length > 3 ? ' +' + (lines.length - 3) : '') + '</td>' +
+      '<td class="num">' + (num(p.Total_Paid) ? money(p.Net_Paid) : '—') + '</td>' +
+      '<td>' + st + (ups ? ' <span class="chip up">' + ups + ' price' + (ups > 1 ? 's' : '') + ' up</span>' : '') + '</td>' +
+      '<td class="sub">' + (att ? '📎 ' + att : '') + '</td></tr>' +
+      (open ? '<tr><td colspan="7" style="padding:0 0 4px; background:white">' + renderPurchaseEditor(p) + '</td></tr>' : '');
+  }).join('');
+  return '<div class="panel"><h2>Orders &amp; invoices</h2>' +
+    '<p class="lead">One row per invoice. Enter the lines as billed and the total from the card statement. When the freight refund arrives, enter it — every landed cost updates.' +
+    (pending ? ' <strong>' + pending + ' order' + (pending > 1 ? 's are' : ' is') + ' waiting on a refund.</strong>' : '') + '</p>' +
+    '<div class="toolbar"><input class="search" type="search" placeholder="Search supplier, invoice # or item" value="' + esc(S.orderSearch) + '" ' +
+      'oninput="S.orderSearch=this.value; renderKeepFocus(this)">' +
+      '<select class="f" style="width:auto" onchange="S.orderSupplier=Number(this.value); render()">' + supOpts + '</select>' +
+      '<span class="spacer"></span><button class="btn btn-teal" onclick="newPurchase()">+ New order</button></div>' +
+    (list.length ? '<table class="grid"><thead><tr><th>Date</th><th>Supplier</th><th>Invoice</th><th>Items</th><th class="r">Net paid</th><th>Status</th><th>Files</th></tr></thead><tbody>' +
+      rows + '</tbody></table>' : '<div class="empty">' + (S.T.Purchases.length ? 'Nothing matches.' : 'No orders logged yet. Add your most recent invoice for each supplier to set a baseline.') + '</div>') +
+    '</div>';
+}
+
+/* ════════════════════════════ SUPPLIES ════════════════════════════ */
+async function newSupply(category) {
+  const cat = category || S.supCat || 'Other';
+  const pr = PRESETS[cat] || PRESETS.Other;
+  const res = await act([['AddRecord', 'Supplies', null, {
+    Name: 'New ' + cat.toLowerCase(), Category: cat, Buy_Unit: pr.buy, Use_Unit: pr.use, Use_Per_Buy: pr.per || null
+  }]]);
+  const id = newId(res);
+  if (id) { S.openSupply = id; S.supMode = 'all'; }
+  await load();
+}
+/* Linking a label supply to its sheet template fills the conversion from what
+   is printed on the template: labels per sheet × sheets per pack. */
+async function linkLabelTemplate(sid, raw) {
+  const tid = Number(raw) || 0;
+  const fields = { Label_Template: tid };
+  const t = I.labelTpl[tid];
+  if (t) {
+    const per = num(t.Labels_Per_Sheet) * (num(t.Sheets_Per_Pack) || 1);
+    if (per) { fields.Use_Per_Buy = per; fields.Use_Unit = 'label'; fields.Buy_Unit = t.Sheets_Per_Pack ? 'pack' : 'sheet'; }
+  }
+  await act([['UpdateRecord', 'Supplies', sid, fields]]);
+  await load();
+}
+/* Linking thread to a Product fills nothing on the supply itself, but lets the
+   cost tab propose a thread component sized by Products.Thread_Weight_g. */
+function renderSupplyEditor(s) {
+  const supList = S.T.Suppliers.slice().sort((a, b) => fold(a.Name).localeCompare(fold(b.Name))).map(x => ({ v: x.id, t: x.Name || '(unnamed)' }));
+  const cat = s.Category || '';
+  const link = [];
+  if (cat === 'Thread' || cat === 'Spools' || S.X.Products.length && getRefId(s.Product)) {
+    link.push('<label>Product (thread / spool for)' + sel('Supplies', s.id, 'Product', s.Product,
+      { list: S.X.Products.map(p => ({ v: p.id, t: pick(p, ['Product_Code'], '') + ' ' + pick(p, ['Product_Name'], '') })), kind: 'ref' }, '— none —') + '</label>');
+  }
+  if (cat === 'Labels' || getRefId(s.Label_Template)) {
+    link.push('<label>Label sheet<select class="f" onchange="linkLabelTemplate(' + s.id + ',this.value)"><option value="">— none —</option>' +
+      S.X.Label_Templates.map(t => '<option value="' + t.id + '"' + (getRefId(s.Label_Template) === t.id ? ' selected' : '') + '>' +
+        esc([t.Stock_Code, t.Description].filter(Boolean).join(' — ')) + '</option>').join('') + '</select></label>');
+  }
+  if (/mailer|box|packing/i.test(cat) || getRefId(s.Packaging)) {
+    link.push('<label>Packaging size' + sel('Supplies', s.id, 'Packaging', s.Packaging,
+      { list: S.X.Packaging.map(p => ({ v: p.id, t: [p.Package_Code, p.Name].filter(Boolean).join(' — ') })), kind: 'ref' }, '— none —') + '</label>');
+  }
+  if (cat === 'Dye powder' || getRefId(s.Dye)) {
+    const d = I.dye[getRefId(s.Dye)];
+    link.push('<label>Dye<span class="f" style="background:var(--paper)">' + esc(d ? dyeLabel(d) : '— set from the Dye prices view —') + '</span></label>');
+  }
+  const hist = (I.linesBySupply[s.id] || []).map(l => {
+    const p = I.purchase[getRefId(l.Purchase)];
+    return '<tr class="click" onclick="S.tab=\'orders\'; S.openPurchase=' + getRefId(l.Purchase) + '; render()">' +
+      '<td class="mono">' + esc(epochToISO(l.Order_Date)) + '</td>' +
+      '<td>' + esc(p ? supplierName(p.Supplier) : '') + '</td>' +
+      '<td class="mono">' + esc(p && p.Invoice_No || '') + '</td>' +
+      '<td class="num">' + esc(l.Qty == null ? '' : l.Qty) + ' ' + esc(s.Buy_Unit || '') + '</td>' +
+      '<td class="num">' + unitMoney(l.Unit_Price) + '</td>' +
+      '<td class="num">' + (num(l.Tariff_Per_Unit) ? unitMoney(l.Tariff_Per_Unit) : '—') + '</td>' +
+      '<td class="num">' + unitMoney(l.Landed_Per_Unit) + '</td>' +
+      '<td class="num">' + (l.Landed_Per_Unit && num(s.Use_Per_Buy) ? unitMoney(num(l.Landed_Per_Unit) / num(s.Use_Per_Buy)) : '—') + '</td></tr>';
+  }).join('');
+  const usedIn = S.T.Cost_Components.filter(c => getRefId(c.Supply) === s.id).length;
+  return '<div class="editor">' +
+    '<div class="fields">' +
+      '<label class="wide">Name' + inp('Supplies', s.id, 'Name', s.Name) + '</label>' +
+      '<label>Category' + sel('Supplies', s.id, 'Category', s.Category, { list: CATEGORIES.map(c => ({ v: c, t: c })) }, '—') + '</label>' +
+      '<label>Supplier' + sel('Supplies', s.id, 'Supplier', s.Supplier, { list: supList, kind: 'ref' }, '— none —') + '</label>' +
+      '<label>Supplier item #' + inp('Supplies', s.id, 'Item_Code', s.Item_Code) + '</label>' +
+      '<label>Bought per' + inp('Supplies', s.id, 'Buy_Unit', s.Buy_Unit, 'text', 'placeholder="lb, jar, pack, each"') + '</label>' +
+      '<label>Used per' + inp('Supplies', s.id, 'Use_Unit', s.Use_Unit, 'text', 'placeholder="g, label, each"') + '</label>' +
+      '<label>' + esc(s.Use_Unit || 'use units') + ' per ' + esc(s.Buy_Unit || 'buy unit') + inp('Supplies', s.id, 'Use_Per_Buy', s.Use_Per_Buy, 'num') + '</label>' +
+      '<label>Manual price / ' + esc(s.Buy_Unit || 'unit') + inp('Supplies', s.id, 'Manual_Price', s.Manual_Price, 'num', 'placeholder="only if never logged"') + '</label>' +
+      link.join('') +
+      '<label class="check">' + chk('Supplies', s.id, 'Retired', s.Retired) + ' Retired (no longer bought)</label>' +
+      '<label class="wide">Notes' + inp('Supplies', s.id, 'Notes', s.Notes) + '</label>' +
+    '</div>' +
+    '<div class="group-head" style="margin-top:4px">Price history</div>' +
+    (hist ? '<table class="grid"><thead><tr><th>Date</th><th>Supplier</th><th>Invoice</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Tariff</th>' +
+      '<th class="r">Landed / ' + esc(s.Buy_Unit || 'unit') + '</th><th class="r">Per ' + esc(s.Use_Unit || 'use') + '</th></tr></thead><tbody>' + hist + '</tbody></table>'
+      : '<p class="sub">Never ordered through the log' + (s.Manual_Price ? ' — using the manual price.' : '.') + '</p>') +
+    '<div class="toolbar" style="margin-top:10px"><span class="sub">' + (usedIn ? 'Used in ' + usedIn + ' cost component' + (usedIn > 1 ? 's' : '') : 'Not used in any cost component yet') + '</span>' +
+      '<span class="spacer"></span>' +
+      ((I.linesBySupply[s.id] || []).length || usedIn ? '' : '<button class="btn btn-small btn-warn" onclick="removeRow(\'Supplies\',' + s.id + ',\'supply\')">Delete</button>') +
+      '<button class="btn btn-small" onclick="S.openSupply=null; render()">Close</button></div>' +
+    '</div>';
+}
+function supplyRow(s) {
+  const open = S.openSupply === s.id;
+  const src = s.Price_Source === 'Order' ? '' : s.Price_Source === 'Manual' ? '<span class="chip est">manual</span>' : '<span class="chip warn">no price</span>';
+  const conv = num(s.Use_Per_Buy) && s.Use_Unit && s.Use_Unit !== s.Buy_Unit;
+  return '<tr class="click' + (open ? ' open' : '') + '" onclick="S.openSupply=' + (open ? 'null' : s.id) + '; render()">' +
+    '<td>' + esc(s.Name || '(unnamed)') + (s.Retired ? ' <span class="chip est">retired</span>' : '') + '</td>' +
+    '<td class="sub">' + esc(supplierName(s.Supplier)) + '</td>' +
+    '<td class="num">' + unitMoney(s.Landed_Per_Buy) + ' <span class="sub">/' + esc(s.Buy_Unit || '') + '</span></td>' +
+    '<td class="num">' + (conv ? unitMoney(s.Cost_Per_Use) + ' <span class="sub">/' + esc(s.Use_Unit) + '</span>' : '') + '</td>' +
+    '<td class="mono sub">' + esc(epochToISO(s.Last_Ordered)) + '</td>' +
+    '<td>' + changeChip(s.Change_Pct) + ' ' + src + '</td></tr>' +
+    (open ? '<tr><td colspan="6" style="padding:0; background:white">' + renderSupplyEditor(s) + '</td></tr>' : '');
+}
+function renderSupplies() {
+  const modeBar = '<div class="tabs" style="margin-bottom:10px">' +
+    '<button class="tab-btn' + (S.supMode === 'all' ? ' active' : '') + '" onclick="S.supMode=\'all\'; render()">All supplies</button>' +
+    '<button class="tab-btn' + (S.supMode === 'dyes' ? ' active' : '') + '" onclick="S.supMode=\'dyes\'; render()">Dye prices<span class="pip">' +
+      (S.X.Dyes.length ? Object.keys(I.supplyByDye).length + '/' + S.X.Dyes.length : '') + '</span></button></div>';
+  if (S.supMode === 'dyes') return modeBar + renderDyePrices();
+  const q = norm(S.supSearch);
+  // Dye jars are priced one per dye and would bury everything else; they get their own view.
+  let list = S.T.Supplies.filter(s => s.Category !== 'Dye powder' || !getRefId(s.Dye));
+  if (S.supCat) list = list.filter(s => (s.Category || 'Other') === S.supCat);
+  if (q) list = list.filter(s => norm([s.Name, s.Item_Code, supplierName(s.Supplier), s.Notes].join(' ')).includes(q));
+  const groups = {};
+  list.forEach(s => { const c = s.Category || 'Other'; (groups[c] = groups[c] || []).push(s); });
+  const order = CATEGORIES.filter(c => groups[c]).concat(Object.keys(groups).filter(c => !CATEGORIES.includes(c)));
+  const ups = S.T.Supplies.filter(s => num(s.Change_Pct) > 0).length;
+  const body = order.map(c => '<div class="group-head">' + esc(c) + '</div>' +
+    '<table class="grid"><thead><tr><th>Supply</th><th>Supplier</th><th class="r">Landed cost</th><th class="r">Per use</th><th>Last ordered</th><th>Change</th></tr></thead><tbody>' +
+    groups[c].sort((a, b) => (a.Retired ? 1 : 0) - (b.Retired ? 1 : 0) || fold(a.Name).localeCompare(fold(b.Name))).map(supplyRow).join('') +
+    '</tbody></table>').join('');
+  const catPills = '<select class="f" style="width:auto" onchange="S.supCat=this.value; render()"><option value="">All categories</option>' +
+    CATEGORIES.map(c => '<option' + (S.supCat === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select>';
+  const addSel = '<select class="f" style="width:auto" onchange="if(this.value) newSupply(this.value)"><option value="">+ New supply…</option>' +
+    CATEGORIES.filter(c => c !== 'Dye powder').map(c => '<option>' + esc(c) + '</option>').join('') + '</select>';
+  return modeBar + '<div class="panel"><h2>Supplies</h2>' +
+    '<p class="lead">Current cost comes from the latest logged order (landed, with freight and tariff shared in). ' +
+    'A manual price fills in for anything not yet ordered through the log.' + (ups ? ' <strong>' + ups + ' went up</strong> on their latest order.' : '') + '</p>' +
+    '<div class="toolbar"><input class="search" type="search" placeholder="Search supplies" value="' + esc(S.supSearch) + '" oninput="S.supSearch=this.value; renderKeepFocus(this)">' +
+      catPills + '<span class="spacer"></span>' + addSel + '</div>' +
+    (body || '<div class="empty">' + (S.T.Supplies.length ? 'Nothing matches.' : 'No supplies yet. Add thread, spools, labels, mailers, boxes, ink and winder motors here; dyes are priced in the Dye prices view.') + '</div>') +
+    '</div>';
+}
+
+/* ── dye prices: one supply per dye, row-ID linked ── */
+function brandList() { return [...new Set(S.X.Dyes.map(d => d.Brand).filter(Boolean))].sort(); }
+/* $/g for a dye: its own price if it has one, else the average of priced dyes of
+   the same brand (marked estimated). Average is per gram, so jar size washes out. */
+function brandAvgPerGram() {
+  const acc = {};
+  S.X.Dyes.forEach(d => {
+    const s = I.supplyByDye[d.id];
+    if (!s || !num(s.Cost_Per_Use)) return;
+    const b = d.Brand || '';
+    (acc[b] = acc[b] || []).push(num(s.Cost_Per_Use));
+  });
+  const out = {};
+  Object.entries(acc).forEach(([b, a]) => { out[b] = a.reduce((x, y) => x + y, 0) / a.length; });
+  return out;
+}
+function dyePerGram(dyeId, avg) {
+  const s = I.supplyByDye[dyeId];
+  if (s && num(s.Cost_Per_Use)) return { v: num(s.Cost_Per_Use), est: false, s };
+  const d = I.dye[dyeId];
+  const a = avg || brandAvgPerGram();
+  if (d && a[d.Brand || '']) return { v: a[d.Brand || ''], est: true, s };
+  return { v: 0, est: false, s };
+}
+async function saveDyePrice(dyeId) {
+  const d = I.dye[dyeId];
+  const g = num(document.getElementById('dyeSize_' + dyeId).value);
+  const price = parseVal('num', document.getElementById('dyePrice_' + dyeId).value);
+  if (!g) { toast('Pick a jar size', true); return; }
+  const s = I.supplyByDye[dyeId];
+  const fields = { Use_Per_Buy: g, Manual_Price: price, Buy_Unit: 'jar', Use_Unit: 'g' };
+  if (s) await act([['UpdateRecord', 'Supplies', s.id, fields]], 'Saved');
+  else await act([['AddRecord', 'Supplies', null, Object.assign({
+    Name: dyeLabel(d) + ' (' + jarLabel(g, d.Brand) + ' jar)', Category: 'Dye powder', Dye: dyeId
+  }, fields)]], 'Saved');
+  S.openDye = null;
+  await load();
+}
+/* One price for every dye of a brand at a jar size. Dyes that already carry a
+   price from a logged order are left alone — a real invoice beats a list price. */
+async function applyBulkDye() {
+  const b = S.bulk.brand, g = num(S.bulk.size), price = parseVal('num', S.bulk.price);
+  if (!b || !g || !price) { toast('Choose a brand, a jar size and a price', true); return; }
+  const dyes = S.X.Dyes.filter(d => (d.Brand || '') === b);
+  const skip = dyes.filter(d => { const s = I.supplyByDye[d.id]; return s && s.Price_Source === 'Order'; });
+  const todo = dyes.filter(d => !skip.includes(d));
+  if (!todo.length) { toast('Every ' + b + ' dye already has an ordered price'); return; }
+  if (!confirm('Set ' + money(price) + ' per ' + jarLabel(g, b) + ' jar on ' + todo.length + ' ' + b + ' dyes?' +
+    (skip.length ? '\n' + skip.length + ' with a price from a logged order will be left alone.' : ''))) return;
+  const upd = todo.filter(d => I.supplyByDye[d.id]), add = todo.filter(d => !I.supplyByDye[d.id]);
+  const actions = [];
+  if (upd.length) actions.push(['BulkUpdateRecord', 'Supplies', upd.map(d => I.supplyByDye[d.id].id),
+    { Use_Per_Buy: upd.map(() => g), Manual_Price: upd.map(() => price), Buy_Unit: upd.map(() => 'jar'), Use_Unit: upd.map(() => 'g') }]);
+  if (add.length) actions.push(['BulkAddRecord', 'Supplies', add.map(() => null), {
+    Name: add.map(d => dyeLabel(d) + ' (' + jarLabel(g, b) + ' jar)'), Category: add.map(() => 'Dye powder'),
+    Dye: add.map(d => d.id), Use_Per_Buy: add.map(() => g), Manual_Price: add.map(() => price),
+    Buy_Unit: add.map(() => 'jar'), Use_Unit: add.map(() => 'g') }]);
+  await act(actions, todo.length + ' dyes priced');
+  await load();
+}
+function renderDyePrices() {
+  if (!S.X.has_Dyes) return '<div class="panel"><div class="empty">No Dyes table in this document.</div></div>';
+  const avg = brandAvgPerGram();
+  const q = norm(S.dyeSearch);
+  let list = S.X.Dyes.filter(d => d.Dye_Name);
+  if (S.dyeBrand) list = list.filter(d => (d.Brand || '') === S.dyeBrand);
+  if (q) list = list.filter(d => norm(dyeLabel(d)).includes(q));
+  list = list.sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name)));
+  const shown = list.slice(0, 250);
+  const brands = brandList();
+  const bulkSizes = jarLadder(S.bulk.brand);
+  const bulk = '<div class="editor" style="margin:0 0 12px"><strong style="font-size:12px">Price a whole brand at once</strong> ' +
+    '<span class="sub">— then adjust any dye that differs. Dyes priced from a logged order are never overwritten.</span>' +
+    '<div class="toolbar" style="margin:8px 0 0">' +
+      '<select class="f" style="width:auto" onchange="S.bulk.brand=this.value; S.bulk.size=\'\'; render()"><option value="">Brand…</option>' +
+        brands.map(b => '<option' + (S.bulk.brand === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select>' +
+      '<select class="f" style="width:auto" onchange="S.bulk.size=this.value"><option value="">Jar size…</option>' +
+        bulkSizes.map(z => '<option value="' + z.g + '"' + (String(S.bulk.size) === String(z.g) ? ' selected' : '') + '>' + esc(z.label) + '</option>').join('') + '</select>' +
+      '<input class="f num" style="width:110px" placeholder="$ per jar" value="' + esc(S.bulk.price) + '" oninput="S.bulk.price=this.value">' +
+      '<button class="btn btn-teal btn-small" onclick="applyBulkDye()">Apply to brand</button></div></div>';
+  const rows = shown.map(d => {
+    const r = dyePerGram(d.id, avg);
+    const s = r.s;
+    const open = S.openDye === d.id;
+    const status = s && s.Price_Source === 'Order' ? '<span class="chip ok">ordered</span>'
+      : s && num(s.Cost_Per_Use) ? '<span class="chip est">manual</span>'
+      : r.est ? '<span class="chip est">brand avg</span>' : '<span class="chip warn">no price</span>';
+    const ladder = jarLadder(d.Brand);
+    const curG = s ? num(s.Use_Per_Buy) : 0;
+    return '<tr class="click' + (open ? ' open' : '') + '" onclick="S.openDye=' + (open ? 'null' : d.id) + '; render()">' +
+      '<td>' + esc(d.Dye_Name) + '</td><td class="mono sub">' + esc([d.Brand, d.Serial].filter(Boolean).join(' ')) + '</td>' +
+      '<td class="num">' + (s && num(s.Landed_Per_Buy) ? money(s.Landed_Per_Buy) + ' <span class="sub">/' + esc(jarLabel(s.Use_Per_Buy, d.Brand) || 'jar') + '</span>' : '—') + '</td>' +
+      '<td class="num">' + (r.v ? unitMoney(r.v) + '<span class="sub">/g</span>' : '—') + '</td>' +
+      '<td>' + status + ' ' + (s ? changeChip(s.Change_Pct) : '') + '</td></tr>' +
+      (open ? '<tr><td colspan="5" style="background:white"><div class="editor" onclick="event.stopPropagation()">' +
+        '<div class="toolbar" style="margin:0">' +
+        '<label class="sub">Jar <select class="f" style="width:auto" id="dyeSize_' + d.id + '">' +
+          ladder.map(z => '<option value="' + z.g + '"' + (Math.abs(z.g - curG) < 0.7 ? ' selected' : '') + '>' + esc(z.label) + '</option>').join('') +
+          (curG && !ladder.some(z => Math.abs(z.g - curG) < 0.7) ? '<option value="' + curG + '" selected>' + esc(curG + ' g') + '</option>' : '') +
+        '</select></label>' +
+        '<label class="sub">Price per jar <input class="f num" style="width:100px" id="dyePrice_' + d.id + '" value="' + esc(s && s.Manual_Price != null ? s.Manual_Price : '') + '"></label>' +
+        '<button class="btn btn-teal btn-small" onclick="saveDyePrice(' + d.id + ')">Save</button>' +
+        (s ? '<button class="btn btn-small" onclick="S.supMode=\'all\'; S.supCat=\'Dye powder\'; S.openSupply=' + s.id + '; S.supSearch=\'\'; render()">Supply record &amp; history</button>' : '') +
+        '</div><p class="sub" style="margin-top:6px">A manual jar price is the fallback. Once this dye appears on a logged order, the landed price from the invoice takes over.</p>' +
+      '</div></td></tr>' : '');
+  }).join('');
+  return '<div class="panel"><h2>Dye prices</h2>' +
+    '<p class="lead">Each dye is priced on its own and linked to its Dyes row by ID — never by name, since 26 names are shared across brands. Dyes with no price borrow their brand’s average per gram, marked <em>brand avg</em>.</p>' +
+    bulk +
+    '<div class="toolbar"><input class="search" type="search" placeholder="Search dyes" value="' + esc(S.dyeSearch) + '" oninput="S.dyeSearch=this.value; renderKeepFocus(this)">' +
+      '<select class="f" style="width:auto" onchange="S.dyeBrand=this.value; render()"><option value="">All brands</option>' +
+        brands.map(b => '<option' + (S.dyeBrand === b ? ' selected' : '') + '>' + esc(b) + '</option>').join('') + '</select></div>' +
+    (shown.length ? '<table class="grid"><thead><tr><th>Dye</th><th>Brand / #</th><th class="r">Jar price</th><th class="r">Per gram</th><th>Source</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      (list.length > shown.length ? '<p class="sub" style="margin-top:6px">Showing ' + shown.length + ' of ' + list.length + ' — search to narrow.</p>' : '')
+      : '<div class="empty">No dyes match.</div>') +
+    '</div>';
+}
+
+/* ════════════════════════════ COST PER SPOOL ════════════════════════════ */
+function laborRate() {
+  const r = setting('Labor_Rate');
+  if (r) return { v: r, from: 'setting' };
+  const w = S.X.Workers.filter(x => pick(x, ['Active_', 'Active'], false) && num(x.Hourly_Rate));
+  if (!w.length) return { v: 0, from: '' };
+  return { v: w.reduce((a, x) => a + num(x.Hourly_Rate), 0) / w.length, from: 'workers' };
+}
+function productList() {
+  if (S.X.Products.length) return S.X.Products.map(p => ({ id: p.id, code: productCode(p), name: pick(p, ['Product_Name'], ''), p }));
+  // No Products rows: fall back to the fibers the rest of the doc talks about.
+  const codes = new Set();
+  S.X.Customer_Pricing.forEach(r => { const c = fiberCode(r.Fiber_Code); if (c) codes.add(c); });
+  S.X.Recipes.forEach(r => { const c = fiberCode(r.Fiber_Type); if (['FFN', 'EN', 'FFC'].includes(c)) codes.add(c); });
+  return [...codes].map(c => ({ id: null, code: c, name: '', p: null }));
+}
+/* Grams of dye per 100 yd for one recipe component.
+     stock concentration = Std_Powder_tsp ÷ Std_Water_mL (tsp per mL)
+     grams per tsp       = Dyes.Std_Dry_Weight_g ÷ Dyes.Std_Powder_tsp, else the setting
+   Dry-powder components have no stock volume to work from and are flagged. */
+function componentGrams100(c, d) {
+  if (c.Is_Powder) return { skip: 'dry powder' };
+  if (!d) return { skip: 'dye not linked' };
+  const mL = num(c.Effective_mL_per_100_yd) || num(c.Default_mL_per_100_yds) || num(d.Default_mL_per_100_yds);
+  const tsp = num(c.Std_Powder_tsp_) || num(d.Std_Powder_tsp_);
+  const water = num(c.Std_Water_mL_) || num(d.Std_Water_mL_);
+  if (!mL || !tsp || !water) return { skip: 'no stock ratio' };
+  const gpt = num(d.Std_Dry_Weight_g_) && num(d.Std_Powder_tsp_)
+    ? num(d.Std_Dry_Weight_g_) / num(d.Std_Powder_tsp_) : setting('Grams_Per_Tsp_Default');
+  if (!gpt) return { skip: 'no g per tsp' };
+  return { g: mL * tsp / water * gpt, gptGuess: !(num(d.Std_Dry_Weight_g_) && num(d.Std_Powder_tsp_)) };
+}
+let _recipeCostCache = null;
+function recipeCosts() {
+  if (_recipeCostCache) return _recipeCostCache;
+  const avg = brandAvgPerGram();
+  const yds = {};
+  productList().forEach(p => { if (p.p && num(p.p.Yards_Per_Spool)) yds[p.code] = num(p.p.Yards_Per_Spool); });
+  const comps = {};
+  S.X.Recipe_Dye_Components.forEach(c => {
+    const r = getRefId(c.Recipe);
+    if (r) (comps[r] = comps[r] || []).push(c);
+  });
+  _recipeCostCache = S.X.Recipes.map(r => {
+    const code = fiberCode(r.Fiber_Type);
+    const list = comps[r.id] || [];
+    let g100 = 0, cost100 = 0, est = false, guess = false;
+    const flags = new Set();
+    list.forEach(c => {
+      const d = I.dye[getRefId(c.Dye_Name)];
+      const gr = componentGrams100(c, d);
+      if (gr.skip) { flags.add(gr.skip); return; }
+      const pg = dyePerGram(d.id, avg);
+      if (!pg.v) { flags.add('unpriced dye'); return; }
+      if (pg.est) est = true;
+      if (gr.gptGuess) guess = true;
+      g100 += gr.g; cost100 += gr.g * pg.v;
+    });
+    const y = yds[code] || 0;
+    if (list.length && !y) flags.add('no yards per spool');
+    return {
+      r, code, n: list.length, flags: [...flags], est, guess,
+      gPerSpool: y ? g100 * y / 100 : null,
+      perSpool: y && cost100 ? cost100 * y / 100 : null
+    };
+  });
+  return _recipeCostCache;
+}
+function costForProduct(prod) {
+  const comps = S.T.Cost_Components.filter(c => !getRefId(c.Product) || (prod.id && getRefId(c.Product) === prod.id));
+  const lot = setting('Spools_Per_Lot'), ord = setting('Spools_Per_Order'), mon = setting('Spools_Per_Month');
+  const missing = [];
+  const sumLevel = lvl => {
+    const rows = comps.filter(c => (c.Level || 'Per spool') === lvl);
+    rows.filter(c => c.Line_Cost == null).forEach(c => missing.push((supplyName(c.Supply) || 'a component') + ' has no price or quantity'));
+    return { total: rows.reduce((a, c) => a + num(c.Line_Cost), 0), n: rows.length };
+  };
+  const sp = sumLevel('Per spool'), lt = sumLevel('Per lot'), od = sumLevel('Per order'), mo = sumLevel('Per month');
+  const parts = [];
+  parts.push({ label: 'Materials per spool', v: sp.total, n: sp.n });
+  if (lt.n) { if (!lot) missing.push('Set typical spools per lot'); parts.push({ label: 'Per-lot costs ÷ ' + (lot || '?') + ' spools', v: lot ? lt.total / lot : 0 }); }
+  if (od.n) { if (!ord) missing.push('Set typical spools per order'); parts.push({ label: 'Per-order costs ÷ ' + (ord || '?') + ' spools', v: ord ? od.total / ord : 0 }); }
+  if (mo.n) { if (!mon) missing.push('Set spools finished per month'); parts.push({ label: 'Monthly costs ÷ ' + (mon || '?') + ' spools', v: mon ? mo.total / mon : 0 }); }
+  const hrs = setting('Labor_Hours_Per_Month');
+  if (hrs) {
+    const lr = laborRate();
+    if (!lr.v) missing.push('Set a labor rate');
+    if (!mon) missing.push('Set spools finished per month');
+    const loaded = lr.v * (1 + setting('Payroll_Overhead_Pct') / 100);
+    parts.push({ label: 'Labor (' + hrs + ' h × ' + money(loaded) + ' ÷ ' + (mon || '?') + ')', v: mon ? hrs * loaded / mon : 0 });
+  }
+  const rc = recipeCosts().filter(x => x.code === prod.code && x.perSpool && (!x.r.Status || x.r.Status === 'Active'));
+  let dye = null;
+  if (rc.length) {
+    const vals = rc.map(x => x.perSpool).sort((a, b) => a - b);
+    dye = { avg: vals.reduce((a, b) => a + b, 0) / vals.length, min: vals[0], max: vals[vals.length - 1], n: vals.length };
+    parts.push({ label: 'Dye (avg of ' + vals.length + ' active recipe' + (vals.length > 1 ? 's' : '') + ')', v: dye.avg });
+  } else missing.push('No dye cost yet for ' + prod.code + ' recipes (dye prices or stock ratios missing)');
+  if (!sp.n) missing.push('No per-spool materials — add thread, spool and label below');
+  const total = parts.reduce((a, p) => a + num(p.v), 0);
+  return { parts, total, dye, missing: [...new Set(missing)] };
+}
+function pricesFor(code) {
+  const out = [];
+  const retail = setting('Retail_Price:' + code);
+  if (retail) out.push({ who: 'Retail', price: retail });
+  const byPrice = {};
+  S.X.Customer_Pricing.forEach(r => {
+    if (fiberCode(r.Fiber_Code) !== code || !num(r.Price_Per_Spool)) return;
+    const c = I.customer[getRefId(r.Customer)];
+    const k = num(r.Price_Per_Spool).toFixed(2);
+    (byPrice[k] = byPrice[k] || []).push(c ? (c.Code || c.Customer_Name) : '?');
+  });
+  Object.entries(byPrice).sort((a, b) => b[0] - a[0]).forEach(([p, who]) =>
+    out.push({ who: who.length > 3 ? who.slice(0, 3).join(', ') + ' +' + (who.length - 3) : who.join(', '), price: Number(p) }));
+  return out;
+}
+async function addComponent(prodId) {
+  await act([['AddRecord', 'Cost_Components', null, { Product: prodId || 0, Level: 'Per spool', Qty_Per: 1 }]]);
+  await load();
+}
+/* The obvious per-spool lines for a product, sized from Products:
+   thread grams per spool, one spool, one label. Only adds what is missing and
+   only from supplies that exist; never guesses a price. */
+async function suggestComponents(prodId) {
+  const prod = productList().find(p => p.id === prodId);
+  if (!prod || !prod.p) return;
+  const have = S.T.Cost_Components.filter(c => getRefId(c.Product) === prodId).map(c => getRefId(c.Supply));
+  const live = S.T.Supplies.filter(s => !s.Retired);
+  const forProd = s => getRefId(s.Product) === prodId;
+  const thread = live.find(s => s.Category === 'Thread' && forProd(s));
+  const spool = live.find(s => s.Category === 'Spools' && forProd(s)) || live.find(s => s.Category === 'Spools' && !getRefId(s.Product));
+  const label = live.find(s => s.Category === 'Labels' && I.labelTpl[getRefId(s.Label_Template)] &&
+    String(I.labelTpl[getRefId(s.Label_Template)].Fiber_Codes || '').toUpperCase().includes(prod.code));
+  const add = [];
+  if (thread && !have.includes(thread.id)) add.push({ s: thread, q: num(prod.p.Thread_Weight_g) || null, note: 'grams of thread per spool (Products.Thread_Weight_g)' });
+  if (spool && !have.includes(spool.id)) add.push({ s: spool, q: 1, note: '' });
+  if (label && !have.includes(label.id)) add.push({ s: label, q: 1, note: '' });
+  if (!add.length) {
+    toast('Nothing to add — link a Thread supply to ' + prod.code + ' (and spools/labels) on the Supplies tab first', true);
+    return;
+  }
+  await act([['BulkAddRecord', 'Cost_Components', add.map(() => null), {
+    Product: add.map(() => prodId), Supply: add.map(a => a.s.id), Level: add.map(() => 'Per spool'),
+    Qty_Per: add.map(a => a.q), Notes: add.map(a => a.note) }]], add.length + ' component' + (add.length > 1 ? 's' : '') + ' added');
+  await load();
+}
+function renderComponents() {
+  const prods = productList().filter(p => p.id);
+  const prodOpts = [{ v: 0, t: 'All products' }].concat(prods.map(p => ({ v: p.id, t: p.code })));
+  const supOpts = S.T.Supplies.filter(s => !s.Retired).sort((a, b) => fold(a.Category + a.Name).localeCompare(fold(b.Category + b.Name)))
+    .map(s => ({ v: s.id, t: (s.Category ? s.Category + ' · ' : '') + (s.Name || '(unnamed)') }));
+  const rows = S.T.Cost_Components.slice().sort((a, b) =>
+    (getRefId(a.Product) || 0) - (getRefId(b.Product) || 0) || LEVELS.indexOf(a.Level) - LEVELS.indexOf(b.Level) || a.id - b.id).map(c => {
+    const s = I.supply[getRefId(c.Supply)];
+    return '<tr>' +
+      '<td style="width:120px">' + sel('Cost_Components', c.id, 'Product', getRefId(c.Product) || 0, { list: prodOpts, kind: 'ref' }) + '</td>' +
+      '<td style="min-width:200px">' + sel('Cost_Components', c.id, 'Supply', c.Supply, { list: supOpts, kind: 'ref' }, '— pick a supply —') + '</td>' +
+      '<td style="width:110px">' + sel('Cost_Components', c.id, 'Level', c.Level, { list: LEVELS.map(l => ({ v: l, t: l })) }) + '</td>' +
+      '<td style="width:84px">' + inp('Cost_Components', c.id, 'Qty_Per', c.Qty_Per, 'num') + '</td>' +
+      '<td class="sub">' + esc(s && s.Use_Unit || '') + '</td>' +
+      '<td style="width:64px">' + inp('Cost_Components', c.id, 'Loss_Pct', c.Loss_Pct, 'num', 'placeholder="0"') + '</td>' +
+      '<td class="num">' + unitMoney(c.Unit_Cost) + '</td>' +
+      '<td class="num">' + (c.Line_Cost == null ? '<span class="chip warn">no price</span>' : unitMoney(c.Line_Cost)) + '</td>' +
+      '<td><button class="btn btn-small btn-warn" onclick="removeRow(\'Cost_Components\',' + c.id + ',\'component\')" aria-label="Delete">✕</button></td></tr>';
+  }).join('');
+  return '<div class="panel"><h2>What goes into a spool</h2>' +
+    '<p class="lead">Each line takes a quantity of one supply. <strong>Per spool</strong>: thread grams, the wooden spool, a label. ' +
+    '<strong>Per lot</strong>: auxiliaries, gas. <strong>Per order</strong>: mailer or box, packing. <strong>Per month</strong>: winder motors (e.g. 0.25 if one lasts four months), ink, subscriptions. ' +
+    '“All products” lines apply to every fiber. Loss % covers true waste only — remnants sold at a discount are not loss.</p>' +
+    (rows ? '<table class="grid"><thead><tr><th>Product</th><th>Supply</th><th>Level</th><th>Qty</th><th></th><th>Loss %</th><th class="r">Unit cost</th><th class="r">Line cost</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<div class="empty">No components yet.</div>') +
+    '<div class="toolbar" style="margin-top:8px"><button class="btn btn-small" onclick="addComponent(0)">+ Add line</button>' +
+      prods.map(p => '<button class="btn btn-small" onclick="suggestComponents(' + p.id + ')">Suggest for ' + esc(p.code) + '</button>').join('') +
+    '</div></div>';
+}
+function renderRecipeCosts() {
+  const q = norm(S.recipeSearch);
+  let list = recipeCosts().filter(x => x.n);
+  if (q) list = list.filter(x => norm([x.r.Recipe_Name, x.r.SKU_Base, x.code].join(' ')).includes(q));
+  list.sort((a, b) => num(b.perSpool) - num(a.perSpool));
+  const shown = list.slice(0, 150);
+  const rows = shown.map(x => '<tr><td>' + esc(x.r.Recipe_Name || '(unnamed)') + (x.r.Status && x.r.Status !== 'Active' ? ' <span class="chip est">' + esc(x.r.Status) + '</span>' : '') + '</td>' +
+    '<td class="mono sub">' + esc(x.code) + '</td>' +
+    '<td class="num">' + (x.gPerSpool ? (Math.round(x.gPerSpool * 1000) / 1000) + ' g' : '—') + '</td>' +
+    '<td class="num">' + (x.perSpool ? unitMoney(x.perSpool) : '—') + '</td>' +
+    '<td>' + (x.est ? '<span class="chip est">brand avg</span> ' : '') + (x.guess ? '<span class="chip est">g/tsp guess</span> ' : '') +
+      x.flags.map(f => '<span class="chip warn">' + esc(f) + '</span>').join(' ') + '</td></tr>').join('');
+  return '<div class="panel"><h2>Dye cost by recipe</h2>' +
+    '<p class="lead">mL of stock per 100 yd × stock strength × grams per tsp × $ per gram, scaled to the yards on a spool. Most expensive first.</p>' +
+    '<div class="toolbar"><input class="search" type="search" placeholder="Search recipes" value="' + esc(S.recipeSearch) + '" oninput="S.recipeSearch=this.value; renderKeepFocus(this)"></div>' +
+    (rows ? '<table class="grid"><thead><tr><th>Recipe</th><th>Fiber</th><th class="r">Dye / spool</th><th class="r">Cost / spool</th><th>Notes</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      (list.length > shown.length ? '<p class="sub" style="margin-top:6px">Showing ' + shown.length + ' of ' + list.length + '.</p>' : '')
+      : '<div class="empty">No recipes with dye components.</div>') + '</div>';
+}
+function quickSetting(key, label, unit) {
+  const r = I.setting[key];
+  return '<label>' + esc(label) + ' <span class="sub">(' + esc(unit) + ')</span>' +
+    (r ? inp('Cost_Settings', r.id, 'Value', r.Value, 'num') : '<input class="f num" disabled placeholder="run setup">') + '</label>';
+}
+function renderCost() {
+  const prods = productList();
+  const cards = prods.map(p => {
+    const c = costForProduct(p);
+    const prices = pricesFor(p.code);
+    const pr = prices.map(x => {
+      const m = x.price ? (x.price - c.total) / x.price * 100 : null;
+      return '<tr><td>' + esc(x.who) + '</td><td class="v">' + money(x.price) + '</td><td class="v" style="width:70px">' +
+        '<span class="chip ' + (m < 0 ? 'up' : m < 30 ? 'warn' : 'ok') + '">' + pct(m) + '</span></td></tr>';
+    }).join('');
+    return '<div class="card"><h3>' + esc(p.code) + ' <span class="sub" style="font-family:Inter">' + esc(p.name) + '</span></h3>' +
+      '<div class="big">' + unitMoney(c.total) + ' <span class="sub" style="font-family:Inter">per spool</span></div>' +
+      '<table class="brk">' + c.parts.map(x => '<tr><td>' + esc(x.label) + '</td><td class="v">' + unitMoney(x.v) + '</td></tr>').join('') +
+        '<tr class="total"><td>Total</td><td class="v">' + unitMoney(c.total) + '</td></tr></table>' +
+      (c.dye && c.dye.n > 1 ? '<p class="sub">Dye ranges ' + unitMoney(c.dye.min) + ' – ' + unitMoney(c.dye.max) + ' per spool by recipe.</p>' : '') +
+      (pr ? '<div class="group-head" style="font-size:12px; margin-top:10px">Price · margin</div><table class="brk">' + pr + '</table>'
+        : '<p class="sub">No prices for ' + esc(p.code) + ' in Customer_Pricing; set a retail price under Settings.</p>') +
+      (c.missing.length ? '<ul class="miss">' + c.missing.map(m => '<li>' + esc(m) + '</li>').join('') + '</ul>' : '') +
+      '</div>';
+  }).join('');
+  return '<div class="panel"><h2>Cost per spool</h2>' +
+    '<p class="lead">Built from current supply prices, so it moves on its own when an invoice comes in higher. Margins are against Customer_Pricing and your retail price.</p>' +
+    '<div class="fields">' + quickSetting('Spools_Per_Lot', 'Spools per lot', 'typical') + quickSetting('Spools_Per_Order', 'Spools per order', 'typical') +
+      quickSetting('Spools_Per_Month', 'Spools per month', 'finished') + '</div>' +
+    (cards ? '<div class="cards">' + cards + '</div>' : '<div class="empty">No products found.</div>') + '</div>' +
+    renderComponents() + renderRecipeCosts();
+}
+
+/* ════════════════════════════ ORDER EMAIL ════════════════════════════ */
+function fillTemplate(tpl, sup, items) {
+  const d = new Date();
+  const map = {
+    contact: sup.Contact_Name || 'there', account: sup.Account_No || '', supplier: sup.Name || '',
+    date: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }), items
+  };
+  let out = String(tpl).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k in map ? map[k] : m));
+  if (!sup.Account_No) out = out.replace(/^.*Account #:\s*$\n?/m, '');
+  return out;
+}
+function emailParts() {
+  const sup = I.supplier[S.emailSupplier];
+  if (!sup) return null;
+  const supplies = S.T.Supplies.filter(s => getRefId(s.Supplier) === sup.id && !s.Retired);
+  const chosen = supplies.filter(s => num(S.emailQty[s.id]) > 0);
+  const items = chosen.map(s => '- ' + (s.Name || '') + (s.Item_Code ? ' (' + s.Item_Code + ')' : '') + ': ' +
+    num(S.emailQty[s.id]) + ' ' + (s.Buy_Unit || '')).join('\n');
+  return {
+    sup, supplies, chosen,
+    subject: fillTemplate(sup.Order_Subject || DEFAULT_SUBJECT, sup, items),
+    body: fillTemplate(sup.Order_Template || DEFAULT_TEMPLATE, sup, items || '- (add quantities)')
+  };
+}
+function updateEmailPreview() {
+  const e = emailParts();
+  if (!e) return;
+  const pv = document.getElementById('emailPreview'), sj = document.getElementById('emailSubject'), ml = document.getElementById('mailLink');
+  if (pv) pv.textContent = e.body;
+  if (sj) sj.textContent = e.subject;
+  if (ml) ml.href = 'mailto:' + encodeURIComponent(e.sup.Email || '') + '?subject=' + encodeURIComponent(e.subject) + '&body=' + encodeURIComponent(e.body);
+  const lb = document.getElementById('logBtn');
+  if (lb) lb.disabled = !e.chosen.length;
+}
+async function copyEmail() {
+  const e = emailParts();
+  if (!e) return;
+  const text = e.body;
+  try { await navigator.clipboard.writeText(text); toast('Email copied'); return; } catch (err) { /* iframe may block */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast('Email copied'); } catch (err) { toast('Copy blocked — select the preview and copy', true); }
+  ta.remove();
+}
+/* Logging the email creates the order with last time's prices, so the invoice
+   only needs checking against it and the total from the card filled in. */
+async function logEmailOrder() {
+  const e = emailParts();
+  if (!e || !e.chosen.length) return;
+  const res = await act([['AddRecord', 'Purchases', null, { Supplier: e.sup.id, Order_Date: todayEpoch(), Notes: 'Ordered by email' }]]);
+  const pid = newId(res);
+  if (!pid) return;
+  const lines = e.chosen.map(s => {
+    const prev = (I.linesBySupply[s.id] || []).find(l => l.Unit_Price || l.Tariff_Per_Unit);
+    return { s: s.id, q: num(S.emailQty[s.id]), p: prev ? prev.Unit_Price || null : (s.Manual_Price || null), t: prev ? prev.Tariff_Per_Unit || null : null };
+  });
+  await act([['BulkAddRecord', 'Purchase_Lines', lines.map(() => null), {
+    Purchase: lines.map(() => pid), Supply: lines.map(l => l.s), Qty: lines.map(l => l.q),
+    Unit_Price: lines.map(l => l.p), Tariff_Per_Unit: lines.map(l => l.t) }]], 'Order logged — fill in the total when the invoice arrives');
+  S.emailQty = {};
+  S.tab = 'orders'; S.openPurchase = pid;
+  await load();
+}
+function renderEmail() {
+  const sups = S.T.Suppliers.slice().sort((a, b) => fold(a.Name).localeCompare(fold(b.Name)));
+  if (!sups.length) return '<div class="panel"><div class="empty">Add a supplier under Settings first.</div></div>';
+  if (!I.supplier[S.emailSupplier]) S.emailSupplier = sups[0].id;
+  const e = emailParts();
+  const sup = e.sup;
+  const list = e.supplies.sort((a, b) => fold(a.Name).localeCompare(fold(b.Name))).map(s =>
+    '<tr><td>' + esc(s.Name || '(unnamed)') + (s.Item_Code ? ' <span class="sub mono">' + esc(s.Item_Code) + '</span>' : '') + '</td>' +
+    '<td class="num">' + unitMoney(s.Last_Price) + '</td>' +
+    '<td class="mono sub">' + esc(epochToISO(s.Last_Ordered)) + '</td>' +
+    '<td><input class="f num qty-in" value="' + esc(S.emailQty[s.id] || '') + '" oninput="S.emailQty[' + s.id + ']=this.value; updateEmailPreview()"> <span class="sub">' + esc(s.Buy_Unit || '') + '</span></td></tr>').join('');
+  const tplEdit = S.editTemplate
+    ? '<div class="editor"><div class="fields">' +
+        '<label class="wide">Subject' + inp('Suppliers', sup.id, 'Order_Subject', sup.Order_Subject || DEFAULT_SUBJECT) + '</label>' +
+        '<label class="wide">Body<textarea class="f" onchange="setField(\'Suppliers\',' + sup.id + ',\'Order_Template\',this.value,\'text\')">' + esc(sup.Order_Template || DEFAULT_TEMPLATE) + '</textarea></label></div>' +
+        '<p class="sub">Placeholders: <code>{{contact}}</code> <code>{{items}}</code> <code>{{account}}</code> <code>{{date}}</code> <code>{{supplier}}</code>. ' +
+        'Contact, email and account # come from the supplier record under Settings.</p>' +
+        '<div class="toolbar" style="margin:8px 0 0"><button class="btn btn-small" onclick="S.editTemplate=false; render()">Done</button></div></div>'
+    : '';
+  return '<div class="panel"><h2>Order by email</h2>' +
+    '<p class="lead">Pick the supplier, type quantities, then copy or open the email. “Log as order” starts the invoice record with last time’s prices.</p>' +
+    '<div class="toolbar"><select class="f" style="width:auto" onchange="S.emailSupplier=Number(this.value); S.emailQty={}; S.editTemplate=false; render()">' +
+      sups.map(s => '<option value="' + s.id + '"' + (s.id === sup.id ? ' selected' : '') + '>' + esc(s.Name || '(unnamed)') + '</option>').join('') + '</select>' +
+      '<span class="sub">' + esc(sup.Email || 'no email on file') + '</span><span class="spacer"></span>' +
+      '<button class="btn btn-small" onclick="S.editTemplate=!S.editTemplate; render()">' + (S.editTemplate ? 'Hide template' : 'Edit template') + '</button></div>' +
+    tplEdit +
+    '<div class="two"><div>' +
+      (list ? '<table class="grid"><thead><tr><th>Supply</th><th class="r">Last price</th><th>Last</th><th>Qty</th></tr></thead><tbody>' + list + '</tbody></table>'
+        : '<div class="empty">No supplies list ' + esc(sup.Name || 'this supplier') + ' as their supplier yet.</div>') +
+    '</div><div>' +
+      '<div class="sub" style="margin-bottom:4px">Subject: <strong id="emailSubject" style="color:var(--ink)">' + esc(e.subject) + '</strong></div>' +
+      '<pre class="preview" id="emailPreview">' + esc(e.body) + '</pre>' +
+      '<div class="toolbar" style="margin-top:8px">' +
+        '<button class="btn" onclick="copyEmail()">Copy email</button>' +
+        '<a class="btn" id="mailLink" target="_blank" rel="noopener" href="#">Open in email app</a>' +
+        '<span class="spacer"></span><button class="btn btn-teal" id="logBtn" onclick="logEmailOrder()"' + (e.chosen.length ? '' : ' disabled') + '>Log as order</button>' +
+      '</div></div></div></div>';
+}
+
+/* ════════════════════════════ SETTINGS ════════════════════════════ */
+async function newSupplier() {
+  await act([['AddRecord', 'Suppliers', null, { Name: 'New supplier' }]]);
+  await load();
+}
+async function setRetail(code, raw) {
+  const key = 'Retail_Price:' + code;
+  const r = I.setting[key];
+  const v = parseVal('num', raw);
+  if (r) await act([['UpdateRecord', 'Cost_Settings', r.id, { Value: v }]]);
+  else await act([['AddRecord', 'Cost_Settings', null, { Key: key, Value: v, Notes: 'Retail price per spool for ' + code }]]);
+  await load();
+}
+function renderSettings() {
+  const lr = laborRate();
+  const sets = SETTINGS.map(([k, label, unit, hint]) => {
+    const r = I.setting[k];
+    const ph = k === 'Labor_Rate' && lr.from === 'workers' ? 'placeholder="' + esc('avg ' + money(lr.v)) + '"' : '';
+    return '<tr><td><strong>' + esc(label) + '</strong><div class="sub">' + esc(hint) + '</div></td><td class="sub">' + esc(unit) + '</td>' +
+      '<td style="width:120px">' + (r ? inp('Cost_Settings', r.id, 'Value', r.Value, 'num', ph) : '<span class="sub">run setup</span>') + '</td></tr>';
+  }).join('');
+  const retail = productList().map(p => {
+    const r = I.setting['Retail_Price:' + p.code];
+    return '<tr><td><strong>Retail price — ' + esc(p.code) + '</strong></td><td class="sub">$/spool</td><td style="width:120px">' +
+      '<input class="f num" value="' + esc(r && r.Value != null ? r.Value : '') + '" onchange="setRetail(\'' + esc(p.code).replace(/'/g, '') + '\', this.value)"></td></tr>';
+  }).join('');
+  const sups = S.T.Suppliers.slice().sort((a, b) => fold(a.Name).localeCompare(fold(b.Name))).map(s =>
+    '<tr><td>' + inp('Suppliers', s.id, 'Name', s.Name) + '</td><td>' + inp('Suppliers', s.id, 'Contact_Name', s.Contact_Name) + '</td>' +
+    '<td>' + inp('Suppliers', s.id, 'Email', s.Email) + '</td><td>' + inp('Suppliers', s.id, 'Account_No', s.Account_No) + '</td>' +
+    '<td>' + inp('Suppliers', s.id, 'Website', s.Website) + '</td>' +
+    '<td class="mono sub">' + esc(epochToISO(s.Last_Order)) + '</td>' +
+    '<td>' + (S.T.Purchases.some(p => getRefId(p.Supplier) === s.id) || S.T.Supplies.some(x => getRefId(x.Supplier) === s.id) ? ''
+      : '<button class="btn btn-small btn-warn" onclick="removeRow(\'Suppliers\',' + s.id + ',\'supplier\')">✕</button>') + '</td></tr>').join('');
+  return '<div class="panel"><h2>Suppliers</h2><p class="lead">Contact and account # feed the order email. Edit each supplier’s email template on the Order email tab.</p>' +
+    (sups ? '<table class="grid"><thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Account #</th><th>Website</th><th>Last order</th><th></th></tr></thead><tbody>' + sups + '</tbody></table>'
+      : '<div class="empty">No suppliers yet.</div>') +
+    '<div class="toolbar" style="margin-top:8px"><button class="btn btn-small" onclick="newSupplier()">+ Add supplier</button></div></div>' +
+    '<div class="panel"><h2>Cost assumptions</h2><p class="lead">Typed estimates, not tracked figures. Change one and every cost per spool updates.</p>' +
+    '<table class="grid"><tbody>' + sets + retail + '</tbody></table></div>' +
+    '<div class="panel"><h2>Attaching invoices</h2><p class="lead" style="margin:0">Custom widgets can’t upload files, so invoices attach in Grist itself. ' +
+    'On this page, add a <strong>Card</strong> widget for <code>Purchases</code> and select this widget as its <em>Select by</em> source. ' +
+    'Clicking an order here then shows its card, and the invoice PDF or a screenshot of the email goes in the <code>Invoice</code> field.</p></div>';
+}
+
+/* ════════════════════════════ shell ════════════════════════════ */
+const TABS = [['orders', 'Orders'], ['supplies', 'Supplies'], ['cost', 'Cost per spool'], ['email', 'Order email'], ['settings', 'Settings']];
+function setTab(t) { S.tab = t; render(); }
+/* Re-render on every keystroke in a search box without losing the caret. */
+function renderKeepFocus(el) {
+  const ph = el.placeholder, pos = el.selectionStart;
+  render();
+  const again = [...document.querySelectorAll('input.search')].find(x => x.placeholder === ph);
+  if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+}
+function render() {
+  _recipeCostCache = null;
+  const pending = S.T.Purchases ? S.T.Purchases.filter(p => p.Status === 'Refund pending').length : 0;
+  document.getElementById('tabs').innerHTML = TABS.map(([k, l]) =>
+    '<button class="tab-btn' + (S.tab === k ? ' active' : '') + '" onclick="setTab(\'' + k + '\')">' + esc(l) +
+    (k === 'orders' && pending ? '<span class="pip">' + pending + '</span>' : '') + '</button>').join('');
+  const el = document.getElementById('content');
+  if (S.loadError) { el.innerHTML = '<div class="warn-banner">' + esc(S.loadError) + '</div>'; return; }
+  if (!S.ready) return;
+  const nS = (S.T.Supplies || []).length, nP = (S.T.Purchases || []).length;
+  document.getElementById('topNote').textContent = nS + ' supplies · ' + nP + ' orders logged';
+  const absent = Object.keys(S.missing).filter(n => S.missing[n] === 'table');
+  if (absent.length) { el.innerHTML = setupPanel(); return; }
+  let html = needsSetup() ? setupPanel() : '';
+  if (S.tab === 'orders') html += renderOrders();
+  else if (S.tab === 'supplies') html += renderSupplies();
+  else if (S.tab === 'cost') html += renderCost();
+  else if (S.tab === 'email') html += renderEmail();
+  else html += renderSettings();
+  el.innerHTML = html;
+  if (S.tab === 'email') updateEmailPreview();
+}
+
+render();
+try { grist.ready({ requiredAccess: 'full', allowSelectBy: true }); } catch (e) { console.error(e); }
+/* Edits made in Grist's own views (an invoice attached, a total typed in the
+   card) reload the widget. Its own writes already reload, so skip echoes. */
+try { grist.onRecords(() => { if (S.ready && Date.now() - S.lastLoad > 1500) load(); }); } catch (e) { /* not bound to a table */ }
+load();
+</script>
+</body>
+</html>
