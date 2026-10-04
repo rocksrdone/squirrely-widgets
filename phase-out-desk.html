@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dye Phase-Out</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --mute: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5;
+  --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+  --blue: #3A5F8B; --blue-light: #E5ECF2;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+.mono { font-family: 'DM Mono', monospace; }
+.top-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.sub { font-size: 11px; color: var(--mute); }
+.top-actions { display: flex; gap: 6px; }
+.btn { font-size: 12px; padding: 6px 11px; border-radius: 6px; cursor: pointer; border: 1px solid var(--rule); background: white; color: var(--ink); font-family: inherit; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-sm { font-size: 11px; padding: 4px 8px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-teal { background: var(--teal); border-color: var(--teal); color: white; }
+.btn-ink { background: var(--ink); border-color: var(--ink); color: white; }
+
+.layout { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 14px; align-items: start; }
+@media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+.panel { background: white; border: 1px solid var(--rule); border-radius: 8px; padding: 12px; }
+.search, select, .field { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; font-size: 12px; font-family: inherit; background: white; color: var(--ink); }
+.search:focus, select:focus, .field:focus { outline: none; border-color: var(--accent); }
+textarea.field { resize: vertical; min-height: 54px; }
+.row { display: flex; gap: 6px; margin-top: 7px; align-items: center; }
+.row > select { flex: 1; }
+.chips { display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0; }
+.chip { font-size: 10.5px; padding: 3px 8px; border-radius: 10px; border: 1px solid var(--rule); background: white; color: #6B5E52; cursor: pointer; font-family: inherit; }
+.chip.on { background: var(--ink); border-color: var(--ink); color: white; }
+.chip .n { font-family: 'DM Mono', monospace; margin-left: 3px; opacity: .8; }
+
+.list { max-height: 680px; overflow-y: auto; margin: 0 -4px; }
+.item { display: flex; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; align-items: flex-start; margin: 0 4px 2px; }
+.item:hover { background: var(--paper); }
+.item.sel { background: var(--accent-light); }
+.dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; border: 1px solid rgba(0,0,0,.15); }
+.item-main { flex: 1; min-width: 0; }
+.item-name { font-size: 12.5px; font-weight: 500; }
+.item-sub { font-size: 10.5px; color: var(--mute); }
+.item-succ { font-size: 10.5px; color: var(--teal); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-right { text-align: right; flex-shrink: 0; }
+.item-nums { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mute); margin-top: 3px; white-space: nowrap; }
+.empty { color: var(--mute); font-style: italic; padding: 30px 10px; text-align: center; font-size: 12px; }
+
+.badge { display: inline-block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; font-weight: 600; white-space: nowrap; }
+.st-need { background: var(--accent-light); color: var(--accent); }
+.st-test { background: var(--gold-light); color: var(--gold); }
+.st-swap { background: var(--blue-light); color: var(--blue); }
+.st-done { background: var(--teal-light); color: var(--teal); }
+.b-os { background: var(--teal-light); color: var(--teal); }
+.b-acid { background: var(--warm); color: #6B5E52; }
+.b-warn { background: var(--accent-light); color: var(--accent); }
+
+.d-head { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; flex-wrap: wrap; }
+.d-name { font-family: 'Libre Baskerville', serif; font-size: 18px; }
+.d-meta { font-size: 11px; color: var(--mute); margin-top: 2px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 4px; }
+@media (max-width: 560px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--paper); border: 1px solid var(--warm); border-radius: 6px; padding: 7px 9px; }
+.stat-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--mute); font-weight: 600; }
+.stat-v { font-family: 'DM Mono', monospace; font-size: 14px; }
+.stat-s { font-size: 10px; color: var(--mute); }
+.sec { font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--teal); margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule); display: flex; gap: 8px; align-items: baseline; }
+.sec .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.label { font-size: 10px; color: var(--mute); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; display: block; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+
+.succ-card { border: 1px solid var(--teal); background: var(--teal-light); border-radius: 8px; padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; }
+.succ-name { font-size: 14px; font-weight: 600; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; font-size: 11.5px; margin-top: 4px; }
+.kv .k { color: var(--mute); }
+.warnbox { border-left: 3px solid var(--accent); background: var(--accent-light); padding: 7px 10px; font-size: 11.5px; margin-top: 8px; border-radius: 0 6px 6px 0; }
+.infobox { border-left: 3px solid var(--gold); background: var(--gold-light); padding: 7px 10px; font-size: 11.5px; margin-top: 8px; border-radius: 0 6px 6px 0; }
+.link { font-size: 11px; color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; font-family: inherit; }
+
+.cands { border: 1px solid var(--rule); border-radius: 6px; max-height: 280px; overflow-y: auto; margin-top: 6px; }
+.cand { display: flex; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--warm); cursor: pointer; align-items: flex-start; }
+.cand:last-child { border-bottom: none; }
+.cand:hover { background: var(--paper); }
+.cand-name { font-size: 12.5px; }
+.cand-meta { font-size: 10.5px; color: var(--mute); }
+.cand-tags { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+.add-box { border: 1px dashed var(--rule); border-radius: 8px; padding: 10px; margin-top: 8px; background: #FCFAF7; }
+.check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+
+.rec { display: flex; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--warm); align-items: baseline; }
+.rec:last-child { border-bottom: none; }
+.rec:nth-child(even) { background: #FCFAF7; }
+.rec-name { flex: 1; font-size: 12px; }
+.rec-sku { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mute); }
+.rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #C9BFB2; flex-shrink: 0; }
+.rec-dot.on { background: var(--teal); }
+.recs { border: 1px solid var(--rule); border-radius: 6px; max-height: 220px; overflow-y: auto; }
+
+.bulk { background: white; border: 1px solid var(--gold); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.banner { border-left: 3px solid var(--accent); background: var(--accent-light); padding: 8px 12px; font-size: 12px; margin-bottom: 12px; border-radius: 0 6px 6px 0; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999; max-width: 90vw; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <div class="title">Dye Phase-Out</div>
+    <div class="sub" id="topSub">Loading…</div>
+  </div>
+  <div class="top-actions">
+    <button class="btn" onclick="toggleBulk()">Phase out a brand…</button>
+    <button class="btn" title="Reload from Grist" onclick="refresh()">↻</button>
+  </div>
+</div>
+
+<div id="bulkPanel" class="bulk" style="display:none"></div>
+<div id="banner"></div>
+
+<div class="layout">
+  <div class="panel">
+    <input class="search" id="q" placeholder="Search name, serial, brand, replacement…" oninput="state.q = this.value; renderList()">
+    <div class="row">
+      <select id="brandFilter" onchange="state.brand = this.value; savePrefs(); renderList()"></select>
+    </div>
+    <div class="row">
+      <select id="sortBy" onchange="state.sort = this.value; savePrefs(); renderList()">
+        <option value="urgency">Sort: runs out first</option>
+        <option value="recipes">Sort: most active recipes</option>
+        <option value="powder">Sort: powder on hand</option>
+        <option value="stage">Sort: stage</option>
+        <option value="name">Sort: name</option>
+        <option value="brand">Sort: brand</option>
+      </select>
+      <button class="btn btn-sm" id="dirBtn" title="Reverse order" onclick="state.dir *= -1; savePrefs(); renderList()">↓</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="list" id="list"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="panel" id="detail"><div class="empty">Pick a dye on the left to set its replacement.</div></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════
+   Dye Phase-Out desk
+   Outgoing dyes (Status matching phase-out / retired / discontinued),
+   their replacement, test-dye verification, and the recipes still using
+   them. Stage is DERIVED from those fields — never stored.
+     need  → no replacement chosen yet
+     test  → replacement chosen, not yet test-dyed / verified
+     swap  → verified, but active recipes still point at the old dye
+     done  → verified and no active recipe uses the old dye
+   Every dye lookup keys on Grist row id, never on name.
+   ════════════════════════════════════════════════════════════════════ */
+
+const OUT_RE = /phase|retir|discontinu/i;
+const ONE_SHOT_RE = /one.?shot/i;
+const PRO_RE = /\bpro\b|pro\s*chem/i;
+const STAGES = {
+  need: { label: 'Needs replacement', cls: 'st-need', order: 0 },
+  test: { label: 'Needs test dye',    cls: 'st-test', order: 1 },
+  swap: { label: 'Ready to swap',     cls: 'st-swap', order: 2 },
+  done: { label: 'Done',              cls: 'st-done', order: 3 },
+};
+const PREF_KEY = 'ss.phaseOut.prefs.v1';
+
+/* ── helpers (shared conventions) ────────────────────────────────── */
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fold(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+function norm(s) { return fold(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function findColumn(t, cands) {
+  const keys = Object.keys(t);
+  for (const c of cands) { const hit = keys.find(k => norm(k) === norm(c)); if (hit) return hit; }
+  return null;
+}
+function resolveCols(table, tableName, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.cands;
+    const required = Array.isArray(def) ? true : def.required !== false;
+    const hit = findColumn(table, cands);
+    out[key] = hit;
+    if (!hit && required) missing.push(tableName + '.' + cands[0]);
+  }
+  return out;
+}
+const opt = cands => ({ cands, required: false });
+function colArr(t, col) { return Array.isArray(t[col]) ? t[col] : []; }
+function rowField(t, col, i, dflt) {
+  if (!col) return dflt;
+  const v = colArr(t, col)[i];
+  return v === undefined || v === null ? dflt : v;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  if (typeof ref === 'object' && ref !== null && 'rowId' in ref) return ref.rowId;
+  return null;
+}
+function firstRetValue(result) {
+  if (Array.isArray(result)) return result[0];
+  if (result && Array.isArray(result.retValues)) return result.retValues[0];
+  return null;
+}
+function todayEpoch() {
+  const d = new Date();
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000);
+}
+function shortDate(v) {
+  if (!v) return '';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? String(v) : d.toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function isoToday() { return new Date().toISOString().slice(0, 10); }
+function truthy(v) { return v === true || v === 'True' || v === 'true' || v === 1 || v === 'Yes'; }
+function safeHex(h) { return /^#[0-9a-f]{3,8}$/i.test(String(h || '')) ? h : '#C9BFB2'; }
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+function lsGet(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage blocked */ } }
+
+/* ── state ───────────────────────────────────────────────────────── */
+const prefs = lsGet(PREF_KEY, {});
+let state = {
+  q: '', brand: prefs.brand || '', stage: prefs.stage || 'open',
+  sort: prefs.sort || 'urgency', dir: prefs.dir || 1,
+  sel: null, pickQ: '', pickAll: false, showAdd: false, showBulk: false,
+};
+function savePrefs() { lsSet(PREF_KEY, { brand: state.brand, stage: state.stage, sort: state.sort, dir: state.dir }); }
+
+let meta = { types: {}, choices: {} };   // Dyes colId → type / choice list
+let D = {};                               // resolved Dyes columns
+let SUCC_COLS = [];                       // Successor and/or Replacement_Dye
+let COMP = {};                            // resolved Recipe_Dye_Components columns
+let brandRows = [], brandIsRef = false;
+let dyes = [], dyeById = {};
+let recipeById = {}, compByDye = {};
+let powderByDye = {}, stockByDye = {};
+let hasPowder = false, hasStock = false;
+let warnings = [];
+
+/* ── load ────────────────────────────────────────────────────────── */
+async function loadMeta() {
+  meta = { types: {}, choices: {} };
+  try {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const idx = (tables.tableId || []).indexOf('Dyes');
+    if (idx < 0) return;
+    const ref = tables.id[idx];
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    (cols.id || []).forEach((_, i) => {
+      if (cols.parentId[i] !== ref) return;
+      const c = cols.colId[i];
+      meta.types[c] = (cols.type && cols.type[i]) || '';
+      let o = {};
+      try { o = JSON.parse(cols.widgetOptions[i] || '{}'); } catch (e) { /* not JSON */ }
+      if (Array.isArray(o.choices)) meta.choices[c] = o.choices;
+    });
+  } catch (e) { console.warn('Column metadata unreadable — using defaults.', e); }
+}
+
+async function loadBrands() {
+  brandRows = [];
+  for (const n of ['Dye_Brands', 'Brands', 'Dye_Brand']) {
+    try {
+      const t = await grist.docApi.fetchTable(n);
+      const nc = findColumn(t, ['Brand_Name', 'Name', 'Brand', 'Title']);
+      if (!nc) continue;
+      brandRows = (t.id || []).map((id, i) => ({ id, name: String(colArr(t, nc)[i] || '') })).filter(b => b.name);
+      brandRows.sort((a, b) => a.name.localeCompare(b.name));
+      break;
+    } catch (e) { /* table absent — try the next */ }
+  }
+}
+
+async function loadAll() {
+  warnings = [];
+  await loadMeta();
+  await loadBrands();
+
+  const [dyeT, recT, compT] = await Promise.all([
+    grist.docApi.fetchTable('Dyes'),
+    grist.docApi.fetchTable('Recipes'),
+    grist.docApi.fetchTable('Recipe_Dye_Components'),
+  ]);
+  // Optional tables — fetchTable throws on a missing table, so isolate them.
+  let powT = null, stkT = null;
+  try { powT = await grist.docApi.fetchTable('Dye_Powder'); } catch (e) { powT = null; }
+  try { stkT = await grist.docApi.fetchTable('Dye_Stock'); } catch (e) { stkT = null; }
+
+  const missing = [];
+  D = resolveCols(dyeT, 'Dyes', {
+    name: ['Dye_Name'], brand: opt(['Brand']), serial: opt(['Serial']),
+    status: ['Status'], notes: opt(['Status_Notes']),
+    productLine: opt(['Product_Line']), dyeClass: opt(['Dye_Class']),
+    aux: opt(['Auxiliaries_In_Powder']), verified: opt(['Swap_Verified']),
+    swatch: opt(['Swatch_Hex']),
+  }, missing);
+  SUCC_COLS = ['Successor', 'Replacement_Dye'].map(c => findColumn(dyeT, [c])).filter(Boolean);
+  if (!SUCC_COLS.length) missing.push('Dyes.Successor (or Replacement_Dye)');
+  const R = resolveCols(recT, 'Recipes', {
+    name: ['Recipe_Name'], status: opt(['Status']), sku: opt(['SKU_Base']),
+  }, missing);
+  COMP = resolveCols(compT, 'Recipe_Dye_Components', { recipe: ['Recipe'], dye: ['Dye_Name'] }, missing);
+
+  if (missing.length) throw new Error('Columns not found: ' + [...new Set(missing)].join(', '));
+  brandIsRef = /^Ref/.test(meta.types[D.brand] || '');
+  if (!D.verified) warnings.push('No <span class="mono">Swap_Verified</span> column on Dyes — verification can\'t be saved.');
+
+  /* recipes */
+  recipeById = {};
+  (recT.id || []).forEach((id, i) => {
+    recipeById[id] = {
+      id, name: String(rowField(recT, R.name, i, '')) || '(unnamed recipe)',
+      sku: String(rowField(recT, R.sku, i, '')),
+      active: R.status ? rowField(recT, R.status, i, '') === 'Active' : true,
+    };
+  });
+
+  /* components, grouped on dye row id */
+  compByDye = {};
+  (compT.id || []).forEach((rowId, i) => {
+    const did = getRefId(colArr(compT, COMP.dye)[i]);
+    const rid = getRefId(colArr(compT, COMP.recipe)[i]);
+    if (!did || !rid || !recipeById[rid]) return;
+    (compByDye[did] = compByDye[did] || []).push({ rowId, recipeId: rid });
+  });
+
+  /* powder jars */
+  powderByDye = {}; hasPowder = false;
+  if (powT) {
+    const P = resolveCols(powT, 'Dye_Powder', { dye: ['Dye'], size: opt(['Size_g']), state: opt(['State']), low: opt(['Low']) }, []);
+    if (P.dye) {
+      hasPowder = true;
+      (powT.id || []).forEach((_, i) => {
+        const did = getRefId(colArr(powT, P.dye)[i]);
+        if (!did) return;
+        const p = powderByDye[did] = powderByDye[did] || { sealed: 0, open: 0, grams: 0, low: false };
+        const size = Number(rowField(powT, P.size, i, 0)) || 0;
+        const isOpen = rowField(powT, P.state, i, '') === 'Open';
+        const low = truthy(rowField(powT, P.low, i, false));
+        if (isOpen) { p.open++; p.grams += size * (low ? 0.1 : 0.5); if (low) p.low = true; }
+        else { p.sealed++; p.grams += size; }
+      });
+    }
+  }
+
+  /* mixed stock solution */
+  stockByDye = {}; hasStock = false;
+  if (stkT) {
+    const S = resolveCols(stkT, 'Dye_Stock', { dye: ['Dye'], qty: opt(['Quantity_mL']) }, []);
+    if (S.dye) {
+      hasStock = true;
+      (stkT.id || []).forEach((_, i) => {
+        const did = getRefId(colArr(stkT, S.dye)[i]);
+        if (did) stockByDye[did] = (stockByDye[did] || 0) + (Number(rowField(stkT, S.qty, i, 0)) || 0);
+      });
+    }
+  }
+
+  /* dyes */
+  let succDisagree = 0;
+  dyes = (dyeT.id || []).map((id, i) => {
+    const brandRaw = rowField(dyeT, D.brand, i, '');
+    const succVals = SUCC_COLS.map(c => getRefId(colArr(dyeT, c)[i])).filter(Boolean);
+    if (new Set(succVals).size > 1) succDisagree++;
+    const productLine = String(rowField(dyeT, D.productLine, i, ''));
+    const auxRaw = D.aux ? rowField(dyeT, D.aux, i, null) : null;
+    const d = {
+      id,
+      name: String(rowField(dyeT, D.name, i, '')),
+      brandRaw, brand: brandLabelOf(brandRaw),
+      serial: String(rowField(dyeT, D.serial, i, '')),
+      status: String(rowField(dyeT, D.status, i, '')),
+      notes: String(rowField(dyeT, D.notes, i, '')),
+      productLine,
+      dyeClass: String(rowField(dyeT, D.dyeClass, i, '')),
+      swatch: String(rowField(dyeT, D.swatch, i, '')),
+      verified: D.verified ? rowField(dyeT, D.verified, i, null) : null,
+      successor: succVals[0] || null,
+    };
+    d.oneShot = truthy(auxRaw) || ONE_SHOT_RE.test(productLine) || /^OS\d/i.test(d.serial) || /country\s*classic/i.test(d.brand);
+    d.out = OUT_RE.test(d.status);
+    return d;
+  }).filter(d => d.name);
+  dyeById = {}; dyes.forEach(d => { dyeById[d.id] = d; });
+  if (succDisagree) warnings.push(`${succDisagree} dye(s) have different values in <span class="mono">Successor</span> and <span class="mono">Replacement_Dye</span>. This widget writes both; pick one column and delete the other.`);
+
+  dyes.forEach(d => {
+    const comps = compByDye[d.id] || [];
+    d.activeRecipes = new Set(comps.filter(c => recipeById[c.recipeId].active).map(c => c.recipeId)).size;
+    d.allRecipes = new Set(comps.map(c => c.recipeId)).size;
+    d.powder = powderByDye[d.id] || null;
+    d.grams = d.powder ? d.powder.grams : 0;
+    d.mL = stockByDye[d.id] || 0;
+    d.stage = stageOf(d);
+  });
+}
+
+function brandLabelOf(raw) {
+  if (brandIsRef) {
+    const id = getRefId(raw);
+    const hit = brandRows.find(b => b.id === id);
+    return hit ? hit.name : '';
+  }
+  return raw == null ? '' : String(raw);
+}
+function isVerified(d) {
+  const v = d.verified;
+  if (v === null || v === undefined || v === '' || v === false || v === 0) return false;
+  return true;
+}
+function stageOf(d) {
+  if (!d.successor) return 'need';
+  if (!isVerified(d)) return 'test';
+  if (d.activeRecipes > 0) return 'swap';
+  return 'done';
+}
+function phaseChoice() {
+  const ch = meta.choices[D.status] || [];
+  return ch.find(c => /phase/i.test(c)) || 'Phase-out';
+}
+function activeChoice() {
+  const ch = meta.choices[D.status] || [];
+  return ch.find(c => /^active$/i.test(c)) || 'Active';
+}
+function lineLabel(d) {
+  if (d.productLine) return d.productLine;
+  if (d.oneShot) return 'One-Shot';
+  return d.dyeClass || '';
+}
+function chemBadge(d) {
+  return d.oneShot
+    ? '<span class="badge b-os" title="Auxiliaries already in the powder — no added acid">One-Shot</span>'
+    : '<span class="badge b-acid" title="Needs acid added at the bath">Acid at bath</span>';
+}
+function powderShort(d) {
+  if (!hasPowder) return '';
+  if (!d.powder) return 'no powder';
+  const p = d.powder, bits = [];
+  if (p.open) bits.push(p.open + ' open' + (p.low ? ' (low)' : ''));
+  if (p.sealed) bits.push(p.sealed + ' sealed');
+  return bits.join(', ') || 'no powder';
+}
+
+/* ── list ────────────────────────────────────────────────────────── */
+function baseFiltered() {
+  const q = norm(state.q);
+  return dyes.filter(d => d.out).filter(d => {
+    if (state.brand && d.brand !== state.brand) return false;
+    if (!q) return true;
+    const s = d.successor ? dyeById[d.successor] : null;
+    return [d.name, d.serial, d.brand, s && s.name, s && s.serial].some(x => norm(x).includes(q));
+  });
+}
+
+function sortList(list) {
+  const dir = state.dir;
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const cmp = {
+    urgency: (a, b) => {
+      // Done sinks; then dyes active recipes depend on; then least on hand.
+      const da = a.stage === 'done' ? 1 : 0, db = b.stage === 'done' ? 1 : 0;
+      if (da !== db) return da - db;
+      const ua = a.activeRecipes ? 0 : 1, ub = b.activeRecipes ? 0 : 1;
+      if (ua !== ub) return ua - ub;
+      const ga = a.grams + a.mL / 1000, gb = b.grams + b.mL / 1000;
+      if (ga !== gb) return (ga - gb) * dir;
+      return (b.activeRecipes - a.activeRecipes) || byName(a, b);
+    },
+    recipes: (a, b) => ((b.activeRecipes - a.activeRecipes) * dir) || byName(a, b),
+    powder: (a, b) => ((a.grams - b.grams) * dir) || byName(a, b),
+    stage: (a, b) => ((STAGES[a.stage].order - STAGES[b.stage].order) * dir) || byName(a, b),
+    name: (a, b) => byName(a, b) * dir,
+    brand: (a, b) => (a.brand.localeCompare(b.brand) * dir) || byName(a, b),
+  }[state.sort] || ((a, b) => byName(a, b));
+  return list.slice().sort(cmp);
+}
+
+function renderChips(base) {
+  const count = k => base.filter(d => d.stage === k).length;
+  const defs = [
+    ['open', 'To do', base.filter(d => d.stage !== 'done').length],
+    ['need', 'Needs replacement', count('need')],
+    ['test', 'Needs test', count('test')],
+    ['swap', 'Ready to swap', count('swap')],
+    ['done', 'Done', count('done')],
+    ['all', 'All', base.length],
+  ];
+  document.getElementById('chips').innerHTML = defs.map(([k, l, n]) =>
+    `<button class="chip ${state.stage === k ? 'on' : ''}" onclick="setStage('${k}')">${esc(l)}<span class="n">${n}</span></button>`).join('');
+}
+function setStage(k) { state.stage = k; savePrefs(); renderList(); }
+
+function renderBrandFilter() {
+  const brands = [...new Set(dyes.filter(d => d.out).map(d => d.brand).filter(Boolean))].sort();
+  if (state.brand && !brands.includes(state.brand)) state.brand = '';
+  document.getElementById('brandFilter').innerHTML =
+    `<option value="">All outgoing brands</option>` +
+    brands.map(b => `<option value="${esc(b)}" ${b === state.brand ? 'selected' : ''}>${esc(b)}</option>`).join('');
+  document.getElementById('sortBy').value = state.sort;
+}
+
+function renderList() {
+  const base = baseFiltered();
+  renderChips(base);
+  document.getElementById('dirBtn').textContent = state.dir === 1 ? '↓' : '↑';
+  let list = state.stage === 'all' ? base
+    : state.stage === 'open' ? base.filter(d => d.stage !== 'done')
+    : base.filter(d => d.stage === state.stage);
+  list = sortList(list);
+
+  const outN = dyes.filter(d => d.out).length;
+  const doneN = dyes.filter(d => d.out && d.stage === 'done').length;
+  document.getElementById('topSub').textContent = outN
+    ? `${outN} outgoing dyes · ${doneN} done · ${outN - doneN} to go`
+    : 'No dyes marked for phase-out yet — use "Phase out a brand…" or set a Status below.';
+
+  const box = document.getElementById('list');
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">${outN ? 'Nothing in this view.' : 'No outgoing dyes yet.'}</div>`;
+    return;
+  }
+  box.innerHTML = list.map(d => {
+    const s = d.successor ? dyeById[d.successor] : null;
+    const st = STAGES[d.stage];
+    const nums = [`${d.activeRecipes} rec`, powderShort(d)].filter(Boolean).join(' · ');
+    return `
+      <div class="item ${d.id === state.sel ? 'sel' : ''}" onclick="selectDye(${d.id})">
+        <span class="dot" style="background:${safeHex(d.swatch)}"></span>
+        <div class="item-main">
+          <div class="item-name">${esc(d.name)}</div>
+          <div class="item-sub">${esc([d.brand, d.serial].filter(Boolean).join(' · '))}</div>
+          ${s ? `<div class="item-succ">→ ${esc([s.name, s.serial, lineLabel(s), s.brand].filter(Boolean).join(' · '))}</div>` : ''}
+        </div>
+        <div class="item-right">
+          <span class="badge ${st.cls}">${esc(st.label)}</span>
+          <div class="item-nums">${esc(nums)}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ── detail ──────────────────────────────────────────────────────── */
+function selectDye(id) {
+  state.sel = id; state.pickQ = ''; state.showAdd = false;
+  renderList(); renderDetail();
+}
+
+function renderDetail() {
+  const el = document.getElementById('detail');
+  const d = dyeById[state.sel];
+  if (!d) { el.innerHTML = '<div class="empty">Pick a dye on the left to set its replacement.</div>'; return; }
+  const st = STAGES[d.stage];
+  const s = d.successor ? dyeById[d.successor] : null;
+  const statusOpts = (() => {
+    const ch = (meta.choices[D.status] || []).slice();
+    if (!ch.some(c => /phase/i.test(c))) ch.push('Phase-out');
+    if (d.status && !ch.includes(d.status)) ch.unshift(d.status);
+    return ch.map(c => `<option value="${esc(c)}" ${c === d.status ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  })();
+
+  el.innerHTML = `
+    <div class="d-head">
+      <div>
+        <div class="d-name">${esc(d.name)}</div>
+        <div class="d-meta">${esc([d.brand, d.serial, lineLabel(d)].filter(Boolean).join(' · '))} &nbsp;${chemBadge(d)}</div>
+      </div>
+      <span class="badge ${st.cls}" style="font-size:11px;padding:3px 8px">${esc(st.label)}</span>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-k">Active recipes</div><div class="stat-v">${d.activeRecipes}</div><div class="stat-s">${d.allRecipes} total</div></div>
+      <div class="stat"><div class="stat-k">Powder</div><div class="stat-v">${hasPowder ? (d.powder ? Math.round(d.grams) + ' g' : '0') : '—'}</div><div class="stat-s">${esc(hasPowder ? powderShort(d) : 'no Dye_Powder table')}</div></div>
+      <div class="stat"><div class="stat-k">Mixed stock</div><div class="stat-v">${hasStock ? Math.round(d.mL) + ' mL' : '—'}</div><div class="stat-s">in made-dye bins</div></div>
+      <div class="stat"><div class="stat-k">Status</div>
+        <select style="margin-top:2px" onchange="saveStatus(${d.id}, this.value)">${statusOpts}</select></div>
+    </div>
+    ${d.grams === 0 && d.mL === 0 && d.activeRecipes && d.stage !== 'done' && hasPowder
+      ? '<div class="warnbox">Nothing left on hand and active recipes still use this dye — swap these first.</div>' : ''}
+
+    <div class="sec">Replacement</div>
+    ${s ? renderSuccessorCard(d, s) : '<div class="infobox">No replacement chosen. Pick one below, or add the PRO dye if it isn\'t in the catalog yet.</div>'}
+    ${renderPicker(d)}
+
+    <div class="sec">Test dye &amp; verification</div>
+    ${renderVerify(d, s)}
+
+    <div class="sec">Recipes using this dye <span class="r">${d.activeRecipes} active</span></div>
+    ${renderRecipes(d)}
+    ${renderSwap(d, s)}
+  `;
+  const pq = document.getElementById('pickQ');
+  if (pq && state.pickFocus) { pq.focus(); pq.setSelectionRange(pq.value.length, pq.value.length); }
+}
+
+function renderSuccessorCard(d, s) {
+  const p = s.powder;
+  const onHand = !hasPowder ? '—' : p ? `${powderShort(s)} (${Math.round(s.grams)} g)` : 'none — order before swapping';
+  const usedBy = dyes.filter(x => x.successor === s.id && x.id !== d.id);
+  let warn = '';
+  if (d.oneShot && !s.oneShot) warn += '<div class="warnbox"><b>Chemistry change.</b> The old dye is one-shot (acid and leveller already in the jar); the replacement is not. Recipes will need acid added at the bath, and the amount of dye per teaspoon is not comparable.</div>';
+  if (!d.oneShot && s.oneShot) warn += '<div class="warnbox"><b>Chemistry change.</b> The replacement is one-shot and already contains acid. Drop the bath acid for recipes using it, or pH will be uncontrolled.</div>';
+  if (s.out) warn += '<div class="warnbox">The replacement is itself marked for phase-out.</div>';
+  return `
+    <div class="succ-card">
+      <span class="dot" style="background:${safeHex(s.swatch)};width:22px;height:22px"></span>
+      <div style="flex:1;min-width:0">
+        <div class="succ-name">${esc(s.name)} &nbsp;${chemBadge(s)}</div>
+        <div class="kv">
+          <span class="k">Company</span><span>${esc(s.brand || '—')}</span>
+          <span class="k">Product line</span><span>${esc(lineLabel(s) || '—')}</span>
+          <span class="k">Serial</span><span class="mono">${esc(s.serial || '—')}</span>
+          <span class="k">On hand</span><span>${esc(onHand)}</span>
+          ${usedBy.length ? `<span class="k">Also replaces</span><span>${esc(usedBy.map(x => x.name + (x.brand ? ' (' + x.brand + ')' : '')).join(', '))}</span>` : ''}
+        </div>
+      </div>
+      <button class="link" onclick="setSuccessor(${d.id}, null)">clear</button>
+    </div>${warn}`;
+}
+
+function renderPicker(d) {
+  const q = norm(state.pickQ);
+  const nameKey = norm(d.name);
+  let pool = dyes.filter(x => x.id !== d.id && (state.pickAll || (!x.out && PRO_RE.test(x.brand))));
+  const sameName = pool.filter(x => norm(x.name) === nameKey);
+  let list;
+  if (q) {
+    list = pool.filter(x => [x.name, x.serial, x.productLine, x.brand].some(v => norm(v).includes(q)));
+    list.sort((a, b) => (norm(b.name) === nameKey) - (norm(a.name) === nameKey) || a.name.localeCompare(b.name));
+  } else {
+    list = sameName;
+  }
+  list = list.slice(0, 14);
+  const rows = list.map(x => `
+    <div class="cand" onclick="setSuccessor(${d.id}, ${x.id})">
+      <span class="dot" style="background:${safeHex(x.swatch)}"></span>
+      <div style="min-width:0">
+        <div class="cand-name">${esc(x.name)}</div>
+        <div class="cand-meta">${esc([x.brand, lineLabel(x), x.serial].filter(Boolean).join(' · '))}</div>
+      </div>
+      <div class="cand-tags">
+        ${norm(x.name) === nameKey ? '<span class="badge st-swap">same name</span>' : ''}
+        ${chemBadge(x)}
+        ${x.out ? '<span class="badge b-warn">outgoing</span>' : ''}
+        ${hasPowder && !x.powder ? '<span class="badge b-acid">none on hand</span>' : ''}
+      </div>
+    </div>`).join('');
+  const emptyMsg = q ? 'No matches.' : (sameName.length ? '' : 'Type to search the catalog.');
+  return `
+    <div class="row" style="margin-top:10px">
+      <input class="search" id="pickQ" placeholder="${d.successor ? 'Change replacement…' : 'Search replacement by name or serial (e.g. OS072)…'}"
+        value="${esc(state.pickQ)}" oninput="state.pickQ = this.value; state.pickFocus = true; renderDetail()">
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <label class="check" style="margin:0"><input type="checkbox" ${state.pickAll ? 'checked' : ''} onchange="state.pickAll = this.checked; renderDetail()"> Search all brands (default: PRO only)</label>
+      <button class="link" onclick="state.showAdd = !state.showAdd; renderDetail()">${state.showAdd ? 'cancel new dye' : '+ not in the catalog? add it'}</button>
+    </div>
+    ${rows ? `<div class="cands">${!q ? '<div class="cand-meta" style="padding:5px 9px">Suggested — same name</div>' : ''}${rows}</div>`
+           : (emptyMsg ? `<div class="cand-meta" style="padding:6px 2px">${esc(emptyMsg)}</div>` : '')}
+    ${state.showAdd ? renderAddForm(d) : ''}`;
+}
+
+function brandOptionsHtml(selectedLabel) {
+  let opts;
+  if (brandIsRef) opts = brandRows.map(b => ({ value: String(b.id), label: b.name }));
+  else {
+    const names = new Set(brandRows.map(b => b.name));
+    (meta.choices[D.brand] || []).forEach(c => names.add(c));
+    dyes.forEach(x => { if (x.brand) names.add(x.brand); });
+    opts = [...names].sort().map(n => ({ value: n, label: n }));
+  }
+  const pick = opts.find(o => o.label === selectedLabel) || opts.find(o => PRO_RE.test(o.label));
+  return opts.map(o => `<option value="${esc(o.value)}" ${pick && o.value === pick.value ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+}
+
+function renderAddForm(d) {
+  const lines = new Set(meta.choices[D.productLine] || []);
+  dyes.forEach(x => { if (x.productLine) lines.add(x.productLine); });
+  const defLine = [...lines].find(l => ONE_SHOT_RE.test(l)) || 'One-Shot';
+  return `
+    <div class="add-box">
+      <div class="grid2">
+        <div><span class="label">Dye name</span><input class="field" id="addName" value="${esc(d.name)}"></div>
+        <div><span class="label">Serial</span><input class="field mono" id="addSerial" placeholder="OS072"></div>
+        <div><span class="label">Company</span><select id="addBrand">${brandOptionsHtml('')}</select></div>
+        <div><span class="label">Product line</span><input class="field" id="addLine" list="lineOpts" value="${esc(d.oneShot ? defLine : '')}">
+          <datalist id="lineOpts">${[...lines].map(l => `<option value="${esc(l)}">`).join('')}</datalist></div>
+      </div>
+      <label class="check"><input type="checkbox" id="addOS" ${d.oneShot ? 'checked' : ''}> One-shot (auxiliaries already in the powder)</label>
+      ${!D.productLine ? '<div class="cand-meta">No Product_Line column on Dyes — that field won\'t be saved.</div>' : ''}
+      ${!D.aux ? '<div class="cand-meta">No Auxiliaries_In_Powder column on Dyes — the one-shot flag won\'t be saved.</div>' : ''}
+      <div class="row"><button class="btn btn-teal" onclick="createSuccessor(${d.id})">Create &amp; set as replacement</button></div>
+    </div>`;
+}
+
+function renderVerify(d, s) {
+  if (!s) return '<div class="cand-meta">Choose a replacement first.</div>';
+  const v = isVerified(d);
+  const vtype = meta.types[D.verified] || '';
+  const vText = !v ? '' : (/^Bool/.test(vtype) ? 'Verified' : 'Verified ' + shortDate(d.verified));
+  return `
+    <div class="infobox" style="border-color:var(--teal);background:var(--teal-light)">
+      Same pot, same FF nylon lot: old <b>${esc(d.name)}</b> beside new <b>${esc(s.name)}</b>. Scan both; ΔE under ~2 is a drop-in, 2–5 adjust and retest, over 5 reformulate.
+    </div>
+    <div class="row" style="margin-top:10px">
+      ${v ? `<span class="badge st-done" style="font-size:11px;padding:3px 8px">✓ ${esc(vText)}</span>
+             <button class="link" onclick="setVerified(${d.id}, false)">undo</button>`
+          : `<button class="btn btn-teal" ${D.verified ? '' : 'disabled'} onclick="setVerified(${d.id}, true)">Mark test passed today</button>`}
+    </div>
+    <div style="margin-top:10px">
+      <span class="label">Test notes (ΔE, amount adjustments, lot)</span>
+      <textarea class="field" id="notesBox" ${D.notes ? '' : 'disabled'}>${esc(d.notes)}</textarea>
+      <div class="row"><button class="btn btn-sm" ${D.notes ? '' : 'disabled'} onclick="saveNotes(${d.id})">Save notes</button></div>
+    </div>`;
+}
+
+function renderRecipes(d) {
+  const comps = compByDye[d.id] || [];
+  const seen = new Set();
+  const recs = comps.map(c => recipeById[c.recipeId]).filter(r => !seen.has(r.id) && seen.add(r.id));
+  if (!recs.length) return '<div class="cand-meta">Not used in any recipe.</div>';
+  recs.sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
+  return `<div class="recs">${recs.map(r => `
+    <div class="rec"><span class="rec-dot ${r.active ? 'on' : ''}" title="${r.active ? 'Active' : 'Inactive'}"></span>
+      <span class="rec-name">${esc(r.name)}</span><span class="rec-sku">${esc(r.sku)}</span></div>`).join('')}</div>`;
+}
+
+function renderSwap(d, s) {
+  if (!s || !d.activeRecipes) return '';
+  const ready = isVerified(d);
+  return `
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" ${ready ? '' : 'disabled'} onclick="repoint(${d.id})">Swap ${d.activeRecipes} active recipe${d.activeRecipes === 1 ? '' : 's'} to ${esc(s.name)}</button>
+      <span class="cand-meta">${ready ? 'Inactive recipes are left pointing at the old dye, so history stays accurate.' : 'Unlocks once the test dye is marked passed.'}</span>
+    </div>`;
+}
+
+/* ── writes ──────────────────────────────────────────────────────── */
+async function writeDye(id, fields) {
+  if (!Object.keys(fields).length) return;
+  await grist.docApi.applyUserActions([['UpdateRecord', 'Dyes', id, fields]]);
+}
+async function after(msg) { await refresh(true); showToast(msg); }
+function fail(e) { console.error(e); showToast('Save failed: ' + (e && e.message ? e.message : 'see console')); }
+
+async function saveStatus(id, value) {
+  try { await writeDye(id, { [D.status]: value }); await after('Status saved.'); } catch (e) { fail(e); }
+}
+async function setSuccessor(id, succId) {
+  const f = {};
+  SUCC_COLS.forEach(c => { f[c] = succId || 0; });
+  // A new replacement hasn't been tested — clear any old verification.
+  const d = dyeById[id];
+  if (D.verified && d && d.successor !== succId && isVerified(d)) f[D.verified] = /^Bool/.test(meta.types[D.verified] || '') ? false : null;
+  try { state.pickQ = ''; await writeDye(id, f); await after(succId ? 'Replacement set.' : 'Replacement cleared.'); } catch (e) { fail(e); }
+}
+async function setVerified(id, on) {
+  if (!D.verified) return;
+  const t = meta.types[D.verified] || '';
+  let val;
+  if (!on) val = /^Bool/.test(t) ? false : null;
+  else if (/^Bool/.test(t)) val = true;
+  else if (/^Date/.test(t)) val = todayEpoch();   // Date columns want epoch seconds
+  else val = isoToday();
+  try { await writeDye(id, { [D.verified]: val }); await after(on ? 'Marked as tested.' : 'Verification cleared.'); } catch (e) { fail(e); }
+}
+async function saveNotes(id) {
+  if (!D.notes) return;
+  const v = document.getElementById('notesBox').value;
+  try { await writeDye(id, { [D.notes]: v }); await after('Notes saved.'); } catch (e) { fail(e); }
+}
+
+async function createSuccessor(outId) {
+  const name = document.getElementById('addName').value.trim();
+  if (!name) { showToast('Give the new dye a name.'); return; }
+  const fields = { [D.name]: name };
+  const bv = document.getElementById('addBrand').value;
+  if (D.brand) fields[D.brand] = brandIsRef ? (Number(bv) || null) : bv;
+  const serial = document.getElementById('addSerial').value.trim();
+  if (D.serial && serial) fields[D.serial] = serial;
+  const line = document.getElementById('addLine').value.trim();
+  if (D.productLine && line) fields[D.productLine] = line;
+  if (D.aux) {
+    const os = document.getElementById('addOS').checked;
+    fields[D.aux] = /^Bool/.test(meta.types[D.aux] || '') ? os : (os ? 'Yes' : 'No');
+  }
+  fields[D.status] = activeChoice();
+  try {
+    const res = await grist.docApi.applyUserActions([['AddRecord', 'Dyes', null, fields]]);
+    const newId = firstRetValue(res);
+    if (!newId) throw new Error('Grist did not return the new row id.');
+    const f = {}; SUCC_COLS.forEach(c => { f[c] = newId; });
+    await writeDye(outId, f);
+    state.showAdd = false;
+    await after(`Added ${name} and set it as the replacement.`);
+  } catch (e) { fail(e); }
+}
+
+async function repoint(id) {
+  const d = dyeById[id], s = d && dyeById[d.successor];
+  if (!d || !s) return;
+  const rows = (compByDye[id] || []).filter(c => recipeById[c.recipeId].active).map(c => c.rowId);
+  if (!rows.length) return;
+  const chem = d.oneShot !== s.oneShot ? '\n\nWARNING: the chemistry changes (one-shot vs acid at bath). Check bath acid on each recipe.' : '';
+  if (!confirm(`Point ${rows.length} recipe component row(s) on active recipes from\n  ${d.name} (${d.brand})\nto\n  ${s.name} (${s.brand})?\n\nAmounts are not changed. Grist's undo can reverse this.${chem}`)) return;
+  const actions = [['BulkUpdateRecord', 'Recipe_Dye_Components', rows, { [COMP.dye]: rows.map(() => s.id) }]];
+  if (D.notes) {
+    const line = `${isoToday()}: swapped ${rows.length} component(s) on active recipes to ${s.name}${s.serial ? ' ' + s.serial : ''}.`;
+    actions.push(['UpdateRecord', 'Dyes', id, { [D.notes]: d.notes ? d.notes + '\n' + line : line }]);
+  }
+  try { await grist.docApi.applyUserActions(actions); await after('Recipes swapped.'); } catch (e) { fail(e); }
+}
+
+/* ── bulk: phase out a whole brand ───────────────────────────────── */
+function toggleBulk() { state.showBulk = !state.showBulk; renderBulk(); }
+function renderBulk() {
+  const el = document.getElementById('bulkPanel');
+  if (!state.showBulk) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  const brands = [...new Set(dyes.map(d => d.brand).filter(Boolean))].sort();
+  const sel = document.getElementById('bulkBrand') ? document.getElementById('bulkBrand').value : '';
+  const eligible = b => dyes.filter(d => d.brand === b && !d.out);
+  const n = sel ? eligible(sel).length : 0;
+  el.innerHTML = `
+    <div style="font-weight:600;margin-bottom:6px">Mark every dye from one company as <span class="mono">${esc(phaseChoice())}</span></div>
+    <div class="row">
+      <select id="bulkBrand" onchange="renderBulk()"><option value="">Choose a company…</option>
+        ${brands.map(b => `<option value="${esc(b)}" ${b === sel ? 'selected' : ''}>${esc(b)} (${eligible(b).length} not yet outgoing)</option>`).join('')}
+      </select>
+      <button class="btn btn-primary" ${n ? '' : 'disabled'} onclick="bulkPhase()">Mark ${n}</button>
+      <button class="btn" onclick="toggleBulk()">Close</button>
+    </div>
+    <div class="cand-meta" style="margin-top:6px">Only changes the Status column. Dyes already marked outgoing are skipped. Grist's undo reverses it.</div>
+    ${(meta.choices[D.status] || []).some(c => /phase/i.test(c)) ? '' : '<div class="warnbox">The Status column has no "Phase-out" choice yet — add it in Grist so it shows as a proper chip rather than an invalid value.</div>'}`;
+}
+async function bulkPhase() {
+  const b = document.getElementById('bulkBrand').value;
+  const ids = dyes.filter(d => d.brand === b && !d.out).map(d => d.id);
+  if (!ids.length) return;
+  if (!confirm(`Mark ${ids.length} ${b} dyes as "${phaseChoice()}"?`)) return;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Dyes', ids, { [D.status]: ids.map(() => phaseChoice()) }]]);
+    state.showBulk = false; renderBulk();
+    await after(`${ids.length} dyes marked for phase-out.`);
+  } catch (e) { fail(e); }
+}
+
+/* ── boot ────────────────────────────────────────────────────────── */
+async function refresh(quiet) {
+  try {
+    await loadAll();
+    document.getElementById('banner').innerHTML = warnings.map(w => `<div class="banner">${w}</div>`).join('');
+    renderBrandFilter(); renderList(); renderDetail(); renderBulk();
+    if (!quiet && arguments.length === 0) showToast('Reloaded.');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('banner').innerHTML = `<div class="banner">${esc(e.message || 'Could not load — see console.')}</div>`;
+    document.getElementById('list').innerHTML = '<div class="empty">Could not load.</div>';
+  }
+}
+
+try { grist.ready({ requiredAccess: 'full' }); } catch (e) { console.warn('grist.ready failed', e); }
+refresh(true);
+</script>
+</body>
+</html>
