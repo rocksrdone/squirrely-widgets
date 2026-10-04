@@ -466,7 +466,7 @@ async function loadStock() {
       return;
     }
     S.recCols = REC;
-    // Single back-stock bucket (you collapsed store/vendor into General_Stock_Spools).
+    // Held-back bucket. Vendor/Store are still live: they hold the spools listed on each store.
     S.stockCol = LOT.general || LOT.store || LOT.vendor;
     S.lotCols = LOT;
     S.binCol = LOT.bin;
@@ -573,6 +573,12 @@ async function loadStock() {
         + (LOT.vendor ? (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0) : 0)
         + (LOT.general ? (Number(columnAsArray(lotsT, LOT.general)[i]) || 0) : 0);
       if (stock <= 0) return;
+      /* The count shown is everything on hand. Spools in Vendor/Store are the
+         ones listed on a storefront (Inventory Desk moves them there), so a
+         save keeps those and puts only the rest in the held-back column. */
+      const listed = [LOT.store, LOT.vendor, LOT.general]
+        .filter(col => col && col !== S.stockCol)
+        .reduce((n, col) => n + (Number(columnAsArray(lotsT, col)[i]) || 0), 0);
       const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
       (byRecipe[recipeId] = byRecipe[recipeId] || { recipeId, recipe, lots: [], total: 0 });
@@ -582,6 +588,7 @@ async function loadStock() {
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber),
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         stock,
+        listed,
         bin: binDisplay(LOT.bin ? columnAsArray(lotsT, LOT.bin)[i] : null),
         /* The value exactly as stored, so a broken reference can be told from
            a working one and repaired without guessing which it was. */
@@ -1104,8 +1111,19 @@ async function saveLot(lotId) {
   const el = document.getElementById(`q-${lotId}`);
   const val = Math.max(0, Number(el.value) || 0);
   if (!S.stockCol) { showToast('No stock column to write to'); return; }
+  /* The number typed is the whole pile on hand. Listed spools stay listed;
+     the held-back column gets the difference. Going below what is listed
+     would mean selling something not on the shelf, so that is de-listing
+     work for Inventory Desk, not a silent write here. */
+  let target = null;
+  for (const c of S.colors) { target = c.lots.find(l => l.lotId === lotId); if (target) break; }
+  const listed = (target && target.listed) || 0;
+  if (val < listed) {
+    showToast(`${listed} of these are listed on a store — de-list in Inventory Desk first`);
+    return;
+  }
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.stockCol]: val }]]);
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.stockCol]: val - listed }]]);
     showToast(`Saved — ${val} spool${val === 1 ? '' : 's'} ✓`);
     // update local model so totals stay right without a full reload flicker
     for (const c of S.colors) {
