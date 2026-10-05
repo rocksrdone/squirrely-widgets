@@ -166,6 +166,7 @@
     <div class="filters">
       <button class="fbtn on" id="modeOrders">Orders</button>
       <button class="fbtn" id="modeStock">Lot stock</button>
+      <button class="fbtn" id="modeFix">Fix lots</button>
     </div>
     <button class="btn" id="refreshBtn">&#8635; Refresh</button>
   </div>
@@ -450,6 +451,17 @@ async function loadAll() {
     // Whether the label widget has already deducted these from label stock.
     applied: ALLOC.labelsApplied ? !!columnAsArray(allocT, ALLOC.labelsApplied)[i] : false,
   }));
+  /* The raw values of the columns a split has to carry over, so a fix that
+     moves part of an allocation onto another lot makes an identical row. Only
+     known data columns: a formula column would refuse the write. */
+  S.allocCopyCols = [ALLOC.lot, ALLOC.qty, ALLOC.status, ALLOC.customer, ALLOC.line, ALLOC.labelsApplied,
+    ...['Order_Bin', 'Stock_Source', 'Bag', 'Make_Fresh'].map(c => findColumn(allocT, [c]))].filter(Boolean);
+  S.allocRaw = {};
+  (allocT.id || []).forEach((id, i) => {
+    const f = {};
+    S.allocCopyCols.forEach(c => { f[c] = columnAsArray(allocT, c)[i]; });
+    S.allocRaw[id] = f;
+  });
   const statusValues = new Set(S.allocs.map(a => a.status).filter(Boolean));
   S.packedStatus = PACKED_CANDIDATES.find(c => statusValues.has(c)) || 'Packed';
 
@@ -603,7 +615,9 @@ function render() {
   renderLog();
   document.getElementById('modeOrders').classList.toggle('on', S.mode === 'orders');
   document.getElementById('modeStock').classList.toggle('on', S.mode === 'stock');
+  document.getElementById('modeFix').classList.toggle('on', S.mode === 'fix');
   if (S.mode === 'stock') { renderStock(); return; }
+  if (S.mode === 'fix') { renderFix(); return; }
 
   const lines = visibleLines();
   const counts = {
@@ -1418,6 +1432,204 @@ function bindStock() {
   if (dis) dis.addEventListener('click', () => { S.stockDraft = {}; render(); });
 }
 
+/* ---------- fix lots ----------
+   Finds lots whose books say more spools left than were ever made
+       Spools_Made − allocations − On hand − Written off  <  0
+   and offers the fix that explains it, one click each, with undo.
+
+   Three causes were found in the data (2026-10-05):
+   - MOVE: orders were recorded against one lot while a sibling lot of the
+     same colour was written off to balance. The written-off spools are the
+     ones that went out. Fix: move that many allocated spools onto the sibling
+     and lower its Written off by the same amount. The colour total balances
+     and so does each lot.
+   - OWN: a lot's own Written off is larger than what is left once its orders
+     are counted. Fix: lower it.
+   - SHORT: nothing written off to explain it — the pot made more than
+     recorded (Wind & Box used to accept extra spools without raising
+     Spools_Made), or an allocation is a duplicate. Fix: raise Spools_Made, or
+     remove a customer-less allocation when the lot's spools are still on hand.
+   - ORPHAN: allocations whose lot was deleted. Fix: link them to a lot. */
+function lotU(l) { return l.total - l.alloc - l.row.onHand - l.broken; }
+function recipeLabel(rid) {
+  const r = S.recipes[rid] || {};
+  return `${r.name || 'Recipe #' + rid}${r.fiber ? ' · ' + fiberCode(r.fiber) : ''}`;
+}
+function computeFixes() {
+  const fixes = [];
+  Object.entries(S.lotsByRecipe).forEach(([rid, lots]) => {
+    rid = Number(rid);
+    const U = {}, B = {};
+    lots.forEach(l => { U[l.id] = lotU(l); B[l.id] = l.broken; });
+    lots.filter(l => U[l.id] < 0).sort((a, b) => U[a.id] - U[b.id]).forEach(x => {
+      while (U[x.id] < 0) {
+        const ys = lots.filter(y => y.id !== x.id && B[y.id] > 0);
+        if (!ys.length) break;
+        const y = ys.reduce((m, v) => (B[v.id] > B[m.id] ? v : m));
+        const k = Math.min(-U[x.id], B[y.id]);
+        fixes.push({ kind: 'move', rid, x, y, k });
+        U[x.id] += k; B[y.id] -= k;
+      }
+      if (U[x.id] < 0 && B[x.id] > 0) {
+        const k = Math.min(-U[x.id], B[x.id]);
+        fixes.push({ kind: 'own', rid, x, k });
+        U[x.id] += k; B[x.id] -= k;
+      }
+      if (U[x.id] < 0) {
+        const noCust = S.allocs.filter(a => a.lotId === x.id && S.allocRaw[a.id]
+          && S.cols.ALLOC.customer && !S.allocRaw[a.id][S.cols.ALLOC.customer]);
+        fixes.push({ kind: 'short', rid, x, k: -U[x.id], noCust });
+        U[x.id] = 0;
+      }
+    });
+  });
+  // Allocations whose lot no longer exists.
+  const lotIds = new Set(S.lots.map(l => l.id));
+  const orphanByRecipe = {};
+  S.allocs.filter(a => !a.lotId || !lotIds.has(a.lotId)).forEach(a => {
+    const line = S.lines.find(l => l.id === a.lineId);
+    const rid = line && line.recipeId;
+    if (!rid || !(S.lotsByRecipe[rid] || []).length) return;
+    (orphanByRecipe[rid] = orphanByRecipe[rid] || []).push(a);
+  });
+  Object.entries(orphanByRecipe).forEach(([rid, allocs]) => {
+    fixes.push({ kind: 'orphan', rid: Number(rid), allocs, k: allocs.reduce((n, a) => n + a.qty, 0) });
+  });
+  return fixes;
+}
+
+/* Turn a fix into Grist actions plus their exact inverse. `adds` are indexes
+   of AddRecord actions whose new row ids the undo has to remove. */
+function fixActions(f, option) {
+  const LOT = S.cols.LOT, A = S.cols.ALLOC;
+  const acts = [], inv = [], adds = [];
+  if (f.kind === 'move') {
+    // Allocations on x: an exact match first, then whole rows largest first,
+    // splitting one only when nothing else fits.
+    const rows = S.allocs.filter(a => a.lotId === f.x.id && a.qty > 0).sort((a, b) => b.qty - a.qty);
+    const exact = rows.find(a => a.qty === f.k);
+    let left = f.k;
+    for (const a of (exact ? [exact] : rows)) {
+      if (left <= 0) break;
+      if (a.qty <= left) {
+        acts.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.lot]: f.y.id }]);
+        inv.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.lot]: f.x.id }]);
+        left -= a.qty;
+      } else {
+        acts.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.qty]: a.qty - left }]);
+        inv.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.qty]: a.qty }]);
+        const copy = Object.assign({}, S.allocRaw[a.id], { [A.lot]: f.y.id, [A.qty]: left });
+        Object.keys(copy).forEach(c => { if (copy[c] == null) delete copy[c]; });
+        adds.push(acts.length);
+        acts.push(['AddRecord', 'Lot_Allocations', null, copy]);
+        left = 0;
+      }
+    }
+    acts.push(['UpdateRecord', 'Production_Lots', f.y.id, { [LOT.broken]: f.y.broken - f.k }]);
+    inv.push(['UpdateRecord', 'Production_Lots', f.y.id, { [LOT.broken]: f.y.broken }]);
+  } else if (f.kind === 'own') {
+    acts.push(['UpdateRecord', 'Production_Lots', f.x.id, { [LOT.broken]: f.x.broken - f.k }]);
+    inv.push(['UpdateRecord', 'Production_Lots', f.x.id, { [LOT.broken]: f.x.broken }]);
+  } else if (f.kind === 'short' && option === 'drop') {
+    f.noCust.forEach(a => {
+      acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+      inv.push(['AddRecord', 'Lot_Allocations', a.id, Object.fromEntries(
+        Object.entries(S.allocRaw[a.id]).filter(([, v]) => v != null))]);
+    });
+  } else if (f.kind === 'short') {
+    const made = S.stock2.made;
+    acts.push(['UpdateRecord', 'Production_Lots', f.x.id, { [made]: f.x.total + f.k }]);
+    inv.push(['UpdateRecord', 'Production_Lots', f.x.id, { [made]: f.x.row.made }]);
+  } else if (f.kind === 'orphan') {
+    const target = Number(option);
+    f.allocs.forEach(a => {
+      acts.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.lot]: target }]);
+      inv.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.lot]: a.lotId || 0 }]);
+    });
+  }
+  return { acts, inv, adds };
+}
+
+function fixHtml(f, i) {
+  const btn = (opt, label, solid) =>
+    `<button class="btn tiny${solid ? ' solid' : ''}" data-fix="${i}" data-opt="${esc(opt)}">${esc(label)}</button>`;
+  let what = '', how = '', buttons = '';
+  if (f.kind === 'move') {
+    what = `${f.y.number} has ${f.y.broken} written off, but ${f.k} of those went out on orders recorded against ${f.x.number}.`;
+    how = `Moves ${f.k} allocated spool${f.k === 1 ? '' : 's'} from ${f.x.number} to ${f.y.number} and lowers ${f.y.number}'s written off ${f.y.broken} → ${f.y.broken - f.k}.`;
+    buttons = btn('', 'Apply', true);
+  } else if (f.kind === 'own') {
+    what = `${f.x.number} has ${f.x.broken} written off, but its orders already account for ${f.k} of them.`;
+    how = `Lowers written off ${f.x.broken} → ${f.x.broken - f.k}.`;
+    buttons = btn('', 'Apply', true);
+  } else if (f.kind === 'short') {
+    what = `${f.x.number} made ${f.x.total}, but ${f.x.alloc} went to orders and ${f.x.row.onHand} are on hand — ${f.k} more than it made, with nothing written off to explain it.`;
+    const nc = f.noCust.reduce((n, a) => n + a.qty, 0);
+    const twice = nc && f.x.row.onHand;   // the same spools on the shelf and "packed"
+    how = twice
+      ? `It has an allocation of ${nc} with no customer while ${f.x.row.onHand} are still on hand — likely the same spools counted twice. Remove that allocation, or if the pot really made more, raise Made ${f.x.total} → ${f.x.total + f.k}.`
+      : nc
+        ? `It has an allocation of ${nc} with no customer. If those never went to a real order, remove it. If the pot made more than recorded, raise Made ${f.x.total} → ${f.x.total + f.k} instead.`
+        : `Most likely the pot made more than recorded (Wind & Box used to accept extra spools without updating the lot). Raises Made ${f.x.total} → ${f.x.total + f.k}. If instead an order was entered twice, fix that order rather than applying this.`;
+    buttons = (nc ? btn('drop', `Remove no-customer allocation (${nc})`, twice) + ' ' : '')
+      + btn('made', `Raise Made to ${f.x.total + f.k}`, !twice);
+  } else if (f.kind === 'orphan') {
+    const lots = S.lotsByRecipe[f.rid] || [];
+    what = `${f.allocs.length} order allocation${f.allocs.length === 1 ? '' : 's'} (${f.k} spools) point at a lot that no longer exists — it was deleted.`;
+    how = `Link them to one of this colour's lots. If that lot then shows more allocated than made, a second fix will appear for it.`;
+    buttons = `<select class="cust-sel" data-orphan="${i}">${lots.map(l =>
+      `<option value="${l.id}">${esc(l.number)} (made ${l.total})</option>`).join('')}</select> `
+      + `<button class="btn tiny solid" data-fix="${i}" data-opt="orphan">Link</button>`;
+  }
+  return `<div class="dblock" style="margin-bottom:6px">
+    <h4>${esc(recipeLabel(f.rid))} · ${f.k} spool${f.k === 1 ? '' : 's'}</h4>
+    <div style="font-size:12px;line-height:1.5">${esc(what)}</div>
+    <div class="dnote" style="margin:3px 0 6px">${esc(how)}</div>
+    <div class="drow">${buttons}</div>
+  </div>`;
+}
+
+function renderFix() {
+  S.fixes = computeFixes();
+  const total = S.fixes.reduce((n, f) => n + f.k, 0);
+  const colours = new Set(S.fixes.map(f => f.rid)).size;
+  const head = `<div class="sk-legend" style="margin:8px 0">Each lot should balance:
+    <b>Made − to orders − On hand − Written off = 0</b>. These don't — more spools left than were made.
+    Apply one at a time; the list recalculates after each. Every fix can be undone from the bar above.</div>`;
+  const body = !S.fixes.length
+    ? `<div class="empty-note">Every lot balances. Nothing to fix.</div>`
+    : `<div class="banner" style="background:var(--teal-light);color:var(--teal)"><strong>${S.fixes.length}</strong> fixes across
+        <strong>${colours}</strong> colourway${colours === 1 ? '' : 's'} · ${total} spools</div>`
+      + S.fixes.map(fixHtml).join('');
+  document.getElementById('pane').innerHTML = head + body;
+  document.querySelectorAll('[data-fix]').forEach(el => el.addEventListener('click', () => {
+    const i = Number(el.dataset.fix);
+    let opt = el.dataset.opt;
+    if (opt === 'orphan') { const sel = document.querySelector(`[data-orphan="${i}"]`); opt = sel && sel.value; }
+    applyFix(i, opt);
+  }));
+}
+
+async function applyFix(i, option) {
+  const f = S.fixes[i];
+  if (!f) return;
+  if (f.kind === 'short' && option !== 'drop' && !S.stock2.made) { showToast('No Spools_Made column'); return; }
+  const { acts, inv, adds } = fixActions(f, option);
+  if (!acts.length) { showToast('Nothing to change'); return; }
+  try {
+    const res = await grist.docApi.applyUserActions(acts);
+    const vals = retValues(res);
+    const undo = adds.map(k => vals[k]).filter(id => id != null)
+      .map(id => ['RemoveRecord', 'Lot_Allocations', id]).concat(inv);
+    S.log.unshift({ text: `Fixed ${recipeLabel(f.rid)} — ${f.k} spool${f.k === 1 ? '' : 's'}`, inverse: undo });
+    showToast('Fixed ✓');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: fix failed', e);
+    showToast('Fix failed — nothing was changed', true);
+  }
+}
+
 /* ---------- events ---------- */
 function bind() {
   const s = document.getElementById('search');
@@ -1553,6 +1765,7 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
 });
 document.getElementById('modeOrders').addEventListener('click', () => { S.mode = 'orders'; render(); });
 document.getElementById('modeStock').addEventListener('click', () => { S.mode = 'stock'; render(); });
+document.getElementById('modeFix').addEventListener('click', () => { S.mode = 'fix'; render(); });
 
 /* Static shell is already in the DOM; only now do we touch the plugin API, so
    a failure here shows a banner instead of killing the script silently. */

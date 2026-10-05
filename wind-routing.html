@@ -1549,6 +1549,14 @@ async function confirmWind() {
       const b = Math.min(n, row.vendor); if (b) stockMove(row, S.stock2, 'vendor', -b); n -= b;
       if (n) stockMove(row, S.stock2, 'store', -n);
     });
+    /* Spools beyond what a lot recorded were really there — the pot yielded
+       more than was written down. The winder is allowed to enter them; the lot's
+       Spools_Made now goes up to match. Leaving it alone made every such lot
+       read "allocated more than was made" forever after. */
+    p.draws.forEach(d => {
+      const extra = d.qty - (d.lot.freshDry + d.lot.stock);
+      if (extra > 0 && d.lot.row && S.stock2.made) rowOf(d.lot).made += extra;
+    });
     if (p.stock > 0 && anchor && anchor.row) stockMove(rowOf(anchor), S.stock2, 'vendor', p.stock);
     const stockUndo = [];   // [lotId, inverse fields]
     const stockUpdates = {};
