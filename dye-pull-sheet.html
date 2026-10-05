@@ -436,6 +436,8 @@ async function load() {
       const back = LOT.back ? num(columnAsArray(lotT, LOT.back)[i]) : 0;
       let free = num(columnAsArray(lotT, LOT.made)[i]) - (byLot[id] || 0) - back;
       ['store', 'vendor', 'broken'].forEach(k => { if (LOT[k]) free -= num(columnAsArray(lotT, LOT[k])[i]); });
+      // Hank was never wound, so it is not part of Spools_Made: add it back.
+      free += num(columnAsArray(lotT, findColumn(lotT, ['Hank_Est_Spools']) || '')[i]);
       inBins[rid] = (inBins[rid] || 0) + free;
       if (back > 0) inStock[rid] = (inStock[rid] || 0) + back;
       const dyed = LOT.dated ? num(columnAsArray(lotT, LOT.dated)[i]) : 0;

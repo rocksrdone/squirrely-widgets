@@ -355,6 +355,7 @@ async function loadAll() {
       const lRec  = findColumn(lotT, ['Recipe']);
       const lMade = findColumn(lotT, ['Spools_Made']);
       const lBack = findColumn(lotT, ['General_Stock_Spools']);
+      const lHank = findColumn(lotT, ['Hank_Est_Spools']);
       const spoken = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
         .map(c => findColumn(lotT, [c]));
       (lotT.id || []).forEach((id, i) => {
@@ -363,6 +364,9 @@ async function loadAll() {
         const back = lBack ? Number(columnAsArray(lotT, lBack)[i]) || 0 : 0;
         let free = (lMade ? Number(columnAsArray(lotT, lMade)[i]) || 0 : 0) - (allocLot[id] || 0) - back;
         spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotT, c)[i]) || 0; });
+        // Hank was never wound, so it is not part of Spools_Made: add it back
+        // (stock model v2 — Hank_Est_Spools is inside General/Vendor).
+        if (lHank) free += Number(columnAsArray(lotT, lHank)[i]) || 0;
         // Signed, clamped once per recipe: an over-allocated lot must cancel a
         // sibling lot's surplus rather than be discarded as a negative.
         inBins[rid] = (inBins[rid] || 0) + free;

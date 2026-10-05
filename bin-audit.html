@@ -635,7 +635,10 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
     const backStock = general + store + vendor;
     // What should physically be in the bin: everything made, less what broke
     // and less what has already been boxed and sent out.
-    const inBin = made - broken - packed;
+    // A hank sits in the bin too, but was never wound into Spools_Made (stock
+    // model v2), so it is added here; it is already inside backStock.
+    const hank = Number(columnAsArray(lotsT, findColumn(lotsT, ['Hank_Est_Spools']) || '')[i]) || 0;
+    const inBin = made + hank - broken - packed;
     const free = inBin - reserved - backStock;
     const drying = (columnAsArray(lotsT, LOT.dried)[i] || '').toString();
     lots.push({

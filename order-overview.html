@@ -284,6 +284,7 @@ async function loadCoreData() {
     const lGeneral = findColumn(lotsTable, ['General_Stock_Spools']);
     const lBroken = findColumn(lotsTable, ['Broken_Spools']);
     const lFiber = findColumn(lotsTable, ['Fiber']);
+    const lHank = findColumn(lotsTable, ['Hank_Est_Spools']);
     const aLot = findColumn(allocTable2, ['Lot']);
     const aQty = findColumn(allocTable2, ['Qty_Spools']);
     const allocByLot = {};
@@ -298,12 +299,16 @@ async function loadCoreData() {
     (lotsTable.id || []).forEach((id, i) => {
       const rid = getRefId(columnAsArray(lotsTable, lRecipe)[i]);
       if (!rid) return;
+      /* Stock model v2: a lot in hank is tracked by Hank_Est, not by its dyed
+         yardage, and that hank was never wound into Spools_Made. Skip the yards
+         fallback for it and leave the hank out of the wound arithmetic. */
+      const hank = num(lHank, i);
       let total = num(lSpools, i);
-      if (!total && lYards) total = Math.round(num(lYards, i) / (fiberCode(columnAsArray(lotsTable, lFiber)[i]) === 'EN' ? 150 : 100));
+      if (!total && !hank && lYards) total = Math.round(num(lYards, i) / (fiberCode(columnAsArray(lotsTable, lFiber)[i]) === 'EN' ? 150 : 100));
       const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
       // SIGNED — an over-allocated lot must cancel a sibling lot's surplus. Clamping
       // each lot on its own leaves the surplus standing as thread that isn't there.
-      const free = total - (allocByLot[id] || 0) - stock - num(lBroken, i);
+      const free = total - (allocByLot[id] || 0) - (stock - hank) - num(lBroken, i);
       const status = (columnAsArray(lotsTable, lDry)[i] || '').toString();
       const isDry = DRY.test(status) || (!WET.test(status) && !!status);
       if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free;

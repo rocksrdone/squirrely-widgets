@@ -203,12 +203,15 @@ async function loadAll() {
       const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       if (!rid) return;
       const recipe = recipeById[rid] || { fiber: '' };
+      /* Stock model v2: a lot in hank is tracked by Hank_Est, not by its dyed
+         yardage, and that hank was never wound into Spools_Made. */
+      const hank = Number(columnAsArray(lotsT, findColumn(lotsT, ['Hank_Est_Spools']) || '')[i]) || 0;
       let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
-      if (!total && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
+      if (!total && !hank && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
       const stock = (Number(columnAsArray(lotsT, LOT.store)[i]) || 0) + (Number(columnAsArray(lotsT, LOT.vendor)[i]) || 0) + (LOT.general ? Number(columnAsArray(lotsT, LOT.general)[i]) || 0 : 0);
       const broken = LOT.broken ? Number(columnAsArray(lotsT, LOT.broken)[i]) || 0 : 0;
       // SIGNED — an over-allocated lot has to cancel a sibling lot's surplus.
-      const free = total - (allocByLot[id] || 0) - stock - broken;
+      const free = total - (allocByLot[id] || 0) - (stock - hank) - broken;
       const status = (columnAsArray(lotsT, LOT.drying)[i] || '').toString();
       const isDry = DRY.test(status) || (!WET.test(status) && !!status);
       if (isDry) dryByRecipe[rid] = (dryByRecipe[rid] || 0) + free;

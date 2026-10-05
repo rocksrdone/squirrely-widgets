@@ -432,6 +432,8 @@ async function load() {
       ['store', 'vendor', 'broken'].forEach(k => {
         if (LOT[k]) free -= Number(columnAsArray(lotT, LOT[k])[i]) || 0;
       });
+      // Hank was never wound, so it is not part of Spools_Made: add it back.
+      free += Number(columnAsArray(lotT, findColumn(lotT, ['Hank_Est_Spools']) || '')[i]) || 0;
       // Signed, then clamped per recipe: a lot allocated beyond Spools_Made must
       // cancel out a sibling lot's surplus, not be discarded.
       inBins[rid] = (inBins[rid] || 0) + free;
@@ -569,7 +571,9 @@ function buildBinState(lotsT, L, allocByLot, binCode) {
       + (L.vendorStock ? (Number(columnAsArray(lotsT, L.vendorStock)[i]) || 0) : 0)
       + (L.generalStock ? (Number(columnAsArray(lotsT, L.generalStock)[i]) || 0) : 0);
     const broken = L.broken ? (Number(columnAsArray(lotsT, L.broken)[i]) || 0) : 0;
-    const unwound = Math.max(0, made - (allocByLot[id] || 0) - stock - broken);
+    // Hank sits in the bin (counted in stock) but was never wound into Spools_Made.
+    const hank = Number(columnAsArray(lotsT, findColumn(lotsT, ['Hank_Est_Spools']) || '')[i]) || 0;
+    const unwound = Math.max(0, made - (allocByLot[id] || 0) - (stock - hank) - broken);
     fill[bid] = (fill[bid] || 0) + stock + unwound;
     const rid = getRefId(columnAsArray(lotsT, L.recipe)[i]);
     if (rid && !memory[rid]) memory[rid] = { id: bid, code: binCode[bid] || '' };

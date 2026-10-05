@@ -276,12 +276,16 @@ async function loadEverything() {
       const buckets = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
         .map(c => findColumn(lotsT, [c]));
       const cBack = findColumn(lotsT, ['General_Stock_Spools']);
+      const cHank = findColumn(lotsT, ['Hank_Est_Spools']);
       (lotsT.id || []).forEach((id, i) => {
         const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
         if (!rid) return;
         const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
         let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0);
         buckets.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
+        // Hank was never wound, so it is not part of Spools_Made: add it back
+        // (stock model v2 — Hank_Est_Spools is inside General/Vendor).
+        if (cHank) free += Number(columnAsArray(lotsT, cHank)[i]) || 0;
         // Sum SIGNED across a recipe's lots, clamp once at the end. Clamping per
         // lot silently discards over-allocated lots (allocated > Spools_Made),
         // leaving the surplus lots standing alone as thread that does not exist.
