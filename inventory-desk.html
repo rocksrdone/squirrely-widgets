@@ -545,8 +545,14 @@ function storeCmp(g) {
     return { kind: 'bad', text: `Shopify ${v.qty}, product is ${v.status} — not buyable` };
   }
   if (v.qty === g.vendor) return { kind: 'ok', text: `Shopify ${v.qty} \u2713` };
+  /* Spelled out. "Shopify 4 (+2)" left you to work out what the +2 was
+     relative to; this says both numbers and which way they differ. */
   const d = v.qty - g.vendor;
-  return { kind: 'bad', text: `Shopify ${v.qty} (${d > 0 ? '+' : ''}${d})` };
+  const text = v.qty < 0
+    ? `Shopify ${v.qty} (oversold) · Grist ${g.vendor}`
+    : `Shopify ${v.qty} · Grist ${g.vendor} — Shopify has ${Math.abs(d)} ${d > 0 ? 'more' : 'fewer'}`;
+  return { kind: 'bad', text,
+    tip: `If Grist is right, set the vendor store to ${g.vendor}. If Shopify is right, change Vendor here to ${Math.max(0, v.qty)}.` };
 }
 
 function storeBarHtml() {
@@ -565,19 +571,23 @@ function storeBarHtml() {
   const diffs = rows.map(g => ({ g, c: storeCmp(g) })).filter(x => x.c && x.c.kind === 'bad');
   const c = S.store.counts || {};
   el.innerHTML = `<div class="store-bar">
-    <span><strong>${diffs.length}</strong> ${diffs.length === 1 ? 'colourway disagrees' : 'colourways disagree'} with the vendor store</span>
+    <span><strong>${diffs.length}</strong> ${diffs.length === 1 ? 'SKU disagrees' : 'SKUs disagree'} with the vendor store</span>
+    ${diffs.length ? `<button class="btn tiny" id="onlyDiff">${S.onlyDiff ? 'Show everything' : 'Show only these'}</button>` : ''}
     <span class="stamp">${c.variants || 0} SKUs read${c.not_active ? ` \u00b7 ${c.not_active} not active` : ''} \u00b7 ${
       S.store.fetched_at ? new Date(S.store.fetched_at).toLocaleTimeString() : ''}</span>
     ${S.store.truncated ? '<span class="bad">partial snapshot \u2014 250-product cap hit</span>' : ''}
     ${(S.store.notes || []).map(n => `<span class="stamp">${esc(n)}</span>`).join('')}
     <span class="stamp">Comparison only \u2014 nothing is written to Shopify.</span>
   </div>`;
+  const od = document.getElementById('onlyDiff');
+  if (od) od.addEventListener('click', () => { S.onlyDiff = !S.onlyDiff; render(); });
 }
 
-function visible() {
+function visible(ignoreDiff) {
   const q = normalize(S.search);
   return (S.byColourway || []).filter(c => {
     if (!S.showEmpty && c.onHand <= 0) return false;
+    if (!ignoreDiff && S.onlyDiff && S.store && !hasDiff(c)) return false;
     if (!q) return true;
     // A SKU search must find the colourway through ANY of its fibres.
     return normalize(c.name).includes(q)
@@ -586,7 +596,7 @@ function visible() {
 }
 /* The store comparison is per SKU, so it works on recipes, not colourways. */
 function visibleRecipes() {
-  return visible().reduce((a, c) => a.concat(c.members), []);
+  return visible(true).reduce((a, c) => a.concat(c.members), []);
 }
 
 function bucketHtml(g, b) {
@@ -598,8 +608,19 @@ function bucketHtml(g, b) {
 
 function cmpHtml(g) {
   const c = storeCmp(g);
-  return c ? `<span class="cmp ${c.kind}">${esc(c.text)}</span>` : '';
+  return c ? `<span class="cmp ${c.kind}"${c.tip ? ` title="${esc(c.tip)}"` : ''}>${esc(c.text)}</span>` : '';
 }
+/* A two-fibre card used to say nothing on its closed head, so the summary
+   counted differences you could not see without opening every card. */
+function cmpRollupHtml(c) {
+  if (!S.store) return '';
+  const res = c.members.map(storeCmp).filter(Boolean);
+  const bad = res.filter(x => x.kind === 'bad').length;
+  if (bad) return `<span class="cmp bad" title="Open the card to see which">${bad} of ${c.members.length} fibres differ</span>`;
+  if (res.length && res.every(x => x.kind === 'ok')) return `<span class="cmp ok">Shopify \u2713 all fibres</span>`;
+  return `<span class="cmp unknown">not all fibres listed</span>`;
+}
+function hasDiff(c) { return c.members.some(g => { const x = storeCmp(g); return x && x.kind === 'bad'; }); }
 
 /* The move controls and lot list for ONE recipe — one fibre of one colourway.
    Unchanged in substance; it just no longer owns the card. */
@@ -674,7 +695,7 @@ function fibreBlockHtml(g) {
 /* The card is the colourway. With one fibre it reads as it always did; with
    more, each fibre is its own labelled row carrying its own SKU. */
 function cardHtml(c) {
-  const open = !!S.open[c.key];
+  const open = !!S.open[c.key] || (S.onlyDiff && c.multi && hasDiff(c));
   const fibres = c.members.map(g => g.recipe.fiberName || g.recipe.fiber || '?').join(' + ');
   /* A single-fibre card wears the fibre's colour as its own left edge — the
      only cue available when there is nothing beside it to compare with. A
@@ -693,7 +714,7 @@ function cardHtml(c) {
         ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
           title="${c.multi ? 'Combined across ' + c.members.length + ' fibres — open to see the split' : esc(b.label)}">
           <span class="n">${c[b.key]}</span><span class="l">${esc(b.short)}</span></div>`).join('')}
-        ${c.multi ? '' : cmpHtml(c.members[0])}
+        ${c.multi ? cmpRollupHtml(c) : cmpHtml(c.members[0])}
         <span class="onhand" title="On hand">${c.onHand}</span>
       </div>
     </div>
