@@ -1450,6 +1450,11 @@ function onDraw(lotId, cap) {
   updateTally();
 }
 
+// Spools drawn that came off back stock rather than fresh dry thread.
+function stockDrawn(p) {
+  return p.draws.reduce((n, d) => n + Math.max(0, Math.min(d.qty - d.lot.freshDry, d.lot.stock)), 0);
+}
+
 // Spools drawn beyond what the lots were recorded as holding.
 function foundExtra(p) {
   return p.draws.reduce((n, d) => n + Math.max(0, d.qty - (d.lot.freshDry + d.lot.stock)), 0);
@@ -1479,6 +1484,7 @@ function updateTally() {
   t.className = 'tally ' + (p.toOrder === p.line.outstanding ? 'ok' : (p.toOrder === 0 ? 'over' : 'partial'));
   t.innerHTML = `${p.toOrder} of ${p.line.outstanding} for this order`
     + (p.toOrder < p.line.outstanding && p.toOrder > 0 ? ' (partial — rest stays open)' : '')
+    + (stockDrawn(p) ? ` &middot; ${stockDrawn(p)} taken off back stock` : '')
     + (p.stock ? ` &middot; <strong>${p.stock} &rarr; vendor back stock</strong>` : '')
     + (p.broken ? ` &middot; ${p.broken} broken` : '')
     + (foundExtra(p) ? ` &middot; <strong>${foundExtra(p)} more than the lot recorded</strong>` : '');
@@ -1498,27 +1504,60 @@ async function confirmWind() {
 
   const { ALLOC } = S.cols;
   try {
-    // One allocation per lot drawn from
-    const actions = p.draws.map(d => {
+    /* Only what goes to THIS order is allocated to it. This used to allocate
+       every spool drawn, so winding 5 for an order of 3 put 5 against the order
+       AND the 2 extra into vendor stock — the same 2 spools counted twice.
+       Broken spools are recorded as written off, and surplus as stock. */
+    let toAlloc = p.toOrder;
+    const actions = [];
+    p.draws.forEach(d => {
+      const q = Math.min(d.qty, toAlloc);
+      if (q <= 0) return;
+      toAlloc -= q;
       const f = {};
       f[ALLOC.lot] = d.lot.lotId;
-      f[ALLOC.qty] = d.qty;
+      f[ALLOC.qty] = q;
       f[ALLOC.status] = S.woundStatus;
       if (ALLOC.customer) f[ALLOC.customer] = p.line.customerId;
       if (ALLOC.line) f[ALLOC.line] = p.line.lineId;
-      return ['AddRecord', 'Lot_Allocations', null, f];
+      actions.push(['AddRecord', 'Lot_Allocations', null, f]);
     });
 
     // Extra good spools -> back stock on the FIRST lot drawn (or first lot with spools)
     const anchor = p.draws[0] ? p.draws[0].lot : (p.line.lots[0] || null);
-    /* Surplus is wound and listed on the vendor store at once: On_Hand +n and
-       Vendor +n. General is a formula now, so it is never written. */
-    let stockFields = null, stockInverse = null, stockLotId = null;
-    if (p.stock > 0 && anchor && anchor.row) {
-      if (!S.stock2.onHand) { showToast(STOCK2_NOT_READY); return; }
-      const m = stockMove(Object.assign({}, anchor.row), S.stock2, 'vendor', p.stock);
-      stockFields = m.fields; stockInverse = m.inverse; stockLotId = anchor.lotId;
-    }
+    /* Stock changes, worked out per lot on a copy so several changes to one
+       lot add up:
+       - spools drawn beyond a lot's fresh dry thread came off its stock, so
+         they leave the shelf: held back first, then the vendor listing, then
+         retail (this was never written before, so stock pulled for an order
+         stayed on the count);
+       - surplus is wound and listed on the vendor store: On_Hand +n, Vendor +n.
+       General is a formula and is never written. */
+    const work = {}, orig = {};
+    const rowOf = lot => {
+      if (!work[lot.lotId]) { orig[lot.lotId] = Object.assign({}, lot.row); work[lot.lotId] = Object.assign({}, lot.row); }
+      return work[lot.lotId];
+    };
+    const fromStock = stockDrawn(p);
+    if ((fromStock > 0 || p.stock > 0) && !S.stock2.onHand) { showToast(STOCK2_NOT_READY); return; }
+    p.draws.forEach(d => {
+      let n = Math.max(0, Math.min(d.qty - d.lot.freshDry, d.lot.stock));
+      if (n <= 0 || !d.lot.row) return;
+      const row = rowOf(d.lot);
+      const held = Math.max(0, stock2Held(row));
+      const a = Math.min(n, held); if (a) stockMove(row, S.stock2, 'general', -a); n -= a;
+      const b = Math.min(n, row.vendor); if (b) stockMove(row, S.stock2, 'vendor', -b); n -= b;
+      if (n) stockMove(row, S.stock2, 'store', -n);
+    });
+    if (p.stock > 0 && anchor && anchor.row) stockMove(rowOf(anchor), S.stock2, 'vendor', p.stock);
+    const stockUndo = [];   // [lotId, inverse fields]
+    const stockUpdates = {};
+    Object.keys(work).forEach(id => {
+      const d = stock2Diff(orig[id], work[id], S.stock2);
+      if (!Object.keys(d.fields).length) return;
+      stockUpdates[id] = d.fields;
+      stockUndo.push([Number(id), d.inverse]);
+    });
     let brokenBefore = null, brokenLotId = null;
     if (p.broken > 0 && S.brokenCol && anchor) {
       brokenLotId = anchor.lotId; brokenBefore = anchor.broken || 0;
@@ -1527,8 +1566,14 @@ async function confirmWind() {
     const res = await grist.docApi.applyUserActions(actions);
     const newIds = res.retValues || [];
 
+    // Stock changes on lots other than the anchor go in their own updates.
+    const otherUpdates = Object.entries(stockUpdates)
+      .filter(([id]) => !anchor || Number(id) !== anchor.lotId)
+      .map(([id, f]) => ['UpdateRecord', 'Production_Lots', Number(id), f]);
+    if (otherUpdates.length) await grist.docApi.applyUserActions(otherUpdates);
+
     const lotUpdate = {};
-    if (stockFields) Object.assign(lotUpdate, stockFields);
+    if (anchor && stockUpdates[anchor.lotId]) Object.assign(lotUpdate, stockUpdates[anchor.lotId]);
     // Remember the bin on the lot, so the next surplus of this colourway is told
     // where to go rather than asked again.
     if (p.stock > 0 && S.stockBinPick && S.cols.LOT.bin) {
@@ -1555,10 +1600,11 @@ async function confirmWind() {
 
     S.done.unshift({
       customerName: p.line.customerName, allocIds: newIds,
-      stockInverse, stockLotId, stockAdded: p.stock,
+      stockUndo, stockAdded: p.stock,
       brokenLotId, brokenBefore, brokenAdded: p.broken,
       summary: `${p.toOrder} spool${p.toOrder === 1 ? '' : 's'} ${esc(p.line.recipeName)}`
         + (p.draws.length > 1 ? ` (${p.draws.length} lots)` : '')
+        + (fromStock ? ` · ${fromStock} from stock` : '')
         + (p.stock ? ` · ${p.stock} to stock` : '')
         + (p.broken ? ` · ${p.broken} broken` : ''),
     });
@@ -1576,9 +1622,9 @@ async function undoWind(i) {
   if (!d) return;
   try {
     const actions = (d.allocIds || []).map(id => ['RemoveRecord', 'Lot_Allocations', id]);
-    if (d.stockAdded > 0 && d.stockInverse && d.stockLotId != null && Object.keys(d.stockInverse).length) {
-      actions.push(['UpdateRecord', 'Production_Lots', d.stockLotId, d.stockInverse]);
-    }
+    (d.stockUndo || []).forEach(([lotId, inv]) => {
+      actions.push(['UpdateRecord', 'Production_Lots', lotId, inv]);
+    });
     if (d.brokenAdded > 0 && S.brokenCol && d.brokenLotId != null && d.brokenBefore != null) {
       actions.push(['UpdateRecord', 'Production_Lots', d.brokenLotId, { [S.brokenCol]: d.brokenBefore }]);
     }
