@@ -172,6 +172,77 @@ function ageLabel(d) {
 
 let S = { lots: [], cols: null, hasPos: true, closeAll: false };
 
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 async function loadBoard() {
   try {
     const [lotsT, recipesT, allocT, wolT, woT, binsT] = await Promise.all([
@@ -274,18 +345,24 @@ async function loadBoard() {
       waitingByRecipe[rid] = (waitingByRecipe[rid] || 0) + 1;
     });
 
+    S.stock2 = stock2Cols(lotsT);
     S.lots = (lotsT.id || []).map((id, i) => {
+      const row = stock2Row(lotsT, S.stock2, i);
       const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       const recipe = recipeById[recipeId] || { name: '', fiber: '' };
       let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
-      if (!total && LOT.yardsMade) {
+      // A lot in hank is tracked by Hank_Est, not by its dyed yardage — falling
+      // back to yards here would count the same thread twice.
+      if (!total && !row.hank && LOT.yardsMade) {
         total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
       }
       const spoken = (allocByLot[id] || 0)
         + (Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0)
         + (Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0)
         + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0)
-        + (LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0);
+        + (LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0)
+        // Hank was never wound, so it is not part of Spools_Made to account for.
+        - row.hank;
       const rawStatus = columnAsArray(lotsT, LOT.drying)[i] || '';
       const draft = LOT.draft ? (columnAsArray(lotsT, LOT.draft)[i] || '') : '';
       return {
@@ -313,6 +390,7 @@ async function loadBoard() {
             return m;
           }, {}),
         brokenNow: LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0,
+        row,
         days: daysSince(LOT.date ? columnAsArray(lotsT, LOT.date)[i] : null),
         waiting: waitingByRecipe[recipeId] || 0,
         isDraft: !!draft && !recipe.name,
@@ -332,7 +410,8 @@ async function loadBoard() {
         + (LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0);
       const br = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
       const al = allocByLot[id] || 0;
-      S.binFill[bid] = (S.binFill[bid] || 0) + st + Math.max(0, t - al - st - br);
+      const hk = stock2Row(lotsT, S.stock2, i).hank;
+      S.binFill[bid] = (S.binFill[bid] || 0) + st + Math.max(0, t - al - (st - hk) - br);
       const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       const ck = colourKeyOf((recipeById[rid] || {}).name);
       if (ck && !S.binMemory[ck]) S.binMemory[ck] = { id: bid, code: S.binCode[bid] || '' };
@@ -430,9 +509,10 @@ async function resolveRemainder(lotId, how) {
        while every other widget looks at General — and quick-log's back-stock
        decrement reads General only, so spools filed here were never taken off
        the count when they were later boxed. */
-    const col = LOT.generalStock || LOT.storeStock || LOT.vendorStock;
-    if (!col) { showToast('No stock column to write to'); return; }
-    fields[col] = ((l.stockByCol && l.stockByCol[col]) || 0) + n;
+    /* Leftover thread goes on the shelf, held back. General is a formula now,
+       so that means On_Hand +n — stockMove() does the translation. */
+    if (!S.stock2.onHand) { showToast(STOCK2_NOT_READY); return; }
+    Object.assign(fields, stockMove(Object.assign({}, l.row), S.stock2, 'general', n).fields);
     // Shelved thread needs a bin, same rule as everywhere else.
     if (LOT.bin && !l.binId && S.hasBin) {
       const sug = suggestBin({ ...l, unwound: n });

@@ -193,6 +193,10 @@ select.pick {
    listing or de-listing, which is the thing that had no home before and sent
    people into Grist by hand.
 
+   Since 2026-10-05 General is a formula (On_Hand + Hank_Est − Vendor − Store),
+   so a move writes only Vendor/Store and Held back follows. Retail lists wound
+   spools only; hank can be held back or on the vendor store.
+
    Deliberately NOT a Shopify sync. Nothing here talks to either store — Grist
    is not the master and a wrong automatic write to a live storefront is far
    worse than a number being stale. The comparison against what each store
@@ -279,6 +283,77 @@ let S = {
    a live storefront off a number that might itself be the stale one. */
 const STORE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/store-inventory';
 
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 async function loadAll() {
   try {
     const [lotsT, recT] = await Promise.all([
@@ -294,6 +369,8 @@ async function loadAll() {
       made: findColumn(lotsT, ['Spools_Made']),
     };
     BUCKETS.forEach(b => { b.col = findColumn(lotsT, b.cands); });
+    // Held back (General) is a formula now — read, never written.
+    S.stock2 = stock2Cols(lotsT);
     const missing = BUCKETS.filter(b => !b.col);
 
     const REC = {
@@ -329,6 +406,7 @@ async function loadAll() {
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || ''),
         made: LOT.made ? num(columnAsArray(lotsT, LOT.made)[i]) : 0,
         vals,
+        row: stock2Row(lotsT, S.stock2, i),
       });
     });
 
@@ -339,10 +417,11 @@ async function loadAll() {
     S.lots.forEach(l => {
       if (!map.has(l.recipeId)) {
         const r = S.recipes[l.recipeId] || { name: `Recipe #${l.recipeId}`, sku: '', fiber: '' };
-        map.set(l.recipeId, { recipeId: l.recipeId, recipe: r, lots: [], held: 0, vendor: 0, retail: 0 });
+        map.set(l.recipeId, { recipeId: l.recipeId, recipe: r, lots: [], held: 0, vendor: 0, retail: 0, hank: 0 });
       }
       const g = map.get(l.recipeId);
       g.lots.push(l);
+      g.hank += l.row.hank;
       BUCKETS.forEach(b => { g[b.key] += l.vals[b.key]; });
     });
     S.byRecipe = [...map.values()]
@@ -503,7 +582,9 @@ function fibreBlockHtml(g) {
   const from = S.moveFrom[g.recipeId] || 'held';
   const to = S.moveTo[g.recipeId] || (from === 'held' ? 'vendor' : 'held');
   const qty = S.moveQty[g.recipeId] !== undefined ? S.moveQty[g.recipeId] : '';
-  const avail = g[from] || 0;
+  /* Retail only ever lists wound spools, so a move to retail can take no more
+     than each lot's wound spools not already on retail. */
+  const avail = to === 'retail' ? movable(g, from, to) : (g[from] || 0);
   const n = Math.max(0, Number(qty) || 0);
   const canMove = n > 0 && n <= avail && from !== to;
 
@@ -523,7 +604,8 @@ function fibreBlockHtml(g) {
       <div>
         <div class="fb-fiber fib-${fibClass(r.fiber)}" style="background:none;border:none;padding:0">${
           esc(r.fiberName || r.fiber || 'no fibre set')}</div>
-        <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}</div>
+        <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}${
+          g.hank ? ` · ~${g.hank} in hank` : ''}</div>
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => bucketHtml(g, b)).join('')}
@@ -547,7 +629,9 @@ function fibreBlockHtml(g) {
       </div>
       <div class="hint">${
         from === to ? 'Pick two different places.'
-        : n > avail ? `Only ${avail} in ${esc(BUCKETS.find(b => b.key === from).label.toLowerCase())}.`
+        : n > avail ? (to === 'retail' && avail < (g[from] || 0)
+            ? `Only ${avail} of these are wound — retail can't list hank. Wind it first.`
+            : `Only ${avail} in ${esc(BUCKETS.find(b => b.key === from).label.toLowerCase())}.`)
         : 'Nothing is sent to Shopify — this only records where the spools are listed. Oldest lot is drawn from first.'
       }</div>
       ${lotLines ? `<div class="lots">
@@ -664,6 +748,18 @@ function renderLog() {
    wrote a single total somewhere would lose which lot the spools came from —
    which is what makes a lot's arithmetic stop balancing. Both columns of a lot
    are written in the same action, so the lot's total never changes. */
+/* How many of one lot's spools can go from one place to another. */
+function lotMovable(l, from, to) {
+  const have = Math.max(0, l.vals[from] || 0);
+  if (to !== 'retail') return have;
+  // Wound spools on this lot not already listed on retail.
+  const wound = Math.max(0, l.row.onHand - l.vals.retail);
+  return Math.min(have, wound);
+}
+function movable(g, from, to) {
+  return g.lots.reduce((t, l) => t + lotMovable(l, from, to), 0);
+}
+
 async function doMove(recipeId) {
   const g = S.byRecipe.find(x => x.recipeId === recipeId);
   if (!g) return;
@@ -676,24 +772,31 @@ async function doMove(recipeId) {
   const fromB = BUCKETS.find(b => b.key === from);
   const toB = BUCKETS.find(b => b.key === to);
   if (!fromB.col || !toB.col) { showToast('That column does not exist on Production_Lots'); return; }
-  if (want > g[from]) { showToast(`Only ${g[from]} in ${fromB.label.toLowerCase()}`); return; }
+  if (!S.stock2.onHand) { showToast(STOCK2_NOT_READY); return; }
+  const cap = movable(g, from, to);
+  if (want > cap) {
+    showToast(to === 'retail' && cap < g[from]
+      ? `Only ${cap} wound — retail can't list hank`
+      : `Only ${g[from]} in ${fromB.label.toLowerCase()}`);
+    return;
+  }
 
+  /* Moving is listing or de-listing, so only the Vendor and Retail columns
+     change. Held back is a formula (On hand + Hank − listed): it goes down by
+     itself when spools are listed and up when they are de-listed. */
   let left = want;
   const actions = [], inverse = [], touched = [];
   for (const l of g.lots) {          // already oldest-first
     if (left <= 0) break;
-    const have = l.vals[from];
+    const have = lotMovable(l, from, to);
     if (have <= 0) continue;
     const take = Math.min(have, left);
     left -= take;
-    actions.push(['UpdateRecord', 'Production_Lots', l.id, {
-      [fromB.col]: l.vals[from] - take,
-      [toB.col]: l.vals[to] + take,
-    }]);
-    inverse.push(['UpdateRecord', 'Production_Lots', l.id, {
-      [fromB.col]: l.vals[from],
-      [toB.col]: l.vals[to],
-    }]);
+    const f = {}, inv = {};
+    if (from !== 'held') { f[fromB.col] = l.vals[from] - take; inv[fromB.col] = l.vals[from]; }
+    if (to !== 'held') { f[toB.col] = l.vals[to] + take; inv[toB.col] = l.vals[to]; }
+    actions.push(['UpdateRecord', 'Production_Lots', l.id, f]);
+    inverse.push(['UpdateRecord', 'Production_Lots', l.id, inv]);
     touched.push(`${l.lotNumber} ${take}`);
   }
   if (!actions.length) { showToast('Nothing to move'); return; }

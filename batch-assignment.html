@@ -289,7 +289,7 @@ function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : In
 // Pots logged for the currently-selected colorway this session (for running total + undo).
 let sessionPots = [];
 // Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
-let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '';
+let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '', RC_STOCK2 = {};
 let RC_ALLOC = null, RC_WOL = null;
 let S_COLS = { ALLOC: {} };  // resolved Lot_Allocations column ids for stock fulfillment
 let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status string
@@ -331,6 +331,77 @@ function buildBinIndex(binsT, colOf) {
   return idx;
 }
 
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 function buildBinState(lotsT, L, allocByLot, binCode) {
   const fill = {}, memory = {};
   if (!L.bin) return { fill, memory };
@@ -342,7 +413,8 @@ function buildBinState(lotsT, L, allocByLot, binCode) {
       + (L.vendorStock ? (Number(columnAsArray(lotsT, L.vendorStock)[i]) || 0) : 0)
       + (L.generalStock ? (Number(columnAsArray(lotsT, L.generalStock)[i]) || 0) : 0);
     const broken = L.broken ? (Number(columnAsArray(lotsT, L.broken)[i]) || 0) : 0;
-    const unwound = Math.max(0, made - (allocByLot[id] || 0) - stock - broken);
+    const hk = stock2Row(lotsT, stock2Cols(lotsT), i).hank;   // never wound, not in Spools_Made
+    const unwound = Math.max(0, made - (allocByLot[id] || 0) - (stock - hk) - broken);
     fill[bid] = (fill[bid] || 0) + stock + unwound;
     const rid = getRefId(columnAsArray(lotsT, L.recipe)[i]);
     if (rid && !memory[rid]) memory[rid] = { id: bid, code: binCode[bid] || '' };
@@ -411,7 +483,7 @@ async function loadForRecipe(record) {
     // been allocated to them, minus unwound spools still sitting in lots. A stored
     // "dyed" guess made at the kettle goes stale the moment winding assigns the
     // spools differently, so we compute it from physical records instead.
-    let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null, stockSourceName = '';
+    let allocByLine = {}, unwoundByRecipe = {}, stockByRecipe = {}, stockLotsByRecipe = {}, stockColId = null, stockSourceName = '', stock2C2 = null;
     const clampRecipeTotals = m => { Object.keys(m).forEach(k => { if (m[k] < 0) m[k] = 0; }); };
     try {
       const [lotsT, allocT] = await Promise.all([
@@ -460,33 +532,44 @@ async function loadForRecipe(record) {
       const lDate = findColumn(lotsT, ['Date_Dyed']);
       const lBroken = findColumn(lotsT, ['Broken_Spools']);
       const lFiber = findColumn(lotsT, ['Fiber']);
-      stockColId = lGeneral || lStore; // the single back-stock bucket we read/write
+      /* Pulls come out of held-back stock (General). General is a formula now,
+         so the write goes to On_Hand through stockMove(); stockColId only says
+         whether stock can be written at all. */
+      const C2 = stock2Cols(lotsT);
+      stock2C2 = C2;
+      stockColId = C2.onHand;
       /* Name the bucket actually chosen, not the one usually chosen. On a doc
          with no General column this falls back to Store, and labelling that
          pull 'General' would send the spools back to the wrong pile when the
          order builder releases them — quietly moving stock off a storefront. */
-      stockSourceName = (stockColId && stockColId === lGeneral) ? 'General'
-        : (stockColId && stockColId === lStore) ? 'Store' : '';
+      stockSourceName = stockColId ? 'General' : '';
       const num = (col, i) => col ? (Number(columnAsArray(lotsT, col)[i]) || 0) : 0;
       (lotsT.id || []).forEach((id, i) => {
         const rid = lRecipe ? getRefId(columnAsArray(lotsT, lRecipe)[i]) : null;
         if (!rid) return;
+        const row = stock2Row(lotsT, C2, i);
         let total = num(lSpools, i);
-        if (!total && lYards) {
+        // A lot in hank is tracked by Hank_Est, not by its dyed yardage — falling
+        // back to yards here would count the same thread twice.
+        if (!total && !row.hank && lYards) {
           const f = lFiber ? columnAsArray(lotsT, lFiber)[i] : '';
           total = Math.round(num(lYards, i) / yardsPerSpool(f));
         }
         const stock = num(lStore, i) + num(lVendor, i) + num(lGeneral, i);
-        const free = total - (allocByLot[id] || 0) - stock - num(lBroken, i);
+        // Hank was never wound, so it is not part of Spools_Made to account for.
+        const free = total - (allocByLot[id] || 0) - (stock - row.hank) - num(lBroken, i);
+        const held = Math.max(0, stock2Held(row));   // what a pull may take: not listed
         // Sum SIGNED across a recipe's lots, clamp once at the end. Clamping per
         // lot silently discards over-allocated lots (allocated > Spools_Made),
         // leaving the surplus lots standing alone as thread that does not exist.
         unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
-        if (stock > 0 && stockColId) {
-          stockByRecipe[rid] = (stockByRecipe[rid] || 0) + stock;
+        /* Only held-back spools can be pulled for an order. Vendor and Retail
+           spools are on sale; taking them here would sell them twice. */
+        if (held > 0 && stockColId) {
+          stockByRecipe[rid] = (stockByRecipe[rid] || 0) + held;
           (stockLotsByRecipe[rid] = stockLotsByRecipe[rid] || []).push({
             lotId: id, lotNumber: lNumber ? columnAsArray(lotsT, lNumber)[i] : `Lot #${id}`,
-            stock, date: lDate ? columnAsArray(lotsT, lDate)[i] : 0,
+            stock: held, row, date: lDate ? columnAsArray(lotsT, lDate)[i] : 0,
           });
         }
       });
@@ -497,6 +580,7 @@ async function loadForRecipe(record) {
       console.warn('Lots/allocations unavailable — coverage will show needs only', err);
     }
     RC_STOCKBUCKET = stockColId;
+    RC_STOCK2 = stock2C2 || {};
     RC_STOCKSOURCE = stockSourceName;
 
     // ── Resolve every column id up front (rename-proofing) ──────────────
@@ -1018,7 +1102,8 @@ function render() {
 async function fulfillFromStock() {
   const e = currentEntry;
   const bucket = RC_STOCKBUCKET;
-  if (!bucket) { showToast('No stock bucket column found'); return; }
+  if (!bucket) { showToast(STOCK2_NOT_READY); return; }
+  const C2 = RC_STOCK2;
 
   // Orders still owed, soonest-due first
   const need = e.orders
@@ -1080,7 +1165,8 @@ async function fulfillFromStock() {
     // Decrement each stock lot's bucket
     const lotActions = e.stockLots
       .filter(l => lotDelta[l.lotId])
-      .map(l => ['UpdateRecord', 'Production_Lots', l.lotId, { [bucket]: Math.max(0, l.stock - lotDelta[l.lotId]) }]);
+      .map(l => ['UpdateRecord', 'Production_Lots', l.lotId,
+        stockMove(Object.assign({}, l.row), C2, 'general', -lotDelta[l.lotId]).fields]);
     await grist.docApi.applyUserActions([...allocActions, ...lotActions]);
     showToast(`Pulled ${allocActions.reduce((s, a) => s + a[3][ALLOC.qty], 0)} from stock ✓`);
     await loadForRecipe({ id: e.recipeId });
@@ -1178,9 +1264,12 @@ async function logPot() {
     if (LOT.date) lotFields[LOT.date] = todayEpochSeconds();
     if (LOT.bin && binPick) lotFields[LOT.bin] = binPick.id;
     if (leftover > 0) {
-      const col = bucket === 'vendor' ? (LOT.vendorStock || LOT.generalStock)
-                                      : (LOT.storeStock || LOT.generalStock);
-      if (col) lotFields[col] = leftover;
+      // Wound and straight onto a store: On_Hand and that listing, never General.
+      const C2 = stock2Cols(lotsTable);
+      if (!C2.onHand) { showToast(STOCK2_NOT_READY); return; }
+      lotFields[C2.onHand] = leftover;
+      const lc = bucket === 'vendor' ? C2.vendor : C2.store;
+      if (lc) lotFields[lc] = leftover;
     }
 
     const addRes = await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, lotFields]]);

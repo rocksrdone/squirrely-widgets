@@ -448,19 +448,24 @@ async function loadEverything() {
     const DRY = /dry rack|wood rack|overnight|ready to assign/i;
     const WET = /wet rack|metal rack|day rack/i;
     const lotsByRecipe = {};
+    S.stock2 = stock2Cols(lotsT);
     (lotsT.id || []).forEach((id, i) => {
       const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       if (!recipeId) return;
+      const row = stock2Row(lotsT, S.stock2, i);
       const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
       let total = Number(columnAsArray(lotsT, LOT.spoolsMade)[i]) || 0;
-      if (!total && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
+      // A lot in hank is tracked by Hank_Est, not by its dyed yardage — falling
+      // back to yards here would count the same thread twice.
+      if (!total && !row.hank && LOT.yardsMade) total = Math.round((Number(columnAsArray(lotsT, LOT.yardsMade)[i]) || 0) / yardsPerSpool(recipe.fiber));
       const alloc = allocs.filter(a => a.lotId === id).reduce((s, a) => s + a.qty, 0);
       const store = Number(columnAsArray(lotsT, LOT.storeStock)[i]) || 0;
       const vendor = Number(columnAsArray(lotsT, LOT.vendorStock)[i]) || 0;
       const general = LOT.generalStock ? (Number(columnAsArray(lotsT, LOT.generalStock)[i]) || 0) : 0;
       const stock = store + vendor + general;
       const broken = LOT.broken ? (Number(columnAsArray(lotsT, LOT.broken)[i]) || 0) : 0;
-      const unwound = Math.max(0, total - alloc - stock - broken); // fresh spools not yet spoken for
+      // Hank was never wound, so it is not part of Spools_Made to account for.
+      const unwound = Math.max(0, total - alloc - (stock - row.hank) - broken); // fresh spools not yet spoken for
       const rawStatus = (columnAsArray(lotsT, LOT.drying)[i] || '').toString();
       const isDry = DRY.test(rawStatus) || (!WET.test(rawStatus) && !!rawStatus); // unknown non-wet => treat dry
       const windableFresh = unwound > 0 && isDry;
@@ -479,8 +484,7 @@ async function loadEverything() {
         stock,
         bin: LOT.bin ? (binById[getRefId(columnAsArray(lotsT, LOT.bin)[i])] || '') : '',
         fiberName: LOT.fiber ? (columnAsArray(lotsT, LOT.fiber)[i] || recipe.fiber || '') : (recipe.fiber || ''),
-        storeCol: LOT.vendorStock || LOT.generalStock || LOT.storeStock,
-        storeVal: LOT.vendorStock ? vendor : (general || store),
+        row,
       });
     });
     // Where each colourway's back stock already lives, newest lot first. Read
@@ -865,6 +869,77 @@ function shortHelpHtml(p) {
    Fill is derived from the lots assigned to each bin rather than read from
    Storage_Locations. A stored counter drifts the moment anything is moved by
    hand, and the lots already know where they went. */
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 const BIN_CAPACITY = 60;   // spools a bin holds comfortably
 
 function buildBinFill(lotsT, LOT, allocByLot) {
@@ -882,7 +957,8 @@ function buildBinFill(lotsT, LOT, allocByLot) {
     // of hanks is just as full as one full of spools. Counting only the wound
     // side meant the emptiest-bin rule would keep sending stock to a bin that
     // was already packed.
-    const unwound = Math.max(0, total - (allocByLot[id] || 0) - (v + g + st) - broken);
+    const hk = S.stock2 ? stock2Row(lotsT, S.stock2, i).hank : 0;
+    const unwound = Math.max(0, total - (allocByLot[id] || 0) - (v + g + st - hk) - broken);
     fill[bid] = (fill[bid] || 0) + v + g + st + unwound;
   });
   return fill;
@@ -1435,9 +1511,13 @@ async function confirmWind() {
 
     // Extra good spools -> back stock on the FIRST lot drawn (or first lot with spools)
     const anchor = p.draws[0] ? p.draws[0].lot : (p.line.lots[0] || null);
-    let stockBefore = null, stockCol = null, stockLotId = null;
-    if (p.stock > 0 && anchor && anchor.storeCol) {
-      stockCol = anchor.storeCol; stockLotId = anchor.lotId; stockBefore = anchor.storeVal || 0;
+    /* Surplus is wound and listed on the vendor store at once: On_Hand +n and
+       Vendor +n. General is a formula now, so it is never written. */
+    let stockFields = null, stockInverse = null, stockLotId = null;
+    if (p.stock > 0 && anchor && anchor.row) {
+      if (!S.stock2.onHand) { showToast(STOCK2_NOT_READY); return; }
+      const m = stockMove(Object.assign({}, anchor.row), S.stock2, 'vendor', p.stock);
+      stockFields = m.fields; stockInverse = m.inverse; stockLotId = anchor.lotId;
     }
     let brokenBefore = null, brokenLotId = null;
     if (p.broken > 0 && S.brokenCol && anchor) {
@@ -1448,7 +1528,7 @@ async function confirmWind() {
     const newIds = res.retValues || [];
 
     const lotUpdate = {};
-    if (stockCol) lotUpdate[stockCol] = (stockBefore || 0) + p.stock;
+    if (stockFields) Object.assign(lotUpdate, stockFields);
     // Remember the bin on the lot, so the next surplus of this colourway is told
     // where to go rather than asked again.
     if (p.stock > 0 && S.stockBinPick && S.cols.LOT.bin) {
@@ -1475,7 +1555,7 @@ async function confirmWind() {
 
     S.done.unshift({
       customerName: p.line.customerName, allocIds: newIds,
-      stockCol, stockLotId, stockBefore, stockAdded: p.stock,
+      stockInverse, stockLotId, stockAdded: p.stock,
       brokenLotId, brokenBefore, brokenAdded: p.broken,
       summary: `${p.toOrder} spool${p.toOrder === 1 ? '' : 's'} ${esc(p.line.recipeName)}`
         + (p.draws.length > 1 ? ` (${p.draws.length} lots)` : '')
@@ -1496,8 +1576,8 @@ async function undoWind(i) {
   if (!d) return;
   try {
     const actions = (d.allocIds || []).map(id => ['RemoveRecord', 'Lot_Allocations', id]);
-    if (d.stockAdded > 0 && d.stockCol && d.stockLotId != null && d.stockBefore != null) {
-      actions.push(['UpdateRecord', 'Production_Lots', d.stockLotId, { [d.stockCol]: d.stockBefore }]);
+    if (d.stockAdded > 0 && d.stockInverse && d.stockLotId != null && Object.keys(d.stockInverse).length) {
+      actions.push(['UpdateRecord', 'Production_Lots', d.stockLotId, d.stockInverse]);
     }
     if (d.brokenAdded > 0 && S.brokenCol && d.brokenLotId != null && d.brokenBefore != null) {
       actions.push(['UpdateRecord', 'Production_Lots', d.brokenLotId, { [S.brokenCol]: d.brokenBefore }]);

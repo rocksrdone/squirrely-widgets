@@ -436,6 +436,77 @@ function suggestBinForLot(lot, pending) {
   return { bin: '', note: `every ${lot.fiber || ''} bin is full — ${lot.stock} spools need space` };
 }
 
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 async function loadStock() {
   try {
     const [lotsT, recipesT] = await Promise.all([
@@ -466,8 +537,10 @@ async function loadStock() {
       return;
     }
     S.recCols = REC;
-    // Held-back bucket. Vendor/Store are still live: they hold the spools listed on each store.
-    S.stockCol = LOT.general || LOT.store || LOT.vendor;
+    /* General is a formula now (held back = On hand + Hank − listed). Writes go
+       to On_Hand via stockSet(); S.stockCol is only "can stock be written". */
+    S.stock2 = stock2Cols(lotsT);
+    S.stockCol = S.stock2.onHand;
     S.lotCols = LOT;
     S.binCol = LOT.bin;
     /* Before any lot is read, so binDisplay() knows which way to translate. */
@@ -576,9 +649,8 @@ async function loadStock() {
       /* The count shown is everything on hand. Spools in Vendor/Store are the
          ones listed on a storefront (Inventory Desk moves them there), so a
          save keeps those and puts only the rest in the held-back column. */
-      const listed = [LOT.store, LOT.vendor, LOT.general]
-        .filter(col => col && col !== S.stockCol)
-        .reduce((n, col) => n + (Number(columnAsArray(lotsT, col)[i]) || 0), 0);
+      const row = stock2Row(lotsT, S.stock2, i);
+      const listed = row.vendor + row.store;
       const recipeId = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
       const recipe = recipeById[recipeId] || { name: `Recipe #${recipeId}`, fiber: '', method: '' };
       (byRecipe[recipeId] = byRecipe[recipeId] || { recipeId, recipe, lots: [], total: 0 });
@@ -589,6 +661,7 @@ async function loadStock() {
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         stock,
         listed,
+        row,
         bin: binDisplay(LOT.bin ? columnAsArray(lotsT, LOT.bin)[i] : null),
         /* The value exactly as stored, so a broken reference can be told from
            a working one and repaired without guessing which it was. */
@@ -634,7 +707,8 @@ function colorCard(c) {
       <div class="lot-info">
         <div class="lot-no">${esc(l.lotNumber)} ${binChip(l)}${
           (l.customers || []).length ? `<span class="who">${esc(l.customers.join(', '))}</span>` : ''}</div>
-        <div class="lot-sub">${l.fiber ? esc(l.fiber) : ''}${l.date ? (l.fiber ? ' · ' : '') + 'made ' + fmtDate(l.date) : ''}</div>
+        <div class="lot-sub">${l.fiber ? esc(l.fiber) : ''}${l.date ? (l.fiber ? ' · ' : '') + 'made ' + fmtDate(l.date) : ''}${
+          l.row && l.row.hank ? ` · ~${l.row.hank} in hank` : ''}${l.listed ? ` · ${l.listed} listed` : ''}</div>
       </div>
       <div class="lot-adjust">
         <button onclick="event.stopPropagation();step(${l.lotId},-1)">−</button>
@@ -1034,7 +1108,7 @@ async function addStock() {
   if (!r || qty <= 0) { showToast('Pick a colorway and a spool count'); return; }
   const LOT = S.lotCols;
   const bucket = S.stockCol;
-  if (!bucket) { showToast('No stock column to write to'); return; }
+  if (!bucket) { showToast(STOCK2_NOT_READY); return; }
 
   /* ── The variant row, written before the lot that needs it ───────────────
      Confirmed rather than silent: this adds a row to Recipes, which is the
@@ -1074,7 +1148,7 @@ async function addStock() {
     const fields = {};
     fields[LOT.lotNumber] = lotNumber;
     if (LOT.recipe) fields[LOT.recipe] = r.id;
-    fields[bucket] = qty;                       // spools land straight in back stock
+    fields[bucket] = qty;                       // wound spools, straight to back stock (held back)
     if (LOT.spoolsMade) fields[LOT.spoolsMade] = qty;
     if (LOT.yardsMade) fields[LOT.yardsMade] = qty * (fiberCode(r.fiber) === 'EN' ? 150 : 100);
     if (LOT.fiber && r.fiber) fields[LOT.fiber] = fiberCode(r.fiber);
@@ -1110,20 +1184,30 @@ function dirty(lotId) {
 async function saveLot(lotId) {
   const el = document.getElementById(`q-${lotId}`);
   const val = Math.max(0, Number(el.value) || 0);
-  if (!S.stockCol) { showToast('No stock column to write to'); return; }
-  /* The number typed is the whole pile on hand. Listed spools stay listed;
-     the held-back column gets the difference. Going below what is listed
-     would mean selling something not on the shelf, so that is de-listing
-     work for Inventory Desk, not a silent write here. */
+  if (!S.stockCol) { showToast(STOCK2_NOT_READY); return; }
+  /* The number typed is the whole pile: wound + hank. Listed spools stay
+     listed. Going below what is listed would mean selling something not on
+     the shelf, so that is de-listing work for Inventory Desk, not a silent
+     write here. This is a recount, so a drop comes off wound spools first and
+     then the hank estimate, and nothing is treated as wound or shipped. */
   let target = null;
   for (const c of S.colors) { target = c.lots.find(l => l.lotId === lotId); if (target) break; }
-  const listed = (target && target.listed) || 0;
+  if (!target) return;
+  const listed = target.listed || 0;
   if (val < listed) {
     showToast(`${listed} of these are listed on a store — de-list in Inventory Desk first`);
     return;
   }
+  const row = Object.assign({}, target.row);
+  const delta = val - (row.onHand + row.hank);
+  let onHand = row.onHand, hank = row.hank;
+  if (delta >= 0) onHand += delta;
+  else { const w = Math.min(-delta, onHand); onHand -= w; hank = Math.max(0, hank - (-delta - w)); }
+  const { fields } = stockSet(row, S.stock2, { onHand, hank });
+  if (!Object.keys(fields).length) return;
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, { [S.stockCol]: val - listed }]]);
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, fields]]);
+    target.row = row;
     showToast(`Saved — ${val} spool${val === 1 ? '' : 's'} ✓`);
     // update local model so totals stay right without a full reload flicker
     for (const c of S.colors) {

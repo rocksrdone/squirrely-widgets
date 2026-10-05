@@ -544,9 +544,81 @@ async function loadAll() {
    Entirely optional. Every failure in here leaves S.stockNote explaining what
    is missing and leaves the rest of the builder working — an order can always
    be built and pushed without ever touching the shelf. */
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 async function loadStock() {
   S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
   S.stockCols = {}; S.lotStock = {}; S.lotInfo = {}; S.stockNote = ''; S.todoQueue = [];
+  S.stock2 = {}; S.lotRow = {};
   S.stockFailed = false;
   try {
     const [lotT, allocT] = await Promise.all([
@@ -560,6 +632,9 @@ async function loadStock() {
                   date: lc(['Date_Dyed']), bin: lc(['Storage_Bin']),
                   made: lc(['Spools_Made']), notes: lc(['Notes']) };
     S.lotCols = LOT;
+    /* General is READ here (it is what can be reserved from back stock) but
+       never written: it is a formula. Every write goes through stockMove(). */
+    S.stock2 = stock2Cols(lotT);
     SOURCES.forEach(s => {
       const col = lc(SOURCE_META[s].col);
       if (col) S.stockCols[s] = col;
@@ -629,6 +704,7 @@ async function loadStock() {
       const by = {};
       Object.entries(S.stockCols).forEach(([s, col]) => { by[s] = num(columnAsArray(lotT, col)[i]); });
       S.lotStock[id] = by;
+      S.lotRow[id] = stock2Row(lotT, S.stock2, i);
       /* Name and bin for EVERY lot, not just ones with stock left. A lot
          reserved down to zero is exactly the one whose spools are in a box
          waiting to be picked, and "where are they" is the question that
@@ -1486,13 +1562,17 @@ async function reserveFromStock(lineId, source, qtyOverride) {
       if (A.adjusted) f[A.adjusted] = false;   // the pull itself changes nothing on Shopify
       acts.push(['AddRecord', 'Lot_Allocations', null, f]);
     });
+    if (!S.stock2.onHand) throw new Error(STOCK2_NOT_READY);
+    const work = {};   // lotId -> row being changed, so two draws on one lot add up
     draws.forEach(d => {
-      const now = num((S.lotStock[d.lot.lotId] || {})[source]);
-      const fields = { [col]: Math.max(0, now - d.take) };
+      const row = work[d.lot.lotId] = work[d.lot.lotId]
+        || Object.assign({}, S.lotRow[d.lot.lotId] || { onHand: 0, hank: 0, vendor: 0, store: 0, made: 0 });
+      // The spools leave the shelf and, for a store, come off that listing.
+      const fields = stockMove(row, S.stock2, source.toLowerCase(), -d.take).fields;
       /* A lot this screen just created carries no made count yet — it is set
          here so the row only ever claims spools it can also account for. */
       if (d.lot.lotId === S.freshLot && S.lotCols.made) fields[S.lotCols.made] = d.take;
-      acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId, fields]);
+      if (Object.keys(fields).length) acts.push(['UpdateRecord', 'Production_Lots', d.lot.lotId, fields]);
     });
     await grist.docApi.applyUserActions(acts);
     S.freshLot = null;
@@ -1500,7 +1580,8 @@ async function reserveFromStock(lineId, source, qtyOverride) {
     toast(`Reserved ${total} from ${SOURCE_META[source].short}`);
   } catch (e) {
     console.error('Could not reserve:', e);
-    alert('Could not reserve those spools. Nothing was changed.');
+    alert((e && e.message === STOCK2_NOT_READY ? STOCK2_NOT_READY + '\n\n' : '')
+      + 'Could not reserve those spools. Nothing was changed.');
   } finally {
     S.stockBusy = false; render();
   }
@@ -1539,7 +1620,8 @@ async function createLotFor(line, source, want) {
     fields[L.date] = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000;
   }
   if (L.made) fields[L.made] = 0;
-  Object.values(S.stockCols).forEach(col => { fields[col] = 0; });
+  // Every typed stock column starts at zero. General is a formula and is skipped.
+  ['onHand', 'hank', 'vendor', 'store'].forEach(k => { if (S.stock2[k]) fields[S.stock2[k]] = 0; });
   if (L.notes) fields[L.notes] = `Created by the order builder for a ${SOURCE_META[source].short} pull — `
     + `this colourway had no lot.`;
 
@@ -1589,11 +1671,13 @@ function releaseActions(line) {
   /* One UpdateRecord per lot even when several sources are credited, so two
      draws on one lot cannot each overwrite the other's column. */
   Object.entries(backTo).forEach(([lotId, bySource]) => {
-    const fields = {};
+    const row = Object.assign({}, S.lotRow[lotId] || { onHand: 0, hank: 0, vendor: 0, store: 0, made: 0 });
+    let fields = {};
+    // Back on the shelf, and back on the listing it left. Accumulates on `row`.
     Object.entries(bySource).forEach(([source, qty]) => {
-      fields[S.stockCols[source]] = num((S.lotStock[lotId] || {})[source]) + qty;
+      Object.assign(fields, stockMove(row, S.stock2, source.toLowerCase(), qty).fields);
     });
-    acts.push(['UpdateRecord', 'Production_Lots', Number(lotId), fields]);
+    if (Object.keys(fields).length) acts.push(['UpdateRecord', 'Production_Lots', Number(lotId), fields]);
   });
   return { acts, total: allocs.reduce((n, a) => n + a.qty, 0), backTo };
 }

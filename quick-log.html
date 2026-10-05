@@ -140,6 +140,19 @@
     font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99; max-width: 90%;
   }
   #toast.show { opacity: 1; }
+
+  /* Lot stock editor */
+  .sk-in {
+    width: 50px; padding: 3px 4px; border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 12px; text-align: right; font-family: 'DM Mono', ui-monospace, monospace;
+  }
+  .sk-in.changed { border-color: var(--teal); background: var(--teal-light); }
+  td.held { font-family: 'DM Mono', ui-monospace, monospace; text-align: right; font-weight: 700; }
+  td.held.bad, .sk-warn.bad { color: #A33; }
+  .sk-warn { font-size: 10px; color: var(--warn-text); display: block; line-height: 1.3; }
+  .sk-legend { font-size: 10.5px; color: var(--muted); line-height: 1.5; margin: 2px 0 6px; }
+  .sk-legend b { color: var(--mid); }
+  .lotno { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--mid); }
 </style>
 </head>
 <body>
@@ -147,9 +160,15 @@
 <div class="head">
   <div>
     <h1>Quick Log</h1>
-    <div class="head-sub">Every open line in one table. Log, move, or return spools without walking the workflow.</div>
+    <div class="head-sub">Orders: log, move or return spools. Lot stock: set any lot's numbers directly.</div>
   </div>
-  <button class="btn" id="refreshBtn">&#8635; Refresh</button>
+  <div style="display:flex;gap:6px;align-items:center">
+    <div class="filters">
+      <button class="fbtn on" id="modeOrders">Orders</button>
+      <button class="fbtn" id="modeStock">Lot stock</button>
+    </div>
+    <button class="btn" id="refreshBtn">&#8635; Refresh</button>
+  </div>
 </div>
 
 <div id="banner"></div>
@@ -170,7 +189,9 @@
      2. Bulk: tick many lines, box all their remaining in one action.
      3. Transfer spools already allocated to one line over to another line,
         possibly on a different order.
-     4. Send allocated spools back to back stock on their lot.                */
+     4. Send allocated spools back to back stock on their lot.
+     5. Lot stock: set a lot's Made / On hand / Hank / Vendor / Retail /
+        Written off directly, with Held back worked out live.               */
 
 /* ---------- small helpers (same contracts as the other widgets) ---------- */
 function getRefId(ref) {
@@ -224,6 +245,77 @@ function fiberCode(v) {
 }
 function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
 
+/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
+   Production_Lots stock columns:
+     On_Hand_Spools        typed    wound spools physically here, counted
+     Hank_Est_Spools       typed    thread still in hank, estimated in spools
+     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
+     Store_Stock_Spools    typed    listed on retail (wound only)
+     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
+   Total stock is still General + Vendor + Store, so code that only READS
+   stock is unchanged. General can no longer be written: every stock write
+   goes through stockMove()/stockSet(), which turn the old idea "change
+   General/Vendor/Store by n" into the typed columns it means physically:
+     +n to general  → On_Hand +n
+     +n to vendor   → On_Hand +n, Vendor +n
+     +n to store    → On_Hand +n, Store +n
+     −n from any    → vendor/store listing −n, and n spools leave the shelf:
+                      wound first, then hank (retail never holds hank). A hank
+                      that leaves had to be wound, so Spools_Made rises by it.
+   The same block is pasted into every widget that writes stock. Change them
+   together. */
+function stock2Cols(lotsT) {
+  const keys = Object.keys(lotsT || {});
+  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
+  return {
+    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
+    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
+    general: f('General_Stock_Spools'), made: f('Spools_Made'),
+  };
+}
+function stock2Row(lotsT, C, i) {
+  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
+  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
+}
+function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+function stock2Diff(before, row, C) {
+  const fields = {}, inverse = {};
+  STOCK2_KEYS.forEach(k => {
+    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
+  });
+  return { fields, inverse };
+}
+/* Mutates `row` so several moves on one lot accumulate correctly. */
+function stockMove(row, C, where, delta) {
+  const before = Object.assign({}, row);
+  let short = 0;
+  if (delta > 0) {
+    row.onHand += delta;
+    if (where === 'vendor') row.vendor += delta;
+    else if (where === 'store') row.store += delta;
+  } else if (delta < 0) {
+    let n = -delta;
+    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
+    else if (where === 'store') row.store = Math.max(0, row.store - n);
+    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
+    if (where !== 'store' && C.hank) {
+      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
+    }
+    short = n;
+  }
+  return Object.assign(stock2Diff(before, row, C), { short });
+}
+/* Absolute values, for editors. Only keys present in `vals` change. */
+function stockSet(row, C, vals) {
+  const before = Object.assign({}, row);
+  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
+  return stock2Diff(before, row, C);
+}
+/* Shown when a write is refused because the switch-over hasn't happened. */
+const STOCK2_NOT_READY =
+  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+
 /* Same three-bucket split order-overview uses. "Wound - Needs Labels" contains
    the word "Wound", so the needs-labels test must run before the catch-all. */
 const BIN_STATUS = 'Wound - Needs Labels';
@@ -249,6 +341,9 @@ let S = {
   xferTarget: {}, xferQty: {}, stockQty: {},
   log: [],             // [{text, cls, inverse:[actions]}]
   ready: false,
+  mode: 'orders',      // 'orders' | 'stock'
+  stockSearch: '', stockAll: false,
+  stockDraft: {},      // lotId -> { made|onHand|hank|vendor|store|broken: typed value }
 };
 
 /* ---------- load ---------- */
@@ -307,9 +402,11 @@ async function loadAll() {
     return;
   }
   S.cols = { LOT, REC, ALLOC, WOL, WO, CUST };
-  // Which stock column absorbs returned spools. General if it exists, else store.
-  S.stockCol = LOT.generalStock || LOT.storeStock;
-  S.stockColLabel = LOT.generalStock ? 'General stock' : 'Store stock';
+  /* Returned and drawn spools are held-back stock: General, which is now a
+     formula. stockMove() writes On_Hand instead (see the stock model block). */
+  S.stock2 = stock2Cols(lotsT);
+  S.stockCol = S.stock2.onHand;           // truthy = stock can be written
+  S.stockColLabel = 'Back stock';
 
   // Recipes
   S.recipes = {};
@@ -365,19 +462,30 @@ async function loadAll() {
     const rid = getRefId(columnAsArray(lotsT, LOT.recipe)[i]);
     if (!rid) return;
     const rec = S.recipes[rid] || { fiber: '' };
+    const row = stock2Row(lotsT, S.stock2, i);
     let total = num(LOT.spoolsMade, i);
-    if (!total && LOT.yardsMade) total = Math.round(num(LOT.yardsMade, i) / yardsPerSpool(columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber));
+    // A lot in hank is tracked by Hank_Est, not by its dyed yardage — falling
+    // back to yards here would count the same thread twice.
+    if (!total && !row.hank && LOT.yardsMade) total = Math.round(num(LOT.yardsMade, i) / yardsPerSpool(columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber));
     const stock = num(LOT.storeStock, i) + num(LOT.vendorStock, i) + num(LOT.generalStock, i);
+    /* Lot arithmetic counts WOUND spools only. A hank was never in Spools_Made,
+       so subtracting it here would make the lot look over-drawn and cancel a
+       sibling lot's real surplus in the per-recipe sum. */
+    const woundStock = stock - row.hank;
     const lot = {
       id, recipeId: rid,
       number: columnAsArray(lotsT, LOT.lotNumber)[i] || `Lot #${id}`,
       date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
-      total, stock,
+      total, stock, row,
       // `free` is clamped because it describes ONE bag and a bag can't hold a
       // negative. `freeSigned` is what gets summed per recipe — see availByRecipe.
-      free: Math.max(0, total - (allocByLot[id] || 0) - stock - num(LOT.broken, i)),
-      freeSigned: total - (allocByLot[id] || 0) - stock - num(LOT.broken, i),
-      stockVal: S.stockCol ? (Number(columnAsArray(lotsT, S.stockCol)[i]) || 0) : 0,
+      free: Math.max(0, total - (allocByLot[id] || 0) - woundStock - num(LOT.broken, i)),
+      freeSigned: total - (allocByLot[id] || 0) - woundStock - num(LOT.broken, i),
+      // Held back (General): what a draw from back stock may take.
+      stockVal: S.stock2.general ? (Number(columnAsArray(lotsT, S.stock2.general)[i]) || 0) : 0,
+      broken: num(LOT.broken, i),
+      alloc: allocByLot[id] || 0,
+      fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || rec.fiber),
     };
     S.lots.push(lot);
     (S.lotsByRecipe[rid] = S.lotsByRecipe[rid] || []).push(lot);
@@ -391,7 +499,8 @@ async function loadAll() {
   S.availByRecipe = {};
   Object.entries(S.lotsByRecipe).forEach(([rid, arr]) => {
     S.availByRecipe[rid] = {
-      wound: arr.reduce((a, x) => a + x.stock, 0),
+      wound: arr.reduce((a, x) => a + x.stock - x.row.hank, 0),
+      hank: arr.reduce((a, x) => a + x.row.hank, 0),
       // Signed sum, clamped once: an over-allocated lot must cancel a sibling's
       // surplus rather than be dropped, which would invent thread that isn't there.
       unwound: Math.max(0, arr.reduce((a, x) => a + x.freeSigned, 0)),
@@ -492,6 +601,9 @@ function binQty(line) { return Math.min(rowQty(line), Number(line.remaining) || 
 function render() {
   if (!S.ready) return;
   renderLog();
+  document.getElementById('modeOrders').classList.toggle('on', S.mode === 'orders');
+  document.getElementById('modeStock').classList.toggle('on', S.mode === 'stock');
+  if (S.mode === 'stock') { renderStock(); return; }
 
   const lines = visibleLines();
   const counts = {
@@ -587,8 +699,10 @@ function availFor(line) {
 function availChipHtml(l) {
   const a = availFor(l);
   if (!l.recipeId || !a.lots) return '';
-  if (!a.wound && !a.unwound) return '';
+  if (!a.wound && !a.unwound && !a.hank) return '';
   const parts = [];
+  if (a.hank) parts.push(`<span class="avail rack"
+    title="${esc('about ' + a.hank + ' spools still in hank — wind before boxing')}">~${a.hank} hank</span>`);
   if (a.wound) parts.push(`<span class="avail ${l.remaining && a.wound < l.remaining ? 'part' : 'ok'}"
     title="${esc(a.wound + ' wound, in back stock, assigned to nobody')}">${a.wound} wound</span>`);
   if (a.unwound) parts.push(`<span class="avail rack"
@@ -970,10 +1084,12 @@ async function logSpools(lines, status, label) {
 
   Object.entries(stockDraw).forEach(([lotId, taken]) => {
     const lot = S.lots.find(x => x.id === Number(lotId));
-    const before = lot ? lot.stockVal : 0;
-    actions.push(['UpdateRecord', 'Production_Lots', Number(lotId),
-      { [S.stockCol]: Math.max(0, before - taken) }]);
-    inverse.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before }]);
+    if (!lot) return;
+    // Held-back spools leaving the shelf: wound first, then hank.
+    const m = stockMove(Object.assign({}, lot.row), S.stock2, 'general', -taken);
+    if (!Object.keys(m.fields).length) return;
+    actions.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.fields]);
+    inverse.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.inverse]);
   });
 
   if (!actions.length) {
@@ -1081,7 +1197,7 @@ async function doToStock(lineId) {
   const line = lineById(lineId);
   const qty = Math.max(0, Number(S.stockQty[lineId]) || 0);
   if (!line || !qty) { showToast('Set a quantity to return'); return; }
-  if (!S.stockCol) { showToast('No stock column on Production_Lots'); return; }
+  if (!S.stockCol) { showToast(STOCK2_NOT_READY, true); return; }
   const c = consumeFromLine(line, qty);
   if (c.short > 0) { showToast(`Only ${qty - c.short} allocated on that line`); return; }
   const withLot = c.taken.filter(t => t.lotId);
@@ -1093,9 +1209,11 @@ async function doToStock(lineId) {
   const updates = [], invUpdates = [];
   Object.entries(byLot).forEach(([lotId, add]) => {
     const lot = S.lots.find(x => x.id === Number(lotId));
-    const before = lot ? lot.stockVal : 0;
-    updates.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before + add }]);
-    invUpdates.push(['UpdateRecord', 'Production_Lots', Number(lotId), { [S.stockCol]: before }]);
+    if (!lot) return;
+    // Returned spools are wound and go back on the shelf, held back.
+    const m = stockMove(Object.assign({}, lot.row), S.stock2, 'general', add);
+    updates.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.fields]);
+    invUpdates.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.inverse]);
   });
   try {
     await grist.docApi.applyUserActions(c.actions.concat(updates));
@@ -1125,6 +1243,179 @@ async function undo(i) {
     console.error('Quick Log: undo failed', err);
     showToast('Undo failed — the rows may have changed since');
   }
+}
+
+/* ---------- lot stock editor ----------
+   The direct way to set a lot's numbers: what was wound, what is on the shelf,
+   what is still in hank, what is listed where. Held back is never typed — it
+   is whatever is left after the listings, which is what General now is. */
+const SK_FIELDS = [
+  ['made', 'Made', 'Spools ever wound from this lot'],
+  ['onHand', 'On hand', 'Wound spools on the shelf now'],
+  ['hank', 'Hank', 'Still in hank, as an estimated spool count'],
+  ['vendor', 'Vendor', 'Listed on the vendor store (wound or hank)'],
+  ['store', 'Retail', 'Listed on the retail store (wound only)'],
+  ['broken', 'Written off', 'Gone without an order recording it'],
+];
+function skSaved(lot) {
+  return { made: lot.row.made, onHand: lot.row.onHand, hank: lot.row.hank,
+           vendor: lot.row.vendor, store: lot.row.store, broken: lot.broken };
+}
+function skVals(lot) {
+  const v = skSaved(lot), d = S.stockDraft[lot.id] || {};
+  Object.keys(d).forEach(k => { v[k] = Math.max(0, Number(d[k]) || 0); });
+  return v;
+}
+function skChanged(lot) {
+  const a = skSaved(lot), b = skVals(lot);
+  return Object.keys(a).some(k => a[k] !== b[k]);
+}
+/* Everything that can be wrong with a lot's numbers, worst first. */
+function skWarnings(lot, v) {
+  const out = [];
+  const held = v.onHand + v.hank - v.vendor - v.store;
+  if (held < 0) out.push({ bad: true, text: `listed ${-held} more than you have` });
+  if (v.store > v.onHand) out.push({ bad: true, text: 'retail is listing hank — wind it first' });
+  if (v.onHand > v.made) out.push({ bad: true, text: `${v.onHand - v.made} more on hand than were wound` });
+  const unacct = v.made - lot.alloc - v.onHand - v.broken;
+  if (unacct < 0) out.push({ bad: true, text: `${-unacct} more accounted for than were wound` });
+  else if (unacct > 0) out.push({ bad: false, text: `${unacct} wound but not on hand, ordered or written off` });
+  return out;
+}
+function skMatches(lot) {
+  const rec = S.recipes[lot.recipeId] || {};
+  const q = normalize(S.stockSearch);
+  if (q) return normalize(`${lot.number} ${rec.name || ''} ${lot.fiber}`).includes(q);
+  if (S.stockAll) return true;
+  return lot.stock > 0 || lot.row.hank > 0 || !!S.stockDraft[lot.id];
+}
+function skRowHtml(lot) {
+  const rec = S.recipes[lot.recipeId] || {};
+  const v = skVals(lot), saved = skSaved(lot);
+  const held = v.onHand + v.hank - v.vendor - v.store;
+  const warns = skWarnings(lot, v);
+  const cells = SK_FIELDS.map(([k, , tip]) => `<td class="num"><input class="sk-in${
+    v[k] !== saved[k] ? ' changed' : ''}" type="number" min="0" data-sk="${lot.id}" data-k="${k}"
+    value="${v[k]}" title="${esc(tip)}"></td>`);
+  // Held back sits between the listings and Written off, where it reads as a result.
+  cells.splice(5, 0, `<td class="held${held < 0 ? ' bad' : ''}" data-held="${lot.id}"
+    title="On hand + Hank − Vendor − Retail">${held}</td>`);
+  return `<tr class="line" data-skrow="${lot.id}">
+    <td><span class="cw">${esc(rec.name || '?')}</span>${lot.fiber ? `<span class="fib">${esc(lot.fiber)}</span>` : ''}
+      <div class="lotno">${esc(lot.number)}${lot.alloc ? ` · ${lot.alloc} on orders` : ''}</div>
+      <div data-warn="${lot.id}">${warns.map(w => `<span class="sk-warn${w.bad ? ' bad' : ''}">${esc(w.text)}</span>`).join('')}</div>
+    </td>
+    ${cells.join('')}
+    <td class="acts"><button class="btn tiny solid" data-sksave="${lot.id}" ${skChanged(lot) ? '' : 'disabled'}>Save</button></td>
+  </tr>`;
+}
+function renderStock() {
+  const lots = S.lots.filter(skMatches).sort((a, b) => {
+    const na = (S.recipes[a.recipeId] || {}).name || '', nb = (S.recipes[b.recipeId] || {}).name || '';
+    return na.localeCompare(nb) || (a.date || 0) - (b.date || 0);
+  });
+  const dirty = Object.keys(S.stockDraft).filter(id => {
+    const l = S.lots.find(x => x.id === Number(id)); return l && skChanged(l);
+  }).length;
+  const toolbar = `<div class="toolbar">
+    <input class="search" id="skSearch" placeholder="Search colorway or lot number..." value="${esc(S.stockSearch)}">
+    <div class="filters">
+      <button class="fbtn ${S.stockAll ? '' : 'on'}" data-skall="0">In stock</button>
+      <button class="fbtn ${S.stockAll ? 'on' : ''}" data-skall="1">All lots</button>
+    </div>
+  </div>
+  <div class="sk-legend"><b>Held back</b> = On hand + Hank − Vendor − Retail. It's calculated, never typed.
+    <b>Made</b> only counts winding, so a lot that's all hank has 0 made.</div>`;
+  const body = !S.stockCol
+    ? `<div class="banner">${esc(STOCK2_NOT_READY)}</div>`
+    : !lots.length
+      ? `<div class="empty-note">${S.stockSearch ? 'No lot matches.' : 'No lots in stock.'}</div>`
+      : `<table class="grid"><thead><tr>
+          <th>Lot</th>${SK_FIELDS.slice(0, 5).map(([, l]) => `<th class="num" style="width:58px">${l}</th>`).join('')}
+          <th class="num" style="width:58px">Held back</th>
+          <th class="num" style="width:58px">Written off</th><th style="width:52px"></th>
+        </tr></thead><tbody>${lots.map(skRowHtml).join('')}</tbody></table>`;
+  const foot = `<div class="footbar">
+    <div class="count">${dirty ? `<strong>${dirty}</strong> lot${dirty === 1 ? '' : 's'} changed, not saved` : 'Type a number and save the row.'}</div>
+    <button class="btn" id="skDiscard" ${dirty ? '' : 'disabled'}>Discard</button>
+    <button class="btn solid" id="skSaveAll" ${dirty ? '' : 'disabled'}>Save all</button>
+  </div>`;
+  document.getElementById('pane').innerHTML = toolbar + body + foot;
+  bindStock();
+}
+/* Typing must not re-render (focus would jump), so only this row is touched. */
+function skRefreshRow(lotId) {
+  const lot = S.lots.find(x => x.id === lotId);
+  if (!lot) return;
+  const v = skVals(lot), saved = skSaved(lot);
+  const held = v.onHand + v.hank - v.vendor - v.store;
+  const h = document.querySelector(`[data-held="${lotId}"]`);
+  if (h) { h.textContent = held; h.classList.toggle('bad', held < 0); }
+  const w = document.querySelector(`[data-warn="${lotId}"]`);
+  if (w) w.innerHTML = skWarnings(lot, v).map(x => `<span class="sk-warn${x.bad ? ' bad' : ''}">${esc(x.text)}</span>`).join('');
+  document.querySelectorAll(`[data-sk="${lotId}"]`).forEach(el =>
+    el.classList.toggle('changed', v[el.dataset.k] !== saved[el.dataset.k]));
+  const b = document.querySelector(`[data-sksave="${lotId}"]`);
+  if (b) b.disabled = !skChanged(lot);
+  const dirty = Object.keys(S.stockDraft).filter(id => {
+    const l = S.lots.find(x => x.id === Number(id)); return l && skChanged(l);
+  }).length;
+  const c = document.querySelector('.footbar .count');
+  if (c) c.innerHTML = dirty ? `<strong>${dirty}</strong> lot${dirty === 1 ? '' : 's'} changed, not saved` : 'Type a number and save the row.';
+  ['skDiscard', 'skSaveAll'].forEach(id => { const e = document.getElementById(id); if (e) e.disabled = !dirty; });
+}
+async function saveStock(lotIds) {
+  if (!S.stockCol) { showToast(STOCK2_NOT_READY, true); return; }
+  const actions = [], inverse = [], names = [];
+  lotIds.forEach(id => {
+    const lot = S.lots.find(x => x.id === id);
+    if (!lot || !skChanged(lot)) return;
+    const v = skVals(lot);
+    const d = stockSet(Object.assign({}, lot.row), S.stock2, v);
+    const brokenCol = S.cols.LOT.broken;
+    if (brokenCol && v.broken !== lot.broken) { d.fields[brokenCol] = v.broken; d.inverse[brokenCol] = lot.broken; }
+    if (!Object.keys(d.fields).length) return;
+    actions.push(['UpdateRecord', 'Production_Lots', id, d.fields]);
+    inverse.push(['UpdateRecord', 'Production_Lots', id, d.inverse]);
+    names.push(`${(S.recipes[lot.recipeId] || {}).name || lot.number}`);
+  });
+  if (!actions.length) { showToast('Nothing changed'); return; }
+  try {
+    await grist.docApi.applyUserActions(actions);
+    S.log.unshift({
+      text: `Stock set on ${names.length === 1 ? names[0] : names.length + ' lots'}`,
+      inverse,
+    });
+    lotIds.forEach(id => { delete S.stockDraft[id]; });
+    showToast('Saved ✓');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: stock save failed', e);
+    showToast(/formula/i.test(String(e && e.message)) ? STOCK2_NOT_READY : 'Save failed — check Production_Lots', true);
+  }
+}
+function bindStock() {
+  const s = document.getElementById('skSearch');
+  if (s) s.addEventListener('input', () => {
+    S.stockSearch = s.value;
+    const pos = s.selectionStart;
+    render();
+    const s2 = document.getElementById('skSearch');
+    if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
+  });
+  document.querySelectorAll('[data-skall]').forEach(el =>
+    el.addEventListener('click', () => { S.stockAll = el.dataset.skall === '1'; render(); }));
+  document.querySelectorAll('[data-sk]').forEach(el => el.addEventListener('input', () => {
+    const id = Number(el.dataset.sk);
+    (S.stockDraft[id] = S.stockDraft[id] || {})[el.dataset.k] = el.value;
+    skRefreshRow(id);
+  }));
+  document.querySelectorAll('[data-sksave]').forEach(el =>
+    el.addEventListener('click', () => saveStock([Number(el.dataset.sksave)])));
+  const all = document.getElementById('skSaveAll');
+  if (all) all.addEventListener('click', () => saveStock(Object.keys(S.stockDraft).map(Number)));
+  const dis = document.getElementById('skDiscard');
+  if (dis) dis.addEventListener('click', () => { S.stockDraft = {}; render(); });
 }
 
 /* ---------- events ---------- */
@@ -1260,6 +1551,8 @@ function showToast(msg, sticky) {
 document.getElementById('refreshBtn').addEventListener('click', () => {
   S.picked = {}; S.qty = {}; S.openDrawer = null; loadAll();
 });
+document.getElementById('modeOrders').addEventListener('click', () => { S.mode = 'orders'; render(); });
+document.getElementById('modeStock').addEventListener('click', () => { S.mode = 'stock'; render(); });
 
 /* Static shell is already in the DOM; only now do we touch the plugin API, so
    a failure here shows a banner instead of killing the script silently. */
