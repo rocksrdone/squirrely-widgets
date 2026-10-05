@@ -481,17 +481,39 @@ async function checkStores() {
   S.storeLoading = true; S.storeError = '';
   render();
   try {
-    const res = await fetch(STORE_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'inventory-desk' }),
-    });
-    if (!res.ok) throw new Error('webhook returned ' + res.status);
-    const data = await res.json();
-    if (data && data.ok === false) throw new Error(data.error || 'the workflow reported a failure');
+    /* The workflow looks up exactly the SKUs it is sent (by SKU, so there is no
+       250-product cap to fall off). It used to be called with no SKUs at all,
+       answered "nothing was looked up", and every colourway then read as "not
+       on the vendor store". Send every SKU this screen knows, in batches. */
+    const skus = [...new Set(Object.values(S.recipes)
+      .map(r => String(r.sku || '').trim()).filter(Boolean))];
+    if (!skus.length) throw new Error('no recipe has a SKU to look up');
+    const BATCH = 100;
+    const merged = { variants: [], missing: [], notes: [], counts: { variants: 0, not_active: 0, missing: 0 } };
+    for (let i = 0; i < skus.length; i += BATCH) {
+      const res = await fetch(STORE_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: 'inventory-desk', skus: skus.slice(i, i + BATCH) }),
+      });
+      if (!res.ok) throw new Error('webhook returned ' + res.status);
+      const data = await res.json();
+      if (data && data.ok === false) throw new Error(data.error || 'the workflow reported a failure');
+      merged.variants.push(...(data.variants || []));
+      merged.missing.push(...(data.missing || []));
+      (data.notes || []).forEach(n => { if (!merged.notes.includes(n)) merged.notes.push(n); });
+      const c = data.counts || {};
+      merged.counts.variants += c.variants || 0;
+      merged.counts.not_active += c.not_active || 0;
+      merged.counts.missing += c.missing || 0;
+      merged.fetched_at = data.fetched_at;
+    }
     const bySku = {};
-    (data.variants || []).forEach(v => { bySku[normalize(v.sku)] = v; });
-    S.store = { ...data, bySku };
+    merged.variants.forEach(v => { bySku[normalize(v.sku)] = v; });
+    /* Only a SKU that was asked about can be called missing. Anything not asked
+       (a recipe with no SKU) says so instead of claiming it isn't listed. */
+    const asked = new Set(skus.map(normalize));
+    S.store = { ...merged, bySku, asked };
   } catch (e) {
     console.error('Inventory Desk: store check failed', e);
     S.store = null;
