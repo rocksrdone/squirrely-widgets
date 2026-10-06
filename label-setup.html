@@ -190,7 +190,25 @@ const PRESETS={
    shows the sheet's numbers, and saving creates its row. */
 const CAL_KEYS=['left','top','scaleX','scaleY'];
 const PC_COLS={left:'Left_Margin_In',top:'Top_Margin_In',scaleX:'Scale_X',scaleY:'Scale_Y'};
-const PRINTER_DEFAULTS=['Color','B/W'];
+/* Printer names come from the Printer column's own choices, so whatever you
+   name them in Grist (an actual printer model is clearest) is what the tabs
+   show. Names already used in rows are added; nothing is invented. */
+async function printerChoices(colId) {
+  try {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const ti = (tables.tableId || []).indexOf('Printer_Calibrations');
+    if (ti < 0) return [];
+    const ref = tables.id[ti];
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    for (let i = 0; i < (cols.id || []).length; i++) {
+      if (cols.parentId[i] !== ref || cols.colId[i] !== colId) continue;
+      const opts = JSON.parse(cols.widgetOptions[i] || '{}');
+      return Array.isArray(opts.choices) ? opts.choices.map(String) : [];
+    }
+  } catch (e) { console.warn('Could not read the Printer choices', e); }
+  return [];
+}
+
 const S={cols:{},missing:[],tpls:[],sel:null,dirty:{},saving:false,pc:null,printer:null,
          pvName:'Frost Smoke',pvFiber:'FFN',measured:''};
 
@@ -223,8 +241,9 @@ async function loadPrinterCals(){
   const rows=(t.id||[]).map((id,i)=>{const r={id,printer:String(columnAsArray(t,c.printer)[i]||'').trim(),
       tplId:getRefId(columnAsArray(t,c.tpl)[i]),calDate:c.calDate?columnAsArray(t,c.calDate)[i]:null};
     CAL_KEYS.forEach(k=>{r[k]=c[k]?columnAsArray(t,c[k])[i]:null;});return r;}).filter(r=>r.printer);
-  const printers=[...new Set(rows.map(r=>r.printer))];
-  PRINTER_DEFAULTS.forEach(p=>{if(!printers.includes(p))printers.push(p);});
+  const printers=await printerChoices(c.printer);
+  rows.forEach(r=>{if(!printers.includes(r.printer))printers.push(r.printer);});
+  if(!printers.length)return;   // no printers named yet: calibration stays on the sheet
   S.pc={cols:c,rows,printers};
   let saved=null;try{saved=localStorage.getItem('labelPrinter');}catch(e){}
   if(!S.printer||!printers.includes(S.printer))S.printer=printers.includes(saved)?saved:printers[0];

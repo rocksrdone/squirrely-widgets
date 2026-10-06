@@ -539,7 +539,7 @@ async function loadAll() {
   });
 
   await loadTemplates(problems);
-  await loadPrinterCals();
+  await loadPrinterCals(problems);
   await loadLabelSettings();
   await loadLabelStock(problems);
   await reconcileLabelUsage(problems);
@@ -2163,8 +2163,25 @@ function fillFor(groupKey, fillOpts) {
    The sheet's geometry stays on Label_Templates. A printer with no row for a
    sheet uses the sheet's own numbers, so nothing breaks before calibrating.
    Without the table at all, everything works exactly as before. */
-const PRINTER_DEFAULTS = ['Color', 'B/W'];
-async function loadPrinterCals() {
+/* Printer names come from the Printer column's own choices, so whatever you
+   name them in Grist (an actual printer model is clearest) is what the tabs
+   show. Names already used in rows are added; nothing is invented. */
+async function printerChoices(colId) {
+  try {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const ti = (tables.tableId || []).indexOf('Printer_Calibrations');
+    if (ti < 0) return [];
+    const ref = tables.id[ti];
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    for (let i = 0; i < (cols.id || []).length; i++) {
+      if (cols.parentId[i] !== ref || cols.colId[i] !== colId) continue;
+      const opts = JSON.parse(cols.widgetOptions[i] || '{}');
+      return Array.isArray(opts.choices) ? opts.choices.map(String) : [];
+    }
+  } catch (e) { console.warn('Could not read the Printer choices', e); }
+  return [];
+}
+async function loadPrinterCals(problems) {
   S.pc = null;
   let t;
   try { t = await grist.docApi.fetchTable('Printer_Calibrations'); } catch (e) { renderPrinterPick(); return; }
@@ -2184,8 +2201,13 @@ async function loadPrinterCals() {
     calDate: c.calDate ? columnAsArray(t, c.calDate)[i] : null,
     note: c.note ? columnAsArray(t, c.note)[i] || '' : '',
   })).filter(r => r.printer);
-  const printers = [...new Set(rows.map(r => r.printer))];
-  PRINTER_DEFAULTS.forEach(p => { if (!printers.includes(p)) printers.push(p); });
+  const printers = await printerChoices(c.printer);
+  rows.forEach(r => { if (!printers.includes(r.printer)) printers.push(r.printer); });
+  if (!printers.length) {
+    if (problems) problems.push({ title: 'Printer_Calibrations has no printers yet',
+      body: 'Add your printers as choices on its <strong>Printer</strong> column (the model names work well). Until then each sheet uses its own calibration.' });
+    renderPrinterPick(); return;
+  }
   S.pc = { cols: c, rows, printers };
   let saved = null;
   try { saved = localStorage.getItem('labelPrinter'); } catch (e) {}
