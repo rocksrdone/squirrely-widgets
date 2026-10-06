@@ -281,6 +281,7 @@
       <span id="historyBadge" onclick="jumpToHistory()" style="display:none; font-size:10px; font-weight:600; color:var(--teal); background:var(--teal-light); border:1px solid #9ACFC7; border-radius:10px; padding:3px 8px; cursor:pointer; white-space:nowrap;"></span>
       <button class="btn btn-teal" id="finalizeTopBtn" onclick="finalizeRecipe()" style="display:none;" title="Save and mark Active">✓ Finalize</button>
       <button class="btn" id="flagBtn" onclick="flagForReview()" title="Something is wrong with this recipe">⚑ Flag</button>
+      <button class="btn" id="eVersionBtn" onclick="makeEVersion()" style="display:none;" title="Create the E Nylon listing of this colourway — same dye, nothing to retype">+ E version</button>
       <button class="btn" id="promoteBtn" onclick="promoteFromLE()" style="display:none;" title="Create a new general listing from this limited edition — the LE record stays as it is">↑ New Listing</button>
       <button class="btn" id="duplicateBtn" onclick="duplicateRecipe()" title="Copy this recipe, its dyes and its layout into a new limited edition draft">⧉ Duplicate as LE</button>
       <button class="btn" onclick="createNewRecipe()">+ New Draft</button>
@@ -294,7 +295,7 @@
     <div class="field-grid">
       <div class="field-wrap">
         <span class="field-label">Fiber Type</span>
-        <select class="field-select" id="fiberType" onchange="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate();">
+        <select class="field-select" id="fiberType" onchange="markUnsaved(); renderSkuSuggestion(); updateFinalizeGate(); renderEVersionButton();">
           <option value="">—</option>
           <option>FF Nylon</option>
           <option>E Nylon</option>
@@ -2168,6 +2169,100 @@ function renderPromoteButton() {
   if (!btn) return;
   const kind = scopeKind((document.getElementById('recipeScope') || {}).value || '');
   btn.style.display = kind === 'le' ? 'inline-block' : 'none';
+  renderEVersionButton();
+}
+
+/* ── E Nylon version of an FF colourway ────────────────────────────────────
+   FF and E are the same dye wound onto a different spool, so the E row is a
+   catalogue entry, not a recipe: same name, Fiber_Type "E Nylon", the FF SKU
+   with an EN prefix (FFN_HOWARTH_RDG → EN_HOWARTH_RDG), same scope, customer
+   and school fields. No dye components and no photos are copied.
+
+   That is deliberate, and the rest of the system already relies on it: the
+   recipe card shows an E row with no dyes as "use the FF card", print-day puts
+   FF and E on one kettle tag, and bins key on the name. The E row exists so
+   the SKU, the 150-yard spool, stock, orders, labels and its OWN product
+   photos have somewhere to live. Give it dyes of its own only in the rare case
+   E genuinely needs something different. Same rules as Back Stock's
+   "— EN (new)" option, which creates the identical row. */
+function eSkuFor(ffSku) {
+  const s = String(ffSku || '').trim();
+  const i = s.indexOf('_');
+  return i < 0 ? '' : 'EN' + s.slice(i);
+}
+function existingE() {
+  const eSku = eSkuFor((document.getElementById('skuBase') || {}).value);
+  if (!eSku) return null;
+  return (allOtherSkus || []).find(r => normalize(r.sku || '') === normalize(eSku)) || null;
+}
+function renderEVersionButton() {
+  const btn = document.getElementById('eVersionBtn');
+  if (!btn) return;
+  const fiber = (document.getElementById('fiberType') || {}).value || '';
+  const kind = scopeKind((document.getElementById('recipeScope') || {}).value || '');
+  const sku = (document.getElementById('skuBase') || {}).value || '';
+  const show = currentRecipeId && fiber === 'FF Nylon' && kind !== 'le' && eSkuFor(sku);
+  btn.style.display = show ? 'inline-block' : 'none';
+  if (!show) return;
+  const have = existingE();
+  btn.textContent = have ? 'E version \u2713' : '+ E version';
+  btn.title = have ? `${have.sku} exists — click to open it`
+    : `Create ${eSkuFor(sku)} — same dye, nothing to retype`;
+}
+async function makeEVersion() {
+  if (!currentRecipeId) return;
+  const have = existingE();
+  if (have) { try { grist.setCursorPos({ rowId: have.id }); } catch (e) {} return; }
+  if (!(await ensureSavedFirst('make the E version'))) return;
+
+  const ffSku = document.getElementById('skuBase').value.trim();
+  const eSku = eSkuFor(ffSku);
+  if (!eSku) { showToast('This recipe needs an SKU like FFN_NAME first'); return; }
+  const name = document.getElementById('nameInput').value.trim();
+  const btn = document.getElementById('eVersionBtn');
+  btn.disabled = true; btn.textContent = 'Creating...';
+  try {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const fields = {
+      Recipe_Name: name,
+      Fiber_Type: 'E Nylon',
+      SKU_Base: eSku,
+      Dye_Method: val('dyeMethod'),
+      Recipe_Scope: val('recipeScope'),
+      Year_Made: val('yearMade').trim(),
+      Linked_Customer: val('linkedCustomer') ? Number(val('linkedCustomer')) : null,
+      School_State: val('schoolState').trim(),
+      School_City: val('schoolCity').trim(),
+      School_Code: val('schoolCode').trim(),
+      Status: rowField(currentRecord || {}, ['Status']) || null,
+      Created_Date: Math.floor(Date.now() / 1000),
+      Notes: `[${stamp}] E Nylon version of ${ffSku}. Same dye — the recipe is on the FF row (#${currentRecipeId}).`,
+    };
+    // Only columns this document actually has; empty values are left out.
+    Object.keys(fields).forEach(k => {
+      if ((recipesCols && !recipesCols.has(k)) || fields[k] === '' || fields[k] == null) delete fields[k];
+    });
+    const res = await grist.docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
+    const newId = res && res.retValues && res.retValues[0];
+    if (!newId) throw new Error('No row ID came back from AddRecord');
+    try {
+      await grist.docApi.applyUserActions([
+        ['AddRecord', 'Recipe_Change_Log', null, { Recipe: newId, Change_Date: Math.floor(Date.now() / 1000),
+          Change_Note: `Created as the E Nylon version of ${ffSku} (recipe #${currentRecipeId}).` }],
+        ['AddRecord', 'Recipe_Change_Log', null, { Recipe: currentRecipeId, Change_Date: Math.floor(Date.now() / 1000),
+          Change_Note: `E Nylon version created: ${eSku} (recipe #${newId}).` }],
+      ]);
+    } catch (e) { console.error('Could not log the E version:', e); }
+    allOtherSkus.push({ id: newId, sku: eSku, recipeName: name });
+    showToast(`${eSku} \u2713 — same dye, ready for its own photos`);
+  } catch (e) {
+    console.error('Could not create the E version:', e);
+    showToast('Could not create the E version — see console');
+  } finally {
+    btn.disabled = false;
+    renderEVersionButton();
+  }
 }
 
 /* Repeat shape of the ring layout.
@@ -2839,6 +2934,7 @@ async function loadRecipe(record) {
 
   await loadVendorsList();
   await loadAllSkus();
+  renderEVersionButton();   // needs the SKU list to know whether E already exists
   await loadOrderLinesList();
   const linkedOrderLineId = getRefId(rowField(record, ['Linked_Order_Line']));
   selectedOrderLine = linkedOrderLineId ? allOrderLines.find(l => l.lineId === linkedOrderLineId) || null : null;
