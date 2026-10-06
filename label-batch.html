@@ -2113,6 +2113,7 @@ function ringText(fiber) {
    so spacing stays even, and the string is scaled to close the loop exactly —
    which is why a longer string ("150 Yards") still fits without adjustment.
    Midpoint sits at 12 o'clock, matching the existing Maestro design.          */
+const CAP_HEIGHT = 0.718;   // Helvetica cap height as a fraction of the font size
 function drawRingText(doc, text, cx, cy, dia, fontPt, ratio) {
   const chars = [...(text + ' \u2022 ')];   // trailing bullet closes the loop
   doc.setFontSize(fontPt);
@@ -2129,7 +2130,19 @@ function drawRingText(doc, text, cx, cy, dia, fontPt, ratio) {
     const rad = theta * Math.PI / 180;
     const x = cx + radius * Math.sin(rad);
     const y = cy - radius * Math.cos(rad);
-    doc.text(ch, x, y, { angle: -theta, align: 'center', baseline: 'middle' });
+    /* Centre each glyph on the ring ourselves. jsPDF applies align:'center'
+       and baseline:'middle' along the PAGE axes even when the text is rotated,
+       so every letter landed half its width left and half its height low —
+       the whole ring sat off-centre in the die cut, worst at 3 and 9 o'clock.
+       Instead: step back half the glyph width along the baseline direction and
+       half the cap height along the outward direction, then draw from there. */
+    const along = [Math.cos(rad), Math.sin(rad)];     // baseline direction (page coords, y down)
+    const out = [Math.sin(rad), -Math.cos(rad)];      // glyph "up" = away from centre
+    const halfW = widths[i] / 2;
+    const halfH = (fontPt / 72) * CAP_HEIGHT / 2;
+    const x0 = x - along[0] * halfW - out[0] * halfH;
+    const y0 = y - along[1] * halfW - out[1] * halfH;
+    doc.text(ch, x0, y0, { angle: -theta });
   });
 }
 
@@ -2382,6 +2395,9 @@ async function buildPdf(group) {
     doc.text('Edge to cross = offset (fix margins). Cross to cross should be 7.500" across, 10.000" down (fix Scale_X / Scale_Y).',
       4.25 / g.scaleX, 0.22 / g.scaleY, { align: 'center' });
     doc.setTextColor(0);
+    // Back to the label font, or the first label's ring prints in the
+    // thin "normal" weight used for the cross captions.
+    doc.setFont(NAME_FONT[0], NAME_FONT[1]);
   }
 
   const shrunk = new Set();   // names that wouldn't fit at full size
