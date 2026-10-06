@@ -116,6 +116,7 @@ section.blk{margin-bottom:18px}
 
 function esc(s){return (s===null||s===undefined?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function columnAsArray(t,c){return c&&Array.isArray(t[c])?t[c]:[];}
+function getRefId(r){if(r==null)return null;if(typeof r==='number')return r||null;if(Array.isArray(r))return r[1]||null;if(typeof r==='object'&&r.rowId)return r.rowId;return null;}
 function findColumn(t,cands){const keys=Object.keys(t||{});const n=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
   for(const c of cands){const hit=keys.find(k=>n(k)===n(c));if(hit)return hit;}return null;}
 function num(v){const s=String(v??'').trim();if(!s)return null;const x=Number(s.replace(/[^0-9.\-]/g,''));return isNaN(x)?null:x;}
@@ -183,7 +184,14 @@ const PRESETS={
   OL1025:{cols:7,rows:9,pitchX:1.125,pitchY:1.125,dia:1.0,left:0.375,top:0.5,bleed:0.125,perSheet:63,fontPt:7.5},
 };
 
-const S={cols:{},missing:[],tpls:[],sel:null,dirty:{},saving:false,
+/* Calibration per PRINTER: when Printer_Calibrations exists, the four
+   calibration fields (margins and scale) read and save the selected printer's
+   row for this sheet instead of the sheet itself. A printer with no row yet
+   shows the sheet's numbers, and saving creates its row. */
+const CAL_KEYS=['left','top','scaleX','scaleY'];
+const PC_COLS={left:'Left_Margin_In',top:'Top_Margin_In',scaleX:'Scale_X',scaleY:'Scale_Y'};
+const PRINTER_DEFAULTS=['Color','B/W'];
+const S={cols:{},missing:[],tpls:[],sel:null,dirty:{},saving:false,pc:null,printer:null,
          pvName:'Frost Smoke',pvFiber:'FFN',measured:''};
 
 /* ---------- load ---------- */
@@ -200,15 +208,35 @@ async function load(){
   const ids=t.id||[];
   S.tpls=ids.map((id,i)=>{const v={};FIELDS.forEach(f=>{v[f.k]=S.cols[f.k]?columnAsArray(t,S.cols[f.k])[i]:null;});
     return {id,v};}).filter(x=>String(x.v.code||'').trim());
+  await loadPrinterCals();
   setBanner(S.missing.length?('Columns not in Label_Templates — these stay read-only until added: <b>'+esc(S.missing.join(', '))+'</b>'):'');
   renderList();
   if(S.sel&&S.tpls.some(x=>x.id===S.sel))renderMain(); else {S.sel=S.tpls.length?S.tpls[0].id:null;renderList();renderMain();}
 }
+async function loadPrinterCals(){
+  S.pc=null;let t;
+  try{t=await grist.docApi.fetchTable('Printer_Calibrations');}catch(e){return;}
+  const c={printer:findColumn(t,['Printer']),tpl:findColumn(t,['Template','Label_Template']),
+    calDate:findColumn(t,['Calibrated_On']),note:findColumn(t,['Note','Notes'])};
+  CAL_KEYS.forEach(k=>{c[k]=findColumn(t,[PC_COLS[k]]);});
+  if(!c.printer||!c.tpl)return;
+  const rows=(t.id||[]).map((id,i)=>{const r={id,printer:String(columnAsArray(t,c.printer)[i]||'').trim(),
+      tplId:getRefId(columnAsArray(t,c.tpl)[i]),calDate:c.calDate?columnAsArray(t,c.calDate)[i]:null};
+    CAL_KEYS.forEach(k=>{r[k]=c[k]?columnAsArray(t,c[k])[i]:null;});return r;}).filter(r=>r.printer);
+  const printers=[...new Set(rows.map(r=>r.printer))];
+  PRINTER_DEFAULTS.forEach(p=>{if(!printers.includes(p))printers.push(p);});
+  S.pc={cols:c,rows,printers};
+  let saved=null;try{saved=localStorage.getItem('labelPrinter');}catch(e){}
+  if(!S.printer||!printers.includes(S.printer))S.printer=printers.includes(saved)?saved:printers[0];
+}
+function pcRow(){return S.pc?S.pc.rows.find(r=>r.printer===S.printer&&r.tplId===S.sel)||null:null;}
 function setBanner(html){const el=document.getElementById('banner');
   el.className=html?'banner':''; el.innerHTML=html||'';}
 
 function sel(){return S.tpls.find(x=>x.id===S.sel)||null;}
-function val(k){if(k in S.dirty)return S.dirty[k];const t=sel();return t?t.v[k]:null;}
+function val(k){if(k in S.dirty)return S.dirty[k];
+  if(S.pc&&CAL_KEYS.includes(k)){const r=pcRow();if(r&&num(r[k])>0)return r[k];}
+  const t=sel();return t?t.v[k]:null;}
 function nv(k){return num(val(k));}
 function dirty(){return Object.keys(S.dirty).length>0;}
 
@@ -300,7 +328,8 @@ function previewSvg(){
 
 /* ---------- render ---------- */
 function fieldHtml(f){
-  const miss=!S.cols[f.k], v=val(f.k);
+  const onPrinter=S.pc&&CAL_KEYS.includes(f.k);
+  const miss=onPrinter?!S.pc.cols[f.k]:!S.cols[f.k], v=val(f.k);
   if(f.t==='tog')return `<div class="f ${f.wide?'wide':''}"><label>&nbsp;</label>
       <div class="toggle"><input type="checkbox" data-k="${f.k}" ${v?'checked':''} ${miss?'disabled':''}><span>${esc(f.l)}</span></div>
       ${miss?`<div class="hint">add ${esc(f.c[0])}</div>`:''}</div>`;
@@ -308,7 +337,9 @@ function fieldHtml(f){
   return `<div class="f ${f.wide?'wide':''} ${f.t==='txt'?'txt':''} ${miss?'missing':''}">
       <label>${esc(f.l)}</label>
       <input type="${f.t==='date'?'date':'text'}" data-k="${f.k}" value="${esc(dv)}" ${miss?'disabled':''}>
-      ${miss?`<div class="hint">add ${esc(f.c[0])}</div>`:(f.def?`<div class="def">blank = ${esc(f.def)}</div>`:'')}
+      ${miss?`<div class="hint">add ${esc(onPrinter?PC_COLS[f.k]+' to Printer_Calibrations':f.c[0])}</div>`
+        :(onPrinter&&!pcRow()&&!(f.k in S.dirty)?`<div class="def">from the sheet</div>`
+        :(f.def?`<div class="def">blank = ${esc(f.def)}</div>`:''))}
     </div>`;
 }
 
@@ -318,6 +349,7 @@ function renderMain(){
   const g=geoCheck(), pv=previewSvg();
   const presetKey=Object.keys(PRESETS).find(k=>String(val('code')||'').toUpperCase().startsWith(k));
 
+  let pcPills='';
   const blocks=BLOCKS.map(b=>{
     const fs=FIELDS.filter(f=>f.b===b.id);
     let extra='';
@@ -343,6 +375,13 @@ function renderMain(){
     }
     if(b.id==='cal'){
       const sy=nv('scaleY')||1, sx=nv('scaleX')||1;
+      if(S.pc){const r=pcRow();
+        pcPills=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
+          ${S.pc.printers.map(p=>`<button class="btn tiny ${p===S.printer?'solid':''}" data-printer="${esc(p)}">${esc(p)}</button>`).join('')}
+          <span style="font-size:10.5px;color:${r?'var(--mid)':'var(--accent)'};font-style:italic">${r
+            ?`${esc(S.printer)} calibrated${r.calDate?' '+esc(fmtDate(r.calDate)):''}`
+            :`${esc(S.printer)} not calibrated for this sheet yet — showing the sheet's numbers; saving creates its own`}</span>
+        </div>`;}
       const m=num(S.measured);
       extra=`<div class="calc">
         <div class="calc-row">
@@ -357,9 +396,10 @@ function renderMain(){
       </div>
       ${(sy!==1||sx!==1)?`<div class="check ok">Correcting ${sy!==1?`<b>${((sy-1)*100).toFixed(2)}%</b> down the page`:''}${sy!==1&&sx!==1?' and ':''}${sx!==1?`<b>${((sx-1)*100).toFixed(2)}%</b> across`:''}.</div>`:''}`;
     }
-    return `<section class="blk"><div class="blk-title">${esc(b.t)}</div>
+    const pills=b.id==='cal'?pcPills:'';
+    return `<section class="blk"><div class="blk-title">${esc(b.t)}${b.id==='cal'&&S.pc?' — '+esc(S.printer):''}</div>
       ${b.n?`<div class="blk-note">${esc(b.n)}</div>`:''}
-      <div class="grid">${fs.map(fieldHtml).join('')}</div>${extra}</section>`;
+      ${pills}<div class="grid">${fs.map(fieldHtml).join('')}</div>${extra}</section>`;
   }).join('');
 
   el.innerHTML=`
@@ -425,6 +465,11 @@ function bind(){
     if(!key)return;
     Object.entries(PRESETS[key]).forEach(([k,v])=>{if(S.cols[k])S.dirty[k]=String(v);});
     renderMain();showToast(key+' spec values loaded — margins are nominal, recalibrate for your printer.');});
+  document.querySelectorAll('[data-printer]').forEach(b=>b.addEventListener('click',()=>{
+    if(CAL_KEYS.some(k=>k in S.dirty)&&!confirm('Discard unsaved calibration changes?'))return;
+    CAL_KEYS.forEach(k=>{delete S.dirty[k];});
+    S.printer=b.dataset.printer;try{localStorage.setItem('labelPrinter',S.printer);}catch(e){}
+    renderMain();}));
   const rb=document.getElementById('reloadBtn');
   if(rb)rb.addEventListener('click',()=>{if(dirty()&&!confirm('Discard unsaved changes?'))return;S.dirty={};load();});
   const sb=document.getElementById('saveBtn');
@@ -434,23 +479,35 @@ function bind(){
 async function save(){
   if(S.saving||!S.sel)return;
   S.saving=true;
-  const fields={};
+  const fields={}, pfields={};
   Object.keys(S.dirty).forEach(k=>{
-    const col=S.cols[k];if(!col)return;
+    const onPrinter=S.pc&&CAL_KEYS.includes(k);
+    const col=onPrinter?S.pc.cols[k]:S.cols[k];if(!col)return;
     const f=FIELDS.find(x=>x.k===k);let v=S.dirty[k];
     if(f.t==='tog')v=!!v;
     else if(f.t==='date')v=v?Math.floor(new Date(v+'T00:00:00Z').getTime()/1000):null;
     else if(f.t==='txt')v=String(v).trim();
     else v=num(v);
-    fields[col]=v;
+    (onPrinter?pfields:fields)[col]=v;
   });
   // Touching a calibration value stamps the date, so the record can't go stale.
-  if(['left','top','scaleX','scaleY'].some(k=>k in S.dirty)&&S.cols.calDate&&!('calDate' in S.dirty)){
-    fields[S.cols.calDate]=todayEpoch();
+  const calTouched=CAL_KEYS.some(k=>k in S.dirty);
+  if(calTouched&&S.pc){if(S.pc.cols.calDate)pfields[S.pc.cols.calDate]=todayEpoch();}
+  else if(calTouched&&S.cols.calDate&&!('calDate' in S.dirty))fields[S.cols.calDate]=todayEpoch();
+  const actions=[];
+  if(Object.keys(fields).length)actions.push(['UpdateRecord','Label_Templates',S.sel,fields]);
+  if(Object.keys(pfields).length&&!pcRow()){
+    /* A new printer row starts from every number on screen — edited or carried
+       over from the sheet. A blank Numeric cell in Grist is 0, and a 0 margin
+       would print hard against the edge. */
+    CAL_KEYS.forEach(k=>{const col=S.pc.cols[k];if(col&&!(col in pfields)){const v=num(val(k));if(v!==null)pfields[col]=v;}});
   }
-  if(!Object.keys(fields).length){S.saving=false;S.dirty={};renderMain();return;}
+  if(Object.keys(pfields).length){const r=pcRow();
+    actions.push(r?['UpdateRecord','Printer_Calibrations',r.id,pfields]
+      :['AddRecord','Printer_Calibrations',null,Object.assign({[S.pc.cols.printer]:S.printer,[S.pc.cols.tpl]:S.sel},pfields)]);}
+  if(!actions.length){S.saving=false;S.dirty={};renderMain();return;}
   try{
-    await grist.docApi.applyUserActions([['UpdateRecord','Label_Templates',S.sel,fields]]);
+    await grist.docApi.applyUserActions(actions);
     S.dirty={};S.saving=false;showToast('Saved.');await load();
   }catch(e){
     console.error(e);S.saving=false;

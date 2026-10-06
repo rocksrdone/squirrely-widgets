@@ -233,7 +233,10 @@ input[type=checkbox]:disabled { cursor: default; }
     <h1>Spool Label Batch</h1>
     <div class="sub">Back labels for Maestro mail merge, split by label sheet — one file per stock code.</div>
   </div>
-  <div class="head-actions"><button class="btn" id="refreshBtn">↻ Refresh</button></div>
+  <div class="head-actions">
+    <label id="printerPick" style="display:none;font-size:11px;color:var(--mid);align-items:center;gap:6px;">Printer
+      <select id="printerSel" style="padding:5px 8px;border:1px solid var(--rule);border-radius:5px;font-size:12px;background:#fff;color:var(--ink);"></select></label>
+    <button class="btn" id="refreshBtn">↻ Refresh</button></div>
 </div>
 
 <div class="tabs">
@@ -536,6 +539,7 @@ async function loadAll() {
   });
 
   await loadTemplates(problems);
+  await loadPrinterCals();
   await loadLabelSettings();
   await loadLabelStock(problems);
   await reconcileLabelUsage(problems);
@@ -1531,6 +1535,11 @@ function profileHtml(cust, o) {
 
 function calibHtml(tpl) {
   if (!tpl) return '';
+  const base = tpl;
+  tpl = effTpl(tpl);
+  const pr = S.pc ? (printerRow(base)
+    ? `<span class="calib-vals"><b>${esc(S.printer)}</b> printer</span>`
+    : `<span class="calib-missing">${esc(S.printer)}: not calibrated yet — using this sheet's numbers</span>`) : '';
   const has = tpl.left !== null && tpl.left !== undefined && tpl.left !== '';
   const open = S.openCalib === tpl.id;
   const vals = has
@@ -1539,6 +1548,7 @@ function calibHtml(tpl) {
     : `<span class="calib-missing">no calibration recorded for this sheet</span>`;
   return `<div class="calib">
       <span style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;">Page setup</span>
+      ${pr}
       ${vals}
       <button class="btn tiny" style="margin-left:auto;" data-calib="${tpl.id}">${open ? 'Close' : 'Recalibrate'}</button>
     </div>
@@ -1550,7 +1560,7 @@ function calibHtml(tpl) {
         <div class="calib-field"><label>Reverse print</label><div style="padding:6px 0;"><input type="checkbox" data-cf="reverse" ${tpl.reverse ? 'checked' : ''}></div></div>
         <div class="calib-field" style="flex:1;min-width:170px;"><label>Which pack of sheets</label>
           <input type="text" data-cf="batchNote" value="${esc(tpl.batchNote || '')}" placeholder="e.g. box opened July 2026" style="width:100%;"></div>
-        <button class="btn solid" data-calibsave="${tpl.id}">Save calibration</button>
+        <button class="btn solid" data-calibsave="${tpl.id}">Save${S.pc ? ' for ' + esc(S.printer) : ' calibration'}</button>
       </div>
       <div class="calib-note">Copy these into Maestro under <strong>File → Page Setup</strong> before printing. Saving stamps today's date, so when a print comes out crooked you can see whether the numbers changed since the last good run.</div>
     </div>`;
@@ -2037,14 +2047,36 @@ async function saveCalibration(tplId) {
   if (!c || !form) return;
   const get = k => form.querySelector(`[data-cf="${k}"]`);
   const fields = {};
-  if (c.left) fields[c.left] = numOrNull(get('left').value);
-  if (c.top) fields[c.top] = numOrNull(get('top').value);
+  const actions = [];
+  /* With Printer_Calibrations, the margins belong to the selected printer:
+     they go on its row (made if missing), and the other printer is untouched.
+     Bleed, reverse and the pack note are facts about the sheet and stay put. */
+  if (S.pc) {
+    const P = S.pc.cols, tpl = S.templates.find(x => x.id === tplId);
+    const pf = {};
+    if (P.left) pf[P.left] = numOrNull(get('left').value);
+    if (P.top) pf[P.top] = numOrNull(get('top').value);
+    if (P.calDate) pf[P.calDate] = todayEpochSeconds();
+    const row = printerRow(tpl);
+    // A new row also carries the sheet's scale; a blank Numeric cell would be 0.
+    if (!row && tpl) {
+      if (P.scaleX && tpl.scaleX) pf[P.scaleX] = tpl.scaleX;
+      if (P.scaleY && tpl.scaleY) pf[P.scaleY] = tpl.scaleY;
+    }
+    if (row) actions.push(['UpdateRecord', 'Printer_Calibrations', row.id, pf]);
+    else actions.push(['AddRecord', 'Printer_Calibrations', null,
+      Object.assign({ [P.printer]: S.printer, [P.tpl]: tplId }, pf)]);
+  } else {
+    if (c.left) fields[c.left] = numOrNull(get('left').value);
+    if (c.top) fields[c.top] = numOrNull(get('top').value);
+    if (c.calDate) fields[c.calDate] = todayEpochSeconds();
+  }
   if (c.bleed) fields[c.bleed] = numOrNull(get('bleed').value);
   if (c.reverse) fields[c.reverse] = get('reverse').checked;
   if (c.batchNote) fields[c.batchNote] = get('batchNote').value.trim();
-  if (c.calDate) fields[c.calDate] = todayEpochSeconds();
+  if (Object.keys(fields).length) actions.push(['UpdateRecord', 'Label_Templates', tplId, fields]);
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Label_Templates', tplId, fields]]);
+    await grist.docApi.applyUserActions(actions);
     S.openCalib = null;
     showToast('Calibration saved — set Maestro Page Setup to match.');
     await loadAll();
@@ -2122,9 +2154,73 @@ function fillFor(groupKey, fillOpts) {
   return fillOpts.length === 1 ? fillOpts[0] : '';
 }
 
+/* ── Calibration per PRINTER, not per sheet ───────────────────────────────
+   Two printers feed the same sheets differently, so where the sheet starts
+   (left/top margin) and how much the feed stretches (Scale X/Y) belong to the
+   printer + sheet pair. Printer_Calibrations holds one row per pair:
+     Printer (Choice) · Template (Ref → Label_Templates) · Left_Margin_In ·
+     Top_Margin_In · Scale_X · Scale_Y · Calibrated_On · Note
+   The sheet's geometry stays on Label_Templates. A printer with no row for a
+   sheet uses the sheet's own numbers, so nothing breaks before calibrating.
+   Without the table at all, everything works exactly as before. */
+const PRINTER_DEFAULTS = ['Color', 'B/W'];
+async function loadPrinterCals() {
+  S.pc = null;
+  let t;
+  try { t = await grist.docApi.fetchTable('Printer_Calibrations'); } catch (e) { renderPrinterPick(); return; }
+  const c = {
+    printer: findColumn(t, ['Printer']), tpl: findColumn(t, ['Template', 'Label_Template']),
+    left: findColumn(t, ['Left_Margin_In']), top: findColumn(t, ['Top_Margin_In']),
+    scaleX: findColumn(t, ['Scale_X']), scaleY: findColumn(t, ['Scale_Y']),
+    calDate: findColumn(t, ['Calibrated_On']), note: findColumn(t, ['Note', 'Notes']),
+  };
+  if (!c.printer || !c.tpl) { renderPrinterPick(); return; }
+  const rows = (t.id || []).map((id, i) => ({
+    id, printer: String(columnAsArray(t, c.printer)[i] || '').trim(),
+    tplId: getRefId(columnAsArray(t, c.tpl)[i]),
+    left: c.left ? columnAsArray(t, c.left)[i] : null, top: c.top ? columnAsArray(t, c.top)[i] : null,
+    scaleX: c.scaleX ? Number(columnAsArray(t, c.scaleX)[i]) || null : null,
+    scaleY: c.scaleY ? Number(columnAsArray(t, c.scaleY)[i]) || null : null,
+    calDate: c.calDate ? columnAsArray(t, c.calDate)[i] : null,
+    note: c.note ? columnAsArray(t, c.note)[i] || '' : '',
+  })).filter(r => r.printer);
+  const printers = [...new Set(rows.map(r => r.printer))];
+  PRINTER_DEFAULTS.forEach(p => { if (!printers.includes(p)) printers.push(p); });
+  S.pc = { cols: c, rows, printers };
+  let saved = null;
+  try { saved = localStorage.getItem('labelPrinter'); } catch (e) {}
+  if (!S.printer) S.printer = printers.includes(saved) ? saved : printers[0];
+  renderPrinterPick();
+}
+function renderPrinterPick() {
+  const wrap = document.getElementById('printerPick'), sel = document.getElementById('printerSel');
+  if (!wrap || !sel) return;
+  if (!S.pc) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'inline-flex';
+  sel.innerHTML = S.pc.printers.map(p => `<option ${p === S.printer ? 'selected' : ''}>${esc(p)}</option>`).join('');
+}
+function printerRow(tpl) {
+  if (!S.pc || !tpl) return null;
+  return S.pc.rows.find(r => r.printer === S.printer && r.tplId === tpl.id) || null;
+}
+/* The template as the selected printer sees it. */
+function effTpl(tpl) {
+  const r = printerRow(tpl);
+  if (!r) return tpl;
+  const e = Object.assign({}, tpl, { printerRow: r });
+  // 0 is what Grist stores in an empty Numeric cell — not a real margin.
+  if (Number(r.left) > 0) e.left = r.left;
+  if (Number(r.top) > 0) e.top = r.top;
+  if (r.scaleX) e.scaleX = r.scaleX;
+  if (r.scaleY) e.scaleY = r.scaleY;
+  e.calDate = r.calDate || null;
+  return e;
+}
+
 // Every geometry field the generator needs, or a list of what's missing.
 function pdfGeometry(tpl) {
   if (!tpl) return { ok: false, missing: ['a Label_Templates row'] };
+  tpl = effTpl(tpl);
   const need = {
     Columns: tpl.cols, Rows: tpl.rows,
     Pitch_X_In: tpl.pitchX, Pitch_Y_In: tpl.pitchY,
@@ -2641,6 +2737,12 @@ document.getElementById('fillDefault').addEventListener('change', e => {
   render();
 });
 document.getElementById('refreshBtn').addEventListener('click', () => { S.rowState = {}; loadAll(); });
+document.getElementById('printerSel').addEventListener('change', (e) => {
+  S.printer = e.target.value;
+  try { localStorage.setItem('labelPrinter', S.printer); } catch (err) {}
+  S.openCalib = null;
+  render();
+});
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
