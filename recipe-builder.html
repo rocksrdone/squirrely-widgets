@@ -2204,15 +2204,18 @@ function renderEVersionButton() {
   const show = currentRecipeId && fiber === 'FF Nylon' && kind !== 'le' && eSkuFor(sku);
   btn.style.display = show ? 'inline-block' : 'none';
   if (!show) return;
+  /* Greyed out once the E SKU exists, so a second click can never make a
+     duplicate row. makeEVersion() refuses as well, in case the list is stale. */
   const have = existingE();
-  btn.textContent = have ? 'E version \u2713' : '+ E version';
-  btn.title = have ? `${have.sku} exists — click to open it`
-    : `Create ${eSkuFor(sku)} — same dye, nothing to retype`;
+  btn.disabled = !!have;
+  btn.textContent = have ? 'E version exists' : '+ E version';
+  btn.title = have ? `${have.sku} already exists` : `Create ${eSkuFor(sku)} — same dye, nothing to retype`;
 }
 async function makeEVersion() {
   if (!currentRecipeId) return;
+  await loadAllSkus();   // fresh list, so a row made elsewhere since loading still counts
   const have = existingE();
-  if (have) { try { grist.setCursorPos({ rowId: have.id }); } catch (e) {} return; }
+  if (have) { showToast(`${have.sku} already exists`); renderEVersionButton(); return; }
   if (!(await ensureSavedFirst('make the E version'))) return;
 
   const ffSku = document.getElementById('skuBase').value.trim();
@@ -2260,8 +2263,7 @@ async function makeEVersion() {
     console.error('Could not create the E version:', e);
     showToast('Could not create the E version — see console');
   } finally {
-    btn.disabled = false;
-    renderEVersionButton();
+    renderEVersionButton();   // sets the disabled state from the SKU list
   }
 }
 
