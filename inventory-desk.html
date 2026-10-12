@@ -160,6 +160,26 @@ select.pick, select.pick option {
 }
 .store-bar .stamp { color: var(--muted); font-size: 11px; }
 .store-bar .bad { color: var(--accent); font-weight: 600; }
+/* Bins. A chip per bin the colourway's spools are recorded in. More than one
+   bin for one colourway is worth seeing (they are meant to bag together), so
+   the chips sit on the closed card head rather than inside it. */
+.bin-chip {
+  display: inline-block; font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500;
+  padding: 0 6px; margin-right: 3px; border-radius: 4px; line-height: 17px;
+  background: var(--paper); border: 1px solid var(--rule); color: var(--ink); white-space: nowrap;
+}
+.bin-chip.none { color: var(--accent); border-color: #D9A89C; background: var(--accent-light); font-family: 'Inter', sans-serif; }
+.bin-chip.hit { background: var(--ink); color: white; border-color: var(--ink); }
+.bins-line { margin-top: 3px; }
+.lot-bin { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 52px; }
+.lot-bin.none { color: var(--accent); font-family: 'Inter', sans-serif; font-size: 10px; }
+.pdf-bar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--teal-light); border: 1px solid #9ACFC7; border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 12px; font-size: 12px;
+}
+.pdf-bar a { color: var(--teal); font-weight: 600; }
+.pdf-bar .stamp { color: var(--muted); font-size: 11px; }
 .warn-banner {
   background: var(--gold-light); border: 1px solid #D4B07A; color: #7A5518;
   padding: 8px 11px; border-radius: 6px; font-size: 11.5px; margin-bottom: 12px; line-height: 1.5;
@@ -174,11 +194,14 @@ select.pick, select.pick option {
 <div class="toolbar">
   <input class="search" id="search" placeholder="Search colourway or SKU…">
   <button class="btn" id="showAll">Show colourways with none on hand</button>
+  <select class="pick" id="binFilter" title="Show only what is recorded in one bin"><option value="">All bins</option></select>
   <button class="btn" id="checkStores">Check stores</button>
+  <button class="btn" id="binPdf" title="Printable count sheet, one section per bin">⬇ Bin check PDF</button>
   <button class="btn" id="reload">↻ Reload</button>
 </div>
 <div id="totals"></div>
 <div id="storeBar"></div>
+<div id="pdfBar"></div>
 <div id="list"><div class="empty">Loading…</div></div>
 <div id="log"></div>
 <div class="toast" id="toast"></div>
@@ -275,6 +298,7 @@ let S = {
   moveQty: {}, moveFrom: {}, moveTo: {},
   log: [], ready: false,
   store: null, storeLoading: false, storeError: '',
+  binById: {}, locations: [], binFilter: '', pdfBusy: false, pdfUrl: '', pdfName: '',
 };
 
 /* Read-only snapshot of what the vendor store actually reports, via
@@ -358,6 +382,57 @@ function stockSet(row, C, vals) {
 const STOCK2_NOT_READY =
   'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
+/* ── Thread bins ──────────────────────────────────────────────────────────
+   Production_Lots.Storage_Bin is a REFERENCE to Storage_Locations, so a lot
+   filed correctly comes back as a row id and a lot filed by the old
+   string-writing path comes back as the code itself. Both are read here, as
+   in back-stock and bin-audit. These are thread bins (back stock A1–D7,
+   staging S-…) — NOT dye bins, so normBin() must not touch them.
+
+   A colourway's bins are the bins of its lots that still hold spools. A lot
+   with spools and no bin is shown as "no bin" rather than dropped: those are
+   exactly the spools a bin check is looking for. */
+const NO_BIN_KEY = '__none';
+function binFromRaw(raw) {
+  if (raw == null || raw === '' || raw === 0) return '';
+  if (typeof raw === 'number') return S.binById[raw] || ('#' + raw);
+  if (typeof raw === 'string') return raw.replace(/^#Invalid Ref:\s*/i, '').trim().toUpperCase();
+  const id = getRefId(raw);
+  return id ? (S.binById[id] || ('#' + id)) : '';
+}
+function lotTotal(l) { return BUCKETS.reduce((a, b) => a + (l.vals[b.key] || 0), 0); }
+function lotBinKey(l) { return l.bin || NO_BIN_KEY; }
+function binText(key) { return key === NO_BIN_KEY ? 'no bin' : key; }
+/* Shelf order: back stock (A1, A2 … D7) first, then prefixed racks (S-…),
+   then anything off-grid, then "no bin" last. Numbers compare as numbers, so
+   A10 follows A9. */
+function binRank(key) {
+  if (key === NO_BIN_KEY) return [9, '', '', 0];
+  const m = /^(?:([A-Z]+)-)?([A-Z])(\d+)$/.exec(String(key));
+  if (!m) return [8, String(key), '', 0];
+  return [m[1] ? 2 : 1, m[1] || '', m[2], Number(m[3])];
+}
+function binCmp(a, b) {
+  const x = binRank(a), y = binRank(b);
+  for (let i = 0; i < 4; i++) {
+    if (x[i] < y[i]) return -1;
+    if (x[i] > y[i]) return 1;
+  }
+  return 0;
+}
+/* Bins holding spools of these recipes, sorted on the shelf. */
+function binsOf(groups) {
+  const set = new Set();
+  groups.forEach(g => g.lots.forEach(l => { if (lotTotal(l) > 0) set.add(lotBinKey(l)); }));
+  return [...set].sort(binCmp);
+}
+function binChipsHtml(keys) {
+  if (!keys.length) return '';
+  return keys.map(k => `<span class="bin-chip${k === NO_BIN_KEY ? ' none' : ''}${
+    S.binFilter && k === S.binFilter ? ' hit' : ''}" title="${k === NO_BIN_KEY
+      ? 'Spools with no Storage_Bin recorded' : 'Bin ' + esc(k)}">${esc(binText(k))}</span>`).join('');
+}
+
 async function loadAll() {
   try {
     const [lotsT, recT] = await Promise.all([
@@ -365,7 +440,23 @@ async function loadAll() {
       grist.docApi.fetchTable('Recipes'),
     ]);
 
+    /* Optional: without it a bin stored as a reference shows as "#id". */
+    S.binById = {}; S.locations = [];
+    try {
+      const locT = await grist.docApi.fetchTable('Storage_Locations');
+      const codeCol = findColumn(locT, ['Bin_Code']);
+      if (codeCol) (locT.id || []).forEach((id, i) => {
+        const c = String(columnAsArray(locT, codeCol)[i] || '').trim().toUpperCase();
+        if (!c) return;
+        S.binById[id] = c;
+        S.locations.push(c);
+      });
+    } catch (e) {
+      console.warn('Inventory Desk: Storage_Locations unavailable — bins shown as stored', e);
+    }
+
     const LOT = {
+      bin: findColumn(lotsT, ['Storage_Bin']),
       recipe: findColumn(lotsT, ['Recipe']),
       lotNumber: findColumn(lotsT, ['Lot_Number']),
       date: findColumn(lotsT, ['Date_Dyed']),
@@ -409,6 +500,7 @@ async function loadAll() {
         date: LOT.date ? columnAsArray(lotsT, LOT.date)[i] : 0,
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || ''),
         made: LOT.made ? num(columnAsArray(lotsT, LOT.made)[i]) : 0,
+        bin: LOT.bin ? binFromRaw(columnAsArray(lotsT, LOT.bin)[i]) : '',
         vals,
         row: stock2Row(lotsT, S.stock2, i),
       });
@@ -466,6 +558,9 @@ async function loadAll() {
     }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     S.cols = { LOT };
+    S.hasBinCol = !!LOT.bin;
+    // A filter for a bin that no longer holds anything would show an empty list.
+    if (S.binFilter && !allBinKeys().includes(S.binFilter)) S.binFilter = '';
     S.ready = true;
     document.getElementById('banner').innerHTML = missing.length
       ? `<div class="warn-banner"><strong>${missing.map(b => esc(b.cands[0])).join(', ')}</strong>
@@ -588,6 +683,8 @@ function visible(ignoreDiff) {
   return (S.byColourway || []).filter(c => {
     if (!S.showEmpty && c.onHand <= 0) return false;
     if (!ignoreDiff && S.onlyDiff && S.store && !hasDiff(c)) return false;
+    if (S.binFilter && !c.members.some(g => g.lots.some(l =>
+      lotTotal(l) > 0 && lotBinKey(l) === S.binFilter))) return false;
     if (!q) return true;
     // A SKU search must find the colourway through ANY of its fibres.
     return normalize(c.name).includes(q)
@@ -641,6 +738,7 @@ function fibreBlockHtml(g) {
     if (!tot && !S.showEmpty) return '';
     return `<div class="lot-line">
       <span class="lot-no">${esc(l.lotNumber)}</span>
+      <span class="lot-bin${l.bin ? '' : ' none'}">${tot ? esc(l.bin || 'no bin') : ''}</span>
       ${BUCKETS.map(b => `<span class="lot-b" title="${esc(b.label)}">${l.vals[b.key] || '·'}</span>`).join('')}
       <span class="lot-age">${d === null ? '' : d + 'd old'}</span>
     </div>`;
@@ -653,6 +751,7 @@ function fibreBlockHtml(g) {
           esc(r.fiberName || r.fiber || 'no fibre set')}</div>
         <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}${
           g.hank ? ` · ~${g.hank} in hank` : ''}</div>
+        ${binsOf([g]).length ? `<div class="bins-line">${binChipsHtml(binsOf([g]))}</div>` : ''}
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => bucketHtml(g, b)).join('')}
@@ -684,6 +783,7 @@ function fibreBlockHtml(g) {
       ${lotLines ? `<div class="lots">
         <div class="lot-line lot-head">
           <span class="lot-no">Lot</span>
+          <span class="lot-bin">bin</span>
           ${BUCKETS.map(b => `<span class="lot-b">${esc(b.short)}</span>`).join('')}
           <span class="lot-age"></span>
         </div>
@@ -709,6 +809,7 @@ function cardHtml(c) {
         <div class="cw-meta">${c.multi
           ? `${c.members.length} fibres — ${esc(c.members.map(g => g.recipe.sku || '?').join(', '))}`
           : esc(c.members[0].recipe.sku || '')}</div>
+        ${c.onHand > 0 ? `<div class="bins-line">${binChipsHtml(binsOf(c.members))}</div>` : ''}
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
@@ -743,9 +844,27 @@ function render() {
   document.getElementById('showAll').textContent = S.showEmpty
     ? 'Hide colourways with none on hand' : 'Show colourways with none on hand';
 
+  renderBinFilter();
+  pdfBarHtml();
   wire();
   storeBarHtml();
   renderLog();
+}
+
+function allBinKeys() {
+  const set = new Set(S.locations);
+  S.lots.forEach(l => { if (lotTotal(l) > 0) set.add(lotBinKey(l)); });
+  return [...set].sort(binCmp);
+}
+function renderBinFilter() {
+  const sel = document.getElementById('binFilter');
+  if (!sel) return;
+  if (!S.hasBinCol) { sel.style.display = 'none'; return; }
+  const used = new Set();
+  S.lots.forEach(l => { if (lotTotal(l) > 0) used.add(lotBinKey(l)); });
+  sel.innerHTML = `<option value="">All bins</option>` + allBinKeys().map(k =>
+    `<option value="${esc(k)}" ${k === S.binFilter ? 'selected' : ''}>${
+      k === NO_BIN_KEY ? 'No bin recorded' : 'Bin ' + esc(k)}${used.has(k) ? '' : ' (empty)'}</option>`).join('');
 }
 
 function wire() {
@@ -881,10 +1000,308 @@ async function undo(i) {
   }
 }
 
+/* ── Bin check PDF ─────────────────────────────────────────────────────────
+   A count sheet to walk the shelf with. One section per bin, in shelf order;
+   one row per colourway-fibre in that bin (lots of one recipe in one bin are
+   summed — you count the bag, not the lot), then a blank line for anything
+   found in the bin that the sheet doesn't list.
+
+   Each row says what Grist expects (wound and hank separately, because they
+   look different on the shelf), where it is listed, and — when "Check stores"
+   was pressed first — what the vendor store reports. Then: a box to tick when
+   it is right, blanks for the actual count when it isn't, and boxes for where
+   the fix belongs. Nothing is changed from the sheet; it goes back to this
+   screen (or Quick Log) and the store by hand.
+
+   Prints what the screen is showing: the search and bin filter apply, so one
+   rack column or one bin can be printed on its own. Lots with no bin get
+   their own section at the end — they are the spools being looked for. */
+const PDF_LIBS = [
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+];
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve;
+    s.onerror = () => reject(new Error('could not load ' + src.split('/').slice(-2).join('/')));
+    document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs() {
+  if (!(window.jspdf && window.jspdf.jsPDF)) await loadScript(PDF_LIBS[0]);
+  if (!window.jspdf.jsPDF.API.autoTable) await loadScript(PDF_LIBS[1]);
+  return window.jspdf.jsPDF;
+}
+
+/* Plain data for the sheet, from what is on screen. */
+function binSheetData() {
+  const groups = visible().reduce((a, c) => a.concat(c.members), []);
+  const byBin = new Map();
+  groups.forEach(g => {
+    const allBins = binsOf([g]);
+    const per = new Map();
+    g.lots.forEach(l => {
+      const tot = lotTotal(l);
+      if (tot <= 0) return;
+      const key = lotBinKey(l);
+      if (S.binFilter && key !== S.binFilter) return;
+      if (!per.has(key)) per.set(key, { lots: [], wound: 0, hank: 0, vendor: 0, retail: 0, held: 0, total: 0 });
+      const e = per.get(key);
+      e.lots.push(l.lotNumber);
+      const hank = Math.max(0, l.row.hank || 0);
+      e.hank += hank;
+      e.wound += S.stock2.onHand ? Math.max(0, l.row.onHand || 0) : Math.max(0, tot - hank);
+      e.vendor += l.vals.vendor || 0;
+      e.retail += l.vals.retail || 0;
+      e.held += l.vals.held || 0;
+      e.total += tot;
+    });
+    per.forEach((e, key) => {
+      let shop = null;
+      if (S.store) {
+        const v = g.recipe.sku ? S.store.bySku[normalize(g.recipe.sku)] : null;
+        shop = !g.recipe.sku ? 'no SKU' : !v ? 'not listed'
+          : (v.active ? String(v.qty) : `${v.qty} (${v.status})`);
+        // Same rule as the screen: a draft product with stock either side is wrong.
+        if (v && (v.active ? v.qty !== g.vendor : (v.qty > 0 || g.vendor > 0))) shop += ' !';
+      }
+      if (!byBin.has(key)) byBin.set(key, []);
+      byBin.get(key).push({
+        name: g.recipe.name, fiber: g.recipe.fiberName || g.recipe.fiber || '',
+        fiberCode: g.recipe.fiber, sku: g.recipe.sku || '',
+        lots: e.lots, wound: e.wound, hank: e.hank, vendor: e.vendor, retail: e.retail,
+        held: e.held, total: e.total,
+        gristVendor: g.vendor, shop,
+        otherBins: allBins.filter(k => k !== key).map(binText),
+      });
+    });
+  });
+  /* Bins that exist but hold nothing on record still get a section — finding
+     something in an "empty" bin is as much a fix as a wrong count. Only when
+     the whole shelf is being printed, not a search. */
+  if (!S.search) {
+    S.locations.forEach(code => {
+      if (S.binFilter && code !== S.binFilter) return;
+      if (!byBin.has(code)) byBin.set(code, []);
+    });
+  }
+  const rank = f => ({ FFN: 0, EN: 1, FFC: 2 })[f] ?? 3;
+  const bins = [...byBin.keys()].sort(binCmp).map(key => {
+    const rows = byBin.get(key).sort((a, b) =>
+      String(a.name).localeCompare(String(b.name)) || rank(a.fiberCode) - rank(b.fiberCode));
+    return { key, label: binText(key), rows,
+      total: rows.reduce((t, r) => t + r.total, 0) };
+  });
+  const filters = [];
+  if (S.binFilter) filters.push(S.binFilter === NO_BIN_KEY ? 'no-bin lots only' : 'bin ' + S.binFilter);
+  if (S.search) filters.push(`search "${S.search}"`);
+  if (S.onlyDiff && S.store) filters.push('store differences only');
+  return {
+    bins,
+    printedAt: new Date(),
+    filters,
+    storeAt: S.store && S.store.fetched_at ? new Date(S.store.fetched_at) : null,
+    storeChecked: !!S.store,
+  };
+}
+
+/* jsPDF's built-in Helvetica is WinAnsi: accented Latin is fine, but symbols
+   like ≈ ✓ ☐ come out as junk. Boxes are drawn, not typed. */
+function pdfSafe(s) {
+  return String(s == null ? '' : s)
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/—/g, '-').replace(/≈/g, '~')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E -ÿ–]/g, '?');
+}
+
+function drawBinSheet(JsPDF, data) {
+  const doc = new JsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const M = 30;
+  const INK = [26, 22, 20], MUTED = [139, 125, 114], RULE = [212, 201, 188];
+  const WARM = [232, 223, 212], ACCENT = [139, 58, 42];
+  const fmtDate = d => d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  const fmtTime = d => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+  // ── Header ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(...INK);
+  doc.text('Bin check', M, M + 6);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
+  const spools = data.bins.reduce((t, b) => t + b.total, 0);
+  const binsWith = data.bins.filter(b => b.rows.length).length;
+  doc.text(pdfSafe(`Printed ${fmtDate(data.printedAt)} ${fmtTime(data.printedAt)}  ·  ` +
+    `${data.bins.length} bin section${data.bins.length === 1 ? '' : 's'} (${binsWith} with stock on record)  ·  ` +
+    `${spools} spools expected` + (data.filters.length ? `  ·  Showing ${data.filters.join(', ')}` : '')),
+    M, M + 20);
+  doc.text(pdfSafe(data.storeChecked
+    ? `Vendor store read at ${data.storeAt ? fmtTime(data.storeAt) : '?'} - "!" means Shopify and Grist disagree on what is listed. Retail is not read.`
+    : 'Vendor store not read - press "Check stores" before printing to include the Shopify column.'),
+    M, M + 31);
+  doc.setTextColor(...INK);
+  doc.text('Count each bag. Tick OK if it matches. If not, write what is actually there and tick where it needs fixing: '
+    + 'Grist (counts / bin on the lot) and/or Shopify (listed quantity).', M, M + 44);
+
+  // ── Table ──
+  const head = [['Colourway · fibre · SKU · lots', 'Wound', 'Hank', 'Listed', 'Shopify V', 'OK',
+    'Actual wound', 'Actual hank', 'Fix in']];
+  const body = [];
+  const meta = [];   // parallel to body: what kind of row, for drawing
+  const COLS = 9;
+  data.bins.forEach(b => {
+    body.push([{ content: pdfSafe(
+      (b.key === '__none' ? 'NO BIN RECORDED' : 'BIN ' + b.label) +
+      (b.rows.length
+        ? `      ${b.rows.length} item${b.rows.length === 1 ? '' : 's'} · ${b.total} spools expected`
+        : '      nothing on record - empty?')),
+      colSpan: COLS,
+      styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 10.5, textColor: INK, cellPadding: { top: 5, bottom: 5, left: 6, right: 6 } } }]);
+    meta.push({ kind: 'bin' });
+    b.rows.forEach(r => {
+      const where = [];
+      if (r.vendor) where.push(`V ${r.vendor}`);
+      if (r.retail) where.push(`R ${r.retail}`);
+      if (r.held) where.push(`held ${r.held}`);
+      const sub = [r.fiber, r.sku].filter(Boolean).join(' · ');
+      const lots = 'Lots: ' + r.lots.join(', ') +
+        (r.otherBins.length ? `   (also in ${r.otherBins.join(', ')})` : '');
+      body.push([
+        pdfSafe(`\n${sub}\n${lots}`),
+        String(r.wound || '-'),
+        r.hank ? '~' + r.hank : '-',
+        pdfSafe(where.join('\n') || '-'),
+        pdfSafe(r.shop == null ? '' : r.shop + (r.otherBins.length && r.shop && !/^no|^not/.test(r.shop) ? '\n(all bins)' : '')),
+        '', '', '', '',
+      ]);
+      meta.push({ kind: 'item', row: r });
+    });
+    body.push([{ content: 'Also in this bin, not listed above:', colSpan: COLS,
+      styles: { fontSize: 8, textColor: MUTED, minCellHeight: 22, cellPadding: { top: 4, left: 6 } } }]);
+    meta.push({ kind: 'extra' });
+  });
+
+  const box = (x, y, s) => { doc.setDrawColor(...INK); doc.setLineWidth(0.8); doc.rect(x, y, s, s); };
+  doc.autoTable({
+    head, body,
+    startY: M + 54,
+    margin: { left: M, right: M, top: M + 6, bottom: M },
+    theme: 'grid',
+    rowPageBreak: 'avoid',
+    styles: { font: 'helvetica', fontSize: 9, textColor: INK, lineColor: RULE, lineWidth: 0.5,
+      cellPadding: 4, valign: 'middle', overflow: 'linebreak' },
+    headStyles: { fillColor: INK, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { cellWidth: 238, halign: 'left' },
+      1: { cellWidth: 48, halign: 'center', fontStyle: 'bold', fontSize: 11 },
+      2: { cellWidth: 48, halign: 'center', fontSize: 10 },
+      3: { cellWidth: 60, halign: 'center', fontSize: 8.5 },
+      4: { cellWidth: 62, halign: 'center', fontSize: 9 },
+      5: { cellWidth: 34 },
+      6: { cellWidth: 72 },
+      7: { cellWidth: 72 },
+      8: { cellWidth: 98 },
+    },
+    showHead: 'everyPage',
+    didParseCell: (h) => {
+      if (h.section !== 'body') return;
+      const m = meta[h.row.index];
+      if (m && m.kind === 'item' && h.column.index === 0) {
+        h.cell.styles.valign = 'top'; h.cell.styles.textColor = [90, 80, 72]; h.cell.styles.fontSize = 8.5;
+      }
+      if (m && m.kind === 'item' && h.column.index === 4 && /!$/.test(String(m.row.shop || ''))) {
+        h.cell.styles.textColor = ACCENT; h.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawCell: (h) => {
+      if (h.section !== 'body') return;
+      const m = meta[h.row.index];
+      if (!m || m.kind !== 'item') return;
+      const c = h.cell, cx = c.x + c.width / 2, cy = c.y + c.height / 2;
+      if (h.column.index === 0) {
+        /* The first line of the cell is left blank and the name drawn into it
+           in bold — AutoTable can't mix weights inside one cell. */
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK);
+        let name = pdfSafe(m.row.name);
+        const room = c.width - c.padding('left') - c.padding('right');
+        while (name.length > 4 && doc.getTextWidth(name) > room) name = name.slice(0, -2);
+        if (name !== pdfSafe(m.row.name)) name = name.replace(/\s*$/, '') + '...';
+        doc.text(name, c.x + c.padding('left'), c.y + c.padding('top'), { baseline: 'top' });
+        doc.setFont('helvetica', 'normal');
+      }
+      if (h.column.index === 5) box(cx - 6, cy - 6, 12);
+      if (h.column.index === 6 || h.column.index === 7) {
+        doc.setDrawColor(...MUTED); doc.setLineWidth(0.6);
+        doc.line(c.x + 10, c.y + c.height - 9, c.x + c.width - 10, c.y + c.height - 9);
+      }
+      if (h.column.index === 8) {
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...INK);
+        box(c.x + 7, cy - 5, 10); doc.text('Grist', c.x + 20, cy + 3);
+        box(c.x + 49, cy - 5, 10); doc.text('Shopify', c.x + 62, cy + 3);
+      }
+    },
+  });
+
+  // ── Footer: page numbers + sign-off ──
+  const pages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
+    doc.text(`Page ${i} of ${pages}`, W - M, H - 14, { align: 'right' });
+    doc.text('Checked by ____________________   Date ________   Entered in Grist / Shopify ________',
+      M, H - 14);
+  }
+  return doc;
+}
+
+async function makeBinPdf() {
+  if (S.pdfBusy || !S.ready) return;
+  if (!S.hasBinCol) { showToast('Production_Lots has no Storage_Bin column'); return; }
+  S.pdfBusy = true;
+  const btn = document.getElementById('binPdf');
+  if (btn) { btn.disabled = true; btn.textContent = 'Making PDF…'; }
+  try {
+    const data = binSheetData();
+    if (!data.bins.length) { showToast('Nothing on screen to print'); return; }
+    const JsPDF = await ensurePdfLibs();
+    const doc = drawBinSheet(JsPDF, data);
+    const d = data.printedAt;
+    const stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const scope = S.binFilter ? '-' + (S.binFilter === NO_BIN_KEY ? 'no-bin' : S.binFilter) : '';
+    S.pdfName = `bin-check-${stamp}${scope}.pdf`;
+    if (S.pdfUrl) URL.revokeObjectURL(S.pdfUrl);
+    S.pdfUrl = URL.createObjectURL(doc.output('blob'));
+    /* Try the download straight away; the bar keeps a link in case the Grist
+       frame blocks it, plus an Open link that prints from the browser. */
+    const a = document.createElement('a');
+    a.href = S.pdfUrl; a.download = S.pdfName;
+    document.body.appendChild(a); a.click(); a.remove();
+    showToast('PDF ready');
+  } catch (e) {
+    console.error('Inventory Desk: PDF failed', e);
+    showToast('PDF failed — ' + (e && e.message ? e.message : e));
+  } finally {
+    S.pdfBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Bin check PDF'; }
+    pdfBarHtml();
+  }
+}
+function pdfBarHtml() {
+  const el = document.getElementById('pdfBar');
+  if (!el) return;
+  el.innerHTML = S.pdfUrl ? `<div class="pdf-bar">
+      <span>Bin check ready</span>
+      <a href="${S.pdfUrl}" download="${esc(S.pdfName)}">Download ${esc(S.pdfName)}</a>
+      <a href="${S.pdfUrl}" target="_blank" rel="noopener">Open to print</a>
+      <span class="stamp">Made from the screen as it was — press the button again after changes.</span>
+    </div>` : '';
+}
+
 document.getElementById('search').addEventListener('input', (e) => { S.search = e.target.value; render(); });
 document.getElementById('showAll').addEventListener('click', () => { S.showEmpty = !S.showEmpty; render(); });
 document.getElementById('reload').addEventListener('click', () => loadAll());
 document.getElementById('checkStores').addEventListener('click', () => checkStores());
+document.getElementById('binFilter').addEventListener('change', (e) => { S.binFilter = e.target.value; render(); });
+document.getElementById('binPdf').addEventListener('click', () => makeBinPdf());
 
 // Static shell is already rendered. Only now talk to Grist.
 try {
