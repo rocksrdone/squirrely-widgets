@@ -180,6 +180,12 @@ select.pick, select.pick option {
 }
 .lot-r { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 40px; text-align: right; color: #5B4A8B; }
 .tot.resv .n { color: #5B4A8B; }
+.flag-chip {
+  display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; margin: 2px 4px 0 0;
+  border-radius: 4px; line-height: 16px; white-space: nowrap;
+  background: var(--accent-light); color: var(--accent); border: 1px solid #D9A89C;
+}
+.btn.on { background: var(--accent); border-color: var(--accent); color: white; }
 .pdf-bar {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   background: var(--teal-light); border: 1px solid #9ACFC7; border-radius: 8px;
@@ -202,6 +208,7 @@ select.pick, select.pick option {
   <input class="search" id="search" placeholder="Search colourway or SKU…">
   <button class="btn" id="showAll">Show colourways with none on hand</button>
   <select class="pick" id="binFilter" title="Show only what is recorded in one bin"><option value="">All bins</option></select>
+  <button class="btn" id="offOnly" title="Only colourways with something that looks wrong — on screen and in the PDF">Only what looks off</button>
   <button class="btn" id="checkStores">Check stores</button>
   <button class="btn" id="binPdf" title="Printable count sheet, one section per bin">⬇ Bin check PDF</button>
   <button class="btn" id="reload">↻ Reload</button>
@@ -305,7 +312,7 @@ let S = {
   moveQty: {}, moveFrom: {}, moveTo: {},
   log: [], ready: false,
   store: null, storeLoading: false, storeError: '',
-  binById: {}, locations: [], binFilter: '', pdfBusy: false, pdfUrl: '', pdfName: '',
+  binById: {}, locations: [], binFilter: '', offOnly: false, pdfBusy: false, pdfUrl: '', pdfName: '',
 };
 
 /* Read-only snapshot of what the vendor store actually reports, via
@@ -421,6 +428,66 @@ function resvChipHtml(qty, list) {
     esc(resvTitle(list))}">${qty} reserved</span>`;
 }
 
+/* ── What "looks off" ─────────────────────────────────────────────────────
+   Things a walk to the shelf can settle. Each says what it is in words, so
+   the sheet tells whoever is counting what to look for, not just "check".
+
+   Per lot (only lots with something physically findable):
+     · spools with no bin recorded
+     · a bin code that isn't set up in Storage_Locations
+     · more listed than exists (held back below 0 — could oversell)
+     · retail listing more than is wound (hank on retail)
+     · lot arithmetic not balancing (stock-model.md):
+         Spools_Made − allocations − On_Hand − Written off = unaccounted
+       only when the lot has a made count, since an all-hank lot has none.
+   Per SKU: the vendor store disagrees (once "Check stores" has run).
+   Per colourway: spread over more than one bin, when FF / E / cotton of one
+   colour are meant to bag together.
+
+   Lots with no stock at all are left out even if their arithmetic is off —
+   there is nothing in a bin to count. Those are the stale-lot resolver's job
+   on the Wet/Dry Racks page. */
+function lotFlags(l) {
+  const out = [];
+  if (lotPresent(l) <= 0) return out;
+  if (S.hasBinCol && !l.bin) out.push('no bin recorded');
+  else if (l.bin && S.locations.length && !S.locations.includes(l.bin)) out.push(`bin ${l.bin} is not set up`);
+  if (l.vals.held < 0) out.push(`${-l.vals.held} more listed than exist`);
+  if (l.row.store > l.row.onHand) out.push('retail lists more than is wound');
+  if (S.ordersOk && l.made > 0 && S.stock2.onHand) {
+    const u = l.made - l.allocAll - l.row.onHand - l.broken;
+    if (u > 0) out.push(`${u} unaccounted on ${l.lotNumber}`);
+    else if (u < 0) out.push(`${-u} more on record than made (${l.lotNumber})`);
+  }
+  return out;
+}
+function storeFlag(g) {
+  const c = storeCmp(g);
+  if (!c || c.kind !== 'bad') return '';
+  const v = S.store && g.recipe.sku ? S.store.bySku[normalize(g.recipe.sku)] : null;
+  if (!v) return 'listed in Grist, not on vendor store';
+  if (!v.active) return `vendor listing is ${v.status}`;
+  return `vendor store ${v.qty}, expected ${vendorExpected(g)}`;
+}
+function splitFlag(c) {
+  const real = binsOf(c.members).filter(k => k !== NO_BIN_KEY);
+  return real.length > 1 ? `split over ${real.length} bins (${real.join(', ')})` : '';
+}
+/* Every flag on a colourway, de-duplicated, in a stable order. */
+function cwFlags(c) {
+  const out = [];
+  const add = f => { if (f && !out.includes(f)) out.push(f); };
+  add(splitFlag(c));
+  c.members.forEach(g => {
+    g.lots.forEach(l => lotFlags(l).forEach(add));
+    add(storeFlag(g));
+  });
+  return out;
+}
+function flagChipsHtml(flags) {
+  return flags.map(f => `<span class="flag-chip">${esc(f)}</span>`).join('');
+}
+
 /* ── Thread bins ──────────────────────────────────────────────────────────
    Production_Lots.Storage_Bin is a REFERENCE to Storage_Locations, so a lot
    filed correctly comes back as a row id and a lot filed by the old
@@ -499,6 +566,7 @@ async function loadAll() {
     /* Orders and what they hold. All optional: without them the screen works
        as before, it just can't show reservations or correct the comparison. */
     const resvByLot = {};          // lotId -> [{qty, order, source}]
+    const allocAllByLot = {};      // lotId -> every allocation, any status (for lot arithmetic)
     const openVendorByRecipe = {}; // recipeId -> spools sold on the vendor store, not yet drawn in Grist
     const unadjustedByRecipe = {}; // recipeId -> manual pulls from Vendor not yet changed on Shopify
     S.ordersOk = false;
@@ -550,6 +618,8 @@ async function loadAll() {
         const qty = num(columnAsArray(allocT, A.qty)[i]);
         const ln = line[getRefId(columnAsArray(allocT, A.line)[i])];
         if (ln) ln.allocated += qty;
+        const anyLot = getRefId(columnAsArray(allocT, A.lot)[i]);
+        if (anyLot) allocAllByLot[anyLot] = (allocAllByLot[anyLot] || 0) + qty;
         const source = String(columnAsArray(allocT, A.source)[i] || '');
         const status = String(columnAsArray(allocT, A.status)[i] || '');
         if (!source || DONE_STATUS.test(status) || qty <= 0) return;
@@ -580,6 +650,7 @@ async function loadAll() {
       date: findColumn(lotsT, ['Date_Dyed']),
       fiber: findColumn(lotsT, ['Fiber']),
       made: findColumn(lotsT, ['Spools_Made']),
+      broken: findColumn(lotsT, ['Broken_Spools']),
     };
     BUCKETS.forEach(b => { b.col = findColumn(lotsT, b.cands); });
     // Held back (General) is a formula now — read, never written.
@@ -620,6 +691,8 @@ async function loadAll() {
         made: LOT.made ? num(columnAsArray(lotsT, LOT.made)[i]) : 0,
         bin: LOT.bin ? binFromRaw(columnAsArray(lotsT, LOT.bin)[i]) : '',
         resv: resvByLot[id] || [],
+        allocAll: allocAllByLot[id] || 0,
+        broken: LOT.broken ? num(columnAsArray(lotsT, LOT.broken)[i]) : 0,
         reserved: (resvByLot[id] || []).reduce((t, r) => t + r.qty, 0),
         vals,
         row: stock2Row(lotsT, S.stock2, i),
@@ -820,6 +893,7 @@ function visible(ignoreDiff) {
   return (S.byColourway || []).filter(c => {
     if (!S.showEmpty && c.onHand <= 0 && !c.reserved) return false;
     if (!ignoreDiff && S.onlyDiff && S.store && !hasDiff(c)) return false;
+    if (S.offOnly && !cwFlags(c).length) return false;
     if (S.binFilter && !c.members.some(g => g.lots.some(l =>
       lotPresent(l) > 0 && lotBinKey(l) === S.binFilter))) return false;
     if (!q) return true;
@@ -949,6 +1023,7 @@ function cardHtml(c) {
           ? `${c.members.length} fibres — ${esc(c.members.map(g => g.recipe.sku || '?').join(', '))}`
           : esc(c.members[0].recipe.sku || '')}</div>
         ${c.onHand > 0 || c.reserved ? `<div class="bins-line">${binChipsHtml(binsOf(c.members))}${resvChipHtml(c.reserved, c.resv)}</div>` : ''}
+        ${cwFlags(c).length ? `<div>${flagChipsHtml(cwFlags(c))}</div>` : ''}
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
@@ -980,8 +1055,12 @@ function render() {
 
   document.getElementById('list').innerHTML = rows.length
     ? rows.map(cardHtml).join('')
-    : `<div class="empty">${S.search ? 'Nothing matches that.' : 'No colourways with spools on hand.'}</div>`;
+    : `<div class="empty">${S.offOnly ? 'Nothing looks off' + (S.store ? '.' : ' — press Check stores to compare with the vendor store too.')
+        : S.search ? 'Nothing matches that.' : 'No colourways with spools on hand.'}</div>`;
 
+  const ob = document.getElementById('offOnly');
+  ob.classList.toggle('on', S.offOnly);
+  ob.textContent = S.offOnly ? `Only what looks off (${rows.length})` : 'Only what looks off';
   document.getElementById('showAll').textContent = S.showEmpty
     ? 'Hide colourways with none on hand' : 'Show colourways with none on hand';
 
@@ -1179,15 +1258,19 @@ async function ensurePdfLibs() {
 function binSheetData() {
   const groups = visible().reduce((a, c) => a.concat(c.members), []);
   const byBin = new Map();
+  const cwOf = new Map();
+  (S.byColourway || []).forEach(c => c.members.forEach(g => cwOf.set(g, c)));
   groups.forEach(g => {
     const allBins = binsOf([g]);
+    const split = cwOf.get(g) ? splitFlag(cwOf.get(g)) : '';
+    const sflag = storeFlag(g);
     const per = new Map();
     g.lots.forEach(l => {
       const tot = lotTotal(l);
       if (tot <= 0 && !l.reserved) return;
       const key = lotBinKey(l);
       if (S.binFilter && key !== S.binFilter) return;
-      if (!per.has(key)) per.set(key, { lots: [], wound: 0, hank: 0, vendor: 0, retail: 0, held: 0, total: 0, reserved: 0, resv: [] });
+      if (!per.has(key)) per.set(key, { lots: [], wound: 0, hank: 0, vendor: 0, retail: 0, held: 0, total: 0, reserved: 0, resv: [], flags: [] });
       const e = per.get(key);
       e.lots.push(l.lotNumber);
       const hank = Math.max(0, l.row.hank || 0);
@@ -1199,8 +1282,11 @@ function binSheetData() {
       e.total += tot;
       e.reserved += l.reserved;
       e.resv.push(...l.resv);
+      lotFlags(l).forEach(f => { if (!e.flags.includes(f)) e.flags.push(f); });
     });
     per.forEach((e, key) => {
+      [split, sflag].forEach(f => { if (f && !e.flags.includes(f)) e.flags.unshift(f); });
+      if (S.offOnly && !e.flags.length) return;
       let shop = null;
       if (S.store) {
         const v = g.recipe.sku ? S.store.bySku[normalize(g.recipe.sku)] : null;
@@ -1215,7 +1301,7 @@ function binSheetData() {
         name: g.recipe.name, fiber: g.recipe.fiberName || g.recipe.fiber || '',
         fiberCode: g.recipe.fiber, sku: g.recipe.sku || '',
         lots: e.lots, wound: e.wound, hank: e.hank, vendor: e.vendor, retail: e.retail,
-        held: e.held, total: e.total, reserved: e.reserved, resvText: resvTitle(e.resv),
+        held: e.held, total: e.total, reserved: e.reserved, resvText: resvTitle(e.resv), flags: e.flags,
         gristVendor: g.vendor, shop,
         otherBins: allBins.filter(k => k !== key).map(binText),
       });
@@ -1224,7 +1310,7 @@ function binSheetData() {
   /* Bins that exist but hold nothing on record still get a section — finding
      something in an "empty" bin is as much a fix as a wrong count. Only when
      the whole shelf is being printed, not a search. */
-  if (!S.search) {
+  if (!S.search && !S.offOnly) {
     S.locations.forEach(code => {
       if (S.binFilter && code !== S.binFilter) return;
       if (!byBin.has(code)) byBin.set(code, []);
@@ -1242,6 +1328,7 @@ function binSheetData() {
   if (S.binFilter) filters.push(S.binFilter === NO_BIN_KEY ? 'no-bin lots only' : 'bin ' + S.binFilter);
   if (S.search) filters.push(`search "${S.search}"`);
   if (S.onlyDiff && S.store) filters.push('store differences only');
+  if (S.offOnly) filters.push('only items that look off');
   return {
     bins,
     printedAt: new Date(),
@@ -1328,6 +1415,12 @@ function drawBinSheet(JsPDF, data) {
         '', '', '', '',
       ]);
       meta.push({ kind: 'item', row: r });
+      if (r.flags.length) {
+        body.push([{ content: pdfSafe('Check:  ' + r.flags.join('   ·   ')), colSpan: COLS,
+          styles: { fontSize: 8.5, fontStyle: 'bold', textColor: ACCENT, fillColor: [242, 232, 229],
+            cellPadding: { top: 3, bottom: 3, left: 10, right: 6 } } }]);
+        meta.push({ kind: 'flag' });
+      }
     });
     body.push([{ content: 'Also in this bin, not listed above:', colSpan: COLS,
       styles: { fontSize: 8, textColor: MUTED, minCellHeight: 22, cellPadding: { top: 4, left: 6 } } }]);
@@ -1458,6 +1551,7 @@ document.getElementById('search').addEventListener('input', (e) => { S.search = 
 document.getElementById('showAll').addEventListener('click', () => { S.showEmpty = !S.showEmpty; render(); });
 document.getElementById('reload').addEventListener('click', () => loadAll());
 document.getElementById('checkStores').addEventListener('click', () => checkStores());
+document.getElementById('offOnly').addEventListener('click', () => { S.offOnly = !S.offOnly; render(); });
 document.getElementById('binFilter').addEventListener('change', (e) => { S.binFilter = e.target.value; render(); });
 document.getElementById('binPdf').addEventListener('click', () => makeBinPdf());
 
