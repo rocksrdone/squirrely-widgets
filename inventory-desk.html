@@ -173,6 +173,13 @@ select.pick, select.pick option {
 .bins-line { margin-top: 3px; }
 .lot-bin { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 52px; }
 .lot-bin.none { color: var(--accent); font-family: 'Inter', sans-serif; font-size: 10px; }
+.resv-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 600; padding: 0 6px; margin-left: 4px;
+  border-radius: 4px; line-height: 17px; white-space: nowrap;
+  background: #EEE8F7; color: #5B4A8B; border: 1px solid #C9BEE3;
+}
+.lot-r { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 40px; text-align: right; color: #5B4A8B; }
+.tot.resv .n { color: #5B4A8B; }
 .pdf-bar {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   background: var(--teal-light); border: 1px solid #9ACFC7; border-radius: 8px;
@@ -382,6 +389,38 @@ function stockSet(row, C, vals) {
 const STOCK2_NOT_READY =
   'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
+/* ── Spools spoken for by orders ──────────────────────────────────────────
+   Reserving stock for an order (the order builder for manual orders, Wind &
+   Box for vendor-store orders) takes the spools OUT of the three stock
+   columns straight away and writes a Lot_Allocations row instead. Until that
+   row is Packed the spools are usually still sitting in their bin — so a bin
+   count that only knew the stock columns would read short on every bin with
+   an open order in it. Reserved is therefore its own figure, per lot, using
+   the same rule the order builder uses to decide what is still reserved
+   (has a Stock_Source, and the status is not packed / shipped / done).
+
+   The retail store never reserves, so this is vendor and manual orders only.
+
+   The vendor store comparison needs two corrections for the same reason:
+     · a vendor-store order Grist has not drawn stock for yet is already
+       gone from Shopify's count, but still in Grist's Vendor column;
+     · a manual order that reserved from Vendor has left Grist's Vendor
+       column, but stays on Shopify until you change it and tick it off in
+       the order builder (Storefront_Adjusted).
+   So Shopify is compared against Grist − open vendor orders + untouched
+   manual pulls, not against the raw Vendor column. */
+const DONE_STATUS = /pack|ship|sent|deliver|complete|fulfil/i;
+function resvTitle(list) {
+  const by = {};
+  list.forEach(r => { by[r.order] = (by[r.order] || 0) + r.qty; });
+  return Object.entries(by).map(([o, q]) => `${q} for ${o}`).join(', ');
+}
+function resvChipHtml(qty, list) {
+  if (!qty) return '';
+  return `<span class="resv-chip" title="Reserved for orders, already out of the stock counts — may still be in the bin: ${
+    esc(resvTitle(list))}">${qty} reserved</span>`;
+}
+
 /* ── Thread bins ──────────────────────────────────────────────────────────
    Production_Lots.Storage_Bin is a REFERENCE to Storage_Locations, so a lot
    filed correctly comes back as a row id and a lot filed by the old
@@ -401,6 +440,8 @@ function binFromRaw(raw) {
   return id ? (S.binById[id] || ('#' + id)) : '';
 }
 function lotTotal(l) { return BUCKETS.reduce((a, b) => a + (l.vals[b.key] || 0), 0); }
+/* Anything that should be physically findable in the lot's bin. */
+function lotPresent(l) { return lotTotal(l) + (l.reserved || 0); }
 function lotBinKey(l) { return l.bin || NO_BIN_KEY; }
 function binText(key) { return key === NO_BIN_KEY ? 'no bin' : key; }
 /* Shelf order: back stock (A1, A2 … D7) first, then prefixed racks (S-…),
@@ -423,7 +464,7 @@ function binCmp(a, b) {
 /* Bins holding spools of these recipes, sorted on the shelf. */
 function binsOf(groups) {
   const set = new Set();
-  groups.forEach(g => g.lots.forEach(l => { if (lotTotal(l) > 0) set.add(lotBinKey(l)); }));
+  groups.forEach(g => g.lots.forEach(l => { if (lotPresent(l) > 0) set.add(lotBinKey(l)); }));
   return [...set].sort(binCmp);
 }
 function binChipsHtml(keys) {
@@ -453,6 +494,83 @@ async function loadAll() {
       });
     } catch (e) {
       console.warn('Inventory Desk: Storage_Locations unavailable — bins shown as stored', e);
+    }
+
+    /* Orders and what they hold. All optional: without them the screen works
+       as before, it just can't show reservations or correct the comparison. */
+    const resvByLot = {};          // lotId -> [{qty, order, source}]
+    const openVendorByRecipe = {}; // recipeId -> spools sold on the vendor store, not yet drawn in Grist
+    const unadjustedByRecipe = {}; // recipeId -> manual pulls from Vendor not yet changed on Shopify
+    S.ordersOk = false;
+    try {
+      const [allocT, wolT, woT] = await Promise.all([
+        grist.docApi.fetchTable('Lot_Allocations'),
+        grist.docApi.fetchTable('Work_Order_Lines'),
+        grist.docApi.fetchTable('Work_Orders'),
+      ]);
+      const A = {
+        lot: findColumn(allocT, ['Lot']), qty: findColumn(allocT, ['Qty_Spools']),
+        status: findColumn(allocT, ['Status']), line: findColumn(allocT, ['Work_Order_Line']),
+        source: findColumn(allocT, ['Stock_Source', 'Stock_Bucket', 'Reserved_From']),
+        adjusted: findColumn(allocT, ['Storefront_Adjusted', 'Retail_Delisted', 'Delisted']),
+      };
+      const L = {
+        wo: findColumn(wolT, ['Work_Order']), need: findColumn(wolT, ['Qty_Needed']),
+        recipe: findColumn(wolT, ['Recipe']), sku: findColumn(wolT, ['SKU']),
+      };
+      const W = {
+        status: findColumn(woT, ['Status']), number: findColumn(woT, ['Order_Number']),
+        shopify: findColumn(woT, ['Shopify_Order_ID']), type: findColumn(woT, ['Order_Type']),
+        cust: findColumn(woT, ['Customer_Name']),
+      };
+      const recBySku = {};
+      Object.values(S.recipes).forEach(r => { if (r.sku) recBySku[normalize(r.sku)] = r.id; });
+      const wo = {};
+      (woT.id || []).forEach((id, i) => {
+        const number = String(columnAsArray(woT, W.number)[i] || ('WO ' + id)).trim();
+        const manual = String(columnAsArray(woT, W.type)[i] || '') === 'Manual' || /^M-\d+$/i.test(number);
+        const cust = String(columnAsArray(woT, W.cust)[i] || '').trim();
+        wo[id] = {
+          active: String(columnAsArray(woT, W.status)[i] || '') === 'Active',
+          // Only the vendor store's orders are imported, so an imported order came from there.
+          fromVendor: !manual && !!String(columnAsArray(woT, W.shopify)[i] || '').trim(),
+          label: number + (cust ? ' ' + cust : ''),
+        };
+      });
+      const line = {};
+      (wolT.id || []).forEach((id, i) => {
+        const sku = normalize(columnAsArray(wolT, L.sku)[i] || '');
+        line[id] = {
+          wo: wo[getRefId(columnAsArray(wolT, L.wo)[i])] || null,
+          recipeId: getRefId(columnAsArray(wolT, L.recipe)[i]) || recBySku[sku] || null,
+          need: num(columnAsArray(wolT, L.need)[i]), allocated: 0,
+        };
+      });
+      if (A.lot && A.qty) (allocT.id || []).forEach((id, i) => {
+        const qty = num(columnAsArray(allocT, A.qty)[i]);
+        const ln = line[getRefId(columnAsArray(allocT, A.line)[i])];
+        if (ln) ln.allocated += qty;
+        const source = String(columnAsArray(allocT, A.source)[i] || '');
+        const status = String(columnAsArray(allocT, A.status)[i] || '');
+        if (!source || DONE_STATUS.test(status) || qty <= 0) return;
+        const lotId = getRefId(columnAsArray(allocT, A.lot)[i]);
+        if (!lotId) return;
+        (resvByLot[lotId] = resvByLot[lotId] || []).push({
+          qty, source, order: ln && ln.wo ? ln.wo.label : 'an order' });
+        // A manual pull from Vendor: off Grist's Vendor column, still on Shopify until ticked.
+        const adjusted = A.adjusted ? !!columnAsArray(allocT, A.adjusted)[i] : false;
+        if (source === 'Vendor' && !adjusted && !(ln && ln.wo && ln.wo.fromVendor) && ln && ln.recipeId) {
+          unadjustedByRecipe[ln.recipeId] = (unadjustedByRecipe[ln.recipeId] || 0) + qty;
+        }
+      });
+      Object.values(line).forEach(ln => {
+        if (!ln.wo || !ln.wo.active || !ln.wo.fromVendor || !ln.recipeId) return;
+        const open = ln.need - ln.allocated;
+        if (open > 0) openVendorByRecipe[ln.recipeId] = (openVendorByRecipe[ln.recipeId] || 0) + open;
+      });
+      S.ordersOk = !!(A.lot && A.qty);
+    } catch (e) {
+      console.warn('Inventory Desk: orders unavailable — reservations not shown', e);
     }
 
     const LOT = {
@@ -501,6 +619,8 @@ async function loadAll() {
         fiber: fiberCode(columnAsArray(lotsT, LOT.fiber)[i] || ''),
         made: LOT.made ? num(columnAsArray(lotsT, LOT.made)[i]) : 0,
         bin: LOT.bin ? binFromRaw(columnAsArray(lotsT, LOT.bin)[i]) : '',
+        resv: resvByLot[id] || [],
+        reserved: (resvByLot[id] || []).reduce((t, r) => t + r.qty, 0),
         vals,
         row: stock2Row(lotsT, S.stock2, i),
       });
@@ -513,11 +633,15 @@ async function loadAll() {
     S.lots.forEach(l => {
       if (!map.has(l.recipeId)) {
         const r = S.recipes[l.recipeId] || { name: `Recipe #${l.recipeId}`, sku: '', fiber: '' };
-        map.set(l.recipeId, { recipeId: l.recipeId, recipe: r, lots: [], held: 0, vendor: 0, retail: 0, hank: 0 });
+        map.set(l.recipeId, { recipeId: l.recipeId, recipe: r, lots: [], held: 0, vendor: 0, retail: 0, hank: 0,
+          reserved: 0, resv: [],
+          openVendor: openVendorByRecipe[l.recipeId] || 0, unadjusted: unadjustedByRecipe[l.recipeId] || 0 });
       }
       const g = map.get(l.recipeId);
       g.lots.push(l);
       g.hank += l.row.hank;
+      g.reserved += l.reserved;
+      g.resv.push(...l.resv);
       BUCKETS.forEach(b => { g[b.key] += l.vals[b.key]; });
     });
     S.byRecipe = [...map.values()]
@@ -553,6 +677,8 @@ async function loadAll() {
         || String(a.recipe.fiber).localeCompare(String(b.recipe.fiber)));
       BUCKETS.forEach(b => { c[b.key] = c.members.reduce((t, g) => t + g[b.key], 0); });
       c.onHand = c.members.reduce((t, g) => t + g.onHand, 0);
+      c.reserved = c.members.reduce((t, g) => t + g.reserved, 0);
+      c.resv = c.members.reduce((a, g) => a.concat(g.resv), []);
       c.multi = c.members.length > 1;
       return c;
     }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -639,15 +765,26 @@ function storeCmp(g) {
   if (!v.active && (v.qty > 0 || g.vendor > 0)) {
     return { kind: 'bad', text: `Shopify ${v.qty}, product is ${v.status} — not buyable` };
   }
-  if (v.qty === g.vendor) return { kind: 'ok', text: `Shopify ${v.qty} \u2713` };
+  /* What Shopify SHOULD say right now — see "Spools spoken for by orders". */
+  const exp = vendorExpected(g);
+  const why = vendorWhy(g);
+  if (v.qty === exp) return { kind: 'ok', text: `Shopify ${v.qty} \u2713${why ? ' (' + why + ')' : ''}` };
   /* Spelled out. "Shopify 4 (+2)" left you to work out what the +2 was
      relative to; this says both numbers and which way they differ. */
-  const d = v.qty - g.vendor;
+  const d = v.qty - exp;
+  const vs = exp === g.vendor ? `Grist ${g.vendor}` : `expected ${exp} (Grist ${g.vendor}, ${why})`;
   const text = v.qty < 0
-    ? `Shopify ${v.qty} (oversold) · Grist ${g.vendor}`
-    : `Shopify ${v.qty} · Grist ${g.vendor} — Shopify has ${Math.abs(d)} ${d > 0 ? 'more' : 'fewer'}`;
+    ? `Shopify ${v.qty} (oversold) · ${vs}`
+    : `Shopify ${v.qty} · ${vs} — Shopify has ${Math.abs(d)} ${d > 0 ? 'more' : 'fewer'}`;
   return { kind: 'bad', text,
-    tip: `If Grist is right, set the vendor store to ${g.vendor}. If Shopify is right, change Vendor here to ${Math.max(0, v.qty)}.` };
+    tip: `If Grist is right, set the vendor store to ${exp}. If Shopify is right, change Vendor here to ${Math.max(0, g.vendor + d)}.` };
+}
+function vendorExpected(g) { return g.vendor - (g.openVendor || 0) + (g.unadjusted || 0); }
+function vendorWhy(g) {
+  const p = [];
+  if (g.openVendor) p.push(`${g.openVendor} on open vendor orders`);
+  if (g.unadjusted) p.push(`${g.unadjusted} pulled for manual orders, not yet changed on Shopify`);
+  return p.join(', ');
 }
 
 function storeBarHtml() {
@@ -681,10 +818,10 @@ function storeBarHtml() {
 function visible(ignoreDiff) {
   const q = normalize(S.search);
   return (S.byColourway || []).filter(c => {
-    if (!S.showEmpty && c.onHand <= 0) return false;
+    if (!S.showEmpty && c.onHand <= 0 && !c.reserved) return false;
     if (!ignoreDiff && S.onlyDiff && S.store && !hasDiff(c)) return false;
     if (S.binFilter && !c.members.some(g => g.lots.some(l =>
-      lotTotal(l) > 0 && lotBinKey(l) === S.binFilter))) return false;
+      lotPresent(l) > 0 && lotBinKey(l) === S.binFilter))) return false;
     if (!q) return true;
     // A SKU search must find the colourway through ANY of its fibres.
     return normalize(c.name).includes(q)
@@ -735,11 +872,12 @@ function fibreBlockHtml(g) {
   const lotLines = g.lots.map(l => {
     const d = daysSince(l.date);
     const tot = BUCKETS.reduce((a, b) => a + l.vals[b.key], 0);
-    if (!tot && !S.showEmpty) return '';
+    if (!tot && !l.reserved && !S.showEmpty) return '';
     return `<div class="lot-line">
       <span class="lot-no">${esc(l.lotNumber)}</span>
-      <span class="lot-bin${l.bin ? '' : ' none'}">${tot ? esc(l.bin || 'no bin') : ''}</span>
+      <span class="lot-bin${l.bin ? '' : ' none'}">${tot || l.reserved ? esc(l.bin || 'no bin') : ''}</span>
       ${BUCKETS.map(b => `<span class="lot-b" title="${esc(b.label)}">${l.vals[b.key] || '·'}</span>`).join('')}
+      ${S.ordersOk ? `<span class="lot-r" title="${esc(l.reserved ? 'Reserved: ' + resvTitle(l.resv) : 'Nothing reserved')}">${l.reserved || '·'}</span>` : ''}
       <span class="lot-age">${d === null ? '' : d + 'd old'}</span>
     </div>`;
   }).join('');
@@ -750,7 +888,7 @@ function fibreBlockHtml(g) {
         <div class="fb-fiber fib-${fibClass(r.fiber)}" style="background:none;border:none;padding:0">${
           esc(r.fiberName || r.fiber || 'no fibre set')}</div>
         <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}${
-          g.hank ? ` · ~${g.hank} in hank` : ''}</div>
+          g.hank ? ` · ~${g.hank} in hank` : ''}${resvChipHtml(g.reserved, g.resv)}</div>
         ${binsOf([g]).length ? `<div class="bins-line">${binChipsHtml(binsOf([g]))}</div>` : ''}
       </div>
       <div class="buckets">
@@ -785,6 +923,7 @@ function fibreBlockHtml(g) {
           <span class="lot-no">Lot</span>
           <span class="lot-bin">bin</span>
           ${BUCKETS.map(b => `<span class="lot-b">${esc(b.short)}</span>`).join('')}
+          ${S.ordersOk ? '<span class="lot-r">resv</span>' : ''}
           <span class="lot-age"></span>
         </div>
         ${lotLines}</div>` : ''}
@@ -809,7 +948,7 @@ function cardHtml(c) {
         <div class="cw-meta">${c.multi
           ? `${c.members.length} fibres — ${esc(c.members.map(g => g.recipe.sku || '?').join(', '))}`
           : esc(c.members[0].recipe.sku || '')}</div>
-        ${c.onHand > 0 ? `<div class="bins-line">${binChipsHtml(binsOf(c.members))}</div>` : ''}
+        ${c.onHand > 0 || c.reserved ? `<div class="bins-line">${binChipsHtml(binsOf(c.members))}${resvChipHtml(c.reserved, c.resv)}</div>` : ''}
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
@@ -835,6 +974,8 @@ function render() {
     <div class="tot held"><div class="n">${tot.held}</div><div class="l">Held back</div></div>
     <div class="tot vendor"><div class="n">${tot.vendor}</div><div class="l">Vendor store</div></div>
     <div class="tot retail"><div class="n">${tot.retail}</div><div class="l">Retail store</div></div>
+    ${S.ordersOk ? `<div class="tot resv" title="Spoken for by open orders — not in the counts to the left, may still be in bins"><div class="n">${
+      S.byRecipe.reduce((t, g) => t + g.reserved, 0)}</div><div class="l">Reserved for orders</div></div>` : ''}
   </div>`;
 
   document.getElementById('list').innerHTML = rows.length
@@ -853,7 +994,7 @@ function render() {
 
 function allBinKeys() {
   const set = new Set(S.locations);
-  S.lots.forEach(l => { if (lotTotal(l) > 0) set.add(lotBinKey(l)); });
+  S.lots.forEach(l => { if (lotPresent(l) > 0) set.add(lotBinKey(l)); });
   return [...set].sort(binCmp);
 }
 function renderBinFilter() {
@@ -861,7 +1002,7 @@ function renderBinFilter() {
   if (!sel) return;
   if (!S.hasBinCol) { sel.style.display = 'none'; return; }
   const used = new Set();
-  S.lots.forEach(l => { if (lotTotal(l) > 0) used.add(lotBinKey(l)); });
+  S.lots.forEach(l => { if (lotPresent(l) > 0) used.add(lotBinKey(l)); });
   sel.innerHTML = `<option value="">All bins</option>` + allBinKeys().map(k =>
     `<option value="${esc(k)}" ${k === S.binFilter ? 'selected' : ''}>${
       k === NO_BIN_KEY ? 'No bin recorded' : 'Bin ' + esc(k)}${used.has(k) ? '' : ' (empty)'}</option>`).join('');
@@ -1043,10 +1184,10 @@ function binSheetData() {
     const per = new Map();
     g.lots.forEach(l => {
       const tot = lotTotal(l);
-      if (tot <= 0) return;
+      if (tot <= 0 && !l.reserved) return;
       const key = lotBinKey(l);
       if (S.binFilter && key !== S.binFilter) return;
-      if (!per.has(key)) per.set(key, { lots: [], wound: 0, hank: 0, vendor: 0, retail: 0, held: 0, total: 0 });
+      if (!per.has(key)) per.set(key, { lots: [], wound: 0, hank: 0, vendor: 0, retail: 0, held: 0, total: 0, reserved: 0, resv: [] });
       const e = per.get(key);
       e.lots.push(l.lotNumber);
       const hank = Math.max(0, l.row.hank || 0);
@@ -1056,6 +1197,8 @@ function binSheetData() {
       e.retail += l.vals.retail || 0;
       e.held += l.vals.held || 0;
       e.total += tot;
+      e.reserved += l.reserved;
+      e.resv.push(...l.resv);
     });
     per.forEach((e, key) => {
       let shop = null;
@@ -1064,14 +1207,15 @@ function binSheetData() {
         shop = !g.recipe.sku ? 'no SKU' : !v ? 'not listed'
           : (v.active ? String(v.qty) : `${v.qty} (${v.status})`);
         // Same rule as the screen: a draft product with stock either side is wrong.
-        if (v && (v.active ? v.qty !== g.vendor : (v.qty > 0 || g.vendor > 0))) shop += ' !';
+        if (v && (v.active ? v.qty !== vendorExpected(g) : (v.qty > 0 || g.vendor > 0))) shop += ' !';
+        if (v && v.active && vendorExpected(g) !== g.vendor) shop += `\nexp ${vendorExpected(g)}`;
       }
       if (!byBin.has(key)) byBin.set(key, []);
       byBin.get(key).push({
         name: g.recipe.name, fiber: g.recipe.fiberName || g.recipe.fiber || '',
         fiberCode: g.recipe.fiber, sku: g.recipe.sku || '',
         lots: e.lots, wound: e.wound, hank: e.hank, vendor: e.vendor, retail: e.retail,
-        held: e.held, total: e.total,
+        held: e.held, total: e.total, reserved: e.reserved, resvText: resvTitle(e.resv),
         gristVendor: g.vendor, shop,
         otherBins: allBins.filter(k => k !== key).map(binText),
       });
@@ -1091,7 +1235,8 @@ function binSheetData() {
     const rows = byBin.get(key).sort((a, b) =>
       String(a.name).localeCompare(String(b.name)) || rank(a.fiberCode) - rank(b.fiberCode));
     return { key, label: binText(key), rows,
-      total: rows.reduce((t, r) => t + r.total, 0) };
+      total: rows.reduce((t, r) => t + r.total, 0),
+      reserved: rows.reduce((t, r) => t + r.reserved, 0) };
   });
   const filters = [];
   if (S.binFilter) filters.push(S.binFilter === NO_BIN_KEY ? 'no-bin lots only' : 'bin ' + S.binFilter);
@@ -1103,6 +1248,7 @@ function binSheetData() {
     filters,
     storeAt: S.store && S.store.fetched_at ? new Date(S.store.fetched_at) : null,
     storeChecked: !!S.store,
+    ordersOk: !!S.ordersOk,
   };
 }
 
@@ -1141,18 +1287,25 @@ function drawBinSheet(JsPDF, data) {
   doc.setTextColor(...INK);
   doc.text('Count each bag. Tick OK if it matches. If not, write what is actually there and tick where it needs fixing: '
     + 'Grist (counts / bin on the lot) and/or Shopify (listed quantity).', M, M + 44);
+  if (data.ordersOk) {
+    doc.setTextColor(91, 74, 139);
+    doc.text('Reserved = already promised to an open order and NOT in Wound/Hank. If those spools are still in the bag, '
+      + 'leave them out of Actual - set them aside or note them.', M, M + 55);
+    doc.setTextColor(...INK);
+  }
 
   // ── Table ──
-  const head = [['Colourway · fibre · SKU · lots', 'Wound', 'Hank', 'Listed', 'Shopify V', 'OK',
+  const head = [['Colourway · fibre · SKU · lots', 'Wound', 'Hank', 'Listed', 'Reserved', 'Shopify V', 'OK',
     'Actual wound', 'Actual hank', 'Fix in']];
   const body = [];
   const meta = [];   // parallel to body: what kind of row, for drawing
-  const COLS = 9;
+  const COLS = 10;
   data.bins.forEach(b => {
     body.push([{ content: pdfSafe(
       (b.key === '__none' ? 'NO BIN RECORDED' : 'BIN ' + b.label) +
       (b.rows.length
-        ? `      ${b.rows.length} item${b.rows.length === 1 ? '' : 's'} · ${b.total} spools expected`
+        ? `      ${b.rows.length} item${b.rows.length === 1 ? '' : 's'} · ${b.total} spools expected` +
+          (b.reserved ? ` + ${b.reserved} reserved for orders` : '')
         : '      nothing on record - empty?')),
       colSpan: COLS,
       styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 10.5, textColor: INK, cellPadding: { top: 5, bottom: 5, left: 6, right: 6 } } }]);
@@ -1170,6 +1323,7 @@ function drawBinSheet(JsPDF, data) {
         String(r.wound || '-'),
         r.hank ? '~' + r.hank : '-',
         pdfSafe(where.join('\n') || '-'),
+        pdfSafe(r.reserved ? `${r.reserved}\n${r.resvText}` : '-'),
         pdfSafe(r.shop == null ? '' : r.shop + (r.otherBins.length && r.shop && !/^no|^not/.test(r.shop) ? '\n(all bins)' : '')),
         '', '', '', '',
       ]);
@@ -1183,7 +1337,7 @@ function drawBinSheet(JsPDF, data) {
   const box = (x, y, s) => { doc.setDrawColor(...INK); doc.setLineWidth(0.8); doc.rect(x, y, s, s); };
   doc.autoTable({
     head, body,
-    startY: M + 54,
+    startY: M + (data.ordersOk ? 64 : 54),
     margin: { left: M, right: M, top: M + 6, bottom: M },
     theme: 'grid',
     rowPageBreak: 'avoid',
@@ -1191,15 +1345,16 @@ function drawBinSheet(JsPDF, data) {
       cellPadding: 4, valign: 'middle', overflow: 'linebreak' },
     headStyles: { fillColor: INK, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
     columnStyles: {
-      0: { cellWidth: 238, halign: 'left' },
-      1: { cellWidth: 48, halign: 'center', fontStyle: 'bold', fontSize: 11 },
-      2: { cellWidth: 48, halign: 'center', fontSize: 10 },
-      3: { cellWidth: 60, halign: 'center', fontSize: 8.5 },
-      4: { cellWidth: 62, halign: 'center', fontSize: 9 },
-      5: { cellWidth: 34 },
-      6: { cellWidth: 72 },
-      7: { cellWidth: 72 },
-      8: { cellWidth: 98 },
+      0: { cellWidth: 214, halign: 'left' },
+      1: { cellWidth: 46, halign: 'center', fontStyle: 'bold', fontSize: 11 },
+      2: { cellWidth: 46, halign: 'center', fontSize: 10 },
+      3: { cellWidth: 52, halign: 'center', fontSize: 8.5 },
+      4: { cellWidth: 74, halign: 'center', fontSize: 7.5 },
+      5: { cellWidth: 56, halign: 'center', fontSize: 8.5 },
+      6: { cellWidth: 30 },
+      7: { cellWidth: 60 },
+      8: { cellWidth: 60 },
+      9: { cellWidth: 94 },
     },
     showHead: 'everyPage',
     didParseCell: (h) => {
@@ -1208,7 +1363,10 @@ function drawBinSheet(JsPDF, data) {
       if (m && m.kind === 'item' && h.column.index === 0) {
         h.cell.styles.valign = 'top'; h.cell.styles.textColor = [90, 80, 72]; h.cell.styles.fontSize = 8.5;
       }
-      if (m && m.kind === 'item' && h.column.index === 4 && /!$/.test(String(m.row.shop || ''))) {
+      if (m && m.kind === 'item' && h.column.index === 4 && m.row.reserved) {
+        h.cell.styles.textColor = [91, 74, 139];
+      }
+      if (m && m.kind === 'item' && h.column.index === 5 && /!/.test(String(m.row.shop || ''))) {
         h.cell.styles.textColor = ACCENT; h.cell.styles.fontStyle = 'bold';
       }
     },
@@ -1228,12 +1386,12 @@ function drawBinSheet(JsPDF, data) {
         doc.text(name, c.x + c.padding('left'), c.y + c.padding('top'), { baseline: 'top' });
         doc.setFont('helvetica', 'normal');
       }
-      if (h.column.index === 5) box(cx - 6, cy - 6, 12);
-      if (h.column.index === 6 || h.column.index === 7) {
+      if (h.column.index === 6) box(cx - 6, cy - 6, 12);
+      if (h.column.index === 7 || h.column.index === 8) {
         doc.setDrawColor(...MUTED); doc.setLineWidth(0.6);
         doc.line(c.x + 10, c.y + c.height - 9, c.x + c.width - 10, c.y + c.height - 9);
       }
-      if (h.column.index === 8) {
+      if (h.column.index === 9) {
         doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...INK);
         box(c.x + 7, cy - 5, 10); doc.text('Grist', c.x + 20, cy + 3);
         box(c.x + 49, cy - 5, 10); doc.text('Shopify', c.x + 62, cy + 3);
