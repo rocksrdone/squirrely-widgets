@@ -953,6 +953,7 @@ async function loadPricing() {
   S.pricingTable = from;
   const custCol = findColumn(t, ['Customer', 'Customer_Ref', 'Vendor', 'Customer_Name']);
   const recCol = findColumn(t, ['Recipe', 'Colourway', 'Colorway']);
+  const fiberCol = findColumn(t, ['Fiber_Code', 'Fiber', 'Fiber_Type']);
   const priceCol = findColumn(t, ['Unit_Price', 'Price', 'Rate', 'Wholesale_Price', 'Price_Per_Spool']);
   const cols = Object.keys(t).filter(k => k !== 'id');
   if (!custCol || !priceCol) {
@@ -990,9 +991,20 @@ async function loadPricing() {
     }
     if (!cid) { unresolved++; return; }
     const rid = recCol ? getRefId(columnAsArray(t, recCol)[i]) : null;
-    S.pricing[cid] = S.pricing[cid] || {};
-    // A row with no recipe is the customer's default rate.
-    S.pricing[cid][rid || 'default'] = num(columnAsArray(t, priceCol)[i]);
+    const fib = fiberCol ? priceFiberCode(columnAsArray(t, fiberCol)[i]) : '';
+    /* A blank price is "no rate set", not a rate of zero. The customer card
+       seeds an EN row with no price; read as 0 it used to become the
+       customer's only rate and priced every line at nothing. */
+    const rawPrice = columnAsArray(t, priceCol)[i];
+    if (rawPrice == null || rawPrice === '' || !(num(rawPrice) > 0)) return;
+    /* Rates are kept per colourway, per FIBRE (what the customer card
+       writes: FFN / EN / FFC), and as a plain default. Before, every row
+       without a Recipe was "the default", so a card with FFN, FFC and EN
+       rows kept whichever came last. */
+    const P = S.pricing[cid] = S.pricing[cid] || { recipe: {}, fiber: {}, default: null };
+    if (rid) P.recipe[rid] = num(rawPrice);
+    else if (fib) P.fiber[fib] = num(rawPrice);
+    else P.default = num(rawPrice);
     S.pricingRows++;
   });
 
@@ -1012,10 +1024,30 @@ async function loadPricing() {
   S.pricingByName = byNameHits;
 }
 
+/* FFN / EN / FFC from whatever spelling a column holds: a code, a Fiber_Type
+   name ("FF Nylon", "E Nylon", "FF Cotton"), or a SKU prefix. */
+function priceFiberCode(v) {
+  const s = String(v || '').trim().toUpperCase();
+  if (!s) return '';
+  if (/^(FFN|EN|FFC|BW|CN)$/.test(s)) return s;
+  if (/^E\s*NYLON|^EN\b/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+function recipeFiber(recipeId) {
+  const r = S.recipesById && S.recipesById[recipeId];
+  if (!r) return '';
+  return priceFiberCode(r.fiber) || priceFiberCode(String(r.sku || '').split('_')[0]);
+}
+/* Most specific rate wins: this colourway, then this fibre, then the default. */
 function priceFor(customerId, recipeId) {
   const p = S.pricing[customerId];
   if (!p) return 0;
-  return num(p[recipeId] != null ? p[recipeId] : p.default);
+  if (p.recipe[recipeId] != null) return num(p.recipe[recipeId]);
+  const f = recipeFiber(recipeId);
+  if (f && p.fiber[f] != null) return num(p.fiber[f]);
+  return num(p.default);
 }
 
 /* ── Order numbering ────────────────────────────────────────────────────── */
