@@ -87,6 +87,25 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .picked .x:hover { color: var(--accent); }
 .add-row input[type=number] { flex: 0 0 64px; }
 .add-row .btn { flex: 0 0 auto; }
+/* Customer details panel and acknowledgement */
+.cust-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 7px; padding: 10px 12px; margin-bottom: 12px; }
+.cust-info h4 { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; font-weight: 600; margin-bottom: 3px; }
+.cust-info .v { font-size: 12px; line-height: 1.5; white-space: pre-line; }
+.cust-info .v.none { color: #A89B8F; font-style: italic; }
+.cust-info .v.loud { color: var(--accent); font-weight: 600; }
+.cust-info .edit { grid-column: 1 / -1; font-size: 10.5px; color: #8B7D72; }
+input.po { width: 160px; font-family: 'DM Mono', monospace; }
+textarea.order-notes { flex: 1 1 260px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--rule);
+  border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 12px; resize: vertical; background: white; color: var(--ink); }
+.ack { margin-top: 12px; border: 1.5px solid var(--teal); border-radius: 8px; padding: 12px; background: var(--teal-light); }
+.ack h4 { font-size: 12.5px; margin-bottom: 6px; }
+.ack .row { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; flex-wrap: wrap; }
+.ack .row label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #6B5E52; min-width: 54px; }
+.ack input.wide { flex: 1 1 260px; }
+.ack textarea { width: 100%; min-height: 170px; padding: 8px; border: 1px solid var(--rule); border-radius: 6px;
+  font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5; background: white; color: var(--ink); }
+.ack .hint { font-size: 10.5px; color: #6B5E52; margin-top: 6px; }
 label.lab { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 70px; }
 select, input[type=text], input[type=number] {
   padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12.5px;
@@ -371,7 +390,12 @@ const TERMS = {
   },
 };
 const TERMS_ORDER_COL = ['Payment_Terms', 'Terms'];
-const TERMS_CUST_COL = ['Default_Payment_Terms', 'Payment_Terms', 'Terms'];
+const TERMS_CUST_COL = ['Default_Payment_Terms'];
+/* Older columns the customer card used to write. Read only when the
+   Default_ column is blank on that row — the card wrote Payment_Terms and
+   Invoice_Method while this screen read Default_*, so a customer's terms
+   set on the card never reached an order. */
+const TERMS_CUST_LEGACY = ['Payment_Terms', 'Terms'];
 
 /* How they are paying, which changes what the invoice has to say. Wise needs
    bank details on the invoice; a Shopify invoice needs its link; a check needs
@@ -379,7 +403,25 @@ const TERMS_CUST_COL = ['Default_Payment_Terms', 'Payment_Terms', 'Terms'];
    a prepaid order can be paid by any of the three. */
 const PAY_METHODS = ['Wise', 'Check', 'Shopify invoice'];
 const PAYMETHOD_ORDER_COL = ['Payment_Method', 'Pay_By'];
-const PAYMETHOD_CUST_COL = ['Default_Payment_Method', 'Payment_Method', 'Invoice_Method'];
+const PAYMETHOD_CUST_COL = ['Default_Payment_Method'];
+const PAYMETHOD_CUST_LEGACY = ['Payment_Method', 'Invoice_Method'];
+/* Invoice_Method held looser words ("Shopify", "Bank transfer"). Only the ones
+   that mean a method this screen knows are carried over. */
+function normPayMethod(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (/^wise|bank/i.test(s)) return 'Wise';
+  if (/check|cheque/i.test(s)) return 'Check';
+  if (/shopify/i.test(s)) return 'Shopify invoice';
+  return PAY_METHODS.includes(s) ? s : '';
+}
+function normTerms(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (/prepa|before/i.test(s)) return 'Prepaid';
+  if (/receipt|on account|after/i.test(s)) return 'Due on receipt';
+  return TERMS[s] ? s : '';
+}
 
 /* What actually applies to an order: its own value, else the customer's. */
 function termsFor(o) {
@@ -457,6 +499,7 @@ async function loadAll() {
       status: c(['Status']), channel: c(['Channel']), type: c(['Order_Type']),
       orderDate: c(['Order_Date']), dueDate: c(['Due_Date']), notes: c(['Notes']),
       terms: c(TERMS_ORDER_COL), pay: c(PAYMETHOD_ORDER_COL),
+      po: c(['PO_Number', 'PO', 'Purchase_Order', 'PO_No']),
     };
     const lc = (cands) => findColumn(wolT, cands);
     S.lineCols = {
@@ -503,6 +546,9 @@ async function loadAll() {
       notes: columnAsArray(woT, S.cols.notes)[i] || '',
       terms: S.cols.terms ? String(columnAsArray(woT, S.cols.terms)[i] || '').trim() : '',
       pay: S.cols.pay ? String(columnAsArray(woT, S.cols.pay)[i] || '').trim() : '',
+      po: S.cols.po ? String(columnAsArray(woT, S.cols.po)[i] || '').trim() : '',
+      orderDate: S.cols.orderDate ? columnAsArray(woT, S.cols.orderDate)[i] : null,
+      dueDate: S.cols.dueDate ? columnAsArray(woT, S.cols.dueDate)[i] : null,
     }));
 
     S.lines = {};
@@ -904,14 +950,33 @@ async function loadCustomers() {
     const codeCol = findColumn(t, ['Code']);
     const termsCol = findColumn(t, TERMS_CUST_COL);
     const payCol = findColumn(t, PAYMETHOD_CUST_COL);
+    const termsOld = findColumn(t, TERMS_CUST_LEGACY);
+    const payOld = findColumn(t, PAYMETHOD_CUST_LEGACY);
     const countryCol = findColumn(t, ['Ship_Country', 'Country']);
     S.customerCols = { terms: termsCol, pay: payCol };
+    const txt = (cands) => { const col = findColumn(t, cands);
+      return (i) => col ? String(columnAsArray(t, col)[i] == null ? '' : columnAsArray(t, col)[i]).trim() : ''; };
+    const F = {
+      email: txt(['Email', 'Email_Primary']), emailBill: txt(['Email_Billing', 'Billing_Email']),
+      contact: txt(['Main_Contact', 'Contact_Name']), phone: txt(['Phone', 'Phone_Primary']),
+      shipName: txt(['Ship_To_Name', 'Ship_Name']), shipCompany: txt(['Ship_Company', 'Company']),
+      addr1: txt(['Ship_Addr1', 'Ship_Address_1']), addr2: txt(['Ship_Addr2', 'Ship_Address_2']),
+      addr3: txt(['Ship_Addr3', 'Ship_Address_3']),
+      city: txt(['Ship_City']), state: txt(['Ship_State', 'Ship_Province']), zip: txt(['Ship_Zip', 'Ship_Postal_Code']),
+      csz: txt(['Ship_City_State_Zip', 'Ship_CSZ']), country: txt(['Ship_Country', 'Country']),
+      labelFront: txt(['Label_Front_Logo']), labelBack: txt(['Label_Back_Style']), labelNotes: txt(['Label_Notes']),
+      reqs: txt(['Special_Requirements', 'Requirements']), currency: txt(['Currency']),
+      customsType: txt(['Customs_ID_Type']), customsId: txt(['Customs_ID_2', 'PCC']), taxId: txt(['Tax_ID']),
+    };
     S.customers = (t.id || []).map((id, i) => ({
       id,
       name: columnAsArray(t, nameCol)[i] || `Customer #${id}`,
       code: columnAsArray(t, codeCol)[i] || '',
-      terms: termsCol ? String(columnAsArray(t, termsCol)[i] || '').trim() : '',
-      pay: payCol ? String(columnAsArray(t, payCol)[i] || '').trim() : '',
+      terms: (termsCol ? normTerms(columnAsArray(t, termsCol)[i]) : '')
+        || (termsOld ? normTerms(columnAsArray(t, termsOld)[i]) : ''),
+      pay: (payCol ? normPayMethod(columnAsArray(t, payCol)[i]) : '')
+        || (payOld ? normPayMethod(columnAsArray(t, payOld)[i]) : ''),
+      info: Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f(i)])),
       /* Only used to decide whether to mention the commercial invoice. The
          country string is free text ("US — United States"), so this tests for
          the US rather than trying to identify which country it is. */
@@ -1118,6 +1183,16 @@ async function setOrderField(id, col, value) {
   if (!col) return;
   try {
     await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, { [col]: value }]]);
+    /* The write landed, but nothing re-read it: the next redraw rebuilt the
+       dropdowns from the copy loaded earlier and put the OLD value back on
+       screen. That is what made terms and pay-by look as though they never
+       changed. Keep the local copy in step, then redraw. */
+    const o = S.orders.find(x => x.id === id);
+    if (o) {
+      const key = Object.keys(S.cols).find(k => S.cols[k] === col);
+      if (key && key in o) o[key] = value;
+    }
+    render();
   } catch (e) {
     console.error('Could not save:', e);
     alert('Could not save that change.');
@@ -2598,7 +2673,20 @@ function renderMain() {
     <div class="field-row">
       <label class="lab">Customer</label>${custOptions}
     </div>
+    ${custInfoHtml(o)}
     ${termsRowHtml(o)}
+    <div class="field-row">
+      <label class="lab">PO number</label>
+      ${S.cols.po
+        ? `<input type="text" class="po" value="${esc(o.po)}" placeholder="their PO, if any"
+            onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.po)}, this.value.trim())">`
+        : `<span class="st-listed">add a Text column <code>PO_Number</code> to Work_Orders</span>`}
+    </div>
+    ${S.cols.notes ? `<div class="field-row" style="align-items:flex-start">
+      <label class="lab" style="padding-top:6px">For this order</label>
+      <textarea class="order-notes" placeholder="Anything different about this order — a deadline, a label change, split shipping…"
+        onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.notes)}, this.value)">${esc(o.notes || '')}</textarea>
+    </div>` : ''}
 
     <table class="lines">
       <thead><tr><th>Colourway</th><th>SKU</th><th style="text-align:right">Spools</th>
@@ -2659,6 +2747,7 @@ function renderMain() {
     </div>
 
     ${pushPanelHtml(o)}
+    ${S.ackFor === o.id ? ackPanelHtml(o) : ''}
 
     <div class="actions">
       ${building
@@ -2676,6 +2765,9 @@ function renderMain() {
           : !S.lineCols.price
             ? 'Work_Order_Lines has no price column — press this to see what to add'
             : 'Fill in blank prices from this customer\'s rates'}">apply pricing</button>` : ''}
+      ${lines.length ? `<button class="btn secondary" onclick="toggleAck(${o.id})"
+        title="A PDF of this order and a 'we've got your order' email to send them">
+        ${S.ackFor === o.id ? 'Close acknowledgement' : 'Acknowledge order…'}</button>` : ''}
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;
@@ -2687,6 +2779,268 @@ function renderMain() {
       const at = caret == null ? again.value.length : caret;
       if (again.setSelectionRange) { try { again.setSelectionRange(at, at); } catch (e) {} }
     }
+  }
+}
+
+/* ── What the customer record says, on the order ──────────────────────────
+   Shipping, labels and special requirements live on the customer and apply
+   to every order, so they are SHOWN here rather than re-typed. Anything that
+   is different for one order goes in "For this order" below. Edit the
+   customer card to change these. */
+function shipLines(ci) {
+  if (!ci) return [];
+  const place = (ci.city || ci.zip)
+    ? [ci.city, ci.state, ci.zip].filter(Boolean).join(' ')
+    : ci.csz;
+  return [ci.shipName, ci.shipCompany, ci.addr1, ci.addr2, ci.addr3, place,
+    String(ci.country || '').replace(/^[A-Z]{2}\s*[—-]\s*/, '')].filter(Boolean);
+}
+function custOf(o) { return o && o.customerId ? S.customers.find(x => x.id === o.customerId) : null; }
+function custInfoHtml(o) {
+  const c = custOf(o);
+  if (!c || !c.info) return '';
+  const ci = c.info;
+  const ship = shipLines(ci);
+  const labels = [ci.labelFront && `Front: ${ci.labelFront}`, ci.labelBack && `Back: ${ci.labelBack}`, ci.labelNotes]
+    .filter(Boolean).join('\n');
+  const contact = [ci.contact, ci.email, ci.phone].filter(Boolean).join('\n');
+  const v = (txt, cls) => txt ? `<div class="v ${cls || ''}">${esc(txt)}</div>` : `<div class="v none">none recorded</div>`;
+  return `<div class="cust-info">
+    <div><h4>Ship to</h4>${v(ship.join('\n'))}</div>
+    <div><h4>Contact</h4>${v(contact)}</div>
+    <div><h4>Labels</h4>${v(labels)}</div>
+    <div><h4>Special requirements</h4>${v(ci.reqs, 'loud')}</div>
+    <div class="edit">From the customer record — change these on the Customers card. Anything different for just this order goes in “For this order”.</div>
+  </div>`;
+}
+
+/* ── Acknowledgement: a PDF of the order and a "got your order" email ──────
+   Written by you, sent by you. The email is a starting draft you can edit;
+   "Open in email" hands it to your mail app with the subject and text filled
+   in. A mail link cannot carry an attachment, so the PDF is downloaded
+   alongside and dropped into the email by hand. Nothing is sent from here. */
+const ACK_FROM = { name: 'Squirrely Stash', web: 'squirrelystash.com', email: 'info@squirrelystash.com' };
+const ACK_PDF_LIBS = [
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+];
+function ackLoadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve;
+    el.onerror = () => reject(new Error('could not load the PDF library'));
+    document.head.appendChild(el);
+  });
+}
+async function ackPdfLib() {
+  if (!(window.jspdf && window.jspdf.jsPDF)) await ackLoadScript(ACK_PDF_LIBS[0]);
+  if (!window.jspdf.jsPDF.API.autoTable) await ackLoadScript(ACK_PDF_LIBS[1]);
+  return window.jspdf.jsPDF;
+}
+function ackDate(v) {
+  if (v == null || v === '' || v === 0) return '';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+}
+function ackData(o) {
+  const c = custOf(o);
+  const ci = (c && c.info) || {};
+  const lines = (S.lines[o.id] || []).filter(l => l.qty > 0);
+  const priced = lines.length > 0 && lines.every(l => num(l.price) > 0);
+  const t = termsFor(o), p = payFor(o);
+  return {
+    o, c, ci, lines, priced,
+    spools: lines.reduce((n, l) => n + l.qty, 0),
+    total: lines.reduce((n, l) => n + l.qty * num(l.price), 0),
+    terms: t.value || '',
+    pay: p.value || '',
+    greet: (ci.contact || ci.shipName || (c && c.name) || o.customerName || '').split(/\s+/)[0] || 'there',
+    due: ackDate(o.dueDate),
+  };
+}
+function ackDefaultEmail(o) {
+  const d = ackData(o);
+  const ref = o.po ? `your PO ${o.po}` : 'your order';
+  const subject = `Order received — ${o.number}${o.po ? ' (PO ' + o.po + ')' : ''}`;
+  const body =
+`Hi ${d.greet},
+
+Thank you for ${ref}. I've received it and it's now in our production queue as order ${o.number}.
+
+Here's what I'll be working on:
+${d.lines.map(l => `  • ${l.qty} × ${l.recipeName || l.sku}`).join('\n')}
+
+${d.spools} spools in total${d.priced ? `, $${d.total.toFixed(2)}` : ''}.${d.due ? `\nI expect to ship it by ${d.due}.` : ''}
+
+A PDF copy of the order is attached for your records. If anything needs changing, just reply and let me know.
+
+Thank you,
+${ACK_FROM.name}`;
+  return { to: d.ci.email || d.ci.emailBill || '', subject, body };
+}
+function toggleAck(id) {
+  if (S.ackFor === id) { S.ackFor = null; render(); return; }
+  const o = S.orders.find(x => x.id === id);
+  if (!o) return;
+  S.ackFor = id;
+  S.ack = Object.assign({ notesOnPdf: false, pricesOnPdf: true }, ackDefaultEmail(o));
+  render();
+}
+function ackSet(k, v) { if (S.ack) S.ack[k] = v; }
+function ackPanelHtml(o) {
+  const a = S.ack || {};
+  const d = ackData(o);
+  return `<div class="ack">
+    <h4>Acknowledge ${esc(o.number)} to ${esc((d.c && d.c.name) || o.customerName || 'the customer')}</h4>
+    <div class="row"><label>To</label>
+      <input type="text" class="wide" value="${esc(a.to)}" placeholder="no email on the customer record"
+        oninput="ackSet('to', this.value)"></div>
+    <div class="row"><label>Subject</label>
+      <input type="text" class="wide" value="${esc(a.subject)}" oninput="ackSet('subject', this.value)"></div>
+    <textarea oninput="ackSet('body', this.value)">${esc(a.body)}</textarea>
+    <div class="row" style="margin-top:8px">
+      <label style="min-width:0;text-transform:none;letter-spacing:0;font-size:11.5px">
+        <input type="checkbox" ${a.pricesOnPdf && d.priced ? 'checked' : ''} ${d.priced ? '' : 'disabled'}
+          onchange="ackSet('pricesOnPdf', this.checked)"> prices on the PDF</label>
+      <label style="min-width:0;text-transform:none;letter-spacing:0;font-size:11.5px">
+        <input type="checkbox" ${a.notesOnPdf ? 'checked' : ''} ${o.notes ? '' : 'disabled'}
+          onchange="ackSet('notesOnPdf', this.checked)"> “For this order” notes on the PDF</label>
+    </div>
+    <div class="row">
+      <button class="btn" onclick="ackDownloadPdf(${o.id})">⬇ Download PDF</button>
+      <button class="btn secondary" onclick="ackOpenMail(${o.id})">Open in email</button>
+      <button class="btn secondary" onclick="ackCopy()">Copy text</button>
+      <button class="btn secondary" onclick="toggleAck(${o.id}); toggleAck(${o.id})" title="Rebuild the draft from the order as it is now">Reset draft</button>
+    </div>
+    <div class="hint">${d.priced ? '' : 'Some lines have no price, so the PDF leaves prices off. '}Nothing is sent from here — "Open in email" fills in a new message in your mail app; attach the downloaded PDF before sending.</div>
+  </div>`;
+}
+function ackOpenMail(id) {
+  const a = S.ack || {};
+  const href = `mailto:${encodeURIComponent(a.to || '')}?subject=${encodeURIComponent(a.subject || '')}&body=${encodeURIComponent(a.body || '')}`;
+  const link = document.createElement('a');
+  link.href = href; link.target = '_blank'; link.rel = 'noopener';
+  document.body.appendChild(link); link.click(); link.remove();
+}
+async function ackCopy() {
+  const a = S.ack || {};
+  const txt = `${a.subject}\n\n${a.body}`;
+  try { await navigator.clipboard.writeText(txt); toast('Email text copied'); }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand('copy'); toast('Email text copied'); } catch (e2) { toast('Could not copy'); }
+    ta.remove();
+  }
+}
+/* jsPDF's built-in font is Latin-1. Accented names are fine; symbols are not. */
+function ackSafe(s) {
+  return String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-').replace(/•/g, '-').replace(/×/g, 'x')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E -ÿ]/g, '?');
+}
+function ackBuildPdf(JsPDF, o, opts) {
+  const d = ackData(o);
+  const prices = d.priced && opts.pricesOnPdf !== false;
+  const doc = new JsPDF({ unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 44;
+  const INK = [26, 22, 20], MUTED = [139, 125, 114], RULE = [212, 201, 188], TEAL = [58, 139, 122];
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.setTextColor(...INK);
+  doc.text(ACK_FROM.name, M, M + 8);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
+  doc.text(`${ACK_FROM.web}  ·  ${ACK_FROM.email}`, M, M + 22);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(...TEAL);
+  doc.text('Order acknowledgement', W - M, M + 8, { align: 'right' });
+
+  const meta = [
+    ['Our order', o.number],
+    o.po ? ['Your PO', o.po] : null,
+    ['Date', ackDate(o.orderDate) || new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })],
+    d.due ? ['Expected to ship', d.due] : null,
+    d.terms ? ['Terms', d.terms] : null,
+    d.pay ? ['Payment by', d.pay] : null,
+  ].filter(Boolean);
+  doc.setFontSize(9.5);
+  meta.forEach(([k, v], i) => {
+    const y = M + 26 + i * 13;
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(...MUTED);
+    doc.text(ackSafe(k), W - M - 130, y, { align: 'right' });
+    doc.setFont('helvetica', 'bold'); doc.setTextColor(...INK);
+    doc.text(ackSafe(v), W - M, y, { align: 'right' });
+  });
+
+  let y = M + 52;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+  doc.text('CUSTOMER', M, y);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...INK);
+  doc.text(ackSafe((d.c && d.c.name) || o.customerName || ''), M, y + 14);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+  const ship = shipLines(d.ci);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+  doc.text('SHIP TO', M, y + 34);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...INK);
+  ship.forEach((ln, i) => doc.text(ackSafe(ln), M, y + 48 + i * 13));
+  y = Math.max(y + 48 + ship.length * 13, M + 30 + meta.length * 13) + 14;
+
+  const head = prices ? [['Colourway', 'SKU', 'Qty', 'Unit', 'Amount']] : [['Colourway', 'SKU', 'Qty']];
+  const body = d.lines.map(l => prices
+    ? [ackSafe(l.recipeName || l.sku), ackSafe(l.sku), String(l.qty), '$' + num(l.price).toFixed(2), '$' + (l.qty * num(l.price)).toFixed(2)]
+    : [ackSafe(l.recipeName || l.sku), ackSafe(l.sku), String(l.qty)]);
+  const foot = prices
+    ? [['Total', '', String(d.spools), '', '$' + d.total.toFixed(2)]]
+    : [['Total', '', String(d.spools)]];
+  doc.autoTable({
+    head, body, foot, startY: y, margin: { left: M, right: M },
+    theme: 'plain',
+    styles: { font: 'helvetica', fontSize: 10, textColor: INK, cellPadding: { top: 5, bottom: 5, left: 4, right: 4 } },
+    headStyles: { fontSize: 8.5, textColor: MUTED, fontStyle: 'bold', lineWidth: { bottom: 0.8 }, lineColor: INK },
+    footStyles: { fontStyle: 'bold', lineWidth: { top: 0.8 }, lineColor: INK },
+    bodyStyles: { lineWidth: { bottom: 0.4 }, lineColor: RULE },
+    columnStyles: prices
+      ? { 1: { font: 'courier', fontSize: 8.5, textColor: MUTED }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } }
+      : { 1: { font: 'courier', fontSize: 8.5, textColor: MUTED }, 2: { halign: 'right' } },
+    didParseCell: (h) => {
+      if (h.section !== 'body' && prices && h.column.index >= 2) h.cell.styles.halign = 'right';
+      if (h.section !== 'body' && !prices && h.column.index === 2) h.cell.styles.halign = 'right';
+    },
+  });
+  y = doc.lastAutoTable.finalY + 18;
+
+  const block = (title, text) => {
+    if (!text) return;
+    const lines = doc.splitTextToSize(ackSafe(text), W - 2 * M);
+    if (y + 20 + lines.length * 12 > H - M) { doc.addPage(); y = M; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+    doc.text(title, M, y);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...INK);
+    doc.text(lines, M, y + 13);
+    y += 22 + lines.length * 12;
+  };
+  const labels = [d.ci.labelFront && `Front of spool: ${d.ci.labelFront}`, d.ci.labelBack && `Back of spool: ${d.ci.labelBack}`]
+    .filter(Boolean).join('     ');
+  block('LABELS', labels);
+  if (opts.notesOnPdf) block('NOTES FOR THIS ORDER', o.notes);
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+  doc.text(ackSafe(`This confirms we have received your order and it is in production. It is not an invoice.`), M, H - M + 8);
+  return doc;
+}
+async function ackDownloadPdf(id) {
+  const o = S.orders.find(x => x.id === id);
+  if (!o) return;
+  try {
+    const JsPDF = await ackPdfLib();
+    const doc = ackBuildPdf(JsPDF, o, S.ack || {});
+    const name = `${o.number}${o.po ? '-PO-' + o.po.replace(/[^\w.-]+/g, '') : ''}-order.pdf`;
+    const url = URL.createObjectURL(doc.output('blob'));
+    const link = document.createElement('a');
+    link.href = url; link.download = name;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast('PDF downloaded');
+  } catch (e) {
+    console.error('Acknowledgement PDF failed:', e);
+    alert('Could not make the PDF — ' + (e && e.message ? e.message : e));
   }
 }
 

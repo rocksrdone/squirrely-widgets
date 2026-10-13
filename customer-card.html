@@ -327,11 +327,18 @@ const FIELDS = [
   { key: 'website',   cands: ['Website_URL', 'Website', 'URL'],         label: 'Website',         type: 'url',    block: 'people' },
 
   // money
-  { key: 'invMethod', cands: ['Invoice_Method', 'Billing_Method'],      label: 'Invoiced via',    type: 'choice', block: 'money',
-    options: ['Shopify', 'Wise', 'PayPal', 'Bank transfer', 'Check', 'Other'] },
+  /* Terms and pay method are the columns the ORDER BUILDER reads. This card
+     used to write Payment_Terms and Invoice_Method instead, so a customer's
+     terms set here never reached an order. The old columns are still read as
+     the starting value when the new ones are blank (see legacyOf). */
+  { key: 'payTerms',  cands: ['Default_Payment_Terms'],                 label: 'Usual payment terms', type: 'choice', block: 'money',
+    options: ['Due on receipt', 'Prepaid'], legacy: 'termsOld' },
+  { key: 'payMethod', cands: ['Default_Payment_Method'],                label: 'Usually pays by', type: 'choice', block: 'money',
+    options: ['Wise', 'Check', 'Shopify invoice'], legacy: 'invMethod' },
   { key: 'currency',  cands: ['Currency'],                              label: 'Currency',        type: 'choice', block: 'money',
     options: ['USD', 'CAD', 'EUR', 'GBP', 'AUD', 'JPY'] },
-  { key: 'terms',     cands: ['Payment_Terms', 'Terms'],                label: 'Payment terms',   type: 'text',   block: 'money' },
+  { key: 'invMethod', cands: ['Invoice_Method', 'Billing_Method'],      label: 'Invoiced via (old)', type: 'text', block: 'hidden' },
+  { key: 'termsOld',  cands: ['Payment_Terms', 'Terms'],                label: 'Payment terms (old)', type: 'text', block: 'hidden' },
   { key: 'taxId',     cands: ['Tax_ID', 'VAT_Number', 'Resale_Number'], label: 'Tax / VAT / resale no.', type: 'text', block: 'money', mono: true },
 
   // photos
@@ -347,11 +354,18 @@ const FIELDS = [
   { key: 'labelNotes',cands: ['Label_Notes'],                           label: 'Label notes',     type: 'textarea', block: 'labels', wide: true },
 
   // shipping
-  { key: 'shipName',  cands: ['Ship_To_Name', 'Ship_Name'],             label: 'Ship to name',    type: 'text',   block: 'ship' },
+  { key: 'shipName',  cands: ['Ship_To_Name', 'Ship_Name'],             label: 'Ship to (person)', type: 'text',  block: 'ship' },
+  { key: 'shipCompany', cands: ['Ship_Company', 'Company'],             label: 'Company',         type: 'text',   block: 'ship' },
   { key: 'shipAddr1', cands: ['Ship_Addr1', 'Ship_Address_1'],          label: 'Address line 1',  type: 'text',   block: 'ship' },
   { key: 'shipAddr2', cands: ['Ship_Addr2', 'Ship_Address_2'],          label: 'Address line 2',  type: 'text',   block: 'ship' },
-  { key: 'shipCsz',   cands: ['Ship_City_State_Zip', 'Ship_CSZ'],       label: 'City, state, ZIP', type: 'text',  block: 'ship' },
+  { key: 'shipAddr3', cands: ['Ship_Addr3', 'Ship_Address_3'],          label: 'Address line 3',  type: 'text',   block: 'ship' },
+  { key: 'shipCity',  cands: ['Ship_City'],                             label: 'City',            type: 'text',   block: 'ship' },
+  { key: 'shipState', cands: ['Ship_State', 'Ship_Province'],           label: 'State / province / region', type: 'text', block: 'ship' },
+  { key: 'shipZip',   cands: ['Ship_Zip', 'Ship_Postal_Code'],          label: 'ZIP / postcode',  type: 'text',   block: 'ship', mono: true },
   { key: 'shipCountry', cands: ['Ship_Country', 'Country'],             label: 'Country',         type: 'text',   block: 'ship' },
+  /* The old one-box city/state/ZIP. Shown only while the separate fields are
+     empty, with a button that splits it into them for you to check. */
+  { key: 'shipCsz',   cands: ['Ship_City_State_Zip', 'Ship_CSZ'],       label: 'Old city / state / ZIP', type: 'text', block: 'hidden' },
 
   // notes
   { key: 'reqs',      cands: ['Special_Requirements', 'Requirements'],  label: 'Special requirements', type: 'textarea', block: 'notes', wide: true },
@@ -410,7 +424,7 @@ async function loadAll() {
   FIELDS.forEach(f => {
     const hit = findColumn(custT, f.cands);
     S.cols[f.key] = hit;
-    if (!hit) S.missingCols.push(f.cands[0]);
+    if (!hit && f.block !== 'hidden') S.missingCols.push(f.cands[0]);
   });
 
   const ids = custT.id || [];
@@ -625,6 +639,87 @@ function buildPricingRows() {
 }
 
 /* ---------- detail render ---------- */
+/* Old free-text values mapped onto the choices the order builder knows. */
+function legacyValue(f) {
+  const raw = String(val(f.legacy) || '').trim();
+  if (!raw) return '';
+  if (f.key === 'payMethod') {
+    if (/^wise|bank/i.test(raw)) return 'Wise';
+    if (/check|cheque/i.test(raw)) return 'Check';
+    if (/shopify/i.test(raw)) return 'Shopify invoice';
+    return '';
+  }
+  if (f.key === 'payTerms') {
+    if (/prepa|before/i.test(raw)) return 'Prepaid';
+    if (/receipt|account|after/i.test(raw)) return 'Due on receipt';
+    return '';
+  }
+  return '';
+}
+
+/* ── Splitting the old one-box city / state / ZIP ─────────────────────────
+   A suggestion only: it fills the three boxes and marks them changed, and
+   nothing is written until Save. Addresses are laid out differently by
+   country ("Okemos, MI 48864", "97243 Bieberehren", "Sieborowice 32-091",
+   "seocho-gu, Seoul, 06710"), so check it before saving. */
+const REGION_WORDS = ['queensland', 'new south wales', 'victoria', 'tasmania', 'western australia',
+  'south australia', 'northern territory', 'australian capital territory', 'qld', 'nsw', 'vic', 'tas',
+  'wa', 'sa', 'nt', 'act', 'ontario', 'quebec', 'british columbia', 'alberta', 'manitoba',
+  'saskatchewan', 'nova scotia', 'new brunswick', 'newfoundland and labrador', 'prince edward island'];
+function splitCsz(raw) {
+  let s = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!s) return null;
+  const out = { city: '', state: '', zip: '' };
+  const parts = s.split(/\s*,\s*/).filter(Boolean);
+  // Postcode: a trailing token holding a digit (A1B 2C3 and SW1A 1AA allowed).
+  const tail = /\s*([A-Z]{0,2}\d[\dA-Z]?\s?\d?[\dA-Z-]{0,8})$/i;
+  let last = parts[parts.length - 1];
+  let m = tail.exec(last);
+  if (m && /\d/.test(m[1])) {
+    out.zip = m[1].trim();
+    last = last.slice(0, m.index).trim();
+    if (last) parts[parts.length - 1] = last; else parts.pop();
+  } else if ((m = /^(\d{4,6})\s+(.+)$/.exec(parts[0]))) {
+    // Postcode first, the way much of Europe writes it.
+    out.zip = m[1]; parts[0] = m[2];
+  }
+  if (parts.length >= 3) {
+    out.state = parts.pop(); out.city = parts.pop();
+    // Whatever is left (a district) belongs on an address line, not here.
+    out.extra = parts.join(', ');
+  } else if (parts.length === 2) {
+    out.city = parts[0]; out.state = parts[1];
+  } else if (parts.length === 1) {
+    let one = parts[0];
+    const st = /\s([A-Z]{2})$/.exec(one);
+    const region = REGION_WORDS.find(r => one.toLowerCase().endsWith(' ' + r));
+    if (st) { out.state = st[1]; one = one.slice(0, st.index); }
+    else if (region) { out.state = one.slice(one.length - region.length); one = one.slice(0, one.length - region.length); }
+    out.city = one.trim();
+  }
+  return out;
+}
+function splitOldAddress() {
+  const r = splitCsz(val('shipCsz'));
+  if (!r) return;
+  S.dirty.shipCity = r.city; S.dirty.shipState = r.state; S.dirty.shipZip = r.zip;
+  if (r.extra && !String(val('shipAddr3') || '').trim() && S.cols.shipAddr3) S.dirty.shipAddr3 = r.extra;
+  renderDetail();
+}
+function oldAddressHtml() {
+  const old = String(val('shipCsz') || '').trim();
+  const split = ['shipCity', 'shipState', 'shipZip'].some(k => String(val(k) || '').trim());
+  if (!old) return '';
+  return `<div class="field wide"><label>Old city / state / ZIP (one box)</label>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="mono" style="font-size:12px">${esc(old)}</span>
+      <button class="btn tiny" id="splitAddr" type="button">${split ? 'Split again' : 'Split into city / state / postcode'}</button>
+    </div>
+    <div class="field-hint">${split
+      ? 'The separate fields above are what orders use now. This old box is kept for reference.'
+      : 'Fills the three fields above for you to check, then Save. Nothing is written until you do.'}</div></div>`;
+}
+
 function fieldHtml(f) {
   const missing = !S.cols[f.key];
   const v = val(f.key);
@@ -661,7 +756,17 @@ function fieldHtml(f) {
   let control;
   if (f.type === 'choice') {
     const opts = f.options.slice();
+    const was = (!v && f.legacy) ? legacyValue(f) : '';
     if (v && !opts.includes(v)) opts.unshift(v);
+    if (was) {
+      /* Pre-filled from the old column. Not marked as a change (that would
+         make every customer read as unsaved); save() writes it alongside
+         whatever else is saved for this customer. */
+      control = `<select data-key="${f.key}" ${dis}><option value=""></option>` +
+        opts.map(o => `<option value="${esc(o)}" ${o === was ? 'selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
+      return `<div class="${cls}"><label>${esc(f.label)}</label>${control}
+        <div class="field-hint">from the old “${esc(String(val(f.legacy)))}” — kept the next time you Save</div>${hint}</div>`;
+    }
     control = `<select data-key="${f.key}" ${dis}><option value=""></option>` +
       opts.map(o => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
   } else if (f.type === 'textarea') {
@@ -769,6 +874,7 @@ function renderDetail() {
       if (!fs.length) return '';
       body = `<div class="field-grid">${fs.map(fieldHtml).join('')}</div>`;
       if (b.id === 'labels') body += labelSettingsHtml();
+      if (b.id === 'ship') body = body.replace(/<\/div>$/, oldAddressHtml() + '</div>');
     }
     return `<section class="block"><div class="block-title">${esc(b.title)}</div>${body}</section>`;
   }).join('');
@@ -781,7 +887,8 @@ function renderDetail() {
           ${val('code') ? `<span class="tag mono">${esc(val('code'))}</span>` : ''}
           ${val('type') ? `<span class="tag teal">${esc(val('type'))}</span>` : ''}
           ${val('status') ? `<span class="tag ${/inactive|paused/i.test(String(val('status'))) ? 'accent' : ''}">${esc(val('status'))}</span>` : ''}
-          ${val('invMethod') ? `<span class="tag">via ${esc(val('invMethod'))}</span>` : ''}
+          ${(val('payMethod') || val('invMethod')) ? `<span class="tag">pays by ${esc(val('payMethod') || val('invMethod'))}</span>` : ''}
+          ${val('payTerms') ? `<span class="tag">${esc(String(val('payTerms')).toLowerCase())}</span>` : ''}
           <span class="tag ${wantsPhotos ? 'teal' : ''}">${wantsPhotos ? 'Wants photos' : 'No photos'}</span>
         </div>
       </div>
@@ -815,6 +922,8 @@ function bindDetail() {
     loadAll();
   });
   document.getElementById('saveBtn').addEventListener('click', save);
+  const sp = document.getElementById('splitAddr');
+  if (sp) sp.addEventListener('click', splitOldAddress);
 
   document.querySelectorAll('[data-key]').forEach(inp => {
     const key = inp.dataset.key;
@@ -918,6 +1027,11 @@ async function save() {
     if (spec && spec.type === 'toggle') v = !!v;
     else if (typeof v === 'string') v = v.trim();
     fields[col] = v;
+  });
+  // Carry old terms / pay-method values into the columns orders read.
+  FIELDS.filter(f => f.legacy && S.cols[f.key] && !(f.key in S.dirty) && !val(f.key)).forEach(f => {
+    const was = legacyValue(f);
+    if (was) fields[S.cols[f.key]] = was;
   });
   if (Object.keys(fields).length) {
     actions.push(['UpdateRecord', 'Customers', S.selectedId, fields]);
