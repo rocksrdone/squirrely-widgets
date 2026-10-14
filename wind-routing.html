@@ -335,7 +335,7 @@ async function loadEverything() {
     try {
       const binsT = await grist.docApi.fetchTable('Storage_Locations');
       const BIN = resolveCols(binsT, 'Storage_Locations', {
-        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']),
+        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']), max: opt(['Max_Spools']),
       }, []);
       // Bins that hold loose back stock, grouped by fiber. Customer-reserved bins
       // (FOR, MMI, RDG) are excluded: those hold thread already promised, which is
@@ -344,9 +344,13 @@ async function loadEverything() {
       (binsT.id || []).forEach((id, i) => {
         const codeV = columnAsArray(binsT, BIN.code)[i];
         const fibV = BIN.fiber ? columnAsArray(binsT, BIN.fiber)[i] : '';
-        const resV = BIN.reserved ? getRefId(columnAsArray(binsT, BIN.reserved)[i]) : null;
-        if (!codeV || !fibV || resV) return;
-        (S.stockBins[fibV] = S.stockBins[fibV] || []).push({ id, code: codeV });
+        const rawRes = BIN.reserved ? columnAsArray(binsT, BIN.reserved)[i] : null;
+        const resV = typeof rawRes === 'string' ? rawRes.trim() : getRefId(rawRes);
+        const mx = BIN.max ? Number(columnAsArray(binsT, BIN.max)[i]) || 0 : 0;
+        if (codeV && mx > 0) BIN_CAPS[id] = mx;
+        // Blank fibre = takes anything (FF, E and cotton of a colour bag together).
+        if (!codeV || resV) return;
+        (S.stockBins[fibV || '*'] = S.stockBins[fibV || '*'] || []).push({ id, code: codeV });
       });
       if (BIN.code) {
         (binsT.id || []).forEach((id, i) => {
@@ -940,7 +944,12 @@ function stockSet(row, C, vals) {
 const STOCK2_NOT_READY =
   'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
-const BIN_CAPACITY = 60;   // spools a bin holds comfortably
+/* Bin capacity comes from Storage_Locations.Max_Spools, per bin; 60 only
+   when a bin has none set. Every screen that picks a bin reads the same
+   numbers, so the kettle, Wind & Box and the Lot Desk agree on what "full" is. */
+const BIN_CAPACITY = 60;
+const BIN_CAPS = {};
+function capOf(b) { const id = b && typeof b === 'object' ? b.id : b; return BIN_CAPS[id] || BIN_CAPACITY; }
 
 function buildBinFill(lotsT, LOT, allocByLot) {
   const fill = {};
@@ -977,7 +986,7 @@ function splitBinsForRecipe(recipeId) {
 }
 
 function binChoicesFor(fiberName) {
-  const list = (S.stockBins && S.stockBins[fiberName]) || [];
+  const list = ((S.stockBins && S.stockBins[fiberName]) || []).concat((S.stockBins && S.stockBins['*']) || []);
   if (list.length) return list;
   return Object.values(S.stockBins || {}).reduce((a, b) => a.concat(b), []);
 }
@@ -986,14 +995,14 @@ function binFill(binId) { return (S.binFill && S.binFill[binId]) || 0; }
 
 function assignStockBin(line, qty) {
   const known = knownBinForRecipe(line.recipeId);
-  if (known && binFill(known.id) + qty <= BIN_CAPACITY) {
+  if (known && binFill(known.id) + qty <= capOf(known)) {
     return { bin: known, reason: 'where this colourway already lives', tight: false };
   }
   const choices = binChoicesFor(line.fiberName).slice()
     .sort((a, b) => (binFill(a.id) - binFill(b.id)) || String(a.code).localeCompare(String(b.code)));
   if (!choices.length) return { bin: null, reason: 'no back stock bins for this fibre', tight: true };
 
-  const roomy = choices.find(b => binFill(b.id) + qty <= BIN_CAPACITY);
+  const roomy = choices.find(b => binFill(b.id) + qty <= capOf(b));
   if (!roomy) {
     // Everything is over capacity — name the emptiest anyway, because the
     // spools have to go somewhere tonight.
@@ -1019,7 +1028,7 @@ function binChoiceHtml(line) {
     <div class="bin-choice-cap">Back stock bin</div>
     <div class="btn-row">
       <button class="glove sort" disabled>${esc(a.bin.code)}</button>
-      <span class="bin-choice-note">${esc(a.reason)} &middot; ${after} of ${BIN_CAPACITY} after this</span>
+      <span class="bin-choice-note">${esc(a.reason)} &middot; ${after} of ${capOf(a.bin)} after this</span>
     </div>
     ${a.tight ? `<div class="bin-split">Bins are over capacity &mdash; time to deploy some stock.</div>` : ''}
     ${split ? `<div class="bin-split">This colourway is recorded in ${split.map(b => esc(b.code)).join(' and ')} &mdash; consolidate it.</div>` : ''}
@@ -1066,7 +1075,7 @@ function stockTagBar() {
 }
 
 function stockTagHtml(t) {
-  const bins = (S.stockBins && S.stockBins[t.fiber]) || [];
+  const bins = binChoicesFor(t.fiber);
   return `<div class="st-tag">
     <div class="st-hd">BACK STOCK &middot; VENDOR</div>
     <div class="st-name">${esc(t.colorway || '')}</div>

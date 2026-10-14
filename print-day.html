@@ -538,7 +538,12 @@ const code = n => 'SS-' + n;
 
    Fill is derived from the lots rather than read from Storage_Locations, whose
    count columns are formula columns with no formulas in them. */
+/* Bin capacity comes from Storage_Locations.Max_Spools, per bin; 60 only
+   when a bin has none set. Every screen that picks a bin reads the same
+   numbers, so the kettle, Wind & Box and the Lot Desk agree on what "full" is. */
 const BIN_CAPACITY = 60;
+const BIN_CAPS = {};
+function capOf(b) { const id = b && typeof b === 'object' ? b.id : b; return BIN_CAPS[id] || BIN_CAPACITY; }
 
 function buildBinIndex(binsT, colOf) {
   const idx = { code: {}, byFiber: {} };
@@ -546,16 +551,23 @@ function buildBinIndex(binsT, colOf) {
   const cCode = colOf(binsT, ['Bin_Code']);
   const cFib = colOf(binsT, ['Fiber']);
   const cRes = colOf(binsT, ['Reserved_For']);
+  const cMax = colOf(binsT, ['Max_Spools']);
   (binsT.id || []).forEach((id, i) => {
     const code = cCode ? columnAsArray(binsT, cCode)[i] : null;
     if (!code) return;
     idx.code[id] = code;
+    const mx = cMax ? Number(columnAsArray(binsT, cMax)[i]) || 0 : 0;
+    if (mx > 0) BIN_CAPS[id] = mx;
     const fib = cFib ? columnAsArray(binsT, cFib)[i] : '';
     // Customer-reserved bins hold thread already promised to an order — the
     // opposite of loose stock.
-    const res = cRes ? getRefId(columnAsArray(binsT, cRes)[i]) : null;
-    if (!fib || res) return;
-    (idx.byFiber[fib] = idx.byFiber[fib] || []).push({ id, code });
+    const rawRes = cRes ? columnAsArray(binsT, cRes)[i] : null;
+    const res = typeof rawRes === 'string' ? rawRes.trim() : getRefId(rawRes);
+    if (res) return;
+    /* A blank fibre means the bin takes anything — which is every bin now,
+       since FF, E and cotton of one colour bag together. Skipping blanks left
+       no candidates, so only a colourway's existing bin was ever suggested. */
+    (idx.byFiber[fib || '*'] = idx.byFiber[fib || '*'] || []).push({ id, code });
   });
   return idx;
 }
@@ -585,14 +597,14 @@ function buildBinState(lotsT, L, allocByLot, binCode) {
 function assignBin(state, idx, recipeId, fiberName, qty) {
   const fillOf = b => (state.fill && state.fill[b.id]) || 0;
   const known = state.memory ? state.memory[recipeId] : null;
-  if (known && fillOf(known) + qty <= BIN_CAPACITY) {
+  if (known && fillOf(known) + qty <= capOf(known)) {
     return { bin: known, why: 'where this colorway already lives' };
   }
-  let choices = (idx.byFiber && idx.byFiber[fiberName]) || [];
+  let choices = ((idx.byFiber && idx.byFiber[fiberName]) || []).concat((idx.byFiber && idx.byFiber['*']) || []);
   if (!choices.length) choices = Object.values(idx.byFiber || {}).reduce((a, b) => a.concat(b), []);
   if (!choices.length) return { bin: null, why: 'no back stock bins' };
   choices = choices.slice().sort((a, b) => (fillOf(a) - fillOf(b)) || String(a.code).localeCompare(String(b.code)));
-  const roomy = choices.find(b => fillOf(b) + qty <= BIN_CAPACITY);
+  const roomy = choices.find(b => fillOf(b) + qty <= capOf(b));
   return roomy
     ? { bin: roomy, why: known ? `${known.code} is full` : 'emptiest bin' }
     : { bin: choices[0], why: 'every bin is full — most room here' };

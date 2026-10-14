@@ -289,12 +289,14 @@ async function loadBoard() {
     S.binCode = {}; S.stockBins = {};
     if (binsT) {
       const BINC = resolveCols(binsT, 'Storage_Locations', {
-        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']),
+        code: ['Bin_Code'], fiber: opt(['Fiber']), reserved: opt(['Reserved_For']), max: opt(['Max_Spools']),
       }, []);
       (binsT.id || []).forEach((id, i) => {
         const codeV = columnAsArray(binsT, BINC.code)[i];
         if (!codeV) return;
         S.binCode[id] = codeV;
+        const mx = BINC.max ? Number(columnAsArray(binsT, BINC.max)[i]) || 0 : 0;
+        if (mx > 0) BIN_CAPS[id] = mx;
         const fibV = BINC.fiber ? columnAsArray(binsT, BINC.fiber)[i] : '';
         const rawRes = BINC.reserved ? columnAsArray(binsT, BINC.reserved)[i] : null;
         /* Reserved_For holds a NAME in this document ("RDG", "MMI"), not a
@@ -438,7 +440,12 @@ async function loadBoard() {
    Bins are shared with wound surplus (they go in the same large bag), so fill
    counts both, and the same even-fill rule applies: keep a colourway where it
    already lives while there is room, otherwise use the emptiest bin. */
+/* Bin capacity comes from Storage_Locations.Max_Spools, per bin; 60 only
+   when a bin has none set. Every screen that picks a bin reads the same
+   numbers, so the kettle, Wind & Box and the Lot Desk agree on what "full" is. */
 const BIN_CAPACITY = 60;
+const BIN_CAPS = {};
+function capOf(b) { const id = b && typeof b === 'object' ? b.id : b; return BIN_CAPS[id] || BIN_CAPACITY; }
 
 function binFill(id) { return (S.binFill && S.binFill[id]) || 0; }
 
@@ -461,13 +468,13 @@ function binsForFiber(fiberName) {
 
 function suggestBin(lot) {
   const known = (S.binMemory && S.binMemory[colourKeyOf(lot.name)]) || null;
-  if (known && binFill(known.id) + lot.unwound <= BIN_CAPACITY) {
+  if (known && binFill(known.id) + lot.unwound <= capOf(known)) {
     return { bin: known, why: 'where this colourway already lives' };
   }
   const choices = binsForFiber(lot.fiberName).slice()
     .sort((a, b) => (binFill(a.id) - binFill(b.id)) || String(a.code).localeCompare(String(b.code)));
   if (!choices.length) return { bin: null, why: 'no bins for this fibre' };
-  const roomy = choices.find(b => binFill(b.id) + lot.unwound <= BIN_CAPACITY);
+  const roomy = choices.find(b => binFill(b.id) + lot.unwound <= capOf(b));
   return {
     bin: roomy || choices[0],
     why: roomy ? (known ? `${known.code} is full` : 'emptiest bin') : 'every bin is full — most room here',
