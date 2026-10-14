@@ -1353,9 +1353,9 @@ function drawBinSheet(JsPDF, data) {
      left; the boxes to fill in are at the END of the row, each blank right
      beside the number it is checked against. Only columns that have
      something to say are printed. */
-  const doc = new JsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  const doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-  const M = 28;
+  const M = 24;
   const INK = [26, 22, 20], MUTED = [139, 125, 114], RULE = [212, 201, 188];
   const WARM = [232, 223, 212], ACCENT = [139, 58, 42], PURPLE = [91, 74, 139];
   const EXP = [244, 239, 232];          // tint behind the expected numbers
@@ -1370,26 +1370,26 @@ function drawBinSheet(JsPDF, data) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
   doc.text(pdfSafe(d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) +
     (data.filters.length ? '   ·   ' + data.filters.join(', ') : '')), M + 78, M + 6);
-  doc.setTextColor(...INK); doc.setFontSize(9.5);
-  doc.text('Count each bag.  Matches: tick the box.  Doesn\'t: write the real count.', M, M + 22);
+  doc.setTextColor(...INK); doc.setFontSize(9);
+  doc.text('Count each bag.  Matches: tick the box.  Doesn\'t: write the real count.', M, M + 20);
   if (showResv) {
-    doc.setTextColor(...PURPLE);
-    doc.text('Reserved = promised to an order. Not in the Wound / Hank numbers - don\'t count them.', W - M, M + 22, { align: 'right' });
+    doc.setTextColor(...PURPLE); doc.setFontSize(8.5);
+    doc.text('Reserved = promised to an order, not in Wound / Hank. Don\'t count them.', M, M + 31);
   }
 
   // ── Columns ──
   const cols = [
     { key: 'item', title: 'Colourway', w: 0 },
-    { key: 'listed', title: 'Listed', w: 58 },
+    { key: 'listed', title: 'Listed', w: 50 },
   ];
-  if (showResv) cols.push({ key: 'resv', title: 'Reserved', w: 54 });
-  if (showShop) cols.push({ key: 'shop', title: 'Shopify', w: 52 });
+  if (showResv) cols.push({ key: 'resv', title: 'Resv', w: 34 });
+  if (showShop) cols.push({ key: 'shop', title: 'Shopify', w: 44 });
   cols.push(
-    { key: 'wound', title: 'Wound', w: 50, exp: true },
-    { key: 'wActual', title: 'Actual', w: 58, blank: true },
-    { key: 'hank', title: 'Hank', w: 46, exp: true },
-    { key: 'hActual', title: 'Actual', w: 58, blank: true },
-    { key: 'ok', title: 'OK', w: 34, box: true },
+    { key: 'wound', title: 'Wound', w: 40, exp: true },
+    { key: 'wActual', title: 'Actual', w: 50, blank: true },
+    { key: 'hank', title: 'Hank', w: 38, exp: true },
+    { key: 'hActual', title: 'Actual', w: 50, blank: true },
+    { key: 'ok', title: 'OK', w: 26, box: true },
   );
   const fixed = cols.reduce((t, c) => t + c.w, 0);
   cols[0].w = W - 2 * M - fixed;
@@ -1400,8 +1400,8 @@ function drawBinSheet(JsPDF, data) {
   const body = [], meta = [];
   data.bins.forEach(b => {
     body.push([{ content: pdfSafe(b.key === '__none' ? 'NO BIN' : b.label), colSpan: N,
-      styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 12, textColor: INK,
-        cellPadding: { top: 4, bottom: 4, left: 6, right: 6 } } }]);
+      styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 10.5, textColor: INK,
+        cellPadding: { top: 2.5, bottom: 2.5, left: 5, right: 5 } } }]);
     meta.push({ kind: 'bin' });
     b.rows.forEach(r => {
       const listed = [r.vendor && `V${r.vendor}`, r.retail && `R${r.retail}`, r.held && `H${r.held}`]
@@ -1431,25 +1431,25 @@ function drawBinSheet(JsPDF, data) {
       }
     });
     body.push([{ content: 'Other:', colSpan: N,
-      styles: { fontSize: 8, textColor: MUTED, minCellHeight: 18, cellPadding: { top: 4, left: 6 } } }]);
+      styles: { fontSize: 7.5, textColor: MUTED, minCellHeight: 14, cellPadding: { top: 3, bottom: 2, left: 5 } } }]);
     meta.push({ kind: 'extra' });
   });
 
   const columnStyles = {};
   cols.forEach((c, i) => {
     columnStyles[i] = { cellWidth: c.w, halign: i === 0 ? 'left' : 'center' };
-    if (c.exp) Object.assign(columnStyles[i], { fontStyle: 'bold', fontSize: 13, fillColor: EXP });
-    if (c.key === 'listed' || c.key === 'shop') Object.assign(columnStyles[i], { fontSize: 8.5, textColor: MUTED });
-    if (c.key === 'resv') Object.assign(columnStyles[i], { fontSize: 11, fontStyle: 'bold', textColor: PURPLE });
+    if (c.exp) Object.assign(columnStyles[i], { fontStyle: 'bold', fontSize: 12, fillColor: EXP });
+    if (c.key === 'listed' || c.key === 'shop') Object.assign(columnStyles[i], { fontSize: 7.5, textColor: MUTED });
+    if (c.key === 'resv') Object.assign(columnStyles[i], { fontSize: 10, fontStyle: 'bold', textColor: PURPLE });
   });
 
   doc.autoTable({
-    head, body, startY: M + 32,
+    head, body, startY: M + (showResv ? 38 : 28),
     margin: { left: M, right: M, top: M, bottom: M + 6 },
     theme: 'grid', rowPageBreak: 'avoid', showHead: 'everyPage',
     styles: { font: 'helvetica', fontSize: 9, textColor: INK, lineColor: RULE, lineWidth: 0.5,
-      cellPadding: 4, valign: 'middle', overflow: 'linebreak' },
-    headStyles: { fillColor: INK, textColor: 255, fontSize: 8.5, fontStyle: 'bold', halign: 'center' },
+      cellPadding: 3, valign: 'middle', overflow: 'linebreak' },
+    headStyles: { fillColor: INK, textColor: 255, fontSize: 7.5, fontStyle: 'bold', halign: 'center' },
     columnStyles,
     didParseCell: (h) => {
       if (h.section === 'head') {
@@ -1462,7 +1462,7 @@ function drawBinSheet(JsPDF, data) {
       if (!m || m.kind !== 'item') return;
       const c = cols[h.column.index];
       if (h.column.index === 0) {
-        h.cell.styles.minCellHeight = 32;
+        h.cell.styles.minCellHeight = 25;
       }
       if (c && c.key === 'shop' && m.row.shopBad) Object.assign(h.cell.styles, { textColor: ACCENT, fontStyle: 'bold' });
       if (c && c.key === 'hank' && !m.row.hank) Object.assign(h.cell.styles, { fontStyle: 'normal', textColor: MUTED });
@@ -1473,22 +1473,24 @@ function drawBinSheet(JsPDF, data) {
       if (!m || m.kind !== 'item') return;
       const c = h.cell, col = cols[h.column.index];
       if (h.column.index === 0) {
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...INK);
         let name = pdfSafe(m.row.name);
         const room = c.width - 10;
         while (name.length > 4 && doc.getTextWidth(name) > room) name = name.slice(0, -2);
         if (name !== pdfSafe(m.row.name)) name = name.replace(/\s*$/, '') + '...';
-        doc.text(name, c.x + 5, c.y + 5, { baseline: 'top' });
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
-        doc.text(body[h.row.index].sub || '', c.x + 5, c.y + 19, { baseline: 'top' });
+        doc.text(name, c.x + 4, c.y + 3.5, { baseline: 'top' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...MUTED);
+        let sub = body[h.row.index].sub || '';
+        while (sub.length > 4 && doc.getTextWidth(sub) > room) sub = sub.slice(0, -2);
+        doc.text(sub, c.x + 4, c.y + 15, { baseline: 'top' });
       }
       if (col.blank) {
         // A real write-in box, so the eye goes straight to it.
         doc.setDrawColor(...INK); doc.setLineWidth(0.9);
-        doc.rect(c.x + 6, c.y + 5, c.width - 12, c.height - 10);
+        doc.rect(c.x + 4, c.y + 3.5, c.width - 8, c.height - 7);
       }
       if (col.box) {
-        const sz = 14, cx = c.x + c.width / 2, cy = c.y + c.height / 2;
+        const sz = 12, cx = c.x + c.width / 2, cy = c.y + c.height / 2;
         doc.setDrawColor(...INK); doc.setLineWidth(0.9);
         doc.rect(cx - sz / 2, cy - sz / 2, sz, sz);
       }
@@ -1499,8 +1501,8 @@ function drawBinSheet(JsPDF, data) {
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
-    doc.text('Checked by ______________________      Date ____________', M, H - 14);
-    doc.text(`${i} / ${pages}`, W - M, H - 14, { align: 'right' });
+    doc.text('Checked by ____________________    Date __________', M, H - 12);
+    doc.text(`${i} / ${pages}`, W - M, H - 12, { align: 'right' });
   }
   return doc;
 }
