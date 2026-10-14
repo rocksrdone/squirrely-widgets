@@ -109,6 +109,14 @@ textarea.order-notes { flex: 1 1 260px; min-height: 44px; padding: 6px 8px; bord
 .savebar { display: flex; gap: 8px; align-items: center; background: var(--gold-light); border: 1.5px solid #E4CF9E;
   color: #6E4C13; border-radius: 7px; padding: 7px 10px; margin-bottom: 12px; font-size: 12px; font-weight: 600; }
 .savebar .grow { flex: 1; }
+tr.ln-new td { background: #F3FAF8; }
+tr.ln-changed td.num input { border-color: var(--gold); background: var(--gold-light); }
+tr.ln-removing td { text-decoration: line-through; color: #A89B8F; background: #FBF4F2; }
+tr.ln-removing td:last-child { text-decoration: none; }
+.ln-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px;
+  border-radius: 8px; margin-left: 6px; background: var(--teal-light); color: var(--teal); text-decoration: none; display: inline-block; }
+.ln-tag.chg { background: var(--gold-light); color: var(--gold); }
+.ln-tag.rm { background: var(--accent-light); color: var(--accent); }
 .btn.saved { background: white; color: var(--teal); border-color: var(--rule); font-weight: 600; }
 label.lab { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 70px; }
 select, input[type=text], input[type=number] {
@@ -444,7 +452,7 @@ function payFor(o) {
 }
 
 const S = {
-  draft: {},
+  draft: {}, lineDraft: {}, tmpSeq: 1,
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
   pricingNote: '',       // why the rate card is thinner than expected, when it is
@@ -1191,7 +1199,90 @@ async function newOrder() {
    something unsaved. Lines, prices and reservations still save as you go —
    they move stock, and a half-saved reservation is worse than none. */
 function draftOf(id) { return S.draft[id] || {}; }
-function isDirty(id) { return Object.keys(draftOf(id)).length > 0; }
+function lineDraftOf(id) {
+  return S.lineDraft[id] || (S.lineDraft[id] = { qty: {}, remove: {}, adds: [] });
+}
+function linesDirty(id) {
+  const d = S.lineDraft[id];
+  return !!d && (Object.keys(d.qty).length > 0 || Object.keys(d.remove).length > 0 || d.adds.length > 0);
+}
+function isDirty(id) { return Object.keys(draftOf(id)).length > 0 || linesDirty(id); }
+
+/* ── Staged line edits ─────────────────────────────────────────────────────
+   Quantity changes, plain removals and new lines that take nothing from
+   stock wait for Save, like the order's own fields. Two things still happen
+   at once, because they move stock and a half-done move is worse than none:
+   reserving spools from a stock source, and removing a line that already has
+   spools reserved or dyed against it. */
+function viewLines(o) {
+  const d = S.lineDraft[o.id];
+  const base = (S.lines[o.id] || []).map(l => {
+    if (!d) return l;
+    const v = Object.assign({}, l);
+    if (l.id in d.qty) { v.qty = d.qty[l.id]; v.changed = true; }
+    if (d.remove[l.id]) v.removing = true;
+    return v;
+  });
+  const adds = d ? d.adds.map(a => {
+    const r = S.recipesById[a.recipeId] || {};
+    return { tmp: a.tmp, isNew: true, recipeId: a.recipeId, recipeName: r.name, sku: r.sku,
+      qty: a.qty, price: priceFor(o.customerId, a.recipeId), fresh: a.fresh };
+  }) : [];
+  return base.concat(adds);
+}
+function stageQty(orderId, lineId, value) {
+  const n = Math.max(0, Math.round(num(value)));
+  const line = (S.lines[orderId] || []).find(l => l.id === lineId);
+  const d = lineDraftOf(orderId);
+  if (line && line.qty === n) delete d.qty[lineId]; else d.qty[lineId] = n;
+  render();
+}
+function stageAddQty(orderId, tmp, value) {
+  const a = lineDraftOf(orderId).adds.find(x => x.tmp === tmp);
+  if (a) a.qty = Math.max(1, Math.round(num(value)));
+  render();
+}
+function undoAdd(orderId, tmp) {
+  const d = lineDraftOf(orderId);
+  d.adds = d.adds.filter(x => x.tmp !== tmp);
+  render();
+}
+function stageRemove(orderId, lineId, label) {
+  const line = lineById(lineId);
+  const st = line ? lineStock(line) : null;
+  // Stock is attached: the existing path releases it, with its own prompts.
+  if (line && (line.dyed > 0 || (st && st.reserved > 0))) { removeLine(lineId, label); return; }
+  lineDraftOf(orderId).remove[lineId] = true;
+  render();
+}
+function undoRemove(orderId, lineId) {
+  delete lineDraftOf(orderId).remove[lineId];
+  render();
+}
+function lineAddFields(orderId, a) {
+  const o = S.orders.find(x => x.id === orderId);
+  const r = S.recipesById[a.recipeId];
+  const fields = { [S.lineCols.wo]: orderId, [S.lineCols.sku]: r.sku, [S.lineCols.qty]: a.qty };
+  if (S.lineCols.recipe) fields[S.lineCols.recipe] = a.recipeId;
+  if (S.lineCols.dyed) fields[S.lineCols.dyed] = 0;
+  if (S.lineCols.queue) fields[S.lineCols.queue] = 'Open';
+  if (S.lineCols.priority) fields[S.lineCols.priority] = 'Normal';
+  if (S.lineCols.notes) fields[S.lineCols.notes] = r.name;
+  if (S.lineCols.price && o) { const p = priceFor(o.customerId, a.recipeId); if (p) fields[S.lineCols.price] = p; }
+  if (a.fresh && S.lineCols.makeFresh) fields[S.lineCols.makeFresh] = true;
+  return fields;
+}
+function lineSaveActions(orderId) {
+  const d = S.lineDraft[orderId];
+  if (!d) return [];
+  const acts = [];
+  Object.keys(d.remove).forEach(id => acts.push(['RemoveRecord', 'Work_Order_Lines', Number(id)]));
+  Object.entries(d.qty).forEach(([id, n]) => {
+    if (!d.remove[id]) acts.push(['UpdateRecord', 'Work_Order_Lines', Number(id), { [S.lineCols.qty]: n }]);
+  });
+  d.adds.forEach(a => acts.push(['AddRecord', 'Work_Order_Lines', null, lineAddFields(orderId, a)]));
+  return acts;
+}
 function withDraft(o) {
   if (!o || !isDirty(o.id)) return o;
   return Object.assign({}, o, draftOf(o.id));
@@ -1219,13 +1310,19 @@ async function saveOrder(id, quiet) {
   const d = draftOf(id);
   const fields = {};
   Object.keys(d).forEach(k => { if (S.cols[k]) fields[S.cols[k]] = d[k]; });
-  if (!Object.keys(fields).length) { delete S.draft[id]; return true; }
+  const acts = [];
+  if (Object.keys(fields).length) acts.push(['UpdateRecord', 'Work_Orders', id, fields]);
+  const lineActs = lineSaveActions(id);
+  acts.push(...lineActs);
+  if (!acts.length) { delete S.draft[id]; delete S.lineDraft[id]; render(); return true; }
   try {
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, fields]]);
+    // One call: the order and its lines are saved together or not at all.
+    await grist.docApi.applyUserActions(acts);
     const o = S.orders.find(x => x.id === id);
     if (o) Object.assign(o, d);
     delete S.draft[id];
-    render();
+    delete S.lineDraft[id];
+    if (lineActs.length) await loadAll(); else render();
     if (!quiet) toast('Saved');
     return true;
   } catch (e) {
@@ -1236,6 +1333,7 @@ async function saveOrder(id, quiet) {
 }
 function discardOrder(id) {
   delete S.draft[id];
+  delete S.lineDraft[id];
   render();
 }
 /* Anything that reads the order (release, push, pricing, acknowledgement)
@@ -1459,6 +1557,29 @@ async function addLine(orderId) {
 
   const o = S.orders.find(x => x.id === orderId);
   const existing = (S.lines[orderId] || []).find(l => l.recipeId === recipeId);
+
+  /* Nothing taken from stock: stage it for Save. A stock source still goes
+     through straight away (below), because the reservation needs a real line. */
+  const stagedAdd = lineDraftOf(orderId).adds.find(a => a.recipeId === recipeId);
+  if (!source || (source === 'fresh' && !existing)) {
+    if (stagedAdd) {
+      stagedAdd.qty += qty;
+      if (source === 'fresh') stagedAdd.fresh = true;
+    } else if (existing && !source) {
+      const d = lineDraftOf(orderId);
+      const cur = existing.id in d.qty ? d.qty[existing.id] : existing.qty;
+      d.qty[existing.id] = cur + qty;
+      delete d.remove[existing.id];
+    } else {
+      lineDraftOf(orderId).adds.push({ tmp: S.tmpSeq++, recipeId, qty, fresh: source === 'fresh' });
+    }
+    toast(`${qty}× ${r.name} — press Save to keep it`);
+    resetAddRow();
+    render();
+    return;
+  }
+  // Taking from stock: anything already staged for this order is saved first.
+  if (!(await flushDraft(orderId))) return;
   /* One line per colourway. The quantity sync cannot tell two lines with the
      same SKU apart — it skips both and says so — so merging here keeps a
      pushed order syncable later. */
@@ -2382,6 +2503,7 @@ function selectOrder(id) {
       return;
     }
     delete S.draft[S.selected];
+    delete S.lineDraft[S.selected];
   }
   S.selected = id; render();
 }
@@ -2712,9 +2834,10 @@ function renderMain() {
     return;
   }
 
-  const lines = S.lines[o.id] || [];
-  const spools = lines.reduce((n, l) => n + l.qty, 0);
-  const value = lines.reduce((n, l) => n + l.qty * l.price, 0);
+  const lines = viewLines(o);
+  const live = lines.filter(l => !l.removing);
+  const spools = live.reduce((n, l) => n + l.qty, 0);
+  const value = live.reduce((n, l) => n + l.qty * num(l.price), 0);
   const building = o.status === BUILDING_STATUS;
   const pushed = !!o.shopifyId;
 
@@ -2728,16 +2851,34 @@ function renderMain() {
          oninput="draftSet(${o.id}, 'customerName', this.value)">`;
 
   const lineRows = lines.length
-    ? lines.map(l => `<tr>
-        <td>${esc(l.recipeName || l.sku)}${stockLineHtml(l)}</td>
-        <td class="sku">${esc(l.sku)}</td>
-        <td class="num"><input type="number" min="0" value="${l.qty}"
-          onchange="setLineQty(${l.id}, this.value)"></td>
-        <td class="num">${l.price ? '$' + (l.qty * l.price).toFixed(2) : '—'}</td>
-        <td style="text-align:right">
-          <button class="btn danger small"
-            onclick="removeLine(${l.id}, ${esc(JSON.stringify(l.recipeName || l.sku))})">remove</button></td>
-      </tr>`).join('')
+    ? lines.map(l => {
+        const label = esc(JSON.stringify(l.recipeName || l.sku));
+        if (l.isNew) return `<tr class="ln-new">
+          <td>${esc(l.recipeName || l.sku)}<span class="ln-tag">new${l.fresh ? ' · make new' : ''}</span></td>
+          <td class="sku">${esc(l.sku)}</td>
+          <td class="num"><input type="number" min="1" value="${l.qty}"
+            onchange="stageAddQty(${o.id}, ${l.tmp}, this.value)"></td>
+          <td class="num">${num(l.price) ? '$' + (l.qty * l.price).toFixed(2) : '—'}</td>
+          <td style="text-align:right"><button class="btn secondary small"
+            onclick="undoAdd(${o.id}, ${l.tmp})">undo</button></td>
+        </tr>`;
+        if (l.removing) return `<tr class="ln-removing">
+          <td>${esc(l.recipeName || l.sku)}<span class="ln-tag rm">removed on save</span></td>
+          <td class="sku">${esc(l.sku)}</td><td class="num">${l.qty}</td><td class="num"></td>
+          <td style="text-align:right"><button class="btn secondary small"
+            onclick="undoRemove(${o.id}, ${l.id})">undo</button></td>
+        </tr>`;
+        return `<tr class="${l.changed ? 'ln-changed' : ''}">
+          <td>${esc(l.recipeName || l.sku)}${l.changed ? '<span class="ln-tag chg">changed</span>' : ''}${stockLineHtml(l)}</td>
+          <td class="sku">${esc(l.sku)}</td>
+          <td class="num"><input type="number" min="0" value="${l.qty}"
+            onchange="stageQty(${o.id}, ${l.id}, this.value)"></td>
+          <td class="num">${l.price ? '$' + (l.qty * l.price).toFixed(2) : '—'}</td>
+          <td style="text-align:right">
+            <button class="btn danger small"
+              onclick="stageRemove(${o.id}, ${l.id}, ${label})">remove</button></td>
+        </tr>`;
+      }).join('')
     : `<tr><td colspan="5" class="empty" style="padding:14px">No lines yet.</td></tr>`;
 
   box.innerHTML = `<div class="panel">
@@ -2748,7 +2889,7 @@ function renderMain() {
       : 'Released for production. Still not in Shopify.'}</div>
 
     <div class="savebar" id="saveBar" style="${isDirty(o.id) ? '' : 'display:none'}">
-      <span class="grow">Unsaved changes to this order</span>
+      <span class="grow">Unsaved changes to this order${linesDirty(o.id) ? ' — including lines' : ''}</span>
       <button class="btn small" onclick="saveOrder(${o.id})">Save</button>
       <button class="btn secondary small" onclick="discardOrder(${o.id})">Discard</button>
     </div>
