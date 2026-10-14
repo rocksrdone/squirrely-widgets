@@ -106,6 +106,10 @@ textarea.order-notes { flex: 1 1 260px; min-height: 44px; padding: 6px 8px; bord
 .ack textarea { width: 100%; min-height: 170px; padding: 8px; border: 1px solid var(--rule); border-radius: 6px;
   font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5; background: white; color: var(--ink); }
 .ack .hint { font-size: 10.5px; color: #6B5E52; margin-top: 6px; }
+.savebar { display: flex; gap: 8px; align-items: center; background: var(--gold-light); border: 1.5px solid #E4CF9E;
+  color: #6E4C13; border-radius: 7px; padding: 7px 10px; margin-bottom: 12px; font-size: 12px; font-weight: 600; }
+.savebar .grow { flex: 1; }
+.btn.saved { background: white; color: var(--teal); border-color: var(--rule); font-weight: 600; }
 label.lab { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; min-width: 70px; }
 select, input[type=text], input[type=number] {
   padding: 7px 9px; border: 1px solid var(--rule); border-radius: 5px; font-size: 12.5px;
@@ -440,6 +444,7 @@ function payFor(o) {
 }
 
 const S = {
+  draft: {},
   orders: [], lines: {}, recipes: [], recipesById: {}, customers: [],
   pricing: {},           // customerId -> recipeId -> unit price
   pricingNote: '',       // why the rate card is thinner than expected, when it is
@@ -1179,6 +1184,64 @@ async function newOrder() {
   }
 }
 
+/* ── Unsaved order changes ─────────────────────────────────────────────────
+   The order's own fields (PO, notes, terms, pay-by, typed customer name)
+   used to save the moment you left the box, with nothing on screen to say
+   so. They are now held here until Save, with a bar that says there is
+   something unsaved. Lines, prices and reservations still save as you go —
+   they move stock, and a half-saved reservation is worse than none. */
+function draftOf(id) { return S.draft[id] || {}; }
+function isDirty(id) { return Object.keys(draftOf(id)).length > 0; }
+function withDraft(o) {
+  if (!o || !isDirty(o.id)) return o;
+  return Object.assign({}, o, draftOf(o.id));
+}
+function draftSet(id, key, value, redraw) {
+  const o = S.orders.find(x => x.id === id);
+  const d = S.draft[id] = S.draft[id] || {};
+  if (o && String(o[key] == null ? '' : o[key]) === String(value)) delete d[key];
+  else d[key] = value;
+  if (!Object.keys(d).length) delete S.draft[id];
+  if (redraw) render(); else updateSaveUi(id);
+}
+function updateSaveUi(id) {
+  const dirty = isDirty(id);
+  const bar = document.getElementById('saveBar');
+  if (bar) bar.style.display = dirty ? '' : 'none';
+  const btn = document.getElementById('saveBtn');
+  if (btn) {
+    btn.disabled = !dirty;
+    btn.className = dirty ? 'btn' : 'btn saved';
+    btn.textContent = dirty ? 'Save changes' : 'Saved \u2713';
+  }
+}
+async function saveOrder(id, quiet) {
+  const d = draftOf(id);
+  const fields = {};
+  Object.keys(d).forEach(k => { if (S.cols[k]) fields[S.cols[k]] = d[k]; });
+  if (!Object.keys(fields).length) { delete S.draft[id]; return true; }
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', id, fields]]);
+    const o = S.orders.find(x => x.id === id);
+    if (o) Object.assign(o, d);
+    delete S.draft[id];
+    render();
+    if (!quiet) toast('Saved');
+    return true;
+  } catch (e) {
+    console.error('Could not save the order:', e);
+    alert('Could not save those changes. They are still on screen — try Save again.');
+    return false;
+  }
+}
+function discardOrder(id) {
+  delete S.draft[id];
+  render();
+}
+/* Anything that reads the order (release, push, pricing, acknowledgement)
+   saves first, so it never works from values that are only on screen. */
+async function flushDraft(id) { return isDirty(id) ? saveOrder(id, true) : true; }
+
 async function setOrderField(id, col, value) {
   if (!col) return;
   try {
@@ -1912,6 +1975,7 @@ function pricingPlan(orderId) {
 }
 
 async function applyPricing(orderId) {
+  if (!(await flushDraft(orderId))) return;
   if (S.stockBusy) return;
   const o = S.orders.find(x => x.id === orderId);
   if (!o) return;
@@ -2126,6 +2190,7 @@ async function removeLine(lineId, label) {
 }
 
 async function markReady(id) {
+  if (!(await flushDraft(id))) return;
   const o = S.orders.find(x => x.id === id);
   const lines = S.lines[id] || [];
   if (!o) return;
@@ -2215,6 +2280,7 @@ async function callPush(workOrderId, dryRun) {
 }
 
 async function previewPush(id) {
+  if (!(await flushDraft(id))) return;
   if (S.pushBusy) return;
   S.pushBusy = true; S.push = null; render();
   try {
@@ -2307,7 +2373,18 @@ function pushPanelHtml(o) {
 
 /* ── Render ─────────────────────────────────────────────────────────────── */
 
-function selectOrder(id) { S.selected = id; render(); }
+function selectOrder(id) {
+  if (S.selected && S.selected !== id && isDirty(S.selected)) {
+    const cur = S.orders.find(x => x.id === S.selected);
+    if (confirm(`Save your changes to ${cur ? cur.number : 'this order'} first?\n\nOK saves them. Cancel throws them away.`)) {
+      const from = S.selected;
+      saveOrder(from, true).then(ok => { if (ok) { S.selected = id; render(); } });
+      return;
+    }
+    delete S.draft[S.selected];
+  }
+  S.selected = id; render();
+}
 
 function renderBanners() {
   const out = [];
@@ -2591,14 +2668,14 @@ function termsRowHtml(o) {
     `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
 
   const termsSel = S.cols.terms ? `
-    <select onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.terms)}, this.value)"
+    <select onchange="draftSet(${o.id}, 'terms', this.value, true)"
       title="Blank follows the customer's usual terms">
       ${opt('', o.terms, t.inherited ? `${who}'s usual — ${TERMS[t.value] ? TERMS[t.value].short : t.value}` : '— terms —')}
       ${Object.keys(TERMS).map(k => opt(k, o.terms, TERMS[k].short)).join('')}
     </select>` : '';
 
   const paySel = S.cols.pay ? `
-    <select onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.pay)}, this.value)"
+    <select onchange="draftSet(${o.id}, 'pay', this.value, true)"
       title="How they are paying — it changes what the invoice has to carry">
       ${opt('', o.pay, p.inherited ? `${who}'s usual — ${p.value}` : '— pay by —')}
       ${PAY_METHODS.map(m => opt(m, o.pay, m)).join('')}
@@ -2628,7 +2705,7 @@ function renderMain() {
   const wasTyping = !!(act && act.id === 'addSearch');
   const caret = wasTyping ? act.selectionStart : null;
   if (S.loading) { box.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`; return; }
-  const o = S.selected ? S.orders.find(x => x.id === S.selected) : null;
+  const o = withDraft(S.selected ? S.orders.find(x => x.id === S.selected) : null);
   if (!o) {
     box.innerHTML = `<div class="panel"><div class="empty">
       Pick an order on the left, or start a new one.</div></div>`;
@@ -2648,7 +2725,7 @@ function renderMain() {
            ${esc(c.name)}${c.code ? ' (' + esc(c.code) + ')' : ''}</option>`).join('')}
        </select>`
     : `<input type="text" value="${esc(o.customerName)}" placeholder="Customer name"
-         onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.customerName)}, this.value)">`;
+         oninput="draftSet(${o.id}, 'customerName', this.value)">`;
 
   const lineRows = lines.length
     ? lines.map(l => `<tr>
@@ -2670,6 +2747,11 @@ function renderMain() {
       ? 'Editable, invisible to production, and not in Shopify.'
       : 'Released for production. Still not in Shopify.'}</div>
 
+    <div class="savebar" id="saveBar" style="${isDirty(o.id) ? '' : 'display:none'}">
+      <span class="grow">Unsaved changes to this order</span>
+      <button class="btn small" onclick="saveOrder(${o.id})">Save</button>
+      <button class="btn secondary small" onclick="discardOrder(${o.id})">Discard</button>
+    </div>
     <div class="field-row">
       <label class="lab">Customer</label>${custOptions}
     </div>
@@ -2679,13 +2761,13 @@ function renderMain() {
       <label class="lab">PO number</label>
       ${S.cols.po
         ? `<input type="text" class="po" value="${esc(o.po)}" placeholder="their PO, if any"
-            onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.po)}, this.value.trim())">`
+            oninput="draftSet(${o.id}, 'po', this.value.trim())">`
         : `<span class="st-listed">add a Text column <code>PO_Number</code> to Work_Orders</span>`}
     </div>
     ${S.cols.notes ? `<div class="field-row" style="align-items:flex-start">
       <label class="lab" style="padding-top:6px">For this order</label>
       <textarea class="order-notes" placeholder="Anything different about this order — a deadline, a label change, split shipping…"
-        onchange="setOrderField(${o.id}, ${JSON.stringify(S.cols.notes)}, this.value)">${esc(o.notes || '')}</textarea>
+        oninput="draftSet(${o.id}, 'notes', this.value)">${esc(o.notes || '')}</textarea>
     </div>` : ''}
 
     <table class="lines">
@@ -2750,6 +2832,8 @@ function renderMain() {
     ${S.ackFor === o.id ? ackPanelHtml(o) : ''}
 
     <div class="actions">
+      <button id="saveBtn" class="${isDirty(o.id) ? 'btn' : 'btn saved'}" onclick="saveOrder(${o.id})"
+        ${isDirty(o.id) ? '' : 'disabled'}>${isDirty(o.id) ? 'Save changes' : 'Saved \u2713'}</button>
       ${building
         ? `<button class="btn" onclick="markReady(${o.id})">Release for production</button>`
         : `<button class="btn secondary" onclick="backToBuilding(${o.id})">Back to building</button>`}
@@ -2878,8 +2962,9 @@ Thank you,
 ${ACK_FROM.name}`;
   return { to: d.ci.email || d.ci.emailBill || '', subject, body };
 }
-function toggleAck(id) {
+async function toggleAck(id) {
   if (S.ackFor === id) { S.ackFor = null; render(); return; }
+  if (!(await flushDraft(id))) return;
   const o = S.orders.find(x => x.id === id);
   if (!o) return;
   S.ackFor = id;
@@ -2910,7 +2995,7 @@ function ackPanelHtml(o) {
       <button class="btn" onclick="ackDownloadPdf(${o.id})">⬇ Download PDF</button>
       <button class="btn secondary" onclick="ackOpenMail(${o.id})">Open in email</button>
       <button class="btn secondary" onclick="ackCopy()">Copy text</button>
-      <button class="btn secondary" onclick="toggleAck(${o.id}); toggleAck(${o.id})" title="Rebuild the draft from the order as it is now">Reset draft</button>
+      <button class="btn secondary" onclick="S.ackFor = null; toggleAck(${o.id})" title="Rebuild the draft from the order as it is now">Reset draft</button>
     </div>
     <div class="hint">${d.priced ? '' : 'Some lines have no price, so the PDF leaves prices off. '}Nothing is sent from here — "Open in email" fills in a new message in your mail app; attach the downloaded PDF before sending.</div>
   </div>`;
