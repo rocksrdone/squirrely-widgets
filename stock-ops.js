@@ -70,9 +70,10 @@
   async function load(docApi) {
     const fetch = (n) => docApi.fetchTable(n);
     const optional = (n) => docApi.fetchTable(n).catch(() => null);
-    const [lotsT, allocT, wolT, woT, recT, custT, locT] = await Promise.all([
+    const [lotsT, allocT, wolT, woT, recT, custT, locT, taskT] = await Promise.all([
       fetch('Production_Lots'), fetch('Lot_Allocations'), fetch('Work_Order_Lines'),
       fetch('Work_Orders'), fetch('Recipes'), optional('Customers'), optional('Storage_Locations'),
+      optional('Worker_Tasks'),
     ]);
 
     const L = {
@@ -207,7 +208,7 @@
     const binFill = {};
     lots.forEach(l => { if (l.binId) binFill[l.binId] = (binFill[l.binId] || 0) + l.onHand + l.hank + l.waiting; });
 
-    return { cols: { L, A, WL, WO }, missing, recipes, customers, bins, binById, binFill, orders, lots,
+    return { cols: { L, A, WL, WO, T: taskCols(taskT) }, missing, recipes, customers, bins, binById, binFill, orders, lots,
       linesByRecipe, allocByLot };
   }
 
@@ -314,6 +315,30 @@
       acts.push(['UpdateRecord', 'Production_Lots', lot.id, after]);
       undo.push(['UpdateRecord', 'Production_Lots', lot.id, before]);
     }
+
+    /* A job for whoever does it physically. Grist is already right once this
+       saves; the job is the bag actually landing where Grist says it is. */
+    const T = model.cols.T;
+    if (T) {
+      const tag = `${lot.lotNumber} ${lot.recipe.name}${lot.fiber ? ' ' + lot.fiber : ''}`;
+      toOrders.forEach(o => {
+        const ln = lines[o.lineId];
+        const form = o.form === 'wound' ? 'Wound' : 'Hank';
+        acts.push(['AddRecord', 'Worker_Tasks', null, taskFields(T, {
+          type: 'Put away', lotId: lot.id, recipeId: lot.recipe.id, qty: Math.round(num(o.qty)), form,
+          bin: (ln && ln.bin) || '', sku: lot.recipe.sku,
+          instruction: `${tag}: ${Math.round(num(o.qty))} ${form.toLowerCase()} → ${ln ? `order ${ln.order.number} ${ln.order.customerName}` : 'order'}${ln && ln.bin ? ` (bin ${ln.bin})` : ''}`,
+        })]);
+      });
+      const binCode = model.binById[plan.binId] || '';
+      [['Wound', bw], ['Hank', bh]].forEach(([form, q]) => {
+        if (!q) return;
+        acts.push(['AddRecord', 'Worker_Tasks', null, taskFields(T, {
+          type: 'Put away', lotId: lot.id, recipeId: lot.recipe.id, qty: q, form, bin: binCode, sku: lot.recipe.sku,
+          instruction: `${tag}: ${q} ${form.toLowerCase()} → back stock bin ${binCode || '(no bin)'}`,
+        })]);
+      });
+    }
     return { acts, undo, problems, total, diff, ordered, bw, bh,
       stillWaiting: diff < 0 && plan.shortMeans !== 'final' ? -diff : 0 };
   }
@@ -324,9 +349,112 @@
     const ret = (res && res.retValues) || [];
     const undo = built.undo.slice();
     built.acts.forEach((a, i) => {
-      if (a[0] === 'AddRecord' && a[1] === 'Lot_Allocations' && ret[i]) undo.unshift(['RemoveRecord', 'Lot_Allocations', ret[i]]);
+      if (a[0] === 'AddRecord' && ret[i]) undo.unshift(['RemoveRecord', a[1], ret[i]]);
     });
     return undo;
+  }
+
+  /* ── Worker jobs (Worker_Tasks) ────────────────────────────────────────── */
+  function taskCols(t) {
+    if (!t) return null;
+    const c = {
+      created: col(t, ['Created']), type: col(t, ['Type']), instruction: col(t, ['Instruction']),
+      lot: col(t, ['Lot']), recipe: col(t, ['Recipe']), qty: col(t, ['Qty']), form: col(t, ['Form']),
+      bin: col(t, ['Bin']), sku: col(t, ['SKU']), storeQty: col(t, ['Store_Qty']), status: col(t, ['Status']),
+      found: col(t, ['Found_Qty']), note: col(t, ['Worker_Note']), doneAt: col(t, ['Done_At']),
+    };
+    return c.type && c.instruction && c.status ? c : null;
+  }
+  function taskFields(T, j) {
+    const f = {};
+    const put = (k, v) => { if (T[k] && v != null && v !== '') f[T[k]] = v; };
+    put('created', Math.floor(Date.now() / 1000));
+    put('type', j.type); put('instruction', j.instruction); put('lot', j.lotId); put('recipe', j.recipeId);
+    put('qty', j.qty); put('form', j.form); put('bin', j.bin); put('sku', j.sku); put('storeQty', j.storeQty);
+    put('status', 'To do');
+    return f;
+  }
+  async function loadTaskCols(docApi) {
+    try { return taskCols(await docApi.fetchTable('Worker_Tasks')); } catch (e) { return null; }
+  }
+
+  /* ── PDF helper, shared ───────────────────────────────────────────────── */
+  const PDF_LIBS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+  ];
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = document.createElement('script'); el.src = src; el.onload = resolve;
+      el.onerror = () => reject(new Error('could not load the PDF library')); document.head.appendChild(el);
+    });
+  }
+  async function pdfLib() {
+    if (!(root.jspdf && root.jspdf.jsPDF)) await loadScript(PDF_LIBS[0]);
+    if (!root.jspdf.jsPDF.API.autoTable) await loadScript(PDF_LIBS[1]);
+    return root.jspdf.jsPDF;
+  }
+  function pdfSafe(s) {
+    return String(s == null ? '' : s).replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2013\u2014]/g, '-').replace(/\u2192/g, '->').replace(/\u00D7/g, 'x')
+      .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u00FF]/g, '?');
+  }
+  function downloadPdf(doc, name) {
+    const url = URL.createObjectURL(doc.output('blob'));
+    const a = document.createElement('a'); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  function ymd(d) { const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+
+  /* ── End-of-day: pots logged with "Log a pot" (not on the day's list) ─────
+     One row per lot, with room to note the bag label. Lots are found by the
+     note Log a pot writes, dyed on the chosen day. */
+  async function extraPots(docApi, day) {
+    const [lotsT, recT, locT] = await Promise.all([docApi.fetchTable('Production_Lots'),
+      docApi.fetchTable('Recipes'), docApi.fetchTable('Storage_Locations').catch(() => null)]);
+    const L = { num: col(lotsT, ['Lot_Number']), rec: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']),
+      notes: col(lotsT, ['Notes']), made: col(lotsT, ['Spools_Made']), on: col(lotsT, ['On_Hand_Spools']),
+      hank: col(lotsT, ['Hank_Est_Spools']), fib: col(lotsT, ['Fiber']), bin: col(lotsT, ['Storage_Bin']) };
+    const rn = col(recT, ['Recipe_Name']), rs = col(recT, ['SKU_Base']);
+    const recs = {}; (recT.id || []).forEach((id, i) => { recs[id] = { name: arr(recT, rn)[i], sku: arr(recT, rs)[i] }; });
+    const bins = {}; if (locT) { const bc = col(locT, ['Bin_Code']); (locT.id || []).forEach((id, i) => { bins[id] = arr(locT, bc)[i]; }); }
+    const want = ymd(day);
+    const out = [];
+    (lotsT.id || []).forEach((id, i) => {
+      if (!/logged as a pot with no order/i.test(String(arr(lotsT, L.notes)[i] || ''))) return;
+      const d = num(arr(lotsT, L.date)[i]);
+      if (!d || new Date(d * 1000).toISOString().slice(0, 10) !== want) return;
+      const r = recs[refId(arr(lotsT, L.rec)[i])] || {};
+      const binId = refId(arr(lotsT, L.bin)[i]);
+      out.push({ lot: arr(lotsT, L.num)[i], name: r.name || '', sku: r.sku || '', fiber: arr(lotsT, L.fib)[i] || '',
+        spools: num(arr(lotsT, L.made)[i]) + num(arr(lotsT, L.hank)[i]), bin: bins[binId] || '' });
+    });
+    return out.sort((a, b) => String(a.lot).localeCompare(String(b.lot), undefined, { numeric: true }));
+  }
+  async function printExtraPots(docApi, day) {
+    day = day || new Date();
+    const rows = await extraPots(docApi, day);
+    if (!rows.length) return 0;
+    const JsPDF = await pdfLib();
+    const doc = new JsPDF({ unit: 'pt', format: 'letter' });
+    const M = 36, W = doc.internal.pageSize.getWidth();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text('Extra pots', M, M + 6);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(139, 125, 114);
+    doc.text(pdfSafe(`Logged ${day.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })} - not on the day's list. Label these bags.`), M, M + 22);
+    doc.setTextColor(26, 22, 20);
+    doc.autoTable({
+      startY: M + 34, margin: { left: M, right: M },
+      head: [['Lot', 'Colourway', 'Fibre', 'SKU', 'Spools', 'Bin', 'Labelled']],
+      body: rows.map(r => [r.lot, pdfSafe(r.name), r.fiber, r.sku, String(r.spools), r.bin || '-', '']),
+      theme: 'grid', styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, lineColor: [212, 201, 188], lineWidth: 0.5, valign: 'middle' },
+      headStyles: { fillColor: [26, 22, 20], textColor: 255, fontSize: 8.5 },
+      columnStyles: { 0: { font: 'courier', fontSize: 9 }, 1: { fontStyle: 'bold' }, 3: { font: 'courier', fontSize: 8.5, textColor: [139, 125, 114] },
+        4: { halign: 'center', fontStyle: 'bold' }, 5: { halign: 'center' }, 6: { cellWidth: 52 } },
+      didDrawCell: h => { if (h.section === 'body' && h.column.index === 6) { const c = h.cell; doc.setDrawColor(26, 22, 20); doc.rect(c.x + c.width / 2 - 6, c.y + c.height / 2 - 6, 12, 12); } },
+    });
+    downloadPdf(doc, `extra-pots-${ymd(day)}.pdf`);
+    return rows.length;
   }
 
 
@@ -489,6 +617,7 @@
     };
   }
 
-  root.StockOps = { load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
+  root.StockOps = { taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+    load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

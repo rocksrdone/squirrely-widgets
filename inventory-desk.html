@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Inventory Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@300;400;500;600;700&display=swap');
 :root {
@@ -878,6 +879,7 @@ function storeBarHtml() {
   el.innerHTML = `<div class="store-bar">
     <span><strong>${diffs.length}</strong> ${diffs.length === 1 ? 'SKU disagrees' : 'SKUs disagree'} with the vendor store</span>
     ${diffs.length ? `<button class="btn tiny" id="onlyDiff">${S.onlyDiff ? 'Show everything' : 'Show only these'}</button>` : ''}
+    ${storeFixes().length ? `<button class="btn tiny solid" id="sendFixes" title="Turn each quantity difference into a job: set this SKU to this number">Send ${storeFixes().length} store fix${storeFixes().length === 1 ? '' : 'es'} to Jobs</button>` : ''}
     <span class="stamp">${c.variants || 0} SKUs read${c.not_active ? ` \u00b7 ${c.not_active} not active` : ''} \u00b7 ${
       S.store.fetched_at ? new Date(S.store.fetched_at).toLocaleTimeString() : ''}</span>
     ${S.store.truncated ? '<span class="bad">partial snapshot \u2014 250-product cap hit</span>' : ''}
@@ -886,6 +888,49 @@ function storeBarHtml() {
   </div>`;
   const od = document.getElementById('onlyDiff');
   if (od) od.addEventListener('click', () => { S.onlyDiff = !S.onlyDiff; render(); });
+  const sf = document.getElementById('sendFixes');
+  if (sf) sf.addEventListener('click', sendStoreFixes);
+}
+
+/* ── Store fixes as jobs ──────────────────────────────────────────────────
+   Only differences a worker can fix by typing a number into the vendor
+   store: an ACTIVE listing whose quantity is not what it should be. The
+   target is vendorExpected() — Grist's vendor count, less open vendor orders
+   Shopify has already taken off, plus manual pulls Shopify has not seen —
+   so reserved thread is already accounted for. Missing or draft listings
+   are left on this screen for you; they are not a number to type. */
+function storeFixes() {
+  if (!S.store) return [];
+  return S.byRecipe.map(g => {
+    const sku = g.recipe.sku;
+    const v = sku ? S.store.bySku[normalize(sku)] : null;
+    if (!v || !v.active) return null;
+    const exp = Math.max(0, vendorExpected(g));
+    if (v.qty === exp) return null;
+    return { g, sku, now: v.qty, to: exp };
+  }).filter(Boolean);
+}
+async function sendStoreFixes() {
+  const fixes = storeFixes();
+  if (!fixes.length) return;
+  const T = await StockOps.loadTaskCols(grist.docApi);
+  if (!T) { showToast('No Worker_Tasks table'); return; }
+  // One open job per SKU: an existing one is updated rather than duplicated.
+  const t = await grist.docApi.fetchTable('Worker_Tasks');
+  const openBySku = {};
+  (t.id || []).forEach((id, i) => {
+    if (t[T.type][i] === 'Vendor store' && t[T.status][i] === 'To do' && t[T.sku]) openBySku[normalize(t[T.sku][i])] = id;
+  });
+  const acts = fixes.map(x => {
+    const fields = StockOps.taskFields(T, { type: 'Vendor store', recipeId: x.g.recipeId, sku: x.sku, storeQty: x.to,
+      instruction: `${x.g.recipe.name}${x.g.recipe.fiber ? ' ' + x.g.recipe.fiber : ''}: set ${x.sku} to ${x.to} on the vendor store (shows ${x.now})` });
+    const ex = openBySku[normalize(x.sku)];
+    return ex ? ['UpdateRecord', 'Worker_Tasks', ex, fields] : ['AddRecord', 'Worker_Tasks', null, fields];
+  });
+  try {
+    await grist.docApi.applyUserActions(acts);
+    showToast(`${acts.length} store fix${acts.length === 1 ? '' : 'es'} sent to Jobs \u2713`);
+  } catch (e) { console.error(e); showToast('Could not send — check Worker_Tasks'); }
 }
 
 function visible(ignoreDiff) {
@@ -1190,15 +1235,38 @@ async function doMove(recipeId) {
   }
   if (!actions.length) { showToast('Nothing to move'); return; }
 
+  /* Retail is a physical move as well as a listing change — the spools go to
+     the retail shelf — so it becomes a job: grab them, then set the retail
+     store to the new total. Vendor moves are only a number, and arrive as
+     store fixes instead. */
+  let jobAt = -1;
+  if (to === 'retail' || from === 'retail') {
+    const T = await StockOps.loadTaskCols(grist.docApi);
+    if (T) {
+      const bins = [...new Set(g.lots.filter(l => touched.some(t => t.startsWith(l.lotNumber + ' '))).map(l => l.bin).filter(Boolean))];
+      const newRetail = g.retail + (to === 'retail' ? want : -want);
+      const name = `${g.recipe.name}${g.recipe.fiber ? ' ' + g.recipe.fiber : ''}`;
+      const instruction = to === 'retail'
+        ? `${name}: grab ${want} wound from ${bins.join(', ') || 'back stock'} \u2192 retail shelf, then set ${g.recipe.sku || 'the SKU'} to ${newRetail} on the retail store`
+        : `${name}: take ${want} wound off the retail shelf \u2192 ${bins.join(', ') || 'back stock'}, then set ${g.recipe.sku || 'the SKU'} to ${newRetail} on the retail store`;
+      jobAt = actions.length;
+      actions.push(['AddRecord', 'Worker_Tasks', null, StockOps.taskFields(T, {
+        type: 'Retail store', recipeId: g.recipeId, qty: want, form: 'Wound', bin: bins.join(', '),
+        sku: g.recipe.sku, storeQty: newRetail, instruction })]);
+    }
+  }
+
   try {
-    await grist.docApi.applyUserActions(actions);
+    const res = await grist.docApi.applyUserActions(actions);
+    const newJob = jobAt >= 0 && res && res.retValues ? res.retValues[jobAt] : null;
+    if (newJob) inverse.push(['RemoveRecord', 'Worker_Tasks', newJob]);
     S.log.unshift({
       text: `${want} × ${g.recipe.name} — ${fromB.label.toLowerCase()} → ${toB.label.toLowerCase()}` +
         (touched.length > 1 ? ` (${touched.length} lots)` : ` (${touched[0]})`),
       inverse,
     });
     delete S.moveQty[recipeId];
-    showToast('Moved ✓');
+    showToast(jobAt >= 0 ? 'Moved \u2713 \u2014 job added for the retail shelf' : 'Moved \u2713');
     await loadAll();
   } catch (e) {
     console.error('Inventory Desk: move failed', e);

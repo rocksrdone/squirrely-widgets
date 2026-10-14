@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jobs</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --purple: #5B4A8B; --purple-light: #EEE8F7;
+  color-scheme: light;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.45; padding: 14px; }
+.top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 21px; }
+.sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+.btn { font: inherit; font-size: 12.5px; font-weight: 600; padding: 9px 14px; border-radius: 7px; border: 1px solid var(--rule); background: white; color: var(--ink); cursor: pointer; }
+.btn.go { background: var(--teal); border-color: var(--teal); color: white; }
+.btn.warn { color: var(--accent); }
+.btn.small { font-size: 11px; padding: 5px 10px; font-weight: 500; }
+.right { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 16px 0 8px; display: flex; gap: 8px; align-items: center; }
+h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 8px; font-size: 10.5px; letter-spacing: 0; }
+.job { background: white; border: 1.5px solid var(--rule); border-left: 6px solid var(--rule); border-radius: 9px; padding: 12px 14px; margin-bottom: 8px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.job.put { border-left-color: var(--teal); }
+.job.retail { border-left-color: var(--gold); }
+.job.vendor { border-left-color: var(--purple); }
+.job.problem { border-color: var(--accent); background: var(--accent-light); }
+.job .what { flex: 1 1 260px; min-width: 0; }
+.job .what b { font-size: 15px; }
+.job .what .d { font-size: 12px; color: #4A403A; margin-top: 2px; }
+.job .what .m { font-size: 10.5px; color: var(--muted); margin-top: 3px; font-family: 'DM Mono', monospace; }
+.pill { display: inline-block; font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; padding: 3px 9px; border-radius: 6px; background: var(--paper); border: 1px solid var(--rule); white-space: nowrap; }
+.pill.bin { background: var(--ink); color: white; border-color: var(--ink); }
+.pill.set { background: var(--purple-light); color: var(--purple); border-color: #C9BEE3; }
+.acts { display: flex; gap: 8px; }
+.done { font-size: 18px; padding: 10px 18px; }
+.prob { display: flex; gap: 8px; align-items: center; flex-basis: 100%; margin-top: 4px; flex-wrap: wrap; }
+.prob input { padding: 8px; border: 1.5px solid var(--rule); border-radius: 6px; font: inherit; background: white; color: var(--ink); }
+.prob input.n { width: 80px; font-family: 'DM Mono', monospace; text-align: center; font-size: 16px; }
+.prob input.t { flex: 1 1 200px; }
+.donelist div { font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--warm); display: flex; gap: 8px; color: #4A403A; }
+.donelist a { margin-left: auto; color: var(--muted); cursor: pointer; text-decoration: underline; font-size: 11px; }
+.empty { color: var(--muted); font-style: italic; padding: 22px; text-align: center; background: white; border: 1px dashed var(--rule); border-radius: 9px; }
+.banner { background: var(--accent-light); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 8px 11px; font-size: 12px; margin-bottom: 12px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 9px 16px; border-radius: 6px; font-size: 12.5px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 99; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="title">Jobs</div>
+  <div class="right">
+    <button class="btn small" id="print">⬇ Print checklist</button>
+    <button class="btn small" id="extra">⬇ Today's extra pots</button>
+    <button class="btn small" id="reload">↻</button>
+  </div>
+</div>
+<div class="sub">What to do right now. Tap ✓ when it's done. If something doesn't match, tap Problem and say what you found.</div>
+<div id="banner"></div>
+<div id="content"><div class="empty">Loading…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Jobs ────────────────────────────────────────────────────────────────
+   Reads Worker_Tasks. Jobs are created elsewhere — put-away on the Lot Desk,
+   store fixes and retail moves on the Inventory Desk — and only their status
+   is changed here. Grist is already updated when a job appears; ticking it
+   records that the physical move happened. A Problem keeps the job in front
+   of whoever corrects the counts until it is marked resolved. */
+const { esc, num } = StockOps;
+const S = { jobs: [], T: null, open: null, busy: false };
+const TYPES = [
+  { key: 'Put away', cls: 'put', title: 'Put away' },
+  { key: 'Retail store', cls: 'retail', title: 'Retail store' },
+  { key: 'Vendor store', cls: 'vendor', title: 'Vendor store — set quantities' },
+];
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
+
+async function load() {
+  let t;
+  try { t = await grist.docApi.fetchTable('Worker_Tasks'); }
+  catch (e) { document.getElementById('content').innerHTML = `<div class="banner">No Worker_Tasks table.</div>`; return; }
+  S.T = StockOps.taskCols(t);
+  const T = S.T, a = (c, i) => (c && t[c]) ? t[c][i] : null;
+  S.jobs = (t.id || []).map((id, i) => ({
+    id, created: num(a(T.created, i)), type: a(T.type, i) || '', text: a(T.instruction, i) || '',
+    qty: a(T.qty, i), form: a(T.form, i) || '', bin: a(T.bin, i) || '', sku: a(T.sku, i) || '',
+    storeQty: a(T.storeQty, i), status: a(T.status, i) || 'To do', found: a(T.found, i),
+    note: a(T.note, i) || '', doneAt: num(a(T.doneAt, i)),
+  }));
+  render();
+}
+
+function jobHtml(j) {
+  const ty = TYPES.find(x => x.key === j.type) || TYPES[0];
+  const problem = j.status === 'Problem';
+  const head = j.text.split(':')[0];
+  const rest = j.text.includes(':') ? j.text.slice(j.text.indexOf(':') + 1).trim() : '';
+  return `<div class="job ${ty.cls} ${problem ? 'problem' : ''}" data-id="${j.id}">
+    <div class="what"><b>${esc(head)}</b>${rest ? `<div class="d">${esc(rest)}</div>` : ''}
+      ${problem ? `<div class="d" style="color:var(--accent);font-weight:600">Found ${j.found == null ? '?' : esc(j.found)}${j.qty != null ? ` of ${esc(j.qty)}` : ''}${j.note ? ' — ' + esc(j.note) : ''}</div>` : ''}
+      <div class="m">${j.created ? new Date(j.created * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''}</div></div>
+    ${j.qty != null && j.type !== 'Vendor store' ? `<span class="pill">${esc(j.qty)} ${esc((j.form || '').toLowerCase())}</span>` : ''}
+    ${j.bin ? `<span class="pill bin">${esc(j.bin)}</span>` : ''}
+    ${j.storeQty != null && j.sku ? `<span class="pill set">${esc(j.sku)} → ${esc(j.storeQty)}</span>` : ''}
+    <div class="acts">
+      ${problem
+        ? `<button class="btn go" data-act="resolve">Resolved</button>`
+        : `<button class="btn go done" data-act="done" title="Done">✓</button><button class="btn warn" data-act="problem">Problem</button>`}
+    </div>
+    ${S.open === j.id ? `<div class="prob">
+      <span>Found</span><input class="n" type="number" min="0" id="pf" value="${j.qty != null ? esc(j.qty) : ''}">
+      <input class="t" id="pn" placeholder="What's wrong? (optional)">
+      <button class="btn go" data-act="send">Send</button><button class="btn small" data-act="cancel">Cancel</button></div>` : ''}
+  </div>`;
+}
+
+function render() {
+  const open = S.jobs.filter(j => j.status === 'To do' || j.status === 'Problem');
+  const problems = open.filter(j => j.status === 'Problem');
+  const todo = open.filter(j => j.status === 'To do');
+  const today = StockOps.ymd(new Date());
+  const doneToday = S.jobs.filter(j => (j.status === 'Done' || j.status === 'Resolved') && j.doneAt && StockOps.ymd(new Date(j.doneAt * 1000)) === today)
+    .sort((a, b) => b.doneAt - a.doneAt);
+  let html = '';
+  if (problems.length) html += `<h2>Problems <span class="n">${problems.length}</span></h2>${problems.map(jobHtml).join('')}`;
+  TYPES.forEach(ty => {
+    const list = todo.filter(j => j.type === ty.key).sort((a, b) => a.created - b.created || a.id - b.id);
+    if (list.length) html += `<h2>${esc(ty.title)} <span class="n">${list.length}</span></h2>${list.map(jobHtml).join('')}`;
+  });
+  if (!todo.length && !problems.length) html += `<div class="empty">Nothing to do right now. ✓</div>`;
+  if (doneToday.length) html += `<h2>Done today <span class="n">${doneToday.length}</span></h2><div class="donelist">${doneToday.map(j =>
+    `<div><span>${esc(j.text)}</span><a data-undo="${j.id}">undo</a></div>`).join('')}</div>`;
+  document.getElementById('content').innerHTML = html;
+  wire();
+}
+
+function wire() {
+  document.querySelectorAll('.job [data-act]').forEach(b => b.addEventListener('click', () => {
+    const id = Number(b.closest('.job').dataset.id);
+    const act = b.dataset.act;
+    if (act === 'done') return setStatus(id, 'Done');
+    if (act === 'resolve') return setStatus(id, 'Resolved');
+    if (act === 'problem') { S.open = id; render(); const f = document.getElementById('pf'); if (f) { f.focus(); f.select(); } return; }
+    if (act === 'cancel') { S.open = null; return render(); }
+    if (act === 'send') {
+      const found = document.getElementById('pf').value;
+      const note = document.getElementById('pn').value.trim();
+      return setStatus(id, 'Problem', { found: found === '' ? null : num(found), note });
+    }
+  }));
+  document.querySelectorAll('[data-undo]').forEach(a => a.addEventListener('click', () => setStatus(Number(a.dataset.undo), 'To do')));
+}
+
+async function setStatus(id, status, extra) {
+  if (S.busy || !S.T) return;
+  const T = S.T, f = { [T.status]: status };
+  if (T.doneAt) f[T.doneAt] = (status === 'Done' || status === 'Resolved') ? Math.floor(Date.now() / 1000) : null;
+  if (extra && T.found) f[T.found] = extra.found;
+  if (extra && T.note && extra.note) f[T.note] = extra.note;
+  S.busy = true;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Worker_Tasks', id, f]]);
+    S.open = null;
+    toast(status === 'Done' ? 'Done ✓' : status === 'Problem' ? 'Sent — flagged for correction' : status === 'Resolved' ? 'Resolved' : 'Back on the list');
+    await load();
+  } catch (e) { console.error(e); toast('Could not save — try again'); }
+  finally { S.busy = false; }
+}
+
+async function printChecklist() {
+  const open = S.jobs.filter(j => j.status === 'To do');
+  if (!open.length) { toast('Nothing to print'); return; }
+  try {
+    const JsPDF = await StockOps.pdfLib();
+    const doc = new JsPDF({ unit: 'pt', format: 'letter' });
+    const M = 32;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text('Jobs', M, M + 6);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(139, 125, 114);
+    doc.text(StockOps.pdfSafe(new Date().toLocaleString(undefined, { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) +
+      '  -  Tick when done. If it doesn\'t match, write what you found.'), M + 46, M + 6);
+    doc.setTextColor(26, 22, 20);
+    const body = [], meta = [];
+    TYPES.forEach(ty => {
+      const list = open.filter(j => j.type === ty.key);
+      if (!list.length) return;
+      body.push([{ content: ty.title.toUpperCase(), colSpan: 5, styles: { fillColor: [232, 223, 212], fontStyle: 'bold', fontSize: 9.5 } }]); meta.push(null);
+      list.forEach(j => {
+        const what = j.type === 'Vendor store' ? `Set ${j.sku} to ${j.storeQty}` : j.text;
+        body.push([StockOps.pdfSafe(what),
+          j.type === 'Vendor store' ? '' : `${j.qty != null ? j.qty : ''} ${(j.form || '').toLowerCase()}`.trim(),
+          j.bin || '', '', '']);
+        meta.push(j);
+      });
+    });
+    doc.autoTable({
+      startY: M + 18, margin: { left: M, right: M }, theme: 'grid',
+      head: [['Job', 'Qty', 'Bin', 'Found', 'Done']], body,
+      styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 5, lineColor: [212, 201, 188], lineWidth: 0.5, valign: 'middle', minCellHeight: 22 },
+      headStyles: { fillColor: [26, 22, 20], textColor: 255, fontSize: 8.5 },
+      columnStyles: { 1: { cellWidth: 56, halign: 'center' }, 2: { cellWidth: 70, halign: 'center', font: 'courier', fontStyle: 'bold' },
+        3: { cellWidth: 56 }, 4: { cellWidth: 40 } },
+      didDrawCell: h => {
+        if (h.section !== 'body' || !meta[h.row.index]) return;
+        const c = h.cell; doc.setDrawColor(26, 22, 20); doc.setLineWidth(0.8);
+        if (h.column.index === 4) doc.rect(c.x + c.width / 2 - 6, c.y + c.height / 2 - 6, 12, 12);
+        if (h.column.index === 3) doc.rect(c.x + 6, c.y + 4, c.width - 12, c.height - 8);
+      },
+    });
+    StockOps.downloadPdf(doc, `jobs-${StockOps.ymd(new Date())}.pdf`);
+  } catch (e) { console.error(e); toast('Could not make the PDF'); }
+}
+
+document.getElementById('reload').addEventListener('click', load);
+document.getElementById('print').addEventListener('click', printChecklist);
+document.getElementById('extra').addEventListener('click', async () => {
+  try {
+    const n = await StockOps.printExtraPots(grist.docApi, new Date());
+    toast(n ? `${n} extra pot${n === 1 ? '' : 's'} — PDF downloaded` : 'No pots logged with + Log a pot today');
+  } catch (e) { console.error(e); toast('Could not make the PDF'); }
+});
+// New jobs arrive from other screens; check every minute unless someone is typing a problem.
+setInterval(() => { if (!S.open && !S.busy) load(); }, 60000);
+try { grist.ready({ requiredAccess: 'full' }); load(); }
+catch (e) { document.getElementById('content').innerHTML = '<div class="empty">Grist plugin API unavailable</div>'; }
+</script>
+</body>
+</html>

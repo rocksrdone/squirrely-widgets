@@ -77,7 +77,8 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
 </head>
 <body>
 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="title">Lot Desk</div>
-  <button class="btn small" id="logPot" style="margin-left:auto">+ Log a pot</button></div>
+  <button class="btn small" id="logPot" style="margin-left:auto">+ Log a pot</button>
+  <button class="btn ghost small" id="extraPots" title="Pots logged today with + Log a pot — for labelling their bags">⬇ Today's extra pots</button></div>
 <div class="sub">Put away what came off the kettle — into customer bins or back stock, in one step.</div>
 <div id="banner"></div>
 <div class="cols">
@@ -276,6 +277,12 @@ document.getElementById('logPot').addEventListener('click', () =>
     await load();
     if (r.lotId) pick(r.lotId);
   }));
+document.getElementById('extraPots').addEventListener('click', async () => {
+  try {
+    const n = await StockOps.printExtraPots(grist.docApi, new Date());
+    toast(n ? `${n} extra pot${n === 1 ? '' : 's'} — PDF downloaded` : 'No pots logged with + Log a pot today');
+  } catch (e) { console.error(e); toast('Could not make the PDF'); }
+});
 document.getElementById('search').addEventListener('input', e => { S.search = e.target.value; renderList(); });
 try { grist.ready({ requiredAccess: 'full' }); load(); }
 catch (e) { document.getElementById('list').innerHTML = `<div class="empty">Grist plugin API unavailable</div>`; }
