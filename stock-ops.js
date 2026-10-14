@@ -308,8 +308,18 @@
   }
   async function logPot(docApi, recipe, spools) {
     const n = Math.round(num(spools));
-    if (!recipe || !recipe.id) throw new Error('Pick a colourway');
+    if (!recipe || (!recipe.id && !recipe.create)) throw new Error('Pick a colourway');
     if (n <= 0) throw new Error('Enter how many spools');
+    /* The E version of an FF colourway, made on the spot: same dye, longer
+       spool, so it needs a Recipes row only for its SKU and count. Written
+       before the lot that points at it. Only E — cotton is a real recipe and
+       is never conjured. */
+    if (recipe.create) {
+      const res = await docApi.applyUserActions([['AddRecord', 'Recipes', null, recipe.create]]);
+      const newId = res && res.retValues && res.retValues[0];
+      if (!newId) throw new Error('Could not create the E version');
+      recipe = Object.assign({}, recipe, { id: newId, create: null });
+    }
     const lotsT = await docApi.fetchTable('Production_Lots');
     const L = {
       lotNumber: col(lotsT, ['Lot_Number']), recipe: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']),
@@ -374,10 +384,20 @@
     let recipes = [], chosen = null, hi = 0, shown = [];
     try {
       const t = await docApi.fetchTable('Recipes');
-      const n = col(t, ['Recipe_Name']), k = col(t, ['SKU_Base']), fb = col(t, ['Fiber_Type']);
+      const n = col(t, ['Recipe_Name']), k = col(t, ['SKU_Base']), fb = col(t, ['Fiber_Type']), md = col(t, ['Dye_Method']);
       recipes = (t.id || []).map((id, i) => ({ id, name: String(arr(t, n)[i] || ''), sku: String(arr(t, k)[i] || ''),
-        fiber: fiberCode(arr(t, fb)[i]) })).filter(r => r.sku && r.name)
-        .sort((a, b) => a.name.localeCompare(b.name));
+        fiber: fiberCode(arr(t, fb)[i]), method: md ? arr(t, md)[i] : null })).filter(r => r.sku && r.name);
+      // FF colourways with no E row yet: offer "— E (new)", created on save.
+      if (n && k && fb) {
+        const hasE = new Set(recipes.filter(r => r.fiber === 'EN').map(r => r.name.toLowerCase()));
+        recipes.filter(r => r.fiber === 'FFN' && r.sku.indexOf('_') > 0 && !hasE.has(r.name.toLowerCase())).forEach(r => {
+          const sku = 'EN' + r.sku.slice(r.sku.indexOf('_'));
+          const create = { [n]: r.name, [k]: sku, [fb]: 'E Nylon' };
+          if (md && r.method) create[md] = r.method;
+          recipes.push({ id: null, name: r.name, sku, fiber: 'EN', isNew: true, create });
+        });
+      }
+      recipes.sort((a, b) => a.name.localeCompare(b.name) || (a.isNew ? 1 : 0) - (b.isNew ? 1 : 0));
     } catch (e) { $('so-err').textContent = 'Could not read Recipes'; }
 
     const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -387,7 +407,7 @@
       shown = (q ? recipes.filter(r => fold(r.name).includes(q) || fold(r.sku).includes(q)) : recipes).slice(0, 12);
       hi = Math.min(hi, Math.max(0, shown.length - 1));
       $('so-list').innerHTML = shown.map((r, i) => `<div class="so-opt ${i === hi ? 'on' : ''}" data-i="${i}">${esc(r.name)}
-        ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}<small>${esc(r.sku)}</small></div>`).join('')
+        ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}${r.isNew ? '<span class="so-fib" style="background:#F5EDD8;color:#B07D2A">new</span>' : ''}<small>${esc(r.sku)}</small></div>`).join('')
         || '<div class="so-opt" style="cursor:default;color:#8B7D72">No match</div>';
       $('so-list').querySelectorAll('[data-i]').forEach(el => el.onclick = () => choose(shown[Number(el.dataset.i)]));
     };
@@ -395,7 +415,8 @@
       if (!r) return;
       chosen = r;
       $('so-pick').innerHTML = `<div class="so-picked">${esc(r.name)} ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}
-        <span style="font-family:'DM Mono',monospace;font-size:10.5px;color:#6B5E52">${esc(r.sku)}</span><a id="so-change">change</a></div>`;
+        <span style="font-family:'DM Mono',monospace;font-size:10.5px;color:#6B5E52">${esc(r.sku)}</span><a id="so-change">change</a></div>
+        ${r.isNew ? `<div style="font-size:11px;color:#B07D2A;margin-top:5px">No E version of ${esc(r.name)} yet — it will be created (same dye as the FF, SKU ${esc(r.sku)}).</div>` : ''}`;
       $('so-change').onclick = () => { chosen = null; $('so-pick').innerHTML = `<input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div>`; wire(); ready(); };
       $('so-n').focus(); ready();
     };
