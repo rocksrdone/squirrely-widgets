@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lot Desk</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8; --purple: #5B4A8B; --purple-light: #EEE8F7;
+  color-scheme: light;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.45; padding: 14px; }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; }
+.sub { font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+.cols { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.side { width: 300px; flex-shrink: 0; }
+.main { flex: 1; min-width: 340px; }
+.search { width: 100%; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 6px; font: inherit; font-size: 12.5px; background: white; color: var(--ink); margin-bottom: 8px; }
+.count { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.lot { background: white; border: 1.5px solid var(--rule); border-radius: 7px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; }
+.lot:hover { border-color: var(--teal); }
+.lot.sel { border-color: var(--accent); background: var(--accent-light); }
+.lot .nm { font-weight: 600; font-size: 12.5px; display: flex; gap: 6px; align-items: baseline; }
+.lot .nm .n { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; }
+.lot .mt { font-size: 10.5px; color: var(--muted); font-family: 'DM Mono', monospace; }
+.lot.old { border-left: 4px solid var(--gold); }
+.fib { font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--rule); background: var(--warm); color: #6B5E52; }
+.fib.FFN { background: #E7EEFA; color: #2F5FA8; border-color: #A9C2E8; }
+.fib.EN  { background: #F2E9F9; color: #7A3FA8; border-color: #CEB2E4; }
+.fib.FFC { background: #FAE8F1; color: #A8366F; border-color: #E6B3CC; }
+.panel { background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 14px; }
+.panel h2 { font-family: 'Libre Baskerville', serif; font-size: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.panel .meta { font-size: 11px; color: var(--muted); margin: 2px 0 12px; font-family: 'DM Mono', monospace; }
+.big { display: inline-block; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; margin-bottom: 12px; }
+.big b { font-family: 'DM Mono', monospace; font-size: 20px; }
+.big span { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-left: 6px; }
+h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 6px; font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--warm); border-radius: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.row.on { border-color: #9ACFC7; background: var(--teal-light); }
+.row .who { flex: 1 1 160px; min-width: 0; }
+.row .who b { font-size: 12.5px; }
+.row .who div { font-size: 10.5px; color: var(--muted); }
+.row .bin { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--purple); background: var(--purple-light); padding: 1px 6px; border-radius: 4px; }
+input.q { width: 64px; padding: 6px; border: 1.5px solid var(--rule); border-radius: 6px; font-family: 'DM Mono', monospace; font-size: 15px; text-align: center; background: white; color: var(--ink); }
+input.q:focus { outline: none; border-color: var(--teal); }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.seg button { border: none; background: white; color: var(--muted); font: inherit; font-size: 11px; padding: 6px 10px; cursor: pointer; }
+.seg button.on { background: var(--ink); color: white; }
+.lab { font-size: 11px; color: var(--muted); }
+select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; font: inherit; font-size: 12px; background: white; color: var(--ink); }
+.none { font-size: 11.5px; color: var(--muted); font-style: italic; padding: 4px 0; }
+.sum { margin-top: 14px; padding: 10px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.sum.ok { background: var(--teal-light); color: var(--teal); }
+.sum.short { background: var(--gold-light); color: #6E4C13; }
+.sum.over { background: var(--purple-light); color: var(--purple); }
+.sum.bad { background: var(--accent-light); color: var(--accent); }
+.sum label { font-weight: 500; font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
+.btn { font: inherit; font-size: 12px; font-weight: 600; padding: 9px 16px; border-radius: 6px; border: 1px solid var(--teal); background: var(--teal); color: white; cursor: pointer; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.ghost { background: white; color: var(--ink); border-color: var(--rule); font-weight: 500; }
+.btn.small { font-size: 11px; padding: 5px 10px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.log { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 8px; }
+.log div { font-size: 11.5px; padding: 3px 0; display: flex; gap: 8px; border-bottom: 1px solid var(--warm); }
+.log a { margin-left: auto; color: var(--accent); cursor: pointer; text-decoration: underline; font-size: 10.5px; }
+.empty { color: var(--muted); font-style: italic; padding: 24px; text-align: center; }
+.banner { background: var(--accent-light); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 8px 11px; font-size: 11.5px; margin-bottom: 12px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 99; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="title">Lot Desk</div>
+<div class="sub">Put away what came off the kettle — into customer bins or back stock, in one step.</div>
+<div id="banner"></div>
+<div class="cols">
+  <div class="side">
+    <input class="search" id="search" placeholder="Search colourway or lot…">
+    <div class="count" id="count"></div>
+    <div id="list"><div class="empty">Loading…</div></div>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Lot Desk ──────────────────────────────────────────────────────────────
+   Replaces the wet/dry rack step. A lot is simply "waiting" from the kettle
+   until it is put away; drying is not recorded. Put-away splits the lot
+   between open orders (counted against them at once) and back stock, and
+   saves in one go — every rule lives in stock-ops.js. */
+const { esc, num } = StockOps;
+const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false };
+const OLD_DAYS = 14;
+
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
+function age(d) { return d ? Math.floor((Date.now() / 1000 - d) / 86400) : null; }
+function fib(code, name) { return code ? `<span class="fib ${esc(code)}">${esc(code)}</span>` : (name ? `<span class="fib">${esc(name)}</span>` : ''); }
+
+async function load(keepSel) {
+  try {
+    S.model = await StockOps.load(grist.docApi);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('list').innerHTML = `<div class="empty">Could not load — ${esc(e.message || e)}</div>`;
+    return;
+  }
+  document.getElementById('banner').innerHTML = S.model.missing.length
+    ? `<div class="banner">Missing columns: <b>${esc(S.model.missing.join(', '))}</b>. Put-away is off until they exist.</div>` : '';
+  const still = keepSel && waiting().find(l => l.id === S.sel);
+  if (!still) { S.sel = null; S.plan = null; }
+  else S.plan = StockOps.defaultPlan(S.model, still);
+  render();
+}
+
+function waiting() {
+  return S.model.lots.filter(l => l.waiting > 0 && l.recipe.id)
+    .sort((a, b) => (a.date || 0) - (b.date || 0) || a.id - b.id);
+}
+
+function renderList() {
+  const q = S.search.trim().toLowerCase();
+  const all = waiting();
+  const rows = all.filter(l => !q || l.recipe.name.toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
+  const spools = all.reduce((t, l) => t + l.waiting, 0);
+  document.getElementById('count').textContent = `${all.length} lot${all.length === 1 ? '' : 's'} waiting · ${spools} spools`;
+  document.getElementById('list').innerHTML = rows.length ? rows.map(l => {
+    const d = age(l.date);
+    return `<div class="lot ${l.id === S.sel ? 'sel' : ''} ${d != null && d > OLD_DAYS ? 'old' : ''}" data-lot="${l.id}">
+      <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n">${l.waiting}</span></div>
+      <div class="mt">${esc(l.lotNumber)}${d != null ? ` · ${d}d` : ''}${l.binCode ? ` · ${esc(l.binCode)}` : ''}${
+        (S.model.linesByRecipe[l.recipe.id] || []).length ? ' · on order' : ''}</div>
+    </div>`;
+  }).join('') : `<div class="empty">${q ? 'Nothing matches.' : 'Nothing waiting — all put away.'}</div>`;
+  document.querySelectorAll('[data-lot]').forEach(el => el.addEventListener('click', () => pick(Number(el.dataset.lot))));
+}
+
+function pick(id) {
+  const lot = waiting().find(l => l.id === id);
+  if (!lot) return;
+  S.sel = id;
+  S.plan = StockOps.defaultPlan(S.model, lot);
+  render();
+}
+
+function lotSel() { return S.sel ? S.model.lots.find(l => l.id === S.sel) : null; }
+
+function renderMain() {
+  const box = document.getElementById('main');
+  const lot = lotSel();
+  if (!lot || !S.plan) { box.innerHTML = `<div class="panel"><div class="empty">Pick a lot on the left.</div></div>`; return; }
+  const p = S.plan;
+  const lines = S.model.linesByRecipe[lot.recipe.id] || [];
+  const orderRows = lines.length ? lines.map((ln, i) => {
+    const o = p.orders[i];
+    return `<div class="row ${num(o.qty) > 0 ? 'on' : ''}">
+      <div class="who"><b>${esc(ln.order.number)}</b> ${esc(ln.order.customerName)}
+        <div>needs ${ln.short}${ln.need !== ln.short ? ` of ${ln.need}` : ''}</div></div>
+      ${ln.bin ? `<span class="bin" title="Customer bin">${esc(ln.bin)}</span>` : ''}
+      <input class="q" type="number" min="0" data-ord="${i}" value="${num(o.qty) || ''}" placeholder="0">
+      <span class="seg"><button data-form="${i}" data-v="hank" class="${o.form === 'hank' ? 'on' : ''}">Hank</button><button
+        data-form="${i}" data-v="wound" class="${o.form === 'wound' ? 'on' : ''}">Wound</button></span>
+    </div>`;
+  }).join('') : `<div class="none">No open orders for ${esc(lot.recipe.name)}${lot.fiber ? ' ' + esc(lot.fiber) : ''}.</div>`;
+
+  const binOpts = S.model.bins.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+    .map(b => `<option value="${b.id}" ${b.id === p.binId ? 'selected' : ''}>${esc(b.code)}</option>`).join('');
+
+  box.innerHTML = `<div class="panel">
+    <h2>${esc(lot.recipe.name)} ${fib(lot.fiber, lot.recipe.fiberName)}</h2>
+    <div class="meta">${esc(lot.lotNumber)}${lot.date ? ' · dyed ' + new Date(lot.date * 1000).toLocaleDateString() : ''}${lot.recipe.sku ? ' · ' + esc(lot.recipe.sku) : ''}</div>
+    <div class="big"><b>${lot.waiting}</b><span>spools to put away</span></div>
+
+    <h3>To orders</h3>
+    ${orderRows}
+
+    <h3>To back stock</h3>
+    <div class="row">
+      <span class="lab">Wound</span><input class="q" type="number" min="0" id="bw" value="${p.backWound || ''}" placeholder="0">
+      <span class="lab">Hank</span><input class="q" type="number" min="0" id="bh" value="${p.backHank || ''}" placeholder="0">
+      <span class="lab">Bin</span><select id="bin"><option value="">—</option>${binOpts}</select>
+      <label class="lab" style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="lv" ${p.listVendor ? 'checked' : ''}> list on vendor store</label>
+    </div>
+
+    <div id="sum"></div>
+    <div class="actions">
+      <button class="btn" id="save">Put away</button>
+      <button class="btn ghost small" id="reset">Reset</button>
+    </div>
+    ${S.log.length ? `<div class="log">${S.log.map((e, i) => `<div><span>${esc(e.text)}</span><a data-undo="${i}">undo</a></div>`).join('')}</div>` : ''}
+  </div>`;
+
+  box.querySelectorAll('[data-ord]').forEach(el => el.addEventListener('input', () => { p.orders[Number(el.dataset.ord)].qty = el.value; el.closest('.row').classList.toggle('on', num(el.value) > 0); renderSum(); }));
+  box.querySelectorAll('[data-form]').forEach(el => el.addEventListener('click', () => { p.orders[Number(el.dataset.form)].form = el.dataset.v; renderMain(); }));
+  document.getElementById('bw').addEventListener('input', e => { p.backWound = e.target.value; renderSum(); });
+  document.getElementById('bh').addEventListener('input', e => { p.backHank = e.target.value; renderSum(); });
+  document.getElementById('bin').addEventListener('change', e => { p.binId = Number(e.target.value) || null; renderSum(); });
+  document.getElementById('lv').addEventListener('change', e => { p.listVendor = e.target.checked; });
+  document.getElementById('save').addEventListener('click', save);
+  document.getElementById('reset').addEventListener('click', () => { S.plan = StockOps.defaultPlan(S.model, lot); renderMain(); });
+  box.querySelectorAll('[data-undo]').forEach(el => el.addEventListener('click', () => undo(Number(el.dataset.undo))));
+  renderSum();
+}
+
+function renderSum() {
+  const lot = lotSel(); const el = document.getElementById('sum');
+  if (!lot || !el) return;
+  const b = StockOps.putAwayActions(S.model, lot, S.plan);
+  let cls = 'ok', html = `${b.total} of ${lot.waiting} ✓`;
+  if (b.problems.length) { cls = 'bad'; html = esc(b.problems[0]); }
+  else if (b.diff < 0) {
+    cls = 'short';
+    html = `${b.total} of ${lot.waiting} — the other ${-b.diff}:
+      <label><input type="radio" name="sm" value="later" ${S.plan.shortMeans !== 'final' ? 'checked' : ''}> still to come</label>
+      <label><input type="radio" name="sm" value="final" ${S.plan.shortMeans === 'final' ? 'checked' : ''}> that's all there was</label>`;
+  } else if (b.diff > 0) {
+    cls = 'over'; html = `${b.total} of ${lot.waiting} — ${b.diff} more than dyed; the lot is corrected to match`;
+  }
+  el.className = 'sum ' + cls; el.innerHTML = html;
+  el.querySelectorAll('input[name=sm]').forEach(r => r.addEventListener('change', () => { S.plan.shortMeans = r.value; }));
+  const sv = document.getElementById('save');
+  if (sv) sv.disabled = !!b.problems.length || S.busy || S.model.missing.length > 0;
+}
+
+async function save() {
+  const lot = lotSel();
+  if (!lot || S.busy) return;
+  const b = StockOps.putAwayActions(S.model, lot, S.plan);
+  if (b.problems.length) { toast(b.problems[0]); return; }
+  S.busy = true; renderSum();
+  try {
+    const undoActs = await StockOps.applyPutAway(grist.docApi, b);
+    const parts = [];
+    if (b.ordered) parts.push(`${b.ordered} to orders`);
+    if (b.bw) parts.push(`${b.bw} wound`);
+    if (b.bh) parts.push(`${b.bh} hank`);
+    S.log.unshift({ text: `${lot.recipe.name} ${lot.lotNumber}: ${parts.join(', ')}`, undo: undoActs });
+    toast('Put away ✓');
+    await load(b.stillWaiting > 0);
+  } catch (e) {
+    console.error('Put-away failed', e);
+    toast('Could not save — nothing was changed');
+  } finally { S.busy = false; renderSum(); }
+}
+
+async function undo(i) {
+  const e = S.log[i];
+  if (!e) return;
+  try {
+    await grist.docApi.applyUserActions(e.undo);
+    S.log.splice(i, 1);
+    toast('Undone');
+    await load(true);
+  } catch (err) { console.error(err); toast('Undo failed'); }
+}
+
+function render() { renderList(); renderMain(); }
+
+document.getElementById('search').addEventListener('input', e => { S.search = e.target.value; renderList(); });
+try { grist.ready({ requiredAccess: 'full' }); load(); }
+catch (e) { document.getElementById('list').innerHTML = `<div class="empty">Grist plugin API unavailable</div>`; }
+</script>
+</body>
+</html>
