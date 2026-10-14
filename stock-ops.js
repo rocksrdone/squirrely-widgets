@@ -24,6 +24,7 @@
   'use strict';
 
   const ORDER_STATUS_HANK = 'Unwound - Bagged';
+  const BIN_CAPACITY = 60;   // spools a bin holds comfortably — same as the kettle and Wind & Box
   const ORDER_STATUS_WOUND = 'Wound - Needs Labels';
   const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;
   const RELEASED_ORDER = 'Active';
@@ -119,11 +120,14 @@
     }
     const bins = []; const binById = {};
     if (locT) {
-      const bc = col(locT, ['Bin_Code']);
+      const bc = col(locT, ['Bin_Code']), bf = col(locT, ['Fiber']), br = col(locT, ['Reserved_For']),
+        bm = col(locT, ['Max_Spools']);
       (locT.id || []).forEach((id, i) => {
         const code = String(arr(locT, bc)[i] || '').trim();
         if (!code) return;
-        bins.push({ id, code }); binById[id] = code;
+        bins.push({ id, code, fiber: fiberCode(arr(locT, bf)[i]),
+          reserved: !!refId(arr(locT, br)[i]), cap: num(arr(locT, bm)[i]) || BIN_CAPACITY });
+        binById[id] = code;
       });
     }
 
@@ -197,23 +201,59 @@
       });
     });
 
-    return { cols: { L, A, WL, WO }, missing, recipes, customers, bins, binById, orders, lots,
+    /* How full each bin is: everything filed to it — wound, hank, and thread
+       not yet put away — the same count the kettle and Wind & Box use. Derived
+       from the lots, never from a stored counter. */
+    const binFill = {};
+    lots.forEach(l => { if (l.binId) binFill[l.binId] = (binFill[l.binId] || 0) + l.onHand + l.hank + l.waiting; });
+
+    return { cols: { L, A, WL, WO }, missing, recipes, customers, bins, binById, binFill, orders, lots,
       linesByRecipe, allocByLot };
   }
 
-  /* Where back stock of this colourway already lives, so a new lot joins
-     its bag rather than starting another. Falls back to the kettle's pick. */
-  function suggestBin(model, lot) {
+  /* ── Which bin ─────────────────────────────────────────────────────────
+     The same rule the kettle and Wind & Box use, so stock ends up where it
+     always has:
+       1. where this colourway already lives, while that bin has room —
+          keyed on the colourway NAME, so FF, E and cotton bag together;
+       2. otherwise the emptiest bin for its fibre, skipping bins reserved
+          for a customer;
+       3. if every bin is full, the one with most room, flagged as tight.
+     A bin holds BIN_CAPACITY spools unless Storage_Locations.Max_Spools says
+     otherwise. This lot's own thread is left out of the fill it is checked
+     against, so a lot is never "too big" for the bin it is already in. */
+  function binFillFor(model, binId, lot) {
+    let f = model.binFill[binId] || 0;
+    if (lot && lot.binId === binId) f -= lot.onHand + lot.hank + lot.waiting;
+    return Math.max(0, f);
+  }
+  function suggestBin(model, lot, qty) {
+    const need = qty == null ? lot.waiting : qty;
+    const byId = {}; model.bins.forEach(b => { byId[b.id] = b; });
+    const cap = b => (b && b.cap) || BIN_CAPACITY;
     const key = lot.recipe.name.toLowerCase();
     const tally = {};
     model.lots.forEach(l => {
-      if (l.id === lot.id || !l.binId) return;
+      if (l.id === lot.id || !l.binId || !byId[l.binId]) return;
       if (l.recipe.name.toLowerCase() !== key) return;
       const have = l.onHand + l.hank;
       if (have > 0) tally[l.binId] = (tally[l.binId] || 0) + have;
     });
-    const best = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-    return best ? Number(best[0]) : (lot.binId || null);
+    const knownId = Number((Object.entries(tally).sort((a, b) => b[1] - a[1])[0] || [])[0]) || null;
+    const known = knownId ? byId[knownId] : null;
+    if (known && binFillFor(model, known.id, lot) + need <= cap(known)) {
+      return { binId: known.id, reason: `where ${lot.recipe.name} already is`, tight: false };
+    }
+    const open = model.bins.filter(b => !b.reserved);
+    let choices = open.filter(b => b.fiber && b.fiber === lot.fiber);
+    if (!choices.length) choices = open;
+    choices = choices.slice().sort((a, b) => (binFillFor(model, a.id, lot) - binFillFor(model, b.id, lot))
+      || a.code.localeCompare(b.code, undefined, { numeric: true }));
+    if (!choices.length) return { binId: lot.binId || null, reason: 'no bins set up', tight: true };
+    const roomy = choices.find(b => binFillFor(model, b.id, lot) + need <= cap(b));
+    if (!roomy) return { binId: choices[0].id, reason: 'every bin is full — this one has most room', tight: true };
+    return { binId: roomy.id, tight: false,
+      reason: known ? `${known.code} is full, so ${lot.recipe.name} moves here` : `emptiest ${lot.fiber || ''} bin`.replace('  ', ' ') };
   }
 
   /* A default split: open orders first (soonest due), the rest to back
@@ -225,7 +265,8 @@
       left -= take;
       return { lineId: ln.lineId, qty: take, form: 'hank' };
     });
-    return { orders, backWound: 0, backHank: left, binId: suggestBin(model, lot),
+    const sug = suggestBin(model, lot, left);
+    return { orders, backWound: 0, backHank: left, binId: sug.binId, binWhy: sug.reason, binTight: sug.tight,
       listVendor: true, shortMeans: 'later' };
   }
 
@@ -448,6 +489,6 @@
     };
   }
 
-  root.StockOps = { load, defaultPlan, suggestBin, putAwayActions, applyPutAway, logPot, openLogPot,
+  root.StockOps = { load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -170,8 +170,10 @@ function renderMain() {
     </div>`;
   }).join('') : `<div class="none">No open orders for ${esc(lot.recipe.name)}${lot.fiber ? ' ' + esc(lot.fiber) : ''}.</div>`;
 
+  // Each bin shows how full it is, so a different pick is an informed one.
   const binOpts = S.model.bins.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
-    .map(b => `<option value="${b.id}" ${b.id === p.binId ? 'selected' : ''}>${esc(b.code)}</option>`).join('');
+    .map(b => `<option value="${b.id}" ${b.id === p.binId ? 'selected' : ''}>${esc(b.code)} · ${
+      StockOps.binFillFor(S.model, b.id, lot)}/${b.cap}${b.fiber ? ' ' + esc(b.fiber) : ''}${b.reserved ? ' · reserved' : ''}</option>`).join('');
 
   box.innerHTML = `<div class="panel">
     <h2>${esc(lot.recipe.name)} ${fib(lot.fiber, lot.recipe.fiberName)}</h2>
@@ -187,6 +189,7 @@ function renderMain() {
       <span class="lab">Hank</span><input class="q" type="number" min="0" id="bh" value="${p.backHank || ''}" placeholder="0">
       <span class="lab">Bin</span><select id="bin"><option value="">—</option>${binOpts}</select>
       <label class="lab" style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="lv" ${p.listVendor ? 'checked' : ''}> list on vendor store</label>
+      ${p.binWhy ? `<div class="lab" id="binWhy" style="flex-basis:100%;${p.binTight ? 'color:var(--accent);font-weight:600' : ''}">Suggested: ${esc(p.binWhy)}</div>` : ''}
     </div>
 
     <div id="sum"></div>
@@ -201,7 +204,11 @@ function renderMain() {
   box.querySelectorAll('[data-form]').forEach(el => el.addEventListener('click', () => { p.orders[Number(el.dataset.form)].form = el.dataset.v; renderMain(); }));
   document.getElementById('bw').addEventListener('input', e => { p.backWound = e.target.value; renderSum(); });
   document.getElementById('bh').addEventListener('input', e => { p.backHank = e.target.value; renderSum(); });
-  document.getElementById('bin').addEventListener('change', e => { p.binId = Number(e.target.value) || null; renderSum(); });
+  document.getElementById('bin').addEventListener('change', e => {
+    p.binId = Number(e.target.value) || null;
+    const w = document.getElementById('binWhy'); if (w) w.textContent = 'Chosen by you';
+    renderSum();
+  });
   document.getElementById('lv').addEventListener('change', e => { p.listVendor = e.target.checked; });
   document.getElementById('save').addEventListener('click', save);
   document.getElementById('reset').addEventListener('click', () => { S.plan = StockOps.defaultPlan(S.model, lot); renderMain(); });
