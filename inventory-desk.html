@@ -1287,14 +1287,13 @@ function binSheetData() {
     per.forEach((e, key) => {
       [split, sflag].forEach(f => { if (f && !e.flags.includes(f)) e.flags.unshift(f); });
       if (S.offOnly && !e.flags.length) return;
-      let shop = null;
+      let shop = null, shopBad = false;
       if (S.store) {
         const v = g.recipe.sku ? S.store.bySku[normalize(g.recipe.sku)] : null;
-        shop = !g.recipe.sku ? 'no SKU' : !v ? 'not listed'
-          : (v.active ? String(v.qty) : `${v.qty} (${v.status})`);
+        shop = !g.recipe.sku ? 'no SKU' : !v ? 'none'
+          : (v.active ? String(v.qty) : `${v.qty} ${v.status}`);
         // Same rule as the screen: a draft product with stock either side is wrong.
-        if (v && (v.active ? v.qty !== vendorExpected(g) : (v.qty > 0 || g.vendor > 0))) shop += ' !';
-        if (v && v.active && vendorExpected(g) !== g.vendor) shop += `\nexp ${vendorExpected(g)}`;
+        shopBad = !!(v ? (v.active ? v.qty !== vendorExpected(g) : (v.qty > 0 || g.vendor > 0)) : g.vendor > 0);
       }
       if (!byBin.has(key)) byBin.set(key, []);
       byBin.get(key).push({
@@ -1302,7 +1301,7 @@ function binSheetData() {
         fiberCode: g.recipe.fiber, sku: g.recipe.sku || '',
         lots: e.lots, wound: e.wound, hank: e.hank, vendor: e.vendor, retail: e.retail,
         held: e.held, total: e.total, reserved: e.reserved, resvText: resvTitle(e.resv), flags: e.flags,
-        gristVendor: g.vendor, shop,
+        gristVendor: g.vendor, shop, shopBad,
         otherBins: allBins.filter(k => k !== key).map(binText),
       });
     });
@@ -1336,6 +1335,7 @@ function binSheetData() {
     storeAt: S.store && S.store.fetched_at ? new Date(S.store.fetched_at) : null,
     storeChecked: !!S.store,
     ordersOk: !!S.ordersOk,
+    offOnly: !!S.offOnly,
   };
 }
 
@@ -1349,157 +1349,158 @@ function pdfSafe(s) {
 }
 
 function drawBinSheet(JsPDF, data) {
+  /* Built to be read at the shelf, quickly. What Grist expects is on the
+     left; the boxes to fill in are at the END of the row, each blank right
+     beside the number it is checked against. Only columns that have
+     something to say are printed. */
   const doc = new JsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-  const M = 30;
+  const M = 28;
   const INK = [26, 22, 20], MUTED = [139, 125, 114], RULE = [212, 201, 188];
-  const WARM = [232, 223, 212], ACCENT = [139, 58, 42];
-  const fmtDate = d => d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
-  const fmtTime = d => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const WARM = [232, 223, 212], ACCENT = [139, 58, 42], PURPLE = [91, 74, 139];
+  const EXP = [244, 239, 232];          // tint behind the expected numbers
+  const rows = data.bins.reduce((a, b) => a.concat(b.rows), []);
+  const showResv = rows.some(r => r.reserved);
+  const showShop = data.storeChecked;
+  const d = data.printedAt;
 
-  // ── Header ──
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(...INK);
+  // ── Header: one line of who/when, one line of how ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...INK);
   doc.text('Bin check', M, M + 6);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...MUTED);
-  const spools = data.bins.reduce((t, b) => t + b.total, 0);
-  const binsWith = data.bins.filter(b => b.rows.length).length;
-  doc.text(pdfSafe(`Printed ${fmtDate(data.printedAt)} ${fmtTime(data.printedAt)}  ·  ` +
-    `${data.bins.length} bin section${data.bins.length === 1 ? '' : 's'} (${binsWith} with stock on record)  ·  ` +
-    `${spools} spools expected` + (data.filters.length ? `  ·  Showing ${data.filters.join(', ')}` : '')),
-    M, M + 20);
-  doc.text(pdfSafe(data.storeChecked
-    ? `Vendor store read at ${data.storeAt ? fmtTime(data.storeAt) : '?'} - "!" means Shopify and Grist disagree on what is listed. Retail is not read.`
-    : 'Vendor store not read - press "Check stores" before printing to include the Shopify column.'),
-    M, M + 31);
-  doc.setTextColor(...INK);
-  doc.text('Count each bag. Tick OK if it matches. If not, write what is actually there and tick where it needs fixing: '
-    + 'Grist (counts / bin on the lot) and/or Shopify (listed quantity).', M, M + 44);
-  if (data.ordersOk) {
-    doc.setTextColor(91, 74, 139);
-    doc.text('Reserved = already promised to an open order and NOT in Wound/Hank. If those spools are still in the bag, '
-      + 'leave them out of Actual - set them aside or note them.', M, M + 55);
-    doc.setTextColor(...INK);
+  doc.text(pdfSafe(d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) +
+    (data.filters.length ? '   ·   ' + data.filters.join(', ') : '')), M + 78, M + 6);
+  doc.setTextColor(...INK); doc.setFontSize(9.5);
+  doc.text('Count each bag.  Matches: tick the box.  Doesn\'t: write the real count.', M, M + 22);
+  if (showResv) {
+    doc.setTextColor(...PURPLE);
+    doc.text('Reserved = promised to an order. Not in the Wound / Hank numbers - don\'t count them.', W - M, M + 22, { align: 'right' });
   }
 
-  // ── Table ──
-  const head = [['Colourway · fibre · SKU · lots', 'Wound', 'Hank', 'Listed', 'Reserved', 'Shopify V', 'OK',
-    'Actual wound', 'Actual hank', 'Fix in']];
-  const body = [];
-  const meta = [];   // parallel to body: what kind of row, for drawing
-  const COLS = 10;
+  // ── Columns ──
+  const cols = [
+    { key: 'item', title: 'Colourway', w: 0 },
+    { key: 'listed', title: 'Listed', w: 58 },
+  ];
+  if (showResv) cols.push({ key: 'resv', title: 'Reserved', w: 54 });
+  if (showShop) cols.push({ key: 'shop', title: 'Shopify', w: 52 });
+  cols.push(
+    { key: 'wound', title: 'Wound', w: 50, exp: true },
+    { key: 'wActual', title: 'Actual', w: 58, blank: true },
+    { key: 'hank', title: 'Hank', w: 46, exp: true },
+    { key: 'hActual', title: 'Actual', w: 58, blank: true },
+    { key: 'ok', title: 'OK', w: 34, box: true },
+  );
+  const fixed = cols.reduce((t, c) => t + c.w, 0);
+  cols[0].w = W - 2 * M - fixed;
+  const idx = k => cols.findIndex(c => c.key === k);
+  const N = cols.length;
+
+  const head = [cols.map(c => c.title)];
+  const body = [], meta = [];
   data.bins.forEach(b => {
-    body.push([{ content: pdfSafe(
-      (b.key === '__none' ? 'NO BIN RECORDED' : 'BIN ' + b.label) +
-      (b.rows.length
-        ? `      ${b.rows.length} item${b.rows.length === 1 ? '' : 's'} · ${b.total} spools expected` +
-          (b.reserved ? ` + ${b.reserved} reserved for orders` : '')
-        : '      nothing on record - empty?')),
-      colSpan: COLS,
-      styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 10.5, textColor: INK, cellPadding: { top: 5, bottom: 5, left: 6, right: 6 } } }]);
+    body.push([{ content: pdfSafe(b.key === '__none' ? 'NO BIN' : b.label), colSpan: N,
+      styles: { fillColor: WARM, fontStyle: 'bold', fontSize: 12, textColor: INK,
+        cellPadding: { top: 4, bottom: 4, left: 6, right: 6 } } }]);
     meta.push({ kind: 'bin' });
     b.rows.forEach(r => {
-      const where = [];
-      if (r.vendor) where.push(`V ${r.vendor}`);
-      if (r.retail) where.push(`R ${r.retail}`);
-      if (r.held) where.push(`held ${r.held}`);
-      const sub = [r.fiber, r.sku].filter(Boolean).join(' · ');
-      const lots = 'Lots: ' + r.lots.join(', ') +
-        (r.otherBins.length ? `   (also in ${r.otherBins.join(', ')})` : '');
-      body.push([
-        pdfSafe(`\n${sub}\n${lots}`),
-        String(r.wound || '-'),
-        r.hank ? '~' + r.hank : '-',
-        pdfSafe(where.join('\n') || '-'),
-        pdfSafe(r.reserved ? `${r.reserved}\n${r.resvText}` : '-'),
-        pdfSafe(r.shop == null ? '' : r.shop + (r.otherBins.length && r.shop && !/^no|^not/.test(r.shop) ? '\n(all bins)' : '')),
-        '', '', '', '',
-      ]);
+      const listed = [r.vendor && `V${r.vendor}`, r.retail && `R${r.retail}`, r.held && `H${r.held}`]
+        .filter(Boolean).join(' ') || '-';
+      const sub = [r.fiber, r.sku].filter(Boolean).join(' · ') +
+        (r.otherBins.length ? `   +${r.otherBins.join(', ')}` : '');
+      const cell = {
+        item: '',
+        sub: pdfSafe(sub),
+        listed: pdfSafe(listed),
+        resv: r.reserved ? String(r.reserved) : '',
+        shop: r.shop == null ? '' : pdfSafe(r.shop + (r.shopBad ? ' !' : '')),
+        wound: r.wound ? String(r.wound) : '0',
+        hank: r.hank ? '~' + r.hank : '-',
+        wActual: '', hActual: '', ok: '',
+      };
+      const rowArr = cols.map(c => cell[c.key]);
+      rowArr.sub = cell.sub;
+      body.push(rowArr);
       meta.push({ kind: 'item', row: r });
-      if (r.flags.length) {
-        body.push([{ content: pdfSafe('Check:  ' + r.flags.join('   ·   ')), colSpan: COLS,
-          styles: { fontSize: 8.5, fontStyle: 'bold', textColor: ACCENT, fillColor: [242, 232, 229],
-            cellPadding: { top: 3, bottom: 3, left: 10, right: 6 } } }]);
+      // Reasons only on the "looks off" sheet; a plain count stays plain.
+      if (data.offOnly && r.flags.length) {
+        body.push([{ content: pdfSafe('Check: ' + r.flags.join('  ·  ')), colSpan: N,
+          styles: { fontSize: 8, fontStyle: 'bold', textColor: ACCENT, fillColor: [242, 232, 229],
+            cellPadding: { top: 2, bottom: 2, left: 10, right: 6 } } }]);
         meta.push({ kind: 'flag' });
       }
     });
-    body.push([{ content: 'Also in this bin, not listed above:', colSpan: COLS,
-      styles: { fontSize: 8, textColor: MUTED, minCellHeight: 22, cellPadding: { top: 4, left: 6 } } }]);
+    body.push([{ content: 'Other:', colSpan: N,
+      styles: { fontSize: 8, textColor: MUTED, minCellHeight: 18, cellPadding: { top: 4, left: 6 } } }]);
     meta.push({ kind: 'extra' });
   });
 
-  const box = (x, y, s) => { doc.setDrawColor(...INK); doc.setLineWidth(0.8); doc.rect(x, y, s, s); };
+  const columnStyles = {};
+  cols.forEach((c, i) => {
+    columnStyles[i] = { cellWidth: c.w, halign: i === 0 ? 'left' : 'center' };
+    if (c.exp) Object.assign(columnStyles[i], { fontStyle: 'bold', fontSize: 13, fillColor: EXP });
+    if (c.key === 'listed' || c.key === 'shop') Object.assign(columnStyles[i], { fontSize: 8.5, textColor: MUTED });
+    if (c.key === 'resv') Object.assign(columnStyles[i], { fontSize: 11, fontStyle: 'bold', textColor: PURPLE });
+  });
+
   doc.autoTable({
-    head, body,
-    startY: M + (data.ordersOk ? 64 : 54),
-    margin: { left: M, right: M, top: M + 6, bottom: M },
-    theme: 'grid',
-    rowPageBreak: 'avoid',
+    head, body, startY: M + 32,
+    margin: { left: M, right: M, top: M, bottom: M + 6 },
+    theme: 'grid', rowPageBreak: 'avoid', showHead: 'everyPage',
     styles: { font: 'helvetica', fontSize: 9, textColor: INK, lineColor: RULE, lineWidth: 0.5,
       cellPadding: 4, valign: 'middle', overflow: 'linebreak' },
-    headStyles: { fillColor: INK, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
-    columnStyles: {
-      0: { cellWidth: 214, halign: 'left' },
-      1: { cellWidth: 46, halign: 'center', fontStyle: 'bold', fontSize: 11 },
-      2: { cellWidth: 46, halign: 'center', fontSize: 10 },
-      3: { cellWidth: 52, halign: 'center', fontSize: 8.5 },
-      4: { cellWidth: 74, halign: 'center', fontSize: 7.5 },
-      5: { cellWidth: 56, halign: 'center', fontSize: 8.5 },
-      6: { cellWidth: 30 },
-      7: { cellWidth: 60 },
-      8: { cellWidth: 60 },
-      9: { cellWidth: 94 },
-    },
-    showHead: 'everyPage',
+    headStyles: { fillColor: INK, textColor: 255, fontSize: 8.5, fontStyle: 'bold', halign: 'center' },
+    columnStyles,
     didParseCell: (h) => {
-      if (h.section !== 'body') return;
+      if (h.section === 'head') {
+        const c = cols[h.column.index];
+        if (c && c.blank) h.cell.styles.fillColor = [74, 64, 58];
+        if (h.column.index === 0) h.cell.styles.halign = 'left';
+        return;
+      }
       const m = meta[h.row.index];
-      if (m && m.kind === 'item' && h.column.index === 0) {
-        h.cell.styles.valign = 'top'; h.cell.styles.textColor = [90, 80, 72]; h.cell.styles.fontSize = 8.5;
+      if (!m || m.kind !== 'item') return;
+      const c = cols[h.column.index];
+      if (h.column.index === 0) {
+        h.cell.styles.minCellHeight = 32;
       }
-      if (m && m.kind === 'item' && h.column.index === 4 && m.row.reserved) {
-        h.cell.styles.textColor = [91, 74, 139];
-      }
-      if (m && m.kind === 'item' && h.column.index === 5 && /!/.test(String(m.row.shop || ''))) {
-        h.cell.styles.textColor = ACCENT; h.cell.styles.fontStyle = 'bold';
-      }
+      if (c && c.key === 'shop' && m.row.shopBad) Object.assign(h.cell.styles, { textColor: ACCENT, fontStyle: 'bold' });
+      if (c && c.key === 'hank' && !m.row.hank) Object.assign(h.cell.styles, { fontStyle: 'normal', textColor: MUTED });
     },
     didDrawCell: (h) => {
       if (h.section !== 'body') return;
       const m = meta[h.row.index];
       if (!m || m.kind !== 'item') return;
-      const c = h.cell, cx = c.x + c.width / 2, cy = c.y + c.height / 2;
+      const c = h.cell, col = cols[h.column.index];
       if (h.column.index === 0) {
-        /* The first line of the cell is left blank and the name drawn into it
-           in bold — AutoTable can't mix weights inside one cell. */
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...INK);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK);
         let name = pdfSafe(m.row.name);
-        const room = c.width - c.padding('left') - c.padding('right');
+        const room = c.width - 10;
         while (name.length > 4 && doc.getTextWidth(name) > room) name = name.slice(0, -2);
         if (name !== pdfSafe(m.row.name)) name = name.replace(/\s*$/, '') + '...';
-        doc.text(name, c.x + c.padding('left'), c.y + c.padding('top'), { baseline: 'top' });
-        doc.setFont('helvetica', 'normal');
+        doc.text(name, c.x + 5, c.y + 5, { baseline: 'top' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
+        doc.text(body[h.row.index].sub || '', c.x + 5, c.y + 19, { baseline: 'top' });
       }
-      if (h.column.index === 6) box(cx - 6, cy - 6, 12);
-      if (h.column.index === 7 || h.column.index === 8) {
-        doc.setDrawColor(...MUTED); doc.setLineWidth(0.6);
-        doc.line(c.x + 10, c.y + c.height - 9, c.x + c.width - 10, c.y + c.height - 9);
+      if (col.blank) {
+        // A real write-in box, so the eye goes straight to it.
+        doc.setDrawColor(...INK); doc.setLineWidth(0.9);
+        doc.rect(c.x + 6, c.y + 5, c.width - 12, c.height - 10);
       }
-      if (h.column.index === 9) {
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...INK);
-        box(c.x + 7, cy - 5, 10); doc.text('Grist', c.x + 20, cy + 3);
-        box(c.x + 49, cy - 5, 10); doc.text('Shopify', c.x + 62, cy + 3);
+      if (col.box) {
+        const sz = 14, cx = c.x + c.width / 2, cy = c.y + c.height / 2;
+        doc.setDrawColor(...INK); doc.setLineWidth(0.9);
+        doc.rect(cx - sz / 2, cy - sz / 2, sz, sz);
       }
     },
   });
 
-  // ── Footer: page numbers + sign-off ──
   const pages = doc.internal.getNumberOfPages();
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTED);
-    doc.text(`Page ${i} of ${pages}`, W - M, H - 14, { align: 'right' });
-    doc.text('Checked by ____________________   Date ________   Entered in Grist / Shopify ________',
-      M, H - 14);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+    doc.text('Checked by ______________________      Date ____________', M, H - 14);
+    doc.text(`${i} / ${pages}`, W - M, H - 14, { align: 'right' });
   }
   return doc;
 }
