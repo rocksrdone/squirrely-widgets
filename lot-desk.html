@@ -76,7 +76,8 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
 </style>
 </head>
 <body>
-<div class="title">Lot Desk</div>
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="title">Lot Desk</div>
+  <button class="btn small" id="logPot" style="margin-left:auto">+ Log a pot</button></div>
 <div class="sub">Put away what came off the kettle — into customer bins or back stock, in one step.</div>
 <div id="banner"></div>
 <div class="cols">
@@ -262,6 +263,12 @@ async function undo(i) {
 
 function render() { renderList(); renderMain(); }
 
+document.getElementById('logPot').addEventListener('click', () =>
+  StockOps.openLogPot(grist.docApi, async (r, recipe) => {
+    toast(`Logged ${r.lotNumber} — ${r.spools} ${recipe.name}`);
+    await load();
+    if (r.lotId) pick(r.lotId);
+  }));
 document.getElementById('search').addEventListener('input', e => { S.search = e.target.value; renderList(); });
 try { grist.ready({ requiredAccess: 'full' }); load(); }
 catch (e) { document.getElementById('list').innerHTML = `<div class="empty">Grist plugin API unavailable</div>`; }

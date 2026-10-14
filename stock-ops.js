@@ -288,6 +288,145 @@
     return undo;
   }
 
-  root.StockOps = { load, defaultPlan, suggestBin, putAwayActions, applyPutAway,
+
+  /* ── Log a pot that is not on any order ───────────────────────────────────
+     Creates the lot exactly as the kettle does — lot number, colourway,
+     dyed spools as Spools_Made, yardage, fibre, date — so it lands in the Lot
+     Desk's waiting list and is put away like any other lot. Marked as on the
+     dry rack (not wet), so screens that still read drying status treat it as
+     available rather than hiding it. */
+  function lotNumberFor(existing) {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    const prefix = 'LOT-' + String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()) + '-';
+    let max = 0;
+    existing.forEach(v => {
+      const s = String(v || '');
+      if (s.indexOf(prefix) === 0) { const n = parseInt(s.slice(prefix.length), 10); if (!isNaN(n) && n > max) max = n; }
+    });
+    return prefix + (max + 1);
+  }
+  async function logPot(docApi, recipe, spools) {
+    const n = Math.round(num(spools));
+    if (!recipe || !recipe.id) throw new Error('Pick a colourway');
+    if (n <= 0) throw new Error('Enter how many spools');
+    const lotsT = await docApi.fetchTable('Production_Lots');
+    const L = {
+      lotNumber: col(lotsT, ['Lot_Number']), recipe: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']),
+      fiber: col(lotsT, ['Fiber']), yards: col(lotsT, ['Total_Yards_Made']), made: col(lotsT, ['Spools_Made']),
+      drying: col(lotsT, ['Drying_Status']), notes: col(lotsT, ['Notes']),
+    };
+    if (!L.lotNumber || !L.made) throw new Error('Production_Lots needs Lot_Number and Spools_Made');
+    const lotNumber = lotNumberFor(arr(lotsT, L.lotNumber));
+    const d = new Date();
+    const f = { [L.lotNumber]: lotNumber, [L.made]: n };
+    if (L.recipe) f[L.recipe] = recipe.id;
+    if (L.yards) f[L.yards] = n * yardsPerSpool(recipe.fiber);
+    if (L.fiber && recipe.fiber) f[L.fiber] = recipe.fiber;
+    if (L.date) f[L.date] = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000;
+    if (L.drying) f[L.drying] = 'Drying - Dry Rack';
+    if (L.notes) f[L.notes] = 'Logged as a pot with no order';
+    const res = await docApi.applyUserActions([['AddRecord', 'Production_Lots', null, f]]);
+    return { lotId: res && res.retValues && res.retValues[0], lotNumber, spools: n };
+  }
+
+  /* The pop-up both pages use. Self-contained (it brings its own styles), so
+     the Lot Desk and Morning Batch Planning show exactly the same thing. */
+  async function openLogPot(docApi, onDone) {
+    if (!document.getElementById('so-pot-style')) {
+      const st = document.createElement('style'); st.id = 'so-pot-style';
+      st.textContent = `
+.so-ov{position:fixed;inset:0;background:rgba(26,22,20,.45);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:40px 14px}
+.so-box{background:#fff;border-radius:10px;width:100%;max-width:420px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-family:Inter,sans-serif;color:#1A1614;color-scheme:light}
+.so-box h4{font-family:'Libre Baskerville',serif;font-size:16px;margin:0 0 2px}
+.so-box .so-sub{font-size:11.5px;color:#8B7D72;margin-bottom:12px}
+.so-box label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8B7D72;margin:10px 0 4px}
+.so-box input{width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid #D4C9BC;border-radius:6px;font:inherit;font-size:14px;background:#fff;color:#1A1614}
+.so-box input:focus{outline:none;border-color:#3A8B7A}
+.so-box input.so-n{width:110px;font-family:'DM Mono',monospace;font-size:20px;text-align:center}
+.so-list{border:1px solid #E8DFD4;border-radius:6px;margin-top:4px;max-height:230px;overflow:auto}
+.so-opt{padding:7px 10px;cursor:pointer;border-bottom:1px solid #F3EDE5;font-size:13px;display:flex;gap:8px;align-items:center}
+.so-opt:hover,.so-opt.on{background:#E5F2EF}
+.so-opt small{margin-left:auto;font-family:'DM Mono',monospace;font-size:10.5px;color:#8B7D72}
+.so-picked{padding:8px 10px;background:#E5F2EF;border-radius:6px;font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center}
+.so-picked a{margin-left:auto;font-weight:400;font-size:11px;color:#8B3A2A;cursor:pointer;text-decoration:underline}
+.so-fib{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:4px;background:#E8DFD4;color:#6B5E52}
+.so-row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
+.so-row button{font:inherit;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:6px;cursor:pointer;border:1px solid #3A8B7A;background:#3A8B7A;color:#fff}
+.so-row button.so-x{background:#fff;color:#1A1614;border-color:#D4C9BC;font-weight:500}
+.so-row button:disabled{opacity:.45;cursor:default}
+.so-err{color:#8B3A2A;font-size:12px;margin-top:8px}`;
+      document.head.appendChild(st);
+    }
+    const ov = document.createElement('div'); ov.className = 'so-ov';
+    ov.innerHTML = `<div class="so-box"><h4>Log a pot</h4>
+      <div class="so-sub">Thread dyed without an order. It goes to the Lot Desk to be put away.</div>
+      <label>Colourway</label><div id="so-pick"><input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div></div>
+      <label>Spools dyed</label><input id="so-n" class="so-n" type="number" min="1" placeholder="0">
+      <div class="so-err" id="so-err"></div>
+      <div class="so-row"><button class="so-x" id="so-cancel">Cancel</button><button id="so-go" disabled>Log pot</button></div></div>`;
+    document.body.appendChild(ov);
+    const $ = id => ov.querySelector('#' + id);
+    const close = () => ov.remove();
+    $('so-cancel').onclick = close;
+    ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+
+    let recipes = [], chosen = null, hi = 0, shown = [];
+    try {
+      const t = await docApi.fetchTable('Recipes');
+      const n = col(t, ['Recipe_Name']), k = col(t, ['SKU_Base']), fb = col(t, ['Fiber_Type']);
+      recipes = (t.id || []).map((id, i) => ({ id, name: String(arr(t, n)[i] || ''), sku: String(arr(t, k)[i] || ''),
+        fiber: fiberCode(arr(t, fb)[i]) })).filter(r => r.sku && r.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) { $('so-err').textContent = 'Could not read Recipes'; }
+
+    const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const ready = () => { $('so-go').disabled = !(chosen && num($('so-n').value) > 0); };
+    const drawList = () => {
+      const q = fold($('so-q').value).trim();
+      shown = (q ? recipes.filter(r => fold(r.name).includes(q) || fold(r.sku).includes(q)) : recipes).slice(0, 12);
+      hi = Math.min(hi, Math.max(0, shown.length - 1));
+      $('so-list').innerHTML = shown.map((r, i) => `<div class="so-opt ${i === hi ? 'on' : ''}" data-i="${i}">${esc(r.name)}
+        ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}<small>${esc(r.sku)}</small></div>`).join('')
+        || '<div class="so-opt" style="cursor:default;color:#8B7D72">No match</div>';
+      $('so-list').querySelectorAll('[data-i]').forEach(el => el.onclick = () => choose(shown[Number(el.dataset.i)]));
+    };
+    const choose = (r) => {
+      if (!r) return;
+      chosen = r;
+      $('so-pick').innerHTML = `<div class="so-picked">${esc(r.name)} ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}
+        <span style="font-family:'DM Mono',monospace;font-size:10.5px;color:#6B5E52">${esc(r.sku)}</span><a id="so-change">change</a></div>`;
+      $('so-change').onclick = () => { chosen = null; $('so-pick').innerHTML = `<input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div>`; wire(); ready(); };
+      $('so-n').focus(); ready();
+    };
+    const wire = () => {
+      const q = $('so-q');
+      q.oninput = () => { hi = 0; drawList(); };
+      q.onkeydown = e => {
+        if (e.key === 'ArrowDown') { hi = Math.min(hi + 1, shown.length - 1); drawList(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp') { hi = Math.max(hi - 1, 0); drawList(); e.preventDefault(); }
+        else if (e.key === 'Enter') { choose(shown[hi]); e.preventDefault(); }
+        else if (e.key === 'Escape') close();
+      };
+      drawList(); q.focus();
+    };
+    wire();
+    $('so-n').oninput = ready;
+    $('so-n').onkeydown = e => { if (e.key === 'Enter' && !$('so-go').disabled) $('so-go').click(); if (e.key === 'Escape') close(); };
+    $('so-go').onclick = async () => {
+      $('so-go').disabled = true; $('so-err').textContent = '';
+      try {
+        const r = await logPot(docApi, chosen, $('so-n').value);
+        close();
+        if (onDone) onDone(r, chosen);
+      } catch (e) {
+        console.error('Log pot failed', e);
+        $('so-err').textContent = (e && e.message) || 'Could not log it — nothing was added';
+        ready();
+      }
+    };
+  }
+
+  root.StockOps = { load, defaultPlan, suggestBin, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);
