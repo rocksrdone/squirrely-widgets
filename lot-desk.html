@@ -73,6 +73,14 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
 .banner { background: var(--accent-light); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 8px 11px; font-size: 11.5px; margin-bottom: 12px; }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 99; }
 .toast.show { opacity: 1; }
+.lot.prob { border-color: var(--accent); border-left: 4px solid var(--accent); background: #FDF7F5; }
+.lot.prob.sel { background: var(--accent-light); }
+.pnote { background: var(--paper); border-left: 3px solid var(--rule); padding: 6px 10px; font-size: 12.5px; margin: 0 0 10px; font-style: italic; }
+.step { border: 1px solid var(--warm); border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; }
+.step .hd { font-weight: 600; font-size: 12.5px; margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; }
+.step .hd .k { font-family: 'DM Mono', monospace; color: var(--muted); font-weight: 500; }
+.step.done { border-color: #9ACFC7; background: var(--teal-light); }
+.counts { font-family: 'DM Mono', monospace; font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -98,7 +106,7 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
    between open orders (counted against them at once) and back stock, and
    saves in one go — every rule lives in stock-ops.js. */
 const { esc, num } = StockOps;
-const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false };
+const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false, prob: null, fixed: {} };
 const OLD_DAYS = 14;
 
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
@@ -115,6 +123,7 @@ async function load(keepSel) {
   }
   document.getElementById('banner').innerHTML = S.model.missing.length
     ? `<div class="banner">Missing columns: <b>${esc(S.model.missing.join(', '))}</b>. Put-away is off until they exist.</div>` : '';
+  if (S.prob && !S.model.problems.some(p => p.id === S.prob)) S.prob = null;
   const still = keepSel && waiting().find(l => l.id === S.sel);
   if (!still) { S.sel = null; S.plan = null; }
   else S.plan = StockOps.defaultPlan(S.model, still);
@@ -132,14 +141,20 @@ function renderList() {
   const rows = all.filter(l => !q || l.recipe.name.toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
   const spools = all.reduce((t, l) => t + l.waiting, 0);
   document.getElementById('count').textContent = `${all.length} lot${all.length === 1 ? '' : 's'} waiting · ${spools} spools`;
-  document.getElementById('list').innerHTML = rows.length ? rows.map(l => {
+  const probs = S.model.problems.slice().sort((a, b) => a.created - b.created);
+  const probHtml = probs.length ? `<div class="count" style="color:var(--accent);font-weight:600">Problems to fix · ${probs.length}</div>` +
+    probs.map(p => `<div class="lot prob ${p.id === S.prob ? 'sel' : ''}" data-prob="${p.id}">
+      <div class="nm">${esc(p.text.split(':')[0] || p.type)}</div>
+      <div class="mt">${esc(p.type)}${p.found != null ? ` · found ${p.found}${p.qty != null ? ` of ${p.qty}` : ''}` : ''}</div>
+    </div>`).join('') + '<div style="height:10px"></div>' : '';
+  document.getElementById('list').innerHTML = probHtml + (rows.length ? rows.map(l => {
     const d = age(l.date);
     return `<div class="lot ${l.id === S.sel ? 'sel' : ''} ${d != null && d > OLD_DAYS ? 'old' : ''}" data-lot="${l.id}">
       <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n">${l.waiting}</span></div>
       <div class="mt">${esc(l.lotNumber)}${d != null ? ` · ${d}d` : ''}${l.binCode ? ` · ${esc(l.binCode)}` : ''}${
         (S.model.linesByRecipe[l.recipe.id] || []).length ? ' · on order' : ''}</div>
     </div>`;
-  }).join('') : `<div class="empty">${q ? 'Nothing waiting matches.' : 'Nothing waiting — all put away.'}</div>`;
+  }).join('') : `<div class="empty">${q ? 'Nothing waiting matches.' : 'Nothing waiting — all put away.'}</div>`);
 
   /* Lots leave the waiting list once put away, which looked like they had
      vanished. The last RECENT_DAYS days of put-away lots stay listed here —
@@ -164,6 +179,7 @@ function renderList() {
       </div>`;
     }).join('') : '';
   document.querySelectorAll('[data-lot]').forEach(el => el.addEventListener('click', () => pick(Number(el.dataset.lot))));
+  document.querySelectorAll('[data-prob]').forEach(el => el.addEventListener('click', () => { S.prob = Number(el.dataset.prob); S.sel = null; S.plan = null; render(); }));
   document.querySelectorAll('[data-vs]').forEach(el => el.addEventListener('click', () => {
     const l = S.model.lots.find(x => x.id === Number(el.dataset.vs));
     if (!l) return;
@@ -185,7 +201,7 @@ function recentlyPutAway() {
 function pick(id) {
   const lot = waiting().find(l => l.id === id);
   if (!lot) return;
-  S.sel = id;
+  S.sel = id; S.prob = null;
   S.plan = StockOps.defaultPlan(S.model, lot);
   render();
 }
@@ -194,6 +210,7 @@ function lotSel() { return S.sel ? S.model.lots.find(l => l.id === S.sel) : null
 
 function renderMain() {
   const box = document.getElementById('main');
+  if (S.prob) return renderProblem(box);
   const lot = lotSel();
   if (!lot || !S.plan) { box.innerHTML = `<div class="panel"><div class="empty">Pick a lot on the left.</div></div>`; return; }
   const p = S.plan;
@@ -254,6 +271,103 @@ function renderMain() {
   document.getElementById('reset').addEventListener('click', () => { S.plan = StockOps.defaultPlan(S.model, lot); renderMain(); });
   box.querySelectorAll('[data-undo]').forEach(el => el.addEventListener('click', () => undo(Number(el.dataset.undo))));
   renderSum();
+}
+
+/* ── Fixing a job a worker flagged ────────────────────────────────────────
+   1 correct the lot in Grist (put-away count off), 2 bring the store in line,
+   3 mark it resolved. Store numbers are always yours to set — nothing is sent
+   to Shopify without the Set click in the vendor store pop-up. */
+function renderProblem(box) {
+  const p = S.model.problems.find(x => x.id === S.prob);
+  if (!p) { S.prob = null; return renderMain(); }
+  const lot = p.lotId ? S.model.lots.find(l => l.id === p.lotId) : null;
+  const recipeId = (lot && lot.recipe.id) || p.recipeId;
+  const recipe = S.model.recipes[recipeId] || (lot && lot.recipe) || null;
+  const sku = p.sku || (recipe && recipe.sku) || '';
+  const d = p.found != null && p.qty != null ? p.found - p.qty : 0;
+  const toOrder = /^O-/i.test(p.bin) || /→ order/i.test(p.text);
+  const fixed = S.fixed[p.id];
+  const wound = /wound/i.test(p.form);
+  const formWord = wound ? 'wound' : 'hank';
+  const listed = recipeId ? S.model.lots.filter(l => l.recipe.id === recipeId).reduce((t, l) => t + l.vendor, 0) : null;
+
+  let step1 = '';
+  if (p.type === 'Put away' && lot && d) {
+    if (fixed) {
+      step1 = `<div class="step done"><div class="hd"><span class="k">1</span>Grist fixed ✓</div>
+        <div class="lab">${esc(fixed.lot)}: ${esc(fixed.text)} <a href="#" id="pundo" style="color:var(--accent);margin-left:6px">undo</a></div></div>`;
+    } else if (d < 0 && toOrder) {
+      step1 = `<div class="step"><div class="hd"><span class="k">1</span>The order is ${-d} short</div>
+        <div class="lab">This went to an order, so the order needs ${-d} more. Fix the order's count by hand (or dye more), then resolve.</div></div>`;
+    } else {
+      const listDefault = d > 0 && lot.vendor > 0;
+      step1 = `<div class="step"><div class="hd"><span class="k">1</span>Correct ${esc(lot.lotNumber)} in Grist</div>
+        <div class="counts">now: ${lot.onHand} wound · ${lot.hank} hank · ${lot.vendor} listed on vendor</div>
+        <div class="lab" style="margin-bottom:8px">${d > 0
+          ? `${d} more ${formWord} than Grist has → add ${d} ${formWord}.`
+          : `${-d} fewer ${formWord} than Grist has → take ${-d} ${formWord} off${lot.vendor ? '; the vendor listing drops only if it would list more than is there' : ''}.`}</div>
+        ${d > 0 ? `<label class="lab" style="display:flex;gap:5px;align-items:center;margin-bottom:8px"><input type="checkbox" id="plist" ${listDefault ? 'checked' : ''}> list the ${d} extra on the vendor store</label>` : ''}
+        <button class="btn small" id="pfix">Fix Grist</button></div>`;
+    }
+  } else if (p.type === 'Retail store') {
+    step1 = `<div class="step"><div class="hd"><span class="k">1</span>Retail store</div>
+      <div class="lab">Check the spools and set the regular store's count in Shopify by hand.</div></div>`;
+  }
+
+  const step2 = sku ? `<div class="step"><div class="hd"><span class="k">${step1 ? 2 : 1}</span>Vendor store</div>
+      <div class="lab" style="margin-bottom:8px">Grist lists ${listed != null ? listed : '?'} on the vendor store. Check what the store shows and set it to match — or set what's really there and let it fix Grist.</div>
+      <button class="btn ghost small" id="pvs">Vendor store ↗</button></div>` : '';
+  const n3 = 1 + (step1 ? 1 : 0) + (step2 ? 1 : 0);
+
+  box.innerHTML = `<div class="panel">
+    <h2>${esc(p.text.split(':')[0] || p.type)}</h2>
+    <div class="meta">${esc(p.type)} job${p.created ? ' · ' + new Date(p.created * 1000).toLocaleDateString() : ''}${p.bin ? ' · bin ' + esc(p.bin) : ''}</div>
+    <div class="lab" style="margin-bottom:8px">${esc(p.text.includes(':') ? p.text.slice(p.text.indexOf(':') + 1).trim() : p.text)}</div>
+    ${p.found != null ? `<div class="big"><b>${p.found}</b><span>found${p.qty != null ? ` · job said ${p.qty}${p.form ? ' ' + esc(p.form.toLowerCase()) : ''}` : ''}</span></div>` : ''}
+    ${p.note ? `<div class="pnote">“${esc(p.note)}”</div>` : ''}
+    ${step1}${step2}
+    <div class="step"><div class="hd"><span class="k">${n3}</span>Done?</div>
+      <button class="btn small" id="pres">Mark resolved</button>
+      <span class="lab" style="margin-left:6px">takes it off the dashboard and the Jobs list</span></div>
+  </div>`;
+
+  const fx = document.getElementById('pfix');
+  if (fx) fx.addEventListener('click', async () => {
+    if (S.busy) return;
+    S.busy = true; fx.disabled = true;
+    try {
+      const lv = document.getElementById('plist');
+      const r = await StockOps.lotCountFix(grist.docApi, lot.id, p.form, d, !!(lv && lv.checked));
+      if (!r.ok) { toast(r.error); fx.disabled = false; return; }
+      S.fixed[p.id] = r;
+      toast('Grist fixed ✓');
+      await load();
+    } catch (e) { console.error(e); toast('Could not save — nothing was changed'); fx.disabled = false; }
+    finally { S.busy = false; }
+  });
+  const un = document.getElementById('pundo');
+  if (un) un.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try { await grist.docApi.applyUserActions(fixed.undo); delete S.fixed[p.id]; toast('Undone'); await load(); }
+    catch (err) { console.error(err); toast('Undo failed'); }
+  });
+  const vs = document.getElementById('pvs');
+  if (vs) vs.addEventListener('click', () => StockOps.openVendorStock(sku, { target: listed, targetLabel: 'listed in Grist',
+    title: recipe ? `${recipe.name}${recipe.fiber ? ' ' + recipe.fiber : ''}` : sku, onGrist: () => load() }));
+  document.getElementById('pres').addEventListener('click', async () => {
+    const T = S.model.cols.T;
+    if (!T || S.busy) return;
+    S.busy = true;
+    try {
+      const f = { [T.status]: 'Resolved' };
+      if (T.doneAt) f[T.doneAt] = Math.floor(Date.now() / 1000);
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Worker_Tasks', p.id, f]]);
+      delete S.fixed[p.id]; S.prob = null;
+      toast('Resolved ✓');
+      await load();
+    } catch (e) { console.error(e); toast('Could not save'); }
+    finally { S.busy = false; }
+  });
 }
 
 function renderSum() {

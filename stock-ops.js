@@ -188,6 +188,18 @@
       const j = jobsByLot[lot] = jobsByLot[lot] || { open: 0, done: 0, problem: 0 };
       if (st === 'To do') j.open++; else if (st === 'Problem') j.problem++; else j.done++;
     });
+    // Jobs a worker flagged — the Lot Desk lists these for fixing.
+    const problems = [];
+    if (TC) (taskT.id || []).forEach((id, i) => {
+      if (String(arr(taskT, TC.status)[i] || '') !== 'Problem') return;
+      const g = (c) => c ? arr(taskT, c)[i] : null;
+      const found = g(TC.found);
+      problems.push({ id, type: String(g(TC.type) || ''), text: String(g(TC.instruction) || ''),
+        lotId: refId(g(TC.lot)), recipeId: refId(g(TC.recipe)), qty: g(TC.qty) == null ? null : num(g(TC.qty)),
+        form: String(g(TC.form) || ''), bin: String(g(TC.bin) || ''), sku: String(g(TC.sku) || ''),
+        storeQty: g(TC.storeQty), found: found == null || found === '' ? null : num(found),
+        note: String(g(TC.note) || ''), created: num(g(TC.created)) });
+    });
 
     const lots = [];
     (lotsT.id || []).forEach((id, i) => {
@@ -223,7 +235,7 @@
     const binFill = {};
     lots.forEach(l => { if (l.binId) binFill[l.binId] = (binFill[l.binId] || 0) + l.onHand + l.hank + l.waiting; });
 
-    return { cols: { L, A, WL, WO, T: taskCols(taskT) }, missing, recipes, customers, bins, binById, binFill, orders, lots,
+    return { cols: { L, A, WL, WO, T: taskCols(taskT) }, missing, recipes, customers, bins, binById, binFill, orders, lots, problems,
       linesByRecipe, allocByLot };
   }
 
@@ -726,6 +738,56 @@
     return { ok: true, text: plan.map(p => `${p.row.lot}: ${p.text}`).join(' · '), undo };
   }
 
+  /* ── Correct one lot's shelf count (from a job problem) ──────────────────
+     form 'Hank' | 'Wound'; delta = found − expected.
+       more hank:   Hank +n            (+ Vendor +n when list)
+       more wound:  On hand +n, Made +n (+ Vendor +n when list)  — Made keeps "waiting" at 0
+       fewer hank:  Hank −n
+       fewer wound: On hand −n, Broken +n                           — Broken keeps "waiting" at 0
+     When fewer, the vendor listing drops only as far as needed so it never
+     lists more than is on the shelf. Returns { ok, text, undo, vendorBefore, vendorAfter }. */
+  async function lotCountFix(docApi, lotId, form, delta, list) {
+    const t = await docApi.fetchTable('Production_Lots');
+    const i = (t.id || []).indexOf(lotId);
+    if (i < 0) return { ok: false, error: 'That lot is no longer in Grist.' };
+    const C = { v: col(t, ['Vendor_Stock_Spools']), s: col(t, ['Store_Stock_Spools']), oh: col(t, ['On_Hand_Spools']),
+      hank: col(t, ['Hank_Est_Spools']), made: col(t, ['Spools_Made']), broken: col(t, ['Broken_Spools']),
+      notes: col(t, ['Notes']), lot: col(t, ['Lot_Number']) };
+    const g = (c) => num(arr(t, c)[i]);
+    const r = { v: g(C.v), s: g(C.s), oh: g(C.oh), hank: g(C.hank), made: g(C.made), broken: g(C.broken) };
+    const wound = /wound/i.test(form);
+    const n = Math.abs(Math.round(delta));
+    if (!n) return { ok: false, error: 'Nothing to change.' };
+    const nx = Object.assign({}, r);
+    if (delta > 0) {
+      if (wound) { nx.oh += n; nx.made += n; } else nx.hank += n;
+      if (list) nx.v += n;
+    } else {
+      if (wound) {
+        if (r.oh < n) return { ok: false, error: `Grist only has ${r.oh} wound on this lot.` };
+        if (!C.broken) return { ok: false, error: 'Production_Lots has no Broken_Spools column.' };
+        nx.oh -= n; nx.broken += n;
+      } else {
+        if (r.hank < n) return { ok: false, error: `Grist only has ${r.hank} hank on this lot.` };
+        nx.hank -= n;
+      }
+      nx.v = Math.min(r.v, Math.max(0, nx.oh + nx.hank - r.s));
+    }
+    const key = { v: C.v, oh: C.oh, hank: C.hank, made: C.made, broken: C.broken };
+    const upd = {}, old = {};
+    for (const k in key) if (key[k] && nx[k] !== r[k]) { upd[key[k]] = nx[k]; old[key[k]] = r[k]; }
+    const text = `${delta > 0 ? '+' : '−'}${n} ${wound ? 'wound' : 'hank'}${nx.v !== r.v ? ` · vendor ${r.v} → ${nx.v}` : ''}`;
+    if (C.notes) {
+      const prev = String(arr(t, C.notes)[i] || '');
+      const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+      upd[C.notes] = (prev ? prev + '\n' : '') + `${day} count fixed from job problem: ${text}`;
+      old[C.notes] = prev;
+    }
+    await docApi.applyUserActions([['UpdateRecord', 'Production_Lots', lotId, upd]]);
+    return { ok: true, text, lot: String(arr(t, C.lot)[i] || ''), undo: [['UpdateRecord', 'Production_Lots', lotId, old]],
+      vendorBefore: r.v, vendorAfter: nx.v };
+  }
+
   function openVendorStock(sku, opts) {
     opts = opts || {};
     if (!document.getElementById('so-vs-style')) {
@@ -842,7 +904,7 @@
     check();
   }
 
-  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, lotCountFix, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

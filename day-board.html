@@ -382,7 +382,9 @@ async function loadAll() {
   } catch (e) {
     recipesT = null;
   }
-  buildFloor(recipesT, wolT, woT);
+  let tasksT = null;
+  try { tasksT = await grist.docApi.fetchTable('Worker_Tasks'); } catch (e) { tasksT = null; }
+  buildFloor(recipesT, wolT, woT, tasksT);
 
   const missing = [];
   const opt = cands => ({ cands, required: false });
@@ -840,8 +842,31 @@ function renderReorder() {
 
    Both were previously only visible by opening the record they were written to,
    which means finding them required already knowing they existed. */
-function buildFloor(recipesT, wolT, woT) {
+const LOT_DESK_URL = 'https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations/p/90';
+function buildFloor(recipesT, wolT, woT, tasksT) {
   const out = [];
+
+  // Jobs a worker flagged as a problem (count off, bin wrong…). They're fixed on the Lot Desk.
+  if (tasksT) {
+    const st = findColumn(tasksT, ['Status']), ins = findColumn(tasksT, ['Instruction']),
+      qty = findColumn(tasksT, ['Qty']), found = findColumn(tasksT, ['Found_Qty']),
+      note = findColumn(tasksT, ['Worker_Note']), form = findColumn(tasksT, ['Form']),
+      ty = findColumn(tasksT, ['Type']);
+    if (st) (tasksT.id || []).forEach((id, i) => {
+      if (String(columnAsArray(tasksT, st)[i] || '') !== 'Problem') return;
+      const text = ins ? String(columnAsArray(tasksT, ins)[i] || '') : '';
+      const f = found ? columnAsArray(tasksT, found)[i] : null;
+      const q = qty ? columnAsArray(tasksT, qty)[i] : null;
+      const fm = form ? String(columnAsArray(tasksT, form)[i] || '').toLowerCase() : '';
+      const n = note ? String(columnAsArray(tasksT, note)[i] || '') : '';
+      const count = (f != null && f !== '') ? `Found ${f}${q != null ? ` (job said ${q}${fm ? ' ' + fm : ''})` : ''}` : '';
+      out.push({
+        kind: 'job',
+        title: (ty ? String(columnAsArray(tasksT, ty)[i] || 'Job') + ': ' : '') + (text.split(':')[0] || `Job #${id}`),
+        sub: [count, n].filter(Boolean).join(' — ') || 'Flagged with no detail.',
+      });
+    });
+  }
 
   if (recipesT) {
     const flagCol = findColumn(recipesT, ['Needs_Review', 'Flagged', 'Needs_Fix']);
@@ -906,10 +931,11 @@ function renderFloor() {
   box.innerHTML = list.map(r =>
     '<div class="row"><div class="row-top">'
     + '<span class="row-main">' + esc(r.title) + '</span>'
-    + '<span class="tag ' + (r.kind === 'order' ? 't-red' : 't-amber') + '">'
-    + (r.kind === 'order' ? 'short' : 'recipe') + '</span>'
+    + '<span class="tag ' + (r.kind === 'recipe' ? 't-amber' : 't-red') + '">'
+    + ({ order: 'short', job: 'job problem' }[r.kind] || 'recipe') + '</span>'
     + '</div><div class="row-sub">' + esc(r.sub.slice(0, 150))
     + (r.extra && r.kind !== 'order' ? ' <span class="row-side">' + esc(r.extra) + '</span>' : '')
+    + (r.kind === 'job' ? ' <a href="' + LOT_DESK_URL + '" target="_top">fix on Lot Desk →</a>' : '')
     + '</div></div>').join('');
 }
 
