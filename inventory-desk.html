@@ -1167,7 +1167,7 @@ function wire() {
        has not seen — the same number the store check compares against. */
     StockOps.openVendorStock(g.recipe.sku, { target: Math.max(0, vendorExpected(g)), targetLabel: 'should be',
       title: `${g.recipe.name}${g.recipe.fiber ? ' ' + g.recipe.fiber : ''}`,
-      onSet: () => { if (S.store) checkStores(); } });
+      onSet: () => { if (S.store) checkStores(); }, onGrist: () => loadAll() });
   }));
   document.querySelectorAll('[data-move]').forEach(el =>
     el.addEventListener('click', () => doMove(Number(el.dataset.move))));

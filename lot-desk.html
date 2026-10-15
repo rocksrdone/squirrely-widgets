@@ -170,7 +170,7 @@ function renderList() {
     // Grist's vendor total for this SKU across all its lots.
     const listed = S.model.lots.filter(x => x.recipe.id === l.recipe.id).reduce((t, x) => t + x.vendor, 0);
     StockOps.openVendorStock(l.recipe.sku, { target: listed, targetLabel: 'listed in Grist',
-      title: `${l.recipe.name}${l.fiber ? ' ' + l.fiber : ''}` });
+      title: `${l.recipe.name}${l.fiber ? ' ' + l.fiber : ''}`, onGrist: () => load(true) });
   }));
 }
 

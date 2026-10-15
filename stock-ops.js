@@ -652,6 +652,80 @@
   function vendorCheck(sku) { return vendorCall({ mode: 'check', sku }); }
   function vendorSet(sku, quantity, expect) { return vendorCall({ mode: 'set', sku, quantity, expect }); }
 
+  /* ── Bring Grist in line after the vendor store was set to a different number ──
+     delta = new store number − what Grist expected. The kind says WHY, because
+     that decides which counts move:
+       fewer:  hank  → those hanks aren't there: Hank −n, Vendor −n
+               wound → those spools aren't there: On hand −n, Broken +n, Vendor −n
+                       (Broken keeps the lot's "still waiting" sum unchanged)
+               hold  → they're there, just not for the vendor store: Vendor −n
+       more:   general → list n from unlisted stock: Vendor +n
+               hank    → found n more hanks: Hank +n, Vendor +n
+               wound   → found n more spools: On hand +n, Made +n, Vendor +n
+     Newest lots are taken from first. Nothing changes unless all n fit. */
+  async function vendorGristFix(docApi, sku, delta, kind) {
+    const [lotsT, recT] = await Promise.all([docApi.fetchTable('Production_Lots'), docApi.fetchTable('Recipes')]);
+    const rs = col(recT, ['SKU_Base']);
+    const want = String(sku || '').trim().toUpperCase();
+    const recIds = (recT.id || []).filter((id, i) => String(arr(recT, rs)[i] || '').trim().toUpperCase() === want);
+    if (!recIds.length) return { ok: false, error: `No recipe in Grist has the SKU ${sku}.` };
+    const C = { recipe: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']), v: col(lotsT, ['Vendor_Stock_Spools']),
+      s: col(lotsT, ['Store_Stock_Spools']), oh: col(lotsT, ['On_Hand_Spools']), hank: col(lotsT, ['Hank_Est_Spools']),
+      made: col(lotsT, ['Spools_Made']), broken: col(lotsT, ['Broken_Spools']), notes: col(lotsT, ['Notes']),
+      lot: col(lotsT, ['Lot_Number']) };
+    if (!C.v) return { ok: false, error: 'Production_Lots has no Vendor_Stock_Spools column.' };
+    const g = (c, i) => num(arr(lotsT, c)[i]);
+    const rows = (lotsT.id || []).map((id, i) => ({ id, i, rec: refId(arr(lotsT, C.recipe)[i]) }))
+      .filter(r => recIds.includes(r.rec))
+      .map(r => ({ id: r.id, lot: String(arr(lotsT, C.lot)[r.i] || ''), date: num(arr(lotsT, C.date)[r.i]),
+        v: g(C.v, r.i), s: g(C.s, r.i), oh: g(C.oh, r.i), hank: g(C.hank, r.i), made: g(C.made, r.i),
+        broken: g(C.broken, r.i), notes: String(arr(lotsT, C.notes)[r.i] || '') }))
+      .sort((a, b) => (b.date - a.date) || (b.id - a.id));
+    if (!rows.length) return { ok: false, error: `No lots of ${sku} in Grist.` };
+
+    let need = Math.abs(delta);
+    const plan = [];          // { row, fields, text }
+    const step = (row, x, fields, text) => { if (x > 0) { plan.push({ row, fields, text }); need -= x; } };
+    if (delta < 0) {
+      for (const r of rows) {
+        if (!need) break;
+        if (kind === 'hank') { const x = Math.min(need, r.hank, r.v); step(r, x, { hank: r.hank - x, v: r.v - x }, `−${x} hank (not there)`); }
+        else if (kind === 'wound') {
+          if (!C.broken) return { ok: false, error: 'Production_Lots has no Broken_Spools column.' };
+          const x = Math.min(need, r.oh, r.v); step(r, x, { oh: r.oh - x, broken: r.broken + x, v: r.v - x }, `−${x} wound (not there)`);
+        }
+        else { const x = Math.min(need, r.v); step(r, x, { v: r.v - x }, `${x} taken off the vendor store`); }
+      }
+    } else if (kind === 'general') {
+      for (const r of rows) {
+        if (!need) break;
+        const x = Math.min(need, Math.max(0, r.oh + r.hank - r.v - r.s));
+        step(r, x, { v: r.v + x }, `${x} more listed on the vendor store`);
+      }
+    } else {
+      const r = rows[0];
+      step(r, need, kind === 'wound' ? { oh: r.oh + need, made: r.made + need, v: r.v + need } : { hank: r.hank + need, v: r.v + need },
+        `+${need} ${kind === 'wound' ? 'wound' : 'hank'} found`);
+    }
+    if (need > 0) {
+      const what = { hank: 'hank listed on the vendor store', wound: 'wound listed on the vendor store', hold: 'listed on the vendor store',
+        general: 'unlisted spools to add' }[kind] || 'room';
+      return { ok: false, error: `Grist doesn't have ${Math.abs(delta)} ${what} for ${sku} — fix the lot by hand.` };
+    }
+    const key = { v: C.v, oh: C.oh, hank: C.hank, made: C.made, broken: C.broken };
+    const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    const actions = [], undo = [];
+    for (const p of plan) {
+      const upd = {}, old = {};
+      for (const k in p.fields) { upd[key[k]] = p.fields[k]; old[key[k]] = p.row[k]; }
+      if (C.notes) { upd[C.notes] = (p.row.notes ? p.row.notes + '\n' : '') + `${day} vendor store count: ${p.text}`; old[C.notes] = p.row.notes; }
+      actions.push(['UpdateRecord', 'Production_Lots', p.row.id, upd]);
+      undo.push(['UpdateRecord', 'Production_Lots', p.row.id, old]);
+    }
+    await docApi.applyUserActions(actions);
+    return { ok: true, text: plan.map(p => `${p.row.lot}: ${p.text}`).join(' · '), undo };
+  }
+
   function openVendorStock(sku, opts) {
     opts = opts || {};
     if (!document.getElementById('so-vs-style')) {
@@ -673,7 +747,10 @@
 .vs-links{display:flex;gap:12px;margin-top:14px;font-size:12.5px;flex-wrap:wrap}
 .vs-links a{color:#5B4A8B;font-weight:600}
 .vs-msg{margin-top:10px;font-size:12.5px}
-.vs-msg.bad{color:#8B3A2A;font-weight:600}.vs-msg.ok{color:#3A8B7A;font-weight:600}`;
+.vs-msg.bad{color:#8B3A2A;font-weight:600}.vs-msg.ok{color:#3A8B7A;font-weight:600}
+.vs-fix{margin-top:12px;padding-top:12px;border-top:1px solid #E8DFD4}
+.vs-fix-q{font-size:13px;font-weight:600;margin-bottom:8px}
+.vs-fix-b{display:flex;flex-direction:column;gap:6px}.vs-fix-b .vs-btn{text-align:left}`;
       document.head.appendChild(st);
     }
     const ov = document.createElement('div'); ov.className = 'so-ov';
@@ -712,6 +789,8 @@
           $('vs-msg').className = 'vs-msg ok';
           $('vs-msg').textContent = `Vendor store now shows ${s.available} ✓`;
           if (opts.onSet) opts.onSet(s.available);
+          const delta = Number(s.available) - Number(opts.target);
+          if (opts.target != null && delta && Number.isFinite(delta)) offerGristFix(delta);
         } else {
           $('vs-msg').className = 'vs-msg bad';
           $('vs-msg').textContent = s.error || 'Not set.';
@@ -720,11 +799,50 @@
         }
       };
     };
+    /* The store now differs from what Grist expected — ask why, then fix Grist to match. */
+    const offerGristFix = (delta) => {
+      const docApi = opts.docApi || (root.grist && root.grist.docApi);
+      if (!docApi) return;
+      const n = Math.abs(delta);
+      const choices = delta < 0
+        ? [['hank', `${n} hank not there`], ['wound', `${n} wound not there`], ['hold', `They're there — just don't list them`]]
+        : [['general', `List ${n} more of what's on the shelf`], ['hank', `Found ${n} more hank`], ['wound', `Found ${n} more wound`]];
+      const box = document.createElement('div'); box.className = 'vs-fix';
+      box.innerHTML = `<div class="vs-fix-q">Grist expected ${esc(opts.target)}. Update Grist for the ${n} ${delta < 0 ? 'fewer' : 'more'}?</div>
+        <div class="vs-fix-b">${choices.map(([k, t]) => `<button class="vs-btn ghost" data-fix="${k}">${esc(t)}</button>`).join('')}
+        <button class="vs-btn ghost" data-fix="">Leave Grist as is</button></div><div class="vs-msg" id="vs-fixmsg"></div>`;
+      $('vs-body').appendChild(box);
+      box.querySelectorAll('[data-fix]').forEach(b => b.addEventListener('click', async () => {
+        const kind = b.dataset.fix;
+        const msg = box.querySelector('#vs-fixmsg');
+        if (!kind) { box.querySelector('.vs-fix-b').remove(); box.querySelector('.vs-fix-q').textContent = 'Grist left as is.'; return; }
+        box.querySelectorAll('[data-fix]').forEach(x => { x.disabled = true; });
+        msg.className = 'vs-msg'; msg.textContent = 'Updating Grist…';
+        let r;
+        try { r = await vendorGristFix(docApi, sku, delta, kind); } catch (e) { r = { ok: false, error: e.message || String(e) }; }
+        if (!r.ok) {
+          msg.className = 'vs-msg bad'; msg.textContent = r.error;
+          box.querySelectorAll('[data-fix]').forEach(x => { x.disabled = false; });
+          return;
+        }
+        box.querySelector('.vs-fix-b').remove();
+        box.querySelector('.vs-fix-q').textContent = 'Grist updated ✓';
+        msg.className = 'vs-msg ok';
+        msg.innerHTML = `${esc(r.text)} <a href="#" id="vs-fixundo" style="color:#5B4A8B;margin-left:6px">undo</a>`;
+        msg.querySelector('#vs-fixundo').onclick = async (e) => {
+          e.preventDefault();
+          await docApi.applyUserActions(r.undo);
+          msg.className = 'vs-msg'; msg.textContent = 'Grist change undone.';
+          if (opts.onGrist) opts.onGrist();
+        };
+        if (opts.onGrist) opts.onGrist();
+      }));
+    };
     const check = async () => { $('vs-body').innerHTML = '<div class="vs-msg">Checking the vendor store…</div>'; draw(await vendorCheck(sku)); };
     check();
   }
 
-  root.StockOps = { vendorCheck, vendorSet, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

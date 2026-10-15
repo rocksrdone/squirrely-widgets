@@ -151,7 +151,7 @@ function wire() {
       const j = S.jobs.find(x => x.id === id);
       // Setting the store to the job's number IS the job, so it ticks itself off.
       return StockOps.openVendorStock(j.sku, { target: j.storeQty, targetLabel: 'job says', title: j.text.split(':')[0],
-        onSet: (now) => { if (Number(now) === Number(j.storeQty)) setStatus(id, 'Done'); } });
+        onSet: (now) => { if (Number(now) === Number(j.storeQty)) setStatus(id, 'Done'); }, onGrist: () => load() });
     }
     if (act === 'problem') { S.open = id; render(); const f = document.getElementById('pf'); if (f) { f.focus(); f.select(); } return; }
     if (act === 'cancel') { S.open = null; return render(); }
