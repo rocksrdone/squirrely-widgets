@@ -562,7 +562,11 @@
 .so-row button{font:inherit;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:6px;cursor:pointer;border:1px solid #3A8B7A;background:#3A8B7A;color:#fff}
 .so-row button.so-x{background:#fff;color:#1A1614;border-color:#D4C9BC;font-weight:500}
 .so-row button:disabled{opacity:.45;cursor:default}
-.so-err{color:#8B3A2A;font-size:12px;margin-top:8px}`;
+.so-err{color:#8B3A2A;font-size:12px;margin-top:8px}
+.so-have{margin-top:8px;padding:8px 10px;border-radius:6px;background:#F7F3EE;border:1px solid #E8DFD4;font-size:12px;line-height:1.5}
+.so-have b{font-family:'DM Mono',monospace}
+.so-have .so-l{font-family:'DM Mono',monospace;font-size:10.5px;color:#8B7D72}
+.so-have.warn{background:#F5EDD8;border-color:#E2C98F}`;
       document.head.appendChild(st);
     }
     const ov = document.createElement('div'); ov.className = 'so-ov';
@@ -579,6 +583,29 @@
     ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
 
     let recipes = [], chosen = null, hi = 0, shown = [];
+    // What Grist already has, so an unexpected back stock (or the same pot
+    // logged twice) shows up before a new lot is made.
+    const modelP = load(docApi).catch(() => null);
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const haveHtml = (model, r) => {
+      if (!model) return '';
+      if (!r.id) return `<div class="so-have">Nothing in Grist yet — new colourway.</div>`;
+      const lots = model.lots.filter(l => l.recipe.id === r.id);
+      const day = (l) => l.date ? new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+      const shelf = lots.filter(l => l.onHand + l.hank > 0).sort((a, b) => (b.date || 0) - (a.date || 0));
+      const wait = lots.filter(l => l.waiting > 0);
+      const today = lots.filter(l => l.date && l.date * 1000 >= dayStart.getTime() - 86400000 / 2 && /no order/i.test(l.notes || ''));
+      const w = shelf.reduce((t, l) => t + l.onHand, 0), h = shelf.reduce((t, l) => t + l.hank, 0), v = lots.reduce((t, l) => t + l.vendor, 0);
+      const parts = [];
+      if (today.length) parts.push(`<div style="color:#8B3A2A;font-weight:600">Already logged today: ${today.map(l => `${l.made || l.hank} (${esc(l.lotNumber)})`).join(', ')} — make sure this isn't the same pot.</div>`);
+      parts.push(shelf.length
+        ? `In back stock: <b>${w}</b> wound · <b>${h}</b> hank${v ? ` · ${v} listed on vendor` : ''}` +
+          shelf.map(l => `<div class="so-l">${esc(l.lotNumber)} · ${day(l)} · ${l.onHand ? l.onHand + ' wound' : ''}${l.onHand && l.hank ? ' + ' : ''}${l.hank ? l.hank + ' hank' : ''}${l.binCode ? ' · ' + esc(l.binCode) : ''}</div>`).join('')
+        : 'In back stock: <b>none</b>');
+      const waitOther = wait.filter(l => !today.includes(l));
+      if (waitOther.length) parts.push(`<div>Waiting to put away: ${waitOther.map(l => `${l.waiting} (${esc(l.lotNumber)}, ${day(l)})`).join(', ')}</div>`);
+      return `<div class="so-have ${today.length || shelf.length ? 'warn' : ''}">${parts.join('')}</div>`;
+    };
     try {
       const t = await docApi.fetchTable('Recipes');
       const n = col(t, ['Recipe_Name']), k = col(t, ['SKU_Base']), fb = col(t, ['Fiber_Type']), md = col(t, ['Dye_Method']);
@@ -613,7 +640,9 @@
       chosen = r;
       $('so-pick').innerHTML = `<div class="so-picked">${esc(r.name)} ${r.fiber ? `<span class="so-fib">${esc(r.fiber)}</span>` : ''}
         <span style="font-family:'DM Mono',monospace;font-size:10.5px;color:#6B5E52">${esc(r.sku)}</span><a id="so-change">change</a></div>
-        ${r.isNew ? `<div style="font-size:11px;color:#B07D2A;margin-top:5px">No E version of ${esc(r.name)} yet — it will be created (same dye as the FF, SKU ${esc(r.sku)}).</div>` : ''}`;
+        ${r.isNew ? `<div style="font-size:11px;color:#B07D2A;margin-top:5px">No E version of ${esc(r.name)} yet — it will be created (same dye as the FF, SKU ${esc(r.sku)}).</div>` : ''}
+        <div id="so-have"><div class="so-have">Checking back stock…</div></div>`;
+      modelP.then(m => { const el = ov.querySelector('#so-have'); if (el && chosen === r) el.innerHTML = haveHtml(m, r); });
       $('so-change').onclick = () => { chosen = null; $('so-pick').innerHTML = `<input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div>`; wire(); ready(); };
       $('so-n').focus(); ready();
     };
