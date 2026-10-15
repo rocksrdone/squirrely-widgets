@@ -190,6 +190,7 @@
     });
     // Jobs a worker flagged — the Lot Desk lists these for fixing.
     const problems = [];
+    const taskRows = TC && TC.lot ? (taskT.id || []).map((id, i) => ({ id, lotId: refId(arr(taskT, TC.lot)[i]) })) : [];
     if (TC) (taskT.id || []).forEach((id, i) => {
       if (String(arr(taskT, TC.status)[i] || '') !== 'Problem') return;
       const g = (c) => c ? arr(taskT, c)[i] : null;
@@ -219,7 +220,7 @@
         id, recipe, fiber,
         lotNumber: String(arr(lotsT, L.lotNumber)[i] || `Lot #${id}`),
         date: num(arr(lotsT, L.date)[i]),
-        made, madeStored: madeRaw, onHand, hank, broken, alloc,
+        made, madeStored: madeRaw, onHand, hank, broken, alloc, notes: String(arr(lotsT, L.notes)[i] || ''),
         vendor: num(arr(lotsT, L.vendor)[i]), store: num(arr(lotsT, L.store)[i]),
         binId: typeof binRaw === 'number' ? binRaw : refId(binRaw),
         binCode: typeof binRaw === 'string' ? binRaw : (binById[refId(binRaw)] || ''),
@@ -235,7 +236,7 @@
     const binFill = {};
     lots.forEach(l => { if (l.binId) binFill[l.binId] = (binFill[l.binId] || 0) + l.onHand + l.hank + l.waiting; });
 
-    return { cols: { L, A, WL, WO, T: taskCols(taskT) }, missing, recipes, customers, bins, binById, binFill, orders, lots, problems,
+    return { cols: { L, A, WL, WO, T: taskCols(taskT) }, missing, recipes, customers, bins, binById, binFill, orders, lots, problems, taskRows,
       linesByRecipe, allocByLot };
   }
 
@@ -788,6 +789,40 @@
       vendorBefore: r.v, vendorAfter: nx.v };
   }
 
+  /* ── Fix a lot by hand: set what's really on the shelf ────────────────────
+     want = { wound, hank, vendor }. Wound going down → the difference goes to
+     Broken; going up → Made goes up by the same. Either way the lot's "still
+     waiting" sum doesn't move, so it never pops back onto the waiting list.
+     Vendor is capped at what's on the shelf less the retail store's share. */
+  function lotSetActions(lot, want, why) {
+    const w = Math.max(0, Math.round(num(want.wound))), h = Math.max(0, Math.round(num(want.hank)));
+    const cap = Math.max(0, w + h - lot.store);
+    const v = Math.min(Math.max(0, Math.round(num(want.vendor))), cap);
+    const upd = {}, old = {}, said = [];
+    const put = (c, nv, ov) => { if (nv !== ov) { upd[c] = nv; old[c] = ov; } };
+    if (w < lot.onHand) { put('Broken_Spools', lot.broken + (lot.onHand - w), lot.broken); said.push(`wound ${lot.onHand} → ${w}`); }
+    if (w > lot.onHand) { put('Spools_Made', lot.made + (w - lot.onHand), lot.madeStored); said.push(`wound ${lot.onHand} → ${w}`); }
+    put('On_Hand_Spools', w, lot.onHand);
+    put('Hank_Est_Spools', h, lot.hank); if (h !== lot.hank) said.push(`hank ${lot.hank} → ${h}`);
+    put('Vendor_Stock_Spools', v, lot.vendor); if (v !== lot.vendor) said.push(`vendor ${lot.vendor} → ${v}`);
+    if (!w && !h && lot.binId) put('Storage_Bin', 0, lot.binId);
+    if (!said.length) return null;
+    const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    const text = said.join(', ') + (why ? ` (${why})` : '');
+    put('Notes', (lot.notes ? lot.notes + '\n' : '') + `${day} counts fixed: ${text}`, lot.notes || '');
+    return { acts: [['UpdateRecord', 'Production_Lots', lot.id, upd]], undo: [['UpdateRecord', 'Production_Lots', lot.id, old]],
+      text, vendorAfter: v, capped: num(want.vendor) > cap };
+  }
+  /* A lot entered twice: remove it and its jobs. Refused while orders hold its spools. */
+  function lotDeleteActions(model, lot) {
+    if (lot.allocs.length) return { error: `${lot.lotNumber} has spools on ${lot.allocs.length} order line${lot.allocs.length === 1 ? '' : 's'} — move or remove those first.` };
+    const acts = [];
+    const T = model.cols.T;
+    if (T && T.lot) model.taskRows.filter(t => t.lotId === lot.id).forEach(t => acts.push(['RemoveRecord', 'Worker_Tasks', t.id]));
+    acts.push(['RemoveRecord', 'Production_Lots', lot.id]);
+    return { acts };
+  }
+
   function openVendorStock(sku, opts) {
     opts = opts || {};
     if (!document.getElementById('so-vs-style')) {
@@ -904,7 +939,7 @@
     check();
   }
 
-  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, lotCountFix, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

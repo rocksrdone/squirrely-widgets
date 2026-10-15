@@ -106,7 +106,7 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
    between open orders (counted against them at once) and back stock, and
    saves in one go — every rule lives in stock-ops.js. */
 const { esc, num } = StockOps;
-const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false, prob: null, fixed: {} };
+const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false, prob: null, fixed: {}, fix: null, fixDone: null, delAsk: false };
 const OLD_DAYS = 14;
 
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
@@ -124,6 +124,7 @@ async function load(keepSel) {
   document.getElementById('banner').innerHTML = S.model.missing.length
     ? `<div class="banner">Missing columns: <b>${esc(S.model.missing.join(', '))}</b>. Put-away is off until they exist.</div>` : '';
   if (S.prob && !S.model.problems.some(p => p.id === S.prob)) S.prob = null;
+  if (S.fix && !S.model.lots.some(l => l.id === S.fix)) { S.fix = null; S.fixDone = null; }
   const still = keepSel && waiting().find(l => l.id === S.sel);
   if (!still) { S.sel = null; S.plan = null; }
   else S.plan = StockOps.defaultPlan(S.model, still);
@@ -136,9 +137,9 @@ function waiting() {
 }
 
 function renderList() {
-  const q = S.search.trim().toLowerCase();
+  const q = S.search.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const all = waiting();
-  const rows = all.filter(l => !q || l.recipe.name.toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
+  const rows = all.filter(l => !q || l.recipe.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
   const spools = all.reduce((t, l) => t + l.waiting, 0);
   document.getElementById('count').textContent = `${all.length} lot${all.length === 1 ? '' : 's'} waiting · ${spools} spools`;
   const probs = S.model.problems.slice().sort((a, b) => a.created - b.created);
@@ -159,7 +160,7 @@ function renderList() {
   /* Lots leave the waiting list once put away, which looked like they had
      vanished. The last RECENT_DAYS days of put-away lots stay listed here —
      read-only — with where they went and whether the job was done. */
-  const recent = recentlyPutAway().filter(l => !q || l.recipe.name.toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
+  const recent = recentlyPutAway().filter(l => !q || l.recipe.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
   document.getElementById('list').innerHTML += recent.length ? `<div class="count" style="margin-top:14px">Recently put away${q ? '' : ` · last ${RECENT_DAYS} days`}</div>` +
     recent.map(l => {
       const parts = [];
@@ -171,16 +172,30 @@ function renderList() {
       const job = j.problem ? `<span style="color:var(--accent);font-weight:600">problem</span>`
         : j.open ? `<span style="color:var(--gold);font-weight:600">job to do</span>`
         : j.done ? `<span style="color:var(--teal)">done \u2713</span>` : '';
-      return `<div class="lot done-lot" style="cursor:default;opacity:.85">
+      return `<div class="lot done-lot ${l.id === S.fix ? 'sel' : ''}" data-fix="${l.id}" style="opacity:.9" title="Click to fix or delete this lot">
         <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n" style="font-size:12px;color:var(--teal)">put away</span></div>
         <div class="mt">${esc(l.lotNumber)}${l.date ? ' · ' + new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}${job ? ' · ' + job : ''}</div>
         <div class="mt" style="color:var(--ink)">${esc(where || 'nothing on record')}${l.vendor ? ` · ${l.vendor} on vendor` : ''}</div>
         ${l.recipe.sku ? `<button class="btn ghost small" data-vs="${l.id}" style="margin-top:5px">Vendor store \u2197</button>` : ''}
       </div>`;
     }).join('') : '';
+  if (q) {
+    const shown = new Set(all.map(l => l.id).concat(recent.map(l => l.id)));
+    const older = S.model.lots.filter(l => !shown.has(l.id) && l.recipe.id && (l.onHand + l.hank + l.vendor) > 0
+        && (l.recipe.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q)))
+      .sort((a, b) => (b.date || 0) - (a.date || 0));
+    if (older.length) document.getElementById('list').innerHTML += `<div class="count" style="margin-top:14px">Older stock</div>` +
+      older.map(l => `<div class="lot ${l.id === S.fix ? 'sel' : ''}" data-fix="${l.id}" title="Click to fix or delete this lot">
+        <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n" style="font-size:12px">${l.onHand + l.hank}</span></div>
+        <div class="mt">${esc(l.lotNumber)}${l.date ? ' · ' + new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}${l.binCode ? ' · ' + esc(l.binCode) : ''}</div>
+        <div class="mt" style="color:var(--ink)">${l.onHand} wound · ${l.hank} hank${l.vendor ? ` · ${l.vendor} on vendor` : ''}</div>
+      </div>`).join('');
+  }
   document.querySelectorAll('[data-lot]').forEach(el => el.addEventListener('click', () => pick(Number(el.dataset.lot))));
-  document.querySelectorAll('[data-prob]').forEach(el => el.addEventListener('click', () => { S.prob = Number(el.dataset.prob); S.sel = null; S.plan = null; render(); }));
-  document.querySelectorAll('[data-vs]').forEach(el => el.addEventListener('click', () => {
+  document.querySelectorAll('[data-fix]').forEach(el => el.addEventListener('click', () => openFix(Number(el.dataset.fix))));
+  document.querySelectorAll('[data-prob]').forEach(el => el.addEventListener('click', () => { S.prob = Number(el.dataset.prob); S.sel = null; S.plan = null; S.fix = null; render(); }));
+  document.querySelectorAll('[data-vs]').forEach(el => el.addEventListener('click', (e) => {
+    e.stopPropagation();
     const l = S.model.lots.find(x => x.id === Number(el.dataset.vs));
     if (!l) return;
     // Grist's vendor total for this SKU across all its lots.
@@ -201,7 +216,7 @@ function recentlyPutAway() {
 function pick(id) {
   const lot = waiting().find(l => l.id === id);
   if (!lot) return;
-  S.sel = id; S.prob = null;
+  S.sel = id; S.prob = null; S.fix = null;
   S.plan = StockOps.defaultPlan(S.model, lot);
   render();
 }
@@ -211,6 +226,7 @@ function lotSel() { return S.sel ? S.model.lots.find(l => l.id === S.sel) : null
 function renderMain() {
   const box = document.getElementById('main');
   if (S.prob) return renderProblem(box);
+  if (S.fix) return renderFix(box);
   const lot = lotSel();
   if (!lot || !S.plan) { box.innerHTML = `<div class="panel"><div class="empty">Pick a lot on the left.</div></div>`; return; }
   const p = S.plan;
@@ -253,6 +269,7 @@ function renderMain() {
     <div class="actions">
       <button class="btn" id="save">Put away</button>
       <button class="btn ghost small" id="reset">Reset</button>
+      <button class="btn ghost small" id="fixThis" style="margin-left:auto">Fix or delete this lot</button>
     </div>
     ${S.log.length ? `<div class="log">${S.log.map((e, i) => `<div><span>${esc(e.text)}</span><a data-undo="${i}">undo</a></div>`).join('')}</div>` : ''}
   </div>`;
@@ -269,8 +286,96 @@ function renderMain() {
   document.getElementById('lv').addEventListener('change', e => { p.listVendor = e.target.checked; });
   document.getElementById('save').addEventListener('click', save);
   document.getElementById('reset').addEventListener('click', () => { S.plan = StockOps.defaultPlan(S.model, lot); renderMain(); });
+  document.getElementById('fixThis').addEventListener('click', () => openFix(lot.id));
   box.querySelectorAll('[data-undo]').forEach(el => el.addEventListener('click', () => undo(Number(el.dataset.undo))));
   renderSum();
+}
+
+/* ── Fix or delete any lot ─────────────────────────────────────────────────
+   For when Grist and the shelf disagree outside a job: set what's really
+   there (wound / hank / listed on vendor), zero a lot that's gone, or delete
+   a lot that was entered twice. Store numbers stay yours to set. */
+function openFix(id) { S.fix = id; S.fixDone = null; S.delAsk = false; S.sel = null; S.plan = null; S.prob = null; render(); }
+
+function renderFix(box) {
+  const lot = S.model.lots.find(l => l.id === S.fix);
+  if (!lot) { S.fix = null; return renderMain(); }
+  const listed = S.model.lots.filter(l => l.recipe.id === lot.recipe.id).reduce((t, l) => t + l.vendor, 0);
+  const jobs = S.model.taskRows.filter(t => t.lotId === lot.id).length;
+  const done = S.fixDone;
+  box.innerHTML = `<div class="panel">
+    <h2>${esc(lot.recipe.name)} ${fib(lot.fiber, lot.recipe.fiberName)}</h2>
+    <div class="meta">${esc(lot.lotNumber)}${lot.date ? ' · dyed ' + new Date(lot.date * 1000).toLocaleDateString() : ''}${lot.binCode ? ' · bin ' + esc(lot.binCode) : ''}${lot.recipe.sku ? ' · ' + esc(lot.recipe.sku) : ''}</div>
+    <div class="counts">Grist now: ${lot.onHand} wound · ${lot.hank} hank · ${lot.vendor} listed on vendor${lot.store ? ` · ${lot.store} retail` : ''}${lot.alloc ? ` · ${lot.alloc} to orders` : ''}${lot.waiting > 0 ? ` · ${lot.waiting} waiting` : ''}${lot.broken ? ` · ${lot.broken} broken` : ''}</div>
+
+    <div class="step ${done ? 'done' : ''}"><div class="hd"><span class="k">1</span>${done ? 'Fixed ✓' : "What's really on the shelf?"}</div>
+      ${done ? `<div class="lab">${esc(done.text)}${done.capped ? ' — vendor capped at what is on the shelf' : ''} <a href="#" id="fundo" style="color:var(--accent);margin-left:6px">undo</a></div>` : `
+      <div class="row" style="border:none;padding:0">
+        <span class="lab">Wound</span><input class="q" type="number" min="0" id="fw" value="${lot.onHand}">
+        <span class="lab">Hank</span><input class="q" type="number" min="0" id="fh" value="${lot.hank}">
+        <span class="lab">Listed on vendor</span><input class="q" type="number" min="0" id="fv" value="${lot.vendor}">
+      </div>
+      <input class="search" id="fwhy" placeholder="Why? (optional — goes in the lot's notes)" style="margin:8px 0">
+      <div class="actions" style="margin-top:0">
+        <button class="btn small" id="fsave">Save</button>
+        <button class="btn ghost small" id="fzero">None left — zero it</button>
+      </div>
+      <div class="lab" style="margin-top:6px">Fewer wound than Grist had are recorded as broken, so the lot doesn't come back as "waiting".</div>`}
+    </div>
+
+    ${lot.recipe.sku ? `<div class="step"><div class="hd"><span class="k">2</span>Vendor store</div>
+      <div class="lab" style="margin-bottom:8px">Grist lists ${listed} ${esc(lot.recipe.name)} on the vendor store across all its lots.</div>
+      <button class="btn ghost small" id="fvs">Vendor store ↗</button></div>` : ''}
+
+    <div class="step"><div class="hd">Entered twice?</div>
+      ${lot.allocs.length ? `<div class="lab">Can't delete — ${lot.alloc} spools of this lot are on orders. Zero it instead, or move the order spools first.</div>`
+        : S.delAsk ? `<div class="lab" style="margin-bottom:8px;color:var(--accent);font-weight:600">Delete ${esc(lot.lotNumber)}${jobs ? ` and its ${jobs} job${jobs === 1 ? '' : 's'}` : ''}? Only do this if the lot never existed.</div>
+          <button class="btn small" id="fdelyes" style="background:var(--accent);border-color:var(--accent)">Yes, delete it</button>
+          <button class="btn ghost small" id="fdelno">No</button>`
+        : `<button class="btn ghost small" id="fdel">Delete this lot</button>
+          <span class="lab" style="margin-left:6px">removes the lot${jobs ? ` and its ${jobs} job${jobs === 1 ? '' : 's'}` : ''} — Ctrl+Z in Grist brings it back</span>`}
+    </div>
+    ${lot.notes ? `<div class="lab" style="white-space:pre-line;margin-top:6px">${esc(lot.notes)}</div>` : ''}
+  </div>`;
+
+  const apply = async (want) => {
+    if (S.busy) return;
+    const built = StockOps.lotSetActions(lot, want, (document.getElementById('fwhy') || {}).value || '');
+    if (!built) { toast('Nothing changed'); return; }
+    S.busy = true;
+    try {
+      await grist.docApi.applyUserActions(built.acts);
+      S.fixDone = built;
+      S.log.unshift({ text: `${lot.recipe.name} ${lot.lotNumber}: ${built.text}`, undo: built.undo });
+      toast('Lot fixed ✓');
+      await load();
+    } catch (e) { console.error(e); toast('Could not save — nothing was changed'); }
+    finally { S.busy = false; }
+  };
+  const $ = (id) => document.getElementById(id);
+  if ($('fsave')) $('fsave').addEventListener('click', () => apply({ wound: $('fw').value, hank: $('fh').value, vendor: $('fv').value }));
+  if ($('fzero')) $('fzero').addEventListener('click', () => apply({ wound: 0, hank: 0, vendor: 0 }));
+  if ($('fundo')) $('fundo').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try { await grist.docApi.applyUserActions(done.undo); S.fixDone = null; toast('Undone'); await load(); }
+    catch (err) { console.error(err); toast('Undo failed'); }
+  });
+  if ($('fvs')) $('fvs').addEventListener('click', () => StockOps.openVendorStock(lot.recipe.sku, { target: listed, targetLabel: 'listed in Grist',
+    title: `${lot.recipe.name}${lot.fiber ? ' ' + lot.fiber : ''}`, onGrist: () => load() }));
+  if ($('fdel')) $('fdel').addEventListener('click', () => { S.delAsk = true; renderMain(); });
+  if ($('fdelno')) $('fdelno').addEventListener('click', () => { S.delAsk = false; renderMain(); });
+  if ($('fdelyes')) $('fdelyes').addEventListener('click', async () => {
+    const d = StockOps.lotDeleteActions(S.model, lot);
+    if (d.error) { toast(d.error); return; }
+    S.busy = true;
+    try {
+      await grist.docApi.applyUserActions(d.acts);
+      toast(`${lot.lotNumber} deleted`);
+      S.fix = null; S.delAsk = false;
+      await load();
+    } catch (e) { console.error(e); toast('Could not delete'); }
+    finally { S.busy = false; }
+  });
 }
 
 /* ── Fixing a job a worker flagged ────────────────────────────────────────
