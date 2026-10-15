@@ -146,12 +146,14 @@
 
     // Allocations: totals per lot (all statuses — the arithmetic counts them
     // all) and per order line (what is already covered).
-    const allocByLot = {}, allocByLine = {};
+    const allocByLot = {}, allocByLine = {}, allocListByLot = {};
     (allocT.id || []).forEach((id, i) => {
       const q = num(arr(allocT, A.qty)[i]);
       const lot = refId(arr(allocT, A.lot)[i]);
       const line = refId(arr(allocT, A.line)[i]);
       if (lot) allocByLot[lot] = (allocByLot[lot] || 0) + q;
+      if (lot) (allocListByLot[lot] = allocListByLot[lot] || []).push({ qty: q,
+        bin: String(arr(allocT, A.orderBin)[i] || ''), status: String(arr(allocT, A.status)[i] || '') });
       if (line) allocByLine[line] = (allocByLine[line] || 0) + q;
     });
 
@@ -176,6 +178,17 @@
     Object.values(linesByRecipe).forEach(list => list.sort((a, b) =>
       ((a.order.due || 9e12) - (b.order.due || 9e12)) || String(a.order.number).localeCompare(String(b.order.number))));
 
+    // Job progress per lot, so a put-away lot shows whether it was physically done.
+    const jobsByLot = {};
+    const TC = taskCols(taskT);
+    if (TC && TC.lot) (taskT.id || []).forEach((id, i) => {
+      const lot = refId(arr(taskT, TC.lot)[i]);
+      if (!lot) return;
+      const st = String(arr(taskT, TC.status)[i] || '');
+      const j = jobsByLot[lot] = jobsByLot[lot] || { open: 0, done: 0, problem: 0 };
+      if (st === 'To do') j.open++; else if (st === 'Problem') j.problem++; else j.done++;
+    });
+
     const lots = [];
     (lotsT.id || []).forEach((id, i) => {
       const rid = refId(arr(lotsT, L.recipe)[i]);
@@ -199,6 +212,8 @@
         binId: typeof binRaw === 'number' ? binRaw : refId(binRaw),
         binCode: typeof binRaw === 'string' ? binRaw : (binById[refId(binRaw)] || ''),
         waiting: Math.max(0, made - alloc - onHand - broken),
+        allocs: allocListByLot[id] || [],
+        jobs: jobsByLot[id] || { open: 0, done: 0, problem: 0 },
       });
     });
 

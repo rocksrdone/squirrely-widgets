@@ -139,8 +139,38 @@ function renderList() {
       <div class="mt">${esc(l.lotNumber)}${d != null ? ` · ${d}d` : ''}${l.binCode ? ` · ${esc(l.binCode)}` : ''}${
         (S.model.linesByRecipe[l.recipe.id] || []).length ? ' · on order' : ''}</div>
     </div>`;
-  }).join('') : `<div class="empty">${q ? 'Nothing matches.' : 'Nothing waiting — all put away.'}</div>`;
+  }).join('') : `<div class="empty">${q ? 'Nothing waiting matches.' : 'Nothing waiting — all put away.'}</div>`;
+
+  /* Lots leave the waiting list once put away, which looked like they had
+     vanished. The last RECENT_DAYS days of put-away lots stay listed here —
+     read-only — with where they went and whether the job was done. */
+  const recent = recentlyPutAway().filter(l => !q || l.recipe.name.toLowerCase().includes(q) || l.lotNumber.toLowerCase().includes(q));
+  document.getElementById('list').innerHTML += recent.length ? `<div class="count" style="margin-top:14px">Recently put away${q ? '' : ` · last ${RECENT_DAYS} days`}</div>` +
+    recent.map(l => {
+      const parts = [];
+      if (l.onHand) parts.push(`${l.onHand} wound`);
+      if (l.hank) parts.push(`${l.hank} hank`);
+      const where = [parts.length ? `${parts.join(' + ')}${l.binCode ? ' → ' + l.binCode : ''}` : '']
+        .concat(l.allocs.map(a => `${a.qty} → ${a.bin || 'order'}`)).filter(Boolean).join(' · ');
+      const j = l.jobs;
+      const job = j.problem ? `<span style="color:var(--accent);font-weight:600">problem</span>`
+        : j.open ? `<span style="color:var(--gold);font-weight:600">job to do</span>`
+        : j.done ? `<span style="color:var(--teal)">done \u2713</span>` : '';
+      return `<div class="lot done-lot" style="cursor:default;opacity:.85">
+        <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n" style="font-size:12px;color:var(--teal)">put away</span></div>
+        <div class="mt">${esc(l.lotNumber)}${l.date ? ' · ' + new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}${job ? ' · ' + job : ''}</div>
+        <div class="mt" style="color:var(--ink)">${esc(where || 'nothing on record')}${l.vendor ? ` · ${l.vendor} on vendor` : ''}</div>
+      </div>`;
+    }).join('') : '';
   document.querySelectorAll('[data-lot]').forEach(el => el.addEventListener('click', () => pick(Number(el.dataset.lot))));
+}
+
+const RECENT_DAYS = 14;
+function recentlyPutAway() {
+  const since = Date.now() / 1000 - RECENT_DAYS * 86400;
+  return S.model.lots.filter(l => l.recipe.id && l.waiting <= 0 && l.date >= since
+      && (l.onHand + l.hank + l.alloc) > 0)
+    .sort((a, b) => (b.date || 0) - (a.date || 0) || b.id - a.id);
 }
 
 function pick(id) {
