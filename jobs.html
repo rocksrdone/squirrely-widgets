@@ -112,7 +112,7 @@ function jobHtml(j) {
     <div class="acts">
       ${problem
         ? `<button class="btn go" data-act="resolve">Resolved</button>`
-        : `<button class="btn go done" data-act="done" title="Done">✓</button><button class="btn warn" data-act="problem">Problem</button>`}
+        : `${j.type === 'Vendor store' && j.sku ? `<button class="btn" data-act="vendor" style="border-color:var(--purple);color:var(--purple)">Check &amp; set</button>` : ''}<button class="btn go done" data-act="done" title="Done">✓</button><button class="btn warn" data-act="problem">Problem</button>`}
     </div>
     ${S.open === j.id ? `<div class="prob">
       <span>Found</span><input class="n" type="number" min="0" id="pf" value="${j.qty != null ? esc(j.qty) : ''}">
@@ -147,6 +147,12 @@ function wire() {
     const act = b.dataset.act;
     if (act === 'done') return setStatus(id, 'Done');
     if (act === 'resolve') return setStatus(id, 'Resolved');
+    if (act === 'vendor') {
+      const j = S.jobs.find(x => x.id === id);
+      // Setting the store to the job's number IS the job, so it ticks itself off.
+      return StockOps.openVendorStock(j.sku, { target: j.storeQty, targetLabel: 'job says', title: j.text.split(':')[0],
+        onSet: (now) => { if (Number(now) === Number(j.storeQty)) setStatus(id, 'Done'); } });
+    }
     if (act === 'problem') { S.open = id; render(); const f = document.getElementById('pf'); if (f) { f.focus(); f.select(); } return; }
     if (act === 'cancel') { S.open = null; return render(); }
     if (act === 'send') {

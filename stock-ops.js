@@ -632,7 +632,99 @@
     };
   }
 
-  root.StockOps = { taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+
+  /* ── Vendor store: check, set, and links ──────────────────────────────────
+     Talks to "SS - Vendor Stock (check and set)". Check first shows what the
+     store has; Set sends the new number with the one you were shown, and
+     Shopify refuses if the store moved in between — so a sale made while you
+     looked is never overwritten. Nothing is sent without a click. */
+  const VENDOR_STOCK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/vendor-stock';
+  async function vendorCall(body) {
+    let r;
+    try {
+      r = await fetch(VENDOR_STOCK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), cache: 'no-store' });
+    } catch (e) { return { ok: false, error: 'Could not reach n8n — is the "SS - Vendor Stock" workflow imported and active?' }; }
+    if (r.status === 404) return { ok: false, error: 'The "SS - Vendor Stock (check and set)" workflow is not imported or not active in n8n yet.' };
+    if (!r.ok) return { ok: false, error: `n8n answered ${r.status}.` };
+    try { return await r.json(); } catch (e) { return { ok: false, error: 'n8n sent back something unreadable.' }; }
+  }
+  function vendorCheck(sku) { return vendorCall({ mode: 'check', sku }); }
+  function vendorSet(sku, quantity, expect) { return vendorCall({ mode: 'set', sku, quantity, expect }); }
+
+  function openVendorStock(sku, opts) {
+    opts = opts || {};
+    if (!document.getElementById('so-vs-style')) {
+      const st = document.createElement('style'); st.id = 'so-vs-style';
+      st.textContent = `
+.so-ov{position:fixed;inset:0;background:rgba(26,22,20,.45);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:40px 14px}
+.so-box{background:#fff;border-radius:10px;width:100%;max-width:440px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-family:Inter,sans-serif;color:#1A1614;color-scheme:light}
+.so-box h4{font-family:'Libre Baskerville',serif;font-size:16px;margin:0 0 2px}
+.so-sub{font-size:11.5px;color:#8B7D72;margin-bottom:12px;font-family:'DM Mono',monospace}
+.vs-nums{display:flex;gap:10px;margin-bottom:12px}
+.vs-n{flex:1;border:1px solid #E8DFD4;border-radius:8px;padding:8px 10px;background:#F7F3EE}
+.vs-n b{display:block;font-family:'DM Mono',monospace;font-size:24px}
+.vs-n span{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8B7D72}
+.vs-set{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vs-set input{width:90px;padding:8px;border:1.5px solid #D4C9BC;border-radius:6px;font-family:'DM Mono',monospace;font-size:18px;text-align:center;background:#fff;color:#1A1614}
+.vs-btn{font:inherit;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:6px;cursor:pointer;border:1px solid #5B4A8B;background:#5B4A8B;color:#fff}
+.vs-btn.ghost{background:#fff;color:#1A1614;border-color:#D4C9BC;font-weight:500}
+.vs-btn:disabled{opacity:.45;cursor:default}
+.vs-links{display:flex;gap:12px;margin-top:14px;font-size:12.5px;flex-wrap:wrap}
+.vs-links a{color:#5B4A8B;font-weight:600}
+.vs-msg{margin-top:10px;font-size:12.5px}
+.vs-msg.bad{color:#8B3A2A;font-weight:600}.vs-msg.ok{color:#3A8B7A;font-weight:600}`;
+      document.head.appendChild(st);
+    }
+    const ov = document.createElement('div'); ov.className = 'so-ov';
+    ov.innerHTML = `<div class="so-box"><h4 id="vs-t">${esc(opts.title || sku)}</h4><div class="so-sub" id="vs-s">${esc(sku)} · vendor store</div>
+      <div id="vs-body"><div class="vs-msg">Checking the vendor store…</div></div>
+      <div class="vs-links" id="vs-links"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="vs-btn ghost" id="vs-close">Close</button></div></div>`;
+    document.body.appendChild(ov);
+    const $ = id => ov.querySelector('#' + id);
+    const close = () => ov.remove();
+    $('vs-close').onclick = close;
+    ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+
+    const draw = (r) => {
+      if (r.title) $('vs-t').textContent = r.title;
+      $('vs-s').textContent = `${sku} · vendor store${r.status ? ' · ' + String(r.status).toLowerCase() : ''}`;
+      $('vs-links').innerHTML = (r.adminUrl ? `<a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Edit in Shopify admin ↗</a>` : '')
+        + (r.storeUrl ? `<a href="${esc(r.storeUrl)}" target="_blank" rel="noopener">View on the store ↗</a>` : '');
+      if (!r.ok && r.available == null) { $('vs-body').innerHTML = `<div class="vs-msg bad">${esc(r.error || 'Could not check.')}</div>`; return; }
+      const target = opts.target == null ? r.available : opts.target;
+      $('vs-body').innerHTML = `<div class="vs-nums">
+          <div class="vs-n"><b>${r.available == null ? '?' : esc(r.available)}</b><span>vendor store now</span></div>
+          ${opts.target != null ? `<div class="vs-n"><b>${esc(opts.target)}</b><span>${esc(opts.targetLabel || 'Grist says')}</span></div>` : ''}
+        </div>
+        <div class="vs-set"><span style="font-size:12px">Set it to</span><input id="vs-q" type="number" min="0" value="${esc(target)}">
+          <button class="vs-btn" id="vs-go">Set</button><button class="vs-btn ghost" id="vs-re">Check again</button></div>
+        <div class="vs-msg ${r.ok ? '' : 'bad'}" id="vs-msg">${r.ok ? (r.available === target ? 'Already matches.' : '') : esc(r.error || '')}</div>`;
+      $('vs-re').onclick = check;
+      $('vs-go').onclick = async () => {
+        const q = Math.round(Number($('vs-q').value));
+        if (!(q >= 0)) { $('vs-msg').className = 'vs-msg bad'; $('vs-msg').textContent = 'Enter a number, 0 or more.'; return; }
+        $('vs-go').disabled = true; $('vs-msg').className = 'vs-msg'; $('vs-msg').textContent = `Setting ${sku} to ${q}…`;
+        const s = await vendorSet(sku, q, r.available);
+        if (s.ok && s.set) {
+          $('vs-body').querySelector('.vs-n b').textContent = s.available;
+          $('vs-msg').className = 'vs-msg ok';
+          $('vs-msg').textContent = `Vendor store now shows ${s.available} ✓`;
+          if (opts.onSet) opts.onSet(s.available);
+        } else {
+          $('vs-msg').className = 'vs-msg bad';
+          $('vs-msg').textContent = s.error || 'Not set.';
+          $('vs-go').disabled = false;
+          if (s.stale) setTimeout(check, 600);
+        }
+      };
+    };
+    const check = async () => { $('vs-body').innerHTML = '<div class="vs-msg">Checking the vendor store…</div>'; draw(await vendorCheck(sku)); };
+    check();
+  }
+
+  root.StockOps = { vendorCheck, vendorSet, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

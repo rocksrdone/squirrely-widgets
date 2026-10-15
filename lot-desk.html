@@ -160,9 +160,18 @@ function renderList() {
         <div class="nm">${esc(l.recipe.name)} ${fib(l.fiber)}<span class="n" style="font-size:12px;color:var(--teal)">put away</span></div>
         <div class="mt">${esc(l.lotNumber)}${l.date ? ' · ' + new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}${job ? ' · ' + job : ''}</div>
         <div class="mt" style="color:var(--ink)">${esc(where || 'nothing on record')}${l.vendor ? ` · ${l.vendor} on vendor` : ''}</div>
+        ${l.recipe.sku ? `<button class="btn ghost small" data-vs="${l.id}" style="margin-top:5px">Vendor store \u2197</button>` : ''}
       </div>`;
     }).join('') : '';
   document.querySelectorAll('[data-lot]').forEach(el => el.addEventListener('click', () => pick(Number(el.dataset.lot))));
+  document.querySelectorAll('[data-vs]').forEach(el => el.addEventListener('click', () => {
+    const l = S.model.lots.find(x => x.id === Number(el.dataset.vs));
+    if (!l) return;
+    // Grist's vendor total for this SKU across all its lots.
+    const listed = S.model.lots.filter(x => x.recipe.id === l.recipe.id).reduce((t, x) => t + x.vendor, 0);
+    StockOps.openVendorStock(l.recipe.sku, { target: listed, targetLabel: 'listed in Grist',
+      title: `${l.recipe.name}${l.fiber ? ' ' + l.fiber : ''}` });
+  }));
 }
 
 const RECENT_DAYS = 14;

@@ -1006,7 +1006,7 @@ function fibreBlockHtml(g) {
       <div>
         <div class="fb-fiber fib-${fibClass(r.fiber)}" style="background:none;border:none;padding:0">${
           esc(r.fiberName || r.fiber || 'no fibre set')}</div>
-        <div class="fb-sku">${esc(r.sku || 'no SKU')}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}${
+        <div class="fb-sku">${esc(r.sku || 'no SKU')}${r.sku ? ` <button class="btn tiny" data-vs="${g.recipeId}" title="Check the vendor store, set the quantity, or open the product in Shopify">Vendor store \u2197</button>` : ''}${g.lots.length ? ` · ${g.lots.length} lot${g.lots.length === 1 ? '' : 's'}` : ''}${
           g.hank ? ` · ~${g.hank} in hank` : ''}${resvChipHtml(g.reserved, g.resv)}</div>
         ${binsOf([g]).length ? `<div class="bins-line">${binChipsHtml(binsOf([g]))}</div>` : ''}
       </div>
@@ -1157,6 +1157,17 @@ function wire() {
     const g = S.byRecipe.find(x => x.recipeId === id);
     if (g) S.moveQty[id] = String(g[S.moveFrom[id] || 'held'] || 0);
     render();
+  }));
+  document.querySelectorAll('[data-vs]').forEach(el => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const g = S.byRecipe.find(x => x.recipeId === Number(el.dataset.vs));
+    if (!g) return;
+    /* The target is what the vendor store SHOULD show: Grist's vendor count less
+       open vendor orders already taken off Shopify, plus manual pulls Shopify
+       has not seen — the same number the store check compares against. */
+    StockOps.openVendorStock(g.recipe.sku, { target: Math.max(0, vendorExpected(g)), targetLabel: 'should be',
+      title: `${g.recipe.name}${g.recipe.fiber ? ' ' + g.recipe.fiber : ''}`,
+      onSet: () => { if (S.store) checkStores(); } });
   }));
   document.querySelectorAll('[data-move]').forEach(el =>
     el.addEventListener('click', () => doMove(Number(el.dataset.move))));
