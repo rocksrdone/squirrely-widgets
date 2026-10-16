@@ -747,6 +747,8 @@ function getPhotoList(r) {
   if (r.Photo_Process_1) list.push({ url: r.Photo_Process_1, label: 'Step 1', note: r.Photo_Process_1_Note });
   if (r.Photo_Process_2) list.push({ url: r.Photo_Process_2, label: 'Step 2', note: r.Photo_Process_2_Note });
   if (r.Photo_Finished) list.push({ url: r.Photo_Finished, label: 'Finished', note: r.Photo_Finished_Note });
+  // Inspiration sits last — there for reference, not the first thing you see.
+  if (r.Photo_Inspiration) list.push({ url: r.Photo_Inspiration, label: 'Inspiration', note: r.Photo_Inspiration_Note });
   return list;
 }
 
@@ -754,6 +756,7 @@ const PHOTO_SLOT_MAP = {
   'Step 1': { photoField: 'Photo_Process_1', noteField: 'Photo_Process_1_Note' },
   'Step 2': { photoField: 'Photo_Process_2', noteField: 'Photo_Process_2_Note' },
   'Finished': { photoField: 'Photo_Finished', noteField: 'Photo_Finished_Note' },
+  'Inspiration': { photoField: 'Photo_Inspiration', noteField: 'Photo_Inspiration_Note' },
 };
 
 function renderPhotoViewer() {
@@ -1419,7 +1422,7 @@ function renderRight() {
   const colors = comps.map(c => guessColor(c.Dye_Name || ''));
   const bars = colors.map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
   const barsRev = [...colors].reverse().map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
-  const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished);
+  const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished || r.Photo_Inspiration);
 
   document.getElementById('rightPanel').innerHTML = `
     ${currentBaseSegments.length ? `
