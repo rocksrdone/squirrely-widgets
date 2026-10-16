@@ -142,6 +142,22 @@ body {
   opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
 }
 .toast.show { opacity: 1; }
+:root { color-scheme: light; }
+/* Dye put-away pop-out, and the "still on the table" reminder. */
+.pa-open { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 11px; margin: 6px 0 8px;
+  border: 2px solid var(--rule); border-radius: 7px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; text-align: left; }
+.pa-open.todo { border-color: var(--accent); background: #FBEFEC; color: var(--accent); }
+.pa-open.ok { border-color: var(--done-border); background: var(--done-bg); color: var(--done-text); }
+.pa-open .pa-n { margin-left: auto; font-family: 'DM Mono', monospace; }
+.pa-ov { position: fixed; inset: 0; background: rgba(26,22,20,.35); z-index: 900; display: flex; }
+.pa-panel { background: var(--paper, #F7F3EE); width: 100%; height: 100%; overflow-y: auto; padding: 12px 14px 24px; }
+.pa-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pa-head .t { font-size: 15px; font-weight: 700; flex: 1; }
+.pa-close { border: 1px solid var(--rule); background: #fff; color: var(--ink); border-radius: 6px; padding: 7px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.left-over { border: 2px solid var(--accent); background: #FBEFEC; border-radius: 7px; padding: 7px 9px; margin-bottom: 8px; font-size: 12px; color: var(--accent); }
+.left-over .lo-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--ink); }
+.left-over .lo-row span { flex: 1; min-width: 0; }
+.left-over button { border: 1px solid var(--accent); background: #fff; color: var(--accent); border-radius: 5px; padding: 4px 10px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .pull-row { display:flex; align-items:center; gap:8px; justify-content:space-between; background:var(--teal-light,#E4F0EF); border:1px solid #2A6B6B; border-radius:5px; padding:6px 9px; margin-bottom:6px; font-size:11px; color:#2A6B6B; }
 .pull-btn { background:#2A6B6B; color:white; border:none; border-radius:4px; padding:5px 10px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
 .coverage { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:11px; color:var(--ink); background:#F7F3EE; border:1px solid var(--rule); border-radius:5px; padding:6px 9px; margin-bottom:6px; }
@@ -472,6 +488,64 @@ function todayEpochSeconds() {
 
 let currentEntry = null;
 let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
+let paOpen = false;        // the dye put-away pop-out
+
+/* ── Put-away memory ───────────────────────────────────────────────────────
+   Once a pot is logged, that recipe's dyes are "on the table" until each one
+   is put away, staged or dumped. Decisions are kept per recipe (so switching
+   colourway and back doesn't lose them) and written to this browser for the
+   day (so a reload doesn't either). Anything still undecided shows as a
+   reminder at the top of whatever colourway is open next. */
+const actionsByRecipe = {};          // recipeId -> {dyeId: action}
+const PA_KEY = () => 'ss-putaway-' + new Date().toISOString().slice(0, 10);
+function paLoad() { try { return JSON.parse(localStorage.getItem(PA_KEY()) || '{}') || {}; } catch (e) { return {}; } }
+function paSave(st) { try { localStorage.setItem(PA_KEY(), JSON.stringify(st)); } catch (e) { /* private window — memory only */ } }
+let paState = paLoad();              // recipeId -> {name, dyes: {dyeId: label}, decided: {dyeId: {label, where, muted}}}
+function paRegisterPot(e) {
+  const rec = paState[e.recipeId] = paState[e.recipeId] || { name: e.recipeName, dyes: {}, decided: {} };
+  rec.name = e.recipeName;
+  e.cleanupInfo.forEach(c => { rec.dyes[c.dyeId] = c.dyeDetail; });
+  paSave(paState);
+}
+/* Mirror this recipe's on-screen decisions into memory + storage. */
+function paSync() {
+  const e = currentEntry; if (!e) return;
+  const mem = actionsByRecipe[e.recipeId] = actionsByRecipe[e.recipeId] || {};
+  const rec = paState[e.recipeId];
+  e.cleanupInfo.forEach((c, idx) => {
+    const a = completedActions[idx];
+    if (a) mem[c.dyeId] = a; else delete mem[c.dyeId];
+    if (rec) {
+      if (a && !a.restored) rec.decided[c.dyeId] = { label: a.label, where: a.board ? a.board.where : '', muted: !!(a.board && a.board.muted) };
+      else if (!a) delete rec.decided[c.dyeId];
+    }
+  });
+  if (rec) paSave(paState);
+}
+/* Bring back decisions made earlier for this recipe (memory first, then storage). */
+function paRestore(e) {
+  const mem = actionsByRecipe[e.recipeId] || {};
+  const rec = paState[e.recipeId];
+  const out = {};
+  e.cleanupInfo.forEach((c, idx) => {
+    if (mem[c.dyeId]) out[idx] = mem[c.dyeId];
+    else if (rec && rec.decided[c.dyeId]) {
+      const d = rec.decided[c.dyeId];
+      out[idx] = { label: d.label + ' (earlier)', board: d.where ? { where: d.where, muted: d.muted } : null, restored: true, undo: async () => {} };
+    }
+  });
+  return out;
+}
+function paLeftovers(exceptId) {
+  return Object.entries(paState).map(([rid, rec]) => ({
+    rid: Number(rid), name: rec.name,
+    left: Object.keys(rec.dyes).filter(d => !rec.decided[d]).map(d => rec.dyes[d]),
+  })).filter(x => x.rid !== exceptId && x.left.length);
+}
+function openRecipe(rid) { sessionPots = []; paOpen = false; loadForRecipe({ id: rid }); }
+function openPutAway() { paOpen = true; render(); }
+function closePutAway() { paOpen = false; render(); }
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && paOpen) closePutAway(); });
 
 async function loadForRecipe(record) {
   if (!record || !record.id) {
@@ -939,7 +1013,7 @@ async function loadForRecipe(record) {
       stockLots: stockLotsByRecipe[record.id] || [],
       stillToMake: Math.max(0, outstanding - inBins - inStock),
     };
-    completedActions = {};
+    completedActions = paRestore(currentEntry);
     render();
   } catch (e) {
     console.error('Failed to load batch assignment:', e);
@@ -955,6 +1029,7 @@ function render() {
     return;
   }
   const e = currentEntry;
+  paSync();
 
   const canPull = e.inStock > 0 && e.outstanding > 0;
   const pullHtml = canPull
@@ -1023,7 +1098,8 @@ function render() {
       return `<div class="dye-block done">
         <div class="dye-done-line">
           <span>✓ <strong>${esc(c.dyeDetail)}</strong> — ${esc(done.label)}</span>
-          <span class="undo-link" onclick="undoAction(${idx})">Undo</span>
+          ${done.restored ? `<span class="undo-link" onclick="undoAction(${idx})" title="Done before a reload — this only clears the mark; fix Dye Stock by hand if it was wrong">clear</span>`
+            : `<span class="undo-link" onclick="undoAction(${idx})">Undo</span>`}
         </div>
       </div>`;
     }
@@ -1092,7 +1168,25 @@ function render() {
 
 
 
-  document.getElementById('content').innerHTML = `
+  // Dyes from other colourways' pots that never got put away or dumped.
+  const others = paLeftovers(e.recipeId);
+  const leftoverHtml = others.length ? `<div class="left-over"><b>⚠ Dyes still on the table</b>${others.map(o => `
+      <div class="lo-row"><span><b>${esc(o.name)}</b> — ${o.left.map(esc).join(', ')}</span>
+        <button onclick="openRecipe(${o.rid})">Put away</button></div>`).join('')}</div>` : '';
+
+  // The dye decisions live in a pop-out: big, and never scrolled out of sight.
+  const total = e.cleanupInfo.length;
+  const doneN = e.cleanupInfo.filter((c, idx) => completedActions[idx]).length;
+  const potLogged = !!paState[e.recipeId] || sessionPots.length > 0;
+  const paButton = total ? `<button class="pa-open ${doneN === total ? 'ok' : potLogged ? 'todo' : ''}" onclick="openPutAway()">🧴 Put away dyes
+      <span class="pa-n">${doneN === total ? 'all done ✓' : `${total - doneN} of ${total} left`}</span></button>` : '';
+  const paOverlay = paOpen && total ? `<div class="pa-ov"><div class="pa-panel">
+      <div class="pa-head"><span class="t">Put away dyes — ${esc(e.recipeName)}</span>
+        <button class="pa-close" onclick="closePutAway()">Done ✕</button></div>
+      ${putAwayHtml}${cleanupHtml}
+    </div></div>` : '';
+
+  document.getElementById('content').innerHTML = paOverlay + `
     <div class="header-bar">
       <div class="header-line">
         <span class="header-title">${esc(e.recipeName)}</span>
@@ -1100,11 +1194,12 @@ function render() {
       </div>
       <button class="draft-mini" id="draftBtn" onclick="createColorDraft()" title="Combined leftovers into something new?">🎨 draft</button>
     </div>
+    ${leftoverHtml}
     ${coverageHtml}
     ${potPanelHtml}
     ${runningHtml}
     ${ordersHtml}
-    ${cleanupHtml ? `${putAwayHtml}${cleanupHtml}` : ''}
+    ${paButton}
   `;
 }
 
@@ -1289,7 +1384,11 @@ async function logPot() {
 
     sessionPots.push({ lotId: newLotId, lotNumber, spools, leftover, bucket });
     spoolsInput.value = '';
+    paRegisterPot(e);
+    paSync();
     await loadForRecipe({ id: e.recipeId }); // recompute coverage from the new lot
+    // The pot's done — the dyes on the table are the next thing to deal with.
+    if (currentEntry && currentEntry.cleanupInfo.some((c, idx) => !completedActions[idx])) { paOpen = true; render(); }
     showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'}`
       + (binPick ? ` · bag to ${binPick.code}` : ''));
   } catch (err) {
@@ -1585,6 +1684,7 @@ grist.ready({
 
 grist.onRecord((record) => {
   sessionPots = [];
+  paOpen = false;
   loadForRecipe(record);
 });
 </script>

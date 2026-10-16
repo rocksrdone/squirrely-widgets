@@ -456,6 +456,17 @@
      manual run that never went through a work order, so it must not compete
      with the mix table for attention on the ordinary pass. */
   .stash-wrap { margin-top: 18px; border-top: 1px solid var(--rule); padding-top: 10px; }
+  /* Setup pop-out: dye mix + premade locations, only needed while setting up. */
+  .setup-btn { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 12px; margin: 4px 0 14px;
+    border: 1px solid var(--rule); border-radius: 7px; background: #fff; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; }
+  .setup-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .setup-btn .sb-meta { margin-left: auto; font-weight: 500; color: #8B7D72; font-size: 11.5px; }
+  .setup-ov { position: fixed; inset: 0; background: rgba(26,22,20,.35); z-index: 900; display: flex; justify-content: flex-start; }
+  .setup-panel { background: var(--paper, #F7F3EE); width: min(640px, 100%); height: 100%; overflow-y: auto; padding: 14px 16px 24px; box-shadow: 4px 0 18px rgba(0,0,0,.18); }
+  .setup-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .setup-head .st-title { font-family: 'Libre Baskerville', serif; font-size: 16px; flex: 1; }
+  .setup-close { border: 1px solid var(--rule); background: #fff; color: var(--ink); border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+  .dye-table td.mix-cell { color: #6B5E52; }
   .stash-toggle {
     display: flex; align-items: center; gap: 8px; width: 100%;
     padding: 8px 10px; border-radius: 6px;
@@ -729,6 +740,14 @@ function closeLightbox() {
 let currentYardage = 100;
 let currentRecipe = null;
 let currentComponents = [];
+let setupOpen = false;   // the dye mix / premade-locations pop-out
+function openSetup() {
+  setupOpen = true;
+  stashOpen = true;
+  if (!stashState && !stashLoading) loadStash(); else renderLeft();
+}
+function closeSetup() { setupOpen = false; renderLeft(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && setupOpen) closeSetup(); });
 let currentMix = { partsByMix: {}, mixInfo: {}, dye: {} };   // custom dye formulas (dye-mix.js)
 /* "= 2 Hot Fuchsia (J 1-160) : 1.5 Sun Yellow (Pro 1-80) : …" under a custom dye. */
 function mixLineHtml(dyeId) {
@@ -1352,10 +1371,12 @@ function renderLeft() {
         <span class="swatch" style="background:${col}"></span>
         ${esc(c.Dye_Name || '—')}
         ${brand ? `<span class="brand">${brand[1]}</span>` : ''}
-      </div>${mixLineHtml(c.Dye_Id)}</td>
-      <td><span class="amt">${calcTsp(rowField(c, ['Std_Powder_tsp_']))}</span></td>
+      </div></td>
+      ${window.DyeMix && DyeMix.isMix(currentMix, c.Dye_Id)
+        ? `<td colspan="3" class="mix-cell">${mixLineHtml(c.Dye_Id)}</td>`
+        : `<td><span class="amt">${calcTsp(rowField(c, ['Std_Powder_tsp_']))}</span></td>
       <td><span class="amt">${calcMl(rowField(c, ['Std_Water_mL_']))}</span></td>
-      <td><span class="amt">${calcMl(rowField(c, ['Effective_mL_per_100_yd']) || rowField(c, ['Default_mL_per_100_yds']))}</span></td>
+      <td><span class="amt">${calcMl(rowField(c, ['Effective_mL_per_100_yd']) || rowField(c, ['Default_mL_per_100_yds']))}</span></td>`}
       <td>${c.Is_Powder ? `<span class="dil" style="background:#EFE7D8;color:#8A6D2A;">powder</span>` : (c.Dilution_Ratio ? `<span class="dil">${c.Dilution_Ratio}</span>` : '')}</td>
     </tr>`;
   }).join('');
@@ -1428,28 +1449,10 @@ function renderLeft() {
       ` : ''}
     </div>
 
-    <div class="yardage-row">
-      <span class="yardage-label">Yards</span>
-      <button class="preset-btn ${currentYardage===100?'active':''}" onclick="setYardage(100,this)">100</button>
-      <button class="preset-btn ${currentYardage===200?'active':''}" onclick="setYardage(200,this)">200</button>
-      <button class="preset-btn ${currentYardage===400?'active':''}" onclick="setYardage(400,this)">400</button>
-      <button class="preset-btn ${currentYardage===500?'active':''}" onclick="setYardage(500,this)">500</button>
-      <input class="custom-input" id="customInput" type="number" placeholder="custom" min="1" oninput="setCustomYardage(this.value)">
-    </div>
+    <button class="setup-btn" onclick="openSetup()">🧪 Setup — dye mix &amp; where the dyes are
+      <span class="sb-meta">${comps.length} dye${comps.length === 1 ? '' : 's'} · ${currentYardage} yd ›</span></button>
 
-    <div class="slabel">Dye mix · ${currentYardage} yards</div>
-    <table class="dye-table">
-      <thead><tr>
-        <th style="width:38%">Dye</th>
-        <th>Powder</th>
-        <th>Water</th>
-        <th>mL/run</th>
-        <th>Dilution</th>
-      </tr></thead>
-      <tbody>${dyeRows || '<tr><td colspan="5" class="no-data">No dye components — add in Recipe Dye Components table</td></tr>'}</tbody>
-    </table>
-
-    <div class="slabel" style="margin-top:20px;">Application steps</div>
+    <div class="slabel" style="margin-top:4px;">Application steps</div>
     <div class="steps-list" id="stepsList">
       ${stepsHTML || '<div class="no-data">No steps yet — add Application_Notes to dye components in Grist</div>'}
     </div>
@@ -1475,7 +1478,34 @@ function renderLeft() {
       }).join('')}
     </div>` : ''}
 
-    ${stashPanelHtml()}
+    ${setupOpen ? `<div class="setup-ov" onmousedown="if (event.target === this) closeSetup()">
+      <div class="setup-panel">
+        <div class="setup-head"><span class="st-title">Setup — ${esc(r.Recipe_Name || '')}</span>
+          <button class="setup-close" onclick="closeSetup()">Close ✕</button></div>
+    <div class="yardage-row">
+          <span class="yardage-label">Yards</span>
+          <button class="preset-btn ${currentYardage===100?'active':''}" onclick="setYardage(100,this)">100</button>
+          <button class="preset-btn ${currentYardage===200?'active':''}" onclick="setYardage(200,this)">200</button>
+          <button class="preset-btn ${currentYardage===400?'active':''}" onclick="setYardage(400,this)">400</button>
+          <button class="preset-btn ${currentYardage===500?'active':''}" onclick="setYardage(500,this)">500</button>
+          <input class="custom-input" id="customInput" type="number" placeholder="custom" min="1" oninput="setCustomYardage(this.value)">
+        </div>
+    
+        <div class="slabel">Dye mix · ${currentYardage} yards</div>
+        <table class="dye-table">
+          <thead><tr>
+            <th style="width:38%">Dye</th>
+            <th>Powder</th>
+            <th>Water</th>
+            <th>mL/run</th>
+            <th>Dilution</th>
+          </tr></thead>
+          <tbody>${dyeRows || '<tr><td colspan="5" class="no-data">No dye components — add in Recipe Dye Components table</td></tr>'}</tbody>
+        </table>
+    
+            ${stashPanelHtml()}
+      </div>
+    </div>` : ''}
   `;
 }
 
