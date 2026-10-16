@@ -420,7 +420,8 @@
     <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron collapsed" id="chevron-photos">▾</span></div>
     <div class="section-body collapsed" id="body-photos">
     <div class="rename-bar">
-      <button id="renamePhotosBtn" onclick="renamePhotosToMatch()" title="Move this recipe's photo files into the folder its current name, fiber and scope call for">✎ Rename files to match recipe</button>
+<label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px" title="Shows a heads-up on the recipe card until a new Finished photo is filed"><input type="checkbox" id="needsLayoutPhoto" onchange="markUnsaved()"> 📷 New layout photo needed</label>
+            <button id="renamePhotosBtn" onclick="renamePhotosToMatch()" title="Move this recipe's photo files into the folder its current name, fiber and scope call for">✎ Rename files to match recipe</button>
       <span id="renamePhotosState"></span>
     </div>
     <div class="rename-bar" id="slotPhotoBar"></div>
@@ -2946,6 +2947,7 @@ async function loadRecipe(record) {
   renderInspirationSwatches();
   document.getElementById('draftNotes').value = rowField(record, ['Draft_Notes']) || '';
   document.getElementById('discussionLink').value = rowField(record, ['Discussion_Link']) || '';
+  document.getElementById('needsLayoutPhoto').checked = !!rowField(record, ['Needs_Layout_Photo']);
   renderDiscussionLink();
   updatePhotoThumbs();
   loadProductPhotos();
@@ -3615,6 +3617,7 @@ async function saveRecipe() {
       Notes: document.getElementById('generalNotes').value,
       Draft_Notes: document.getElementById('draftNotes').value,
       Discussion_Link: document.getElementById('discussionLink').value.trim(),
+      Needs_Layout_Photo: document.getElementById('needsLayoutPhoto').checked,
       Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,
       Linked_Order_Line: selectedOrderLine ? selectedOrderLine.lineId : null,
       Layout_Description: document.getElementById('layoutDescription').value,

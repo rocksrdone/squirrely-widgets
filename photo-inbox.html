@@ -623,6 +623,11 @@ async function fileThisPhoto(key) {
     btn.textContent = 'Filed ✓';
     btn.classList.add('filed');
     showToast(successLabel);
+    // A new Finished photo answers "new layout photo needed".
+    if (state.slot === 'finished') {
+      grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', state.recipe.id, { Needs_Layout_Photo: false }]])
+        .catch(e => console.warn('Could not clear Needs_Layout_Photo:', e));
+    }
 
     inboxPhotos = inboxPhotos.filter(ph => ph.path !== path);
     delete cardState[path];

@@ -1436,6 +1436,20 @@ function renderLeft() {
   `;
 }
 
+/* Flag (or clear) "a new layout photo is needed" on this recipe. Filing a new
+   Finished photo from the Photo Inbox clears it automatically. */
+async function setLayoutPhotoFlag(on) {
+  if (!currentRecipe) return;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipe.id, { Needs_Layout_Photo: !!on }]]);
+    currentRecipe.Needs_Layout_Photo = !!on;
+    renderRight();
+  } catch (e) {
+    console.error('Flag failed:', e);
+    alert('Could not save the flag — does Recipes have a Needs_Layout_Photo column, and does the widget have full access?');
+  }
+}
+
 function renderRight() {
   const r = currentRecipe;
   const comps = [...currentComponents].sort((a,b) => (a.Step_Number||99) - (b.Step_Number||99));
@@ -1444,7 +1458,17 @@ function renderRight() {
   const barsRev = [...colors].reverse().map(c => `<div class="skein-bar" style="background:${c};flex:1"></div>`).join('');
   const hasPhotos = !!(r.Photo_Process_1 || r.Photo_Process_2 || r.Photo_Finished || r.Photo_Inspiration);
 
+  // Layout photo heads-up: flagged by hand, or no Finished photo at all.
+  const needPhoto = !!r.Needs_Layout_Photo, noFinished = !r.Photo_Finished;
+  const photoFlag = (needPhoto || noFinished) ? `
+    <div style="background:#F5EDD8;border:1px solid #E2C98F;border-radius:7px;padding:9px 11px;margin-bottom:12px;font-size:12.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:16px">📷</span>
+      <span style="flex:1;min-width:160px"><b>${needPhoto ? 'New layout photo needed' : 'No finished layout photo yet'}</b>${needPhoto && noFinished ? ' — and there is no finished photo yet' : ''}. Take one of the finished layout while it's out.</span>
+      ${needPhoto ? `<button onclick="setLayoutPhotoFlag(false)" style="font:inherit;font-size:11.5px;padding:4px 10px;border:1px solid #D4C9BC;border-radius:5px;background:#fff;color:#1A1614;cursor:pointer">✓ Done — clear</button>` : ''}
+    </div>` : '';
+
   document.getElementById('rightPanel').innerHTML = `
+    ${photoFlag}
     ${currentBaseSegments.length ? `
     <div class="slabel">Color layout</div>
     ${isUnevenRepeat(currentBaseSegments)
@@ -1466,7 +1490,7 @@ function renderRight() {
     </div>` : ''}
 
     ${r.Discussion_Link ? `<div style="margin:6px 0 10px"><a href="${esc(/^[a-z][a-z0-9+.-]*:/i.test(String(r.Discussion_Link).trim()) ? String(r.Discussion_Link).trim() : 'https://' + String(r.Discussion_Link).trim())}" target="_blank" rel="noopener" style="font-weight:600;color:var(--accent)">💬 Open the conversation ↗</a></div>` : ''}
-    ${hasPhotos ? `<div class="slabel">Reference photos</div><div id="photoViewerWrap"></div>` : ''}
+    ${hasPhotos ? `<div class="slabel" style="display:flex;align-items:center;gap:8px">Reference photos${!needPhoto ? `<a href="#" onclick="event.preventDefault(); setLayoutPhotoFlag(true)" style="margin-left:auto;font-size:10.5px;font-weight:500;text-transform:none;letter-spacing:0;color:#8B3A2A">flag: new photo needed</a>` : ''}</div><div id="photoViewerWrap"></div>` : ''}
   `;
 
   renderPhotoViewer();
