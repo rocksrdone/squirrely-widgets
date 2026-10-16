@@ -420,7 +420,8 @@
     <div class="section-title" onclick="toggleSection('photos')"><span>Photos</span><span class="section-chevron collapsed" id="chevron-photos">▾</span></div>
     <div class="section-body collapsed" id="body-photos">
     <div class="rename-bar">
-<label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px" title="Shows a heads-up on the recipe card until a new Finished photo is filed"><input type="checkbox" id="needsLayoutPhoto" onchange="markUnsaved()"> 📷 New layout photo needed</label>
+<label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px" title="Shows a heads-up on the recipe card until a new Finished photo is filed"><input type="checkbox" id="needsLayoutPhoto" onchange="if (this.checked) document.getElementById('layoutPhotoNotNeeded').checked = false; markUnsaved()"> 📷 New layout photo needed</label>
+<label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px;color:#8B7D72" title="Stop the recipe card asking for a finished photo on this recipe"><input type="checkbox" id="layoutPhotoNotNeeded" onchange="if (this.checked) document.getElementById('needsLayoutPhoto').checked = false; markUnsaved()"> No finished photo needed</label>
             <button id="renamePhotosBtn" onclick="renamePhotosToMatch()" title="Move this recipe's photo files into the folder its current name, fiber and scope call for">✎ Rename files to match recipe</button>
       <span id="renamePhotosState"></span>
     </div>
@@ -2015,6 +2016,21 @@ async function setYearMade(record) {
   el.value = stored ? String(stored).trim() : '';
 }
 
+/* Columns added recently can reach onRecord stale or missing (Grist caches
+   the widget's schema), and a blank box would then be SAVED over the real
+   value. Read them from the table instead. */
+async function loadLateFields(record) {
+  try {
+    const recs = await grist.docApi.fetchTable('Recipes');
+    const idx = (recs.id || []).indexOf(record.id);
+    if (idx === -1 || record.id !== currentRecipeId) return;
+    const v = (c) => Array.isArray(recs[c]) ? recs[c][idx] : undefined;
+    if (v('Discussion_Link') !== undefined) { document.getElementById('discussionLink').value = v('Discussion_Link') || ''; renderDiscussionLink(); }
+    if (v('Needs_Layout_Photo') !== undefined) document.getElementById('needsLayoutPhoto').checked = !!v('Needs_Layout_Photo');
+    if (v('Layout_Photo_Not_Needed') !== undefined) document.getElementById('layoutPhotoNotNeeded').checked = !!v('Layout_Photo_Not_Needed');
+  } catch (e) { console.error('Late field lookup failed:', e); }
+}
+
 function setScopeValue(raw) {
   const sel = document.getElementById('recipeScope');
   if (!sel) return;
@@ -2948,7 +2964,9 @@ async function loadRecipe(record) {
   document.getElementById('draftNotes').value = rowField(record, ['Draft_Notes']) || '';
   document.getElementById('discussionLink').value = rowField(record, ['Discussion_Link']) || '';
   document.getElementById('needsLayoutPhoto').checked = !!rowField(record, ['Needs_Layout_Photo']);
+  document.getElementById('layoutPhotoNotNeeded').checked = !!rowField(record, ['Layout_Photo_Not_Needed']);
   renderDiscussionLink();
+  loadLateFields(record);
   updatePhotoThumbs();
   loadProductPhotos();
 
@@ -3618,6 +3636,7 @@ async function saveRecipe() {
       Draft_Notes: document.getElementById('draftNotes').value,
       Discussion_Link: document.getElementById('discussionLink').value.trim(),
       Needs_Layout_Photo: document.getElementById('needsLayoutPhoto').checked,
+      Layout_Photo_Not_Needed: document.getElementById('layoutPhotoNotNeeded').checked,
       Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,
       Linked_Order_Line: selectedOrderLine ? selectedOrderLine.lineId : null,
       Layout_Description: document.getElementById('layoutDescription').value,
