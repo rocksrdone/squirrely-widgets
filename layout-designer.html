@@ -238,6 +238,12 @@
           <button class="btn" onclick="applyRepeat()" title="Build one repeat spanning the full circle, then tile it this many times">Tile ×</button>
         </div>
         <div class="tool-row">
+          <span class="tool-lbl">Blend</span>
+          <input class="field-input" type="number" id="blendPct" value="15" min="1" max="45" step="1" title="How much of each colour turns into blend, on each side — 15 means each colour gives up 15% of its width to the blend before it and 15% to the blend after it">
+          <button class="btn" onclick="blendAll()" title="Put a blend between every pair of neighbouring colours (pairs that already have one are left alone)">Between all</button>
+          <span class="pal-hint">% of each colour</span>
+        </div>
+        <div class="tool-row">
           <span class="tool-lbl">Rotate</span>
           <input class="field-input" type="number" id="rotateStep" value="15" min="0.1" max="180" step="any" title="Degrees per click of the ↺ ↻ arrows on the ring — set to one section's width automatically when every section is the same size, so a click moves the next colour into the top-centre spot">
           <span class="pal-hint">degrees — use the ↺ ↻ arrows on the ring</span>
@@ -1135,9 +1141,14 @@ document.addEventListener('keydown', (e) => {
 function autoRotateStep() {
   const el = document.getElementById('rotateStep');
   if (!el || baseSegments.length < 2) return;
-  const widths = baseSegments.map(s => { let w = s.endPct - s.startPct; if (w <= 0) w += 100; return w; });
-  if (Math.max(...widths) - Math.min(...widths) > 0.05) return;
-  el.value = String(Math.round(360 / baseSegments.length * 100) / 100);
+  const widthOf = (s) => { let w = s.endPct - s.startPct; if (w <= 0) w += 100; return w; };
+  const even = (list) => list.length && Math.max(...list) - Math.min(...list) <= 0.05;
+  const widths = baseSegments.map(widthOf);
+  if (even(widths)) { el.value = String(Math.round(360 / baseSegments.length * 100) / 100); return; }
+  // Colours separated by blends: one step = one colour plus one blend.
+  const colours = baseSegments.filter(s => s.type !== 'Blend'), blends = baseSegments.filter(s => s.type === 'Blend');
+  if (colours.length > 1 && blends.length === colours.length && even(colours.map(widthOf)) && even(blends.map(widthOf)))
+    el.value = String(Math.round(360 / colours.length * 100) / 100);
 }
 
 function rotateByStep(dir) {
@@ -1312,6 +1323,51 @@ function pickOverlayDye(name) {
   updateOverlay(selectedOverlayKey, 'dyeName', name);
   document.getElementById('overlayDyeSuggestions').style.display = 'none';
   renderSegmentEditor();
+}
+
+/* A blend between every pair of neighbouring colours in one go. Each colour
+   gives the same share of its own width to both sides, so its centre doesn't
+   move — a first dye centred at the top stays centred. Pairs that already
+   have a blend between them are skipped, so it can be run again safely. */
+function blendAll() {
+  const pct = Math.max(1, Math.min(45, Number(document.getElementById('blendPct').value) || 15)) / 100;
+  if (baseSegments.length < 2) { showToast('Needs at least two colours'); return; }
+  const w = (v) => ((v % 100) + 100) % 100;
+  const width = (sg) => { let x = sg.endPct - sg.startPct; if (x <= 0) x += 100; return x; };
+  const ring = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
+  const n = ring.length;
+  const isBlend = (sg) => sg.type === 'Blend';
+  const pairs = [];
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    if (!isBlend(a) && !isBlend(b)) pairs.push(i);
+  }
+  if (!pairs.length) { showToast('Every pair already has a blend'); return; }
+  const wid = ring.map(width);
+  const cut = new Set(pairs);
+  const out = [];
+  ring.forEach((sg, i) => {
+    const prevI = (i - 1 + n) % n;
+    if (!isBlend(sg)) {
+      if (cut.has(prevI)) sg.startPct = w(sg.startPct + wid[i] * pct);
+      if (cut.has(i)) sg.endPct = w(sg.endPct - wid[i] * pct);
+    }
+  });
+  ring.forEach((sg, i) => {
+    out.push(sg);
+    if (cut.has(i)) {
+      const nx = ring[(i + 1) % n];
+      out.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: sg.endPct, endPct: nx.startPct,
+        type: 'Blend', blendRatio: 50, notes: '', dilution: '' });
+    }
+  });
+  baseSegments = out;
+  selectedSegmentKey = null;
+  autoRotateStep();
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+  showToast(`${pairs.length} blend${pairs.length === 1 ? '' : 's'} added`);
 }
 
 function addBlendAt(key) {
