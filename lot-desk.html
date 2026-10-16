@@ -295,7 +295,7 @@ function renderMain() {
    For when Grist and the shelf disagree outside a job: set what's really
    there (wound / hank / listed on vendor), zero a lot that's gone, or delete
    a lot that was entered twice. Store numbers stay yours to set. */
-function openFix(id) { S.fix = id; S.fixDone = null; S.delAsk = false; S.sel = null; S.plan = null; S.prob = null; render(); }
+function openFix(id) { S.fix = id; S.fixDone = null; S.delAsk = false; S.moveTo = null; S.sel = null; S.plan = null; S.prob = null; render(); }
 
 function renderFix(box) {
   const lot = S.model.lots.find(l => l.id === S.fix);
@@ -327,6 +327,18 @@ function renderFix(box) {
       <div class="lab" style="margin-bottom:8px">Grist lists ${listed} ${esc(lot.recipe.name)} on the vendor store across all its lots.</div>
       <button class="btn ghost small" id="fvs">Vendor store ↗</button></div>` : ''}
 
+    <div class="step"><div class="hd">Came out a different colourway?</div>
+      ${lot.allocs.length ? `<div class="lab">Can't move — ${lot.alloc} spools of this lot are already on orders. Take them off the orders first.</div>` : `
+      <div class="lab" style="margin-bottom:6px">Move this lot to the recipe it really is — e.g. a new Limited Edition made with <b>⧉ Duplicate as LE</b> in the Recipe Builder. ${esc(lot.recipe.name)}'s orders then show these spools as still to make.</div>
+      <div class="picker-wrap" style="position:relative">
+        <input class="search" id="mvq" placeholder="Search the recipe to move it to (name or SKU)…" style="margin:0" autocomplete="off">
+        <div id="mvlist"></div>
+      </div>
+      ${S.moveTo ? `<div class="actions" style="margin-top:6px">
+        <button class="btn small" id="mvgo">Move ${esc(lot.lotNumber)} to ${esc((S.model.recipes[S.moveTo] || {}).name || '?')}</button>
+        <button class="btn ghost small" id="mvno">Cancel</button></div>` : ''}`}
+    </div>
+
     <div class="step"><div class="hd">Entered twice?</div>
       ${lot.allocs.length ? `<div class="lab">Can't delete — ${lot.alloc} spools of this lot are on orders. Zero it instead, or move the order spools first.</div>`
         : S.delAsk ? `<div class="lab" style="margin-bottom:8px;color:var(--accent);font-weight:600">Delete ${esc(lot.lotNumber)}${jobs ? ` and its ${jobs} job${jobs === 1 ? '' : 's'}` : ''}? Only do this if the lot never existed.</div>
@@ -337,6 +349,47 @@ function renderFix(box) {
     </div>
     ${lot.notes ? `<div class="lab" style="white-space:pre-line;margin-top:6px">${esc(lot.notes)}</div>` : ''}
   </div>`;
+
+  const $ = (id) => document.getElementById(id);
+  // Move to another recipe
+  const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const mvq = document.getElementById('mvq');
+  if (mvq) {
+    const draw = () => {
+      const q = fold(mvq.value).trim();
+      const list = document.getElementById('mvlist');
+      if (!q) { list.innerHTML = ''; return; }
+      const hits = Object.values(S.model.recipes).filter(r => r.id !== lot.recipe.id && (fold(r.name).includes(q) || fold(r.sku).includes(q)))
+        .sort((a, b) => b.id - a.id).slice(0, 8);
+      list.innerHTML = hits.map(r => `<div class="row" data-mv="${r.id}" style="cursor:pointer;margin:3px 0"><span class="who"><b>${esc(r.name)}</b> ${fib(r.fiber)}<div>${esc(r.sku)}</div></span></div>`).join('')
+        || '<div class="none">No recipe matches.</div>';
+      list.querySelectorAll('[data-mv]').forEach(el => el.addEventListener('click', () => { S.moveTo = Number(el.dataset.mv); renderMain(); }));
+    };
+    mvq.addEventListener('input', draw);
+  }
+  if ($('mvno')) $('mvno').addEventListener('click', () => { S.moveTo = null; renderMain(); });
+  if ($('mvgo')) $('mvgo').addEventListener('click', async () => {
+    const to = S.model.recipes[S.moveTo];
+    if (!to || S.busy) return;
+    const T = S.model.cols.T;
+    const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    const note = (lot.notes ? lot.notes + '\n' : '') + `${day} moved from ${lot.recipe.name} to ${to.name} (came out a different colourway)`;
+    const acts = [['UpdateRecord', 'Production_Lots', lot.id, { Recipe: to.id, Notes: note }]];
+    const undo = [['UpdateRecord', 'Production_Lots', lot.id, { Recipe: lot.recipe.id, Notes: lot.notes || '' }]];
+    if (T && T.recipe) S.model.taskRows.filter(t => t.lotId === lot.id).forEach(t => {
+      acts.push(['UpdateRecord', 'Worker_Tasks', t.id, { [T.recipe]: to.id }]);
+      undo.push(['UpdateRecord', 'Worker_Tasks', t.id, { [T.recipe]: lot.recipe.id }]);
+    });
+    S.busy = true;
+    try {
+      await grist.docApi.applyUserActions(acts);
+      S.log.unshift({ text: `${lot.lotNumber}: moved ${lot.recipe.name} → ${to.name}`, undo });
+      toast(`Moved to ${to.name} ✓`);
+      S.moveTo = null;
+      await load();
+    } catch (e) { console.error(e); toast('Could not move — nothing was changed'); }
+    finally { S.busy = false; }
+  });
 
   const apply = async (want) => {
     if (S.busy) return;
@@ -352,7 +405,6 @@ function renderFix(box) {
     } catch (e) { console.error(e); toast('Could not save — nothing was changed'); }
     finally { S.busy = false; }
   };
-  const $ = (id) => document.getElementById(id);
   if ($('fsave')) $('fsave').addEventListener('click', () => apply({ wound: $('fw').value, hank: $('fh').value, vendor: $('fv').value }));
   if ($('fzero')) $('fzero').addEventListener('click', () => apply({ wound: 0, hank: 0, vendor: 0 }));
   if ($('fundo')) $('fundo').addEventListener('click', async (e) => {
