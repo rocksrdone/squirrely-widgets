@@ -239,7 +239,7 @@
         </div>
         <div class="tool-row">
           <span class="tool-lbl">Rotate</span>
-          <input class="field-input" type="number" id="rotateStep" value="15" min="1" max="180" title="Degrees per click of the ↺ ↻ arrows on the ring">
+          <input class="field-input" type="number" id="rotateStep" value="15" min="0.1" max="180" step="any" title="Degrees per click of the ↺ ↻ arrows on the ring — set to one section's width automatically when every section is the same size, so a click moves the next colour into the top-centre spot">
           <span class="pal-hint">degrees — use the ↺ ↻ arrows on the ring</span>
         </div>
       </div>
@@ -720,6 +720,7 @@ async function loadLayout(record) {
     }
   }
 
+  autoRotateStep();
   renderRing();
   renderOverlayList();
   renderSegmentEditor();
@@ -1128,6 +1129,17 @@ document.addEventListener('keydown', (e) => {
 });
 
 // The ↺ ↻ buttons on the ring itself. Degrees come from the Rotate field.
+/* When every section is the same width, one rotate click = one section, so the
+   neighbouring colour lands exactly centred at the top instead of off by a few
+   degrees. Uneven layouts keep whatever step was typed. */
+function autoRotateStep() {
+  const el = document.getElementById('rotateStep');
+  if (!el || baseSegments.length < 2) return;
+  const widths = baseSegments.map(s => { let w = s.endPct - s.startPct; if (w <= 0) w += 100; return w; });
+  if (Math.max(...widths) - Math.min(...widths) > 0.05) return;
+  el.value = String(Math.round(360 / baseSegments.length * 100) / 100);
+}
+
 function rotateByStep(dir) {
   const el = document.getElementById('rotateStep');
   const step = Math.abs(Number(el && el.value)) || 15;
@@ -1411,6 +1423,7 @@ function fillFromRecipe() {
   baseSegments.forEach(s => { if (s.rowId) deletedIds.push(s.rowId); });
   baseSegments = filled;
   selectedSegmentKey = null;
+  autoRotateStep();
   markUnsaved();
   renderRing();
   renderSegmentEditor();
@@ -1457,6 +1470,7 @@ function createEqualSections() {
   }
   selectedSegmentKey = null;
   selectedOverlayKey = null;
+  autoRotateStep();
   markUnsaved();
   renderRing();
   renderSegmentEditor();
@@ -1499,6 +1513,7 @@ function applyRepeat() {
   baseSegments.forEach(s => { if (s.rowId) deletedIds.push(s.rowId); });
   baseSegments = newSegments;
   selectedSegmentKey = null;
+  autoRotateStep();
   markUnsaved();
   renderRing();
   renderSegmentEditor();
