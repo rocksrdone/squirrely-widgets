@@ -367,9 +367,9 @@ function formulaLine(parts, form, water) {
   const bits = parts.filter(p => p.ingredient).map(p => {
     const d = allDyes.find(x => x.id === p.ingredient);
     const tag = [d ? brandLabel(d) : '', p.strength].filter(Boolean).join(' ');
-    return `${fmtParts(p.parts)}${dry ? ' tsp' : ''} ${d ? d.Dye_Name : '?'}${tag ? ' (' + tag + ')' : ''}`;
+    return `${fmtParts(p.parts)}${dry ? ' tsp' : ' mL'} ${d ? d.Dye_Name : '?'}${tag ? ' (' + tag + ')' : ''}`;
   });
-  if (Number(water)) bits.push(`${fmtParts(water)}${dry ? ' mL' : ''} water`);
+  if (Number(water)) bits.push(`${fmtParts(water)} mL water`);
   return bits.join(dry ? ' + ' : ' : ');
 }
 function setKind(kind) {
@@ -412,7 +412,7 @@ function renderFormulaSection(d) {
           onblur="setTimeout(() => { const b = document.getElementById('partSug${i}'); if (b) b.style.display='none'; }, 150)">
           <div class="picker-suggestions" id="partSug${i}" style="display:none"></div></div>`;
     return `<div class="mix-part">${pick}
-      <input class="field-input" type="number" step="any" min="0" value="${esc(p.parts)}" title="${dry ? 'tsp of powder' : 'parts'}" oninput="setPart(${i}, 'parts', this.value)">
+      <input class="field-input" type="number" step="any" min="0" value="${esc(p.parts)}" title="${dry ? 'tsp of powder' : 'mL of this solution'}" oninput="setPart(${i}, 'parts', this.value)">
       <input class="field-input" value="${esc(p.strength)}" placeholder="${dry ? 'powder' : '1-80'}" title="Solution strength — tsp powder to mL water, e.g. 1-80 or 1/2-160" oninput="setPart(${i}, 'strength', this.value)">
       <button class="mix-x" onclick="removePart(${i})" title="Remove">✕</button>
       ${p.notes ? `<div style="grid-column:1/-1;font-size:10.5px;color:#B07D2A;margin-top:-3px">${esc(p.notes)}</div>` : ''}
@@ -430,12 +430,12 @@ function renderFormulaSection(d) {
         </select>
       </div>
       <div class="field-row">
-        <span class="field-label">${dry ? 'Water (mL)' : 'Water (parts)'}</span>
+        <span class="field-label">Water (mL)</span>
         <input class="field-input" type="number" step="any" min="0" value="${esc(d.Mix_Water_Parts)}" placeholder="0" oninput="updateField('Mix_Water_Parts', this.value); setPart(-1)">
       </div>
     </div>
     <div class="mix-part" style="font-size:9.5px;color:#8B7D72;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">
-      <span>Ingredient</span><span>${dry ? 'tsp' : 'Parts'}</span><span>${dry ? '' : 'Strength'}</span><span></span></div>
+      <span>Ingredient</span><span>${dry ? 'tsp' : 'Parts (mL)'}</span><span>${dry ? '' : 'Strength'}</span><span></span></div>
     ${rows}
     <button class="btn" onclick="addPart()">+ Ingredient</button>
     <div class="mix-line" id="mixLine">${esc(formulaLine(editingParts, d.Mix_Form, d.Mix_Water_Parts)) || '—'}</div>

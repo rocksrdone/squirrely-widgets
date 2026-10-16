@@ -59,7 +59,7 @@
   }
 
   const fmt = (n) => String(Math.round(Number(n) * 1000) / 1000);
-  /* "2 Hot Fuchsia (J 1-160) : 1.5 Sun Yellow (Pro 1-80) : 4 water" — labelOf(dyeId) → {name, brand} */
+  /* "2 mL Hot Fuchsia (J 1-160) : 1.5 mL Sun Yellow (Pro 1-80) : 4 mL water" — labelOf(dyeId) → {name, brand} */
   function formula(model, dyeId, labelOf) {
     labelOf = labelOf || ((id) => model.dye[id]);
     const info = model.mixInfo[dyeId] || {};
@@ -67,9 +67,9 @@
     const bits = (model.partsByMix[dyeId] || []).map(p => {
       const l = labelOf(p.ingredient) || {};
       const tag = [l.brand, p.strength].filter(Boolean).join(' ');
-      return `${fmt(p.parts)}${dry ? ' tsp' : ''} ${l.name || '?'}${tag ? ' (' + tag + ')' : ''}`;
+      return `${fmt(p.parts)}${dry ? ' tsp' : ' mL'} ${l.name || '?'}${tag ? ' (' + tag + ')' : ''}`;
     });
-    if (info.water) bits.push(`${fmt(info.water)}${dry ? ' mL' : ''} water`);
+    if (info.water) bits.push(`${fmt(info.water)} mL water`);
     return bits.join(dry ? ' + ' : ' : ');
   }
 

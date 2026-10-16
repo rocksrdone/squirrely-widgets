@@ -800,7 +800,7 @@ function ingredientEntries(comp) {
       else if (total > 0) it = { jar: { bins, total }, powder: null, bins, total, form: 'made', label: 'Made dye', icons: ICO_JAR };
       else it = { jar: null, powder: sub.powder, bins: [], total: 0, form: 'dry', label: 'Powder', icons: ICO_TUB };
     }
-    const amt = `${Math.round(p.parts * 1000) / 1000}${mixInfo.form === 'Dry' ? ' tsp' : ' part' + (p.parts === 1 ? '' : 's')}`;
+    const amt = `${Math.round(p.parts * 1000) / 1000}${mixInfo.form === 'Dry' ? ' tsp' : ' mL'}`;
     return { sub, it, depth: p.depth, extra: `<span class="sub">${esc(amt)}${p.strength ? ' · ' + esc(p.strength) : ''} for ${esc((dyeById[p.parentMix] || {}).name || 'the mix')}</span>` };
   });
 }

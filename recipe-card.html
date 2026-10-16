@@ -1244,7 +1244,7 @@ function ingredientRowsHtml(L) {
     if (p.powder) pull.push('powder');
     if (p.isMix) pull.push(p.jar ? '' : 'mix it ↓');
     return `<div class="ing-row" style="padding-left:${18 * p.depth}px">
-      <span class="ing-name">↳ ${esc(String(Math.round(p.parts * 1000) / 1000))} ${esc(p.name)}${p.brand ? ` <span class="brand">${esc(p.brand)}</span>` : ''}${p.strength ? ` <span style="color:#8B7D72">${esc(p.strength)}</span>` : ''}</span>
+      <span class="ing-name">↳ ${esc(String(Math.round(p.parts * 1000) / 1000))}${(currentMix.mixInfo[p.parentMix] || {}).form === 'Dry' ? ' tsp' : ' mL'} ${esc(p.name)}${p.brand ? ` <span class="brand">${esc(p.brand)}</span>` : ''}${p.strength ? ` <span style="color:#8B7D72">${esc(p.strength)}</span>` : ''}</span>
       <span class="ing-pull">${pull.filter(Boolean).join(' + ') || '—'}</span>
     </div>`;
   }).join('');
