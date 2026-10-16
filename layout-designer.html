@@ -231,6 +231,7 @@
           <input class="field-input" type="number" id="sectionCount" value="4" min="1" max="24" title="How many equal sections to start from">
           <button class="btn" onclick="createEqualSections()" title="Replaces the layout with this many evenly-sized blank sections">Equal</button>
           <button class="btn" onclick="fillFromRecipe()" title="One section per dye in this recipe, in dye order">One per dye</button>
+          <button class="btn" onclick="evenOut()" title="Keep the colours and their order as they are now, but make every section the same width — blends all the same width too. The colour at the top ends up centred there.">Even out</button>
         </div>
         <div class="tool-row">
           <span class="tool-lbl">Repeat</span>
@@ -1323,6 +1324,39 @@ function pickOverlayDye(name) {
   updateOverlay(selectedOverlayKey, 'dyeName', name);
   document.getElementById('overlayDyeSuggestions').style.display = 'none';
   renderSegmentEditor();
+}
+
+/* Make what's on the ring equal: same colours, same order, equal widths.
+   Blends stay blends — they share one width (their current average) and the
+   colours split the rest equally. The section at the top is centred there. */
+function evenOut() {
+  const n = baseSegments.length;
+  if (n < 2) { showToast('Only one section'); return; }
+  const w = (v) => ((v % 100) + 100) % 100;
+  const widthOf = (sg) => { let x = sg.endPct - sg.startPct; if (x <= 0) x += 100; return x; };
+  const ring = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
+  // Start from the section covering the top (the one that wraps past 0%, else the one starting at 0).
+  let a = ring.findIndex(sg => sg.endPct < sg.startPct);
+  if (a < 0) a = 0;
+  const order = ring.slice(a).concat(ring.slice(0, a));
+  const blends = order.filter(sg => sg.type === 'Blend');
+  const nc = n - blends.length;
+  let bw = 0, cw = 100 / n;
+  if (blends.length && nc) {
+    bw = blends.reduce((t, sg) => t + widthOf(sg), 0) / blends.length;
+    cw = (100 - bw * blends.length) / nc;
+  }
+  let pos = -(order[0].type === 'Blend' && nc ? bw : cw) / 2;
+  order.forEach(sg => {
+    const width = sg.type === 'Blend' && nc ? bw : cw;
+    sg.startPct = w(pos); pos += width; sg.endPct = w(pos);
+  });
+  baseSegments = order;
+  autoRotateStep();
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
+  showToast('Evened out');
 }
 
 /* A blend between every pair of neighbouring colours in one go. Each colour
