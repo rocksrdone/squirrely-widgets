@@ -240,7 +240,7 @@
         </div>
         <div class="tool-row">
           <span class="tool-lbl">Blend</span>
-          <input class="field-input" type="number" id="blendPct" value="15" min="1" max="45" step="1" title="How much of each colour turns into blend, on each side — 15 means each colour gives up 15% of its width to the blend before it and 15% to the blend after it">
+          <input class="field-input" type="number" id="blendPct" value="15" min="1" max="45" step="1" oninput="onBlendPctChange()" title="How much of each colour turns into blend, on each side — 15 means each colour gives up 15% of its width to the blend before it and 15% to the blend after it">
           <button class="btn" onclick="blendAll()" title="Put a blend between every pair of neighbouring colours (pairs that already have one are left alone)">Between all</button>
           <span class="pal-hint">% of each colour</span>
         </div>
@@ -1401,45 +1401,97 @@ function evenOut() {
    gives the same share of its own width to both sides, so its centre doesn't
    move — a first dye centred at the top stays centred. Pairs that already
    have a blend between them are skipped, so it can be run again safely. */
-function blendAll() {
-  const pct = Math.max(1, Math.min(45, Number(document.getElementById('blendPct').value) || 15)) / 100;
-  if (baseSegments.length < 2) { showToast('Needs at least two colours'); return; }
+function blendPctValue() {
+  return Math.max(1, Math.min(45, Number(document.getElementById('blendPct').value) || 15)) / 100;
+}
+
+/* Lay blends out between neighbouring colours at the given share.
+   First every existing blend (with a colour on both sides) is folded back into
+   its two colours — split in proportion to their widths, which undoes an even
+   blend exactly — then blends go back in where `want` says, each colour giving
+   `pct` of its width to every blended side. A blend that was there before keeps
+   its row, its mix % and its notes. */
+function layBlends(pct, want) {
   const w = (v) => ((v % 100) + 100) % 100;
   const width = (sg) => { let x = sg.endPct - sg.startPct; if (x <= 0) x += 100; return x; };
-  const ring = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
-  const n = ring.length;
   const isBlend = (sg) => sg.type === 'Blend';
-  const pairs = [];
-  for (let i = 0; i < n; i++) {
-    const a = ring[i], b = ring[(i + 1) % n];
-    if (!isBlend(a) && !isBlend(b)) pairs.push(i);
+  let ring = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
+
+  // 1 · fold existing blends back into their neighbours. Every cut is worked
+  //     out from the widths as they are now, before any is applied — folding
+  //     one at a time would skew the later ones.
+  const kept = {};                       // left colour clientKey → old blend
+  {
+    const n0 = ring.length;
+    const folds = [];
+    ring.forEach((bl, i) => {
+      const a = ring[(i - 1 + n0) % n0], b = ring[(i + 1) % n0];
+      if (!isBlend(bl) || isBlend(a) || isBlend(b) || a === b) return;
+      const wa = width(a), wb = width(b);
+      folds.push({ bl, a, b, cut: w(bl.startPct + width(bl) * (wa / ((wa + wb) || 1))) });
+    });
+    folds.forEach(f => { f.a.endPct = f.cut; f.b.startPct = f.cut; kept[f.a.clientKey] = f.bl; });
+    const gone = new Set(folds.map(f => f.bl));
+    ring = ring.filter(sg => !gone.has(sg));
   }
-  if (!pairs.length) { showToast('Every pair already has a blend'); return; }
+  const n = ring.length;
+  if (n < 2) { baseSegments = ring; return 0; }
+
+  // 2 · put blends back where wanted
+  const pairs = new Set();
+  ring.forEach((a, i) => { const b = ring[(i + 1) % n]; if (!isBlend(a) && !isBlend(b) && want(a, b)) pairs.add(i); });
   const wid = ring.map(width);
-  const cut = new Set(pairs);
+  ring.forEach((sg, i) => {
+    if (isBlend(sg)) return;
+    const prevI = (i - 1 + n) % n;
+    if (pairs.has(prevI)) sg.startPct = w(sg.startPct + wid[i] * pct);
+    if (pairs.has(i)) sg.endPct = w(sg.endPct - wid[i] * pct);
+  });
   const out = [];
   ring.forEach((sg, i) => {
-    const prevI = (i - 1 + n) % n;
-    if (!isBlend(sg)) {
-      if (cut.has(prevI)) sg.startPct = w(sg.startPct + wid[i] * pct);
-      if (cut.has(i)) sg.endPct = w(sg.endPct - wid[i] * pct);
-    }
-  });
-  ring.forEach((sg, i) => {
     out.push(sg);
-    if (cut.has(i)) {
-      const nx = ring[(i + 1) % n];
-      out.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: sg.endPct, endPct: nx.startPct,
-        type: 'Blend', blendRatio: 50, notes: '', dilution: '' });
-    }
+    if (!pairs.has(i)) return;
+    const nx = ring[(i + 1) % n];
+    const old = kept[sg.clientKey];
+    if (old) { old.startPct = sg.endPct; old.endPct = nx.startPct; out.push(old); delete kept[sg.clientKey]; }
+    else out.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: sg.endPct, endPct: nx.startPct,
+      type: 'Blend', blendRatio: 50, notes: '', dilution: '' });
   });
+  // Blends that no longer have a place are deleted on save.
+  Object.values(kept).forEach(bl => { if (bl.rowId) deletedIds.push(bl.rowId); });
   baseSegments = out;
+  return pairs.size;
+}
+
+/* A blend between every pair of neighbouring colours in one go. Each colour
+   gives the same share of its own width to both sides, so its centre doesn't
+   move — a first dye centred at the top stays centred. Running it again just
+   re-lays every blend at the current %. */
+function blendAll() {
+  if (baseSegments.filter(sg => sg.type !== 'Blend').length < 2) { showToast('Needs at least two colours'); return; }
+  const n = layBlends(blendPctValue(), () => true);
   selectedSegmentKey = null;
   autoRotateStep();
   markUnsaved();
   renderRing();
   renderSegmentEditor();
-  showToast(`${pairs.length} blend${pairs.length === 1 ? '' : 's'} added`);
+  showToast(`${n} blend${n === 1 ? '' : 's'} at ${Math.round(blendPctValue() * 100)}%`);
+}
+
+/* Changing the % re-lays the blends already on the ring — only those pairs. */
+function onBlendPctChange() {
+  if (!baseSegments.some(sg => sg.type === 'Blend')) return;
+  const sorted = baseSegments.slice().sort((a, b) => a.startPct - b.startPct);
+  const had = new Set();
+  sorted.forEach((sg, i) => {
+    const nx = sorted[(i + 1) % sorted.length];
+    if (sg.type !== 'Blend' && nx.type === 'Blend') had.add(sg.clientKey);
+  });
+  layBlends(blendPctValue(), (a) => had.has(a.clientKey));
+  autoRotateStep();
+  markUnsaved();
+  renderRing();
+  renderSegmentEditor();
 }
 
 function addBlendAt(key) {
