@@ -24,6 +24,8 @@
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { color-scheme: light; }
+  button { color: var(--ink); }
 
   body {
     background: var(--paper);
@@ -1139,16 +1141,18 @@ function splitInto(key, n) {
   const i = baseSegments.findIndex(s => s.clientKey === key);
   if (i < 0 || n < 2) return;
   const seg = baseSegments[i];
-  const from = seg.startPct, to = seg.endPct, span = (to - from) / n;
+  // A segment can cross the top of the ring (end < start) — unwrap it first.
+  const from = seg.startPct, to = seg.endPct <= from ? seg.endPct + 100 : seg.endPct, span = (to - from) / n;
+  const w = (v) => ((v % 100) + 100) % 100;
   const made = [];
   for (let k = 0; k < n; k++) {
     made.push(k === 0 ? seg : {
       rowId: null, clientKey: nextClientKey++, dyeName: seg.dyeName,
-      startPct: from + k * span, endPct: from + (k + 1) * span,
+      startPct: w(from + k * span), endPct: w(from + (k + 1) * span),
       type: 'Solid', notes: '', dilution: seg.dilution || '', blendRatio: 50,
     });
   }
-  seg.startPct = from; seg.endPct = from + span;
+  seg.startPct = from; seg.endPct = w(from + span);
   baseSegments.splice(i + 1, 0, ...made.slice(1));
   markUnsaved();
   renderRing();
@@ -1377,6 +1381,9 @@ function buildSegmentsFromDyeComponents() {
   if (!currentDyeComponents.length) return null;
   const n = currentDyeComponents.length;
   const width = 100 / n;
+  // The first dye sits centred at the top of the ring and the rest follow
+  // clockwise — the way the pot is worked, so it rarely needs rotating.
+  const wrap = (v) => ((v % 100) + 100) % 100;
   return currentDyeComponents.map((c, i) => ({
     rowId: null,
     clientKey: nextClientKey++,
@@ -1384,8 +1391,8 @@ function buildSegmentsFromDyeComponents() {
     // Seeded straight from the component, so filling from the recipe already
     // separates two strengths of the same dye without anything to pick.
     dilution: c.dilution || '',
-    startPct: i * width,
-    endPct: (i + 1) * width,
+    startPct: wrap(i * width - width / 2),
+    endPct: wrap((i + 1) * width - width / 2),
     type: 'Solid',
     blendRatio: 50,
     notes: '',
@@ -1460,7 +1467,19 @@ function applyRepeat() {
   if (factor === 1) return;
   if (!confirm(`Repeat the current pattern ${factor} times around the circle? This replaces the current layout.`)) return;
 
-  const original = baseSegments.map(s => ({ ...s, rowId: null }));
+  /* Tile from the segment at the top of the ring, then turn the result so that
+     segment's centre stays where it was — a "One per dye" layout keeps its
+     first dye centred at the top after tiling, and every repeat lands evenly
+     spaced clockwise from it. */
+  const wrap = (v) => ((v % 100) + 100) % 100;
+  const anchor = baseSegments.find(s => s.endPct < s.startPct)          // wraps past the top
+    || baseSegments.reduce((a, s) => (s.startPct < a.startPct ? s : a), baseSegments[0]);
+  const o = anchor.endPct < anchor.startPct ? anchor.startPct - 100 : anchor.startPct;
+  const original = baseSegments.map(s => {
+    const st = wrap(s.startPct - o);
+    let en = wrap(s.endPct - o); if (en <= st) en += 100;
+    return { ...s, rowId: null, st, en };
+  }).sort((a, b) => a.st - b.st);
   const newSegments = [];
   for (let rep = 0; rep < factor; rep++) {
     original.forEach(seg => {
@@ -1472,8 +1491,8 @@ function applyRepeat() {
         notes: seg.notes,
         dilution: seg.dilution || '',
         blendRatio: seg.blendRatio ?? 50,
-        startPct: rep * (100 / factor) + seg.startPct / factor,
-        endPct: rep * (100 / factor) + seg.endPct / factor,
+        startPct: wrap(rep * (100 / factor) + seg.st / factor + o / factor),
+        endPct: wrap(rep * (100 / factor) + seg.en / factor + o / factor),
       });
     });
   }
