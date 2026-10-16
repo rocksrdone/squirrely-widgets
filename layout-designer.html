@@ -1699,10 +1699,31 @@ function applyRepeat() {
   renderSegmentEditor();
 }
 
+/* A new overlay lands on the section it's most likely meant for: the first
+   bare (Space) section with nothing on it yet, else the first solid colour with
+   nothing on it, going clockwise from the top — sized to that section exactly.
+   Blends are never picked. */
+function overlayTarget() {
+  const mid = (sg) => { let e = sg.endPct; if (e <= sg.startPct) e += 100; return ((sg.startPct + e) / 2) % 100; };
+  const covered = (sg) => overlayMarks.some(m => {
+    const c = mid(sg); let s0 = m.startPct, e0 = m.endPct; if (e0 <= s0) e0 += 100;
+    return (c >= s0 && c <= e0) || (c + 100 >= s0 && c + 100 <= e0);
+  });
+  const fromTop = (sg) => { const c = mid(sg); return c > 50 ? c - 100 : c; };   // top-centre first, then clockwise
+  const ring = baseSegments.slice().sort((a, b) => ((fromTop(a) + 100) % 100) - ((fromTop(b) + 100) % 100));
+  return ring.find(sg => sg.type === 'Space' && !covered(sg))
+    || ring.find(sg => sg.type === 'Solid' && sg.dyeName && !covered(sg))
+    || ring.find(sg => sg.type === 'Space')
+    || ring.find(sg => sg.type !== 'Blend')
+    || null;
+}
+
 function addOverlayMark() {
-  overlayMarks.push({ rowId: null, clientKey: nextClientKey++, dyeName: '', startPct: 45, endPct: 55, notes: '', applicationType: 'Dye' });
+  const t = overlayTarget();
+  overlayMarks.push({ rowId: null, clientKey: nextClientKey++, dyeName: '',
+    startPct: t ? t.startPct : 45, endPct: t ? t.endPct : 55, notes: '', applicationType: 'Dye' });
   markUnsaved();
-  renderRing();
+  selectOverlay(overlayMarks[overlayMarks.length - 1].clientKey);   // opens its editor to pick the dye
   renderOverlayList();
 }
 
