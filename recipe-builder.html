@@ -381,6 +381,13 @@
         <span class="field-label">Working / Scratch Notes</span>
         <textarea class="field-textarea" id="draftNotes" placeholder="Jot down thoughts as you figure this one out..." oninput="markUnsaved()"></textarea>
       </div>
+      <div class="field-wrap wide">
+        <span class="field-label">Conversation link</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="field-input" id="discussionLink" placeholder="Paste the email or message link — Gmail, Messenger, Instagram…" oninput="markUnsaved(); renderDiscussionLink()" style="flex:1">
+          <a id="discussionOpen" target="_blank" rel="noopener" style="display:none;white-space:nowrap;font-weight:600;color:var(--accent,#8B3A2A)">Open ↗</a>
+        </div>
+      </div>
     </div>
     </div>
   </div>
@@ -895,6 +902,21 @@ const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-phot
 const RECIPE_PHOTO_ROOT = 'Squirrely Stash/recipes/photos/';
 
 // inputId -> Grist fields and the filename the inbox gives that slot.
+/* A pasted link without a scheme ("mail.google.com/…") still opens; mailto: and
+   other schemes are kept as typed. */
+function discussionHref(v) {
+  v = String(v || '').trim();
+  if (!v) return '';
+  return /^[a-z][a-z0-9+.-]*:/i.test(v) ? v : 'https://' + v;
+}
+function renderDiscussionLink() {
+  const a = document.getElementById('discussionOpen');
+  const href = discussionHref(document.getElementById('discussionLink').value);
+  if (!a) return;
+  a.style.display = href ? '' : 'none';
+  if (href) a.href = href; else a.removeAttribute('href');
+}
+
 const PHOTO_SLOTS = {
   photoP1:   { label: 'Step 1',      photoField: 'Photo_Process_1',   noteField: 'Photo_Process_1_Note',   noteId: 'noteP1',   fileId: 'fileP1',   filenameBase: 'step1' },
   photoP2:   { label: 'Step 2',      photoField: 'Photo_Process_2',   noteField: 'Photo_Process_2_Note',   noteId: 'noteP2',   fileId: 'fileP2',   filenameBase: 'step2' },
@@ -2921,6 +2943,8 @@ async function loadRecipe(record) {
   document.getElementById('inspirationHex').value = rowField(record, ['Inspiration_Hex_Codes']) || '';
   renderInspirationSwatches();
   document.getElementById('draftNotes').value = rowField(record, ['Draft_Notes']) || '';
+  document.getElementById('discussionLink').value = rowField(record, ['Discussion_Link']) || '';
+  renderDiscussionLink();
   updatePhotoThumbs();
   loadProductPhotos();
 
@@ -3588,6 +3612,7 @@ async function saveRecipe() {
       Shopify_URL: document.getElementById('shopifyProductUrl').value.trim(),
       Notes: document.getElementById('generalNotes').value,
       Draft_Notes: document.getElementById('draftNotes').value,
+      Discussion_Link: document.getElementById('discussionLink').value.trim(),
       Linked_Customer: document.getElementById('linkedCustomer').value ? Number(document.getElementById('linkedCustomer').value) : null,
       Linked_Order_Line: selectedOrderLine ? selectedOrderLine.lineId : null,
       Layout_Description: document.getElementById('layoutDescription').value,

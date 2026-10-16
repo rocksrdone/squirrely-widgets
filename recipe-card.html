@@ -1445,6 +1445,7 @@ function renderRight() {
       ${r.Layout_Description ? `<div class="layout-note">${r.Layout_Description}</div>` : ''}
     </div>` : ''}
 
+    ${r.Discussion_Link ? `<div style="margin:6px 0 10px"><a href="${esc(/^[a-z][a-z0-9+.-]*:/i.test(String(r.Discussion_Link).trim()) ? String(r.Discussion_Link).trim() : 'https://' + String(r.Discussion_Link).trim())}" target="_blank" rel="noopener" style="font-weight:600;color:var(--accent)">💬 Open the conversation ↗</a></div>` : ''}
     ${hasPhotos ? `<div class="slabel">Reference photos</div><div id="photoViewerWrap"></div>` : ''}
   `;
 
