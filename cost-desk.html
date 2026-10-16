@@ -140,6 +140,7 @@ const SCHEMA = {
     {"id": "Category", "type": "Choice", "choices": ["Thread", "Dye powder", "Dye auxiliary", "Spools", "Labels", "Paper", "Ink", "Mailers", "Bubble mailers", "Shipping boxes", "Packing supplies", "Equipment parts", "Services", "Other"]},
     {"id": "Supplier", "type": "Ref:Suppliers"},
     {"id": "Item_Code", "type": "Text"},
+    {"id": "Order_Link", "type": "Text"},
     {"id": "Buy_Unit", "type": "Text"},
     {"id": "Use_Unit", "type": "Text"},
     {"id": "Use_Per_Buy", "type": "Numeric"},
@@ -846,6 +847,8 @@ function renderSupplyEditor(s) {
       '<label>Category' + sel('Supplies', s.id, 'Category', s.Category, { list: CATEGORIES.map(c => ({ v: c, t: c })) }, '—') + '</label>' +
       '<label>Supplier' + sel('Supplies', s.id, 'Supplier', s.Supplier, { list: supList, kind: 'ref' }, '— none —') + '</label>' +
       '<label>Supplier item #' + inp('Supplies', s.id, 'Item_Code', s.Item_Code) + '</label>' +
+      '<label class="wide">Order link' + (s.Order_Link ? ' <a href="' + esc(s.Order_Link) + '" target="_blank" rel="noopener" style="font-weight:600;text-transform:none;letter-spacing:0">open ↗</a>' : '') +
+        inp('Supplies', s.id, 'Order_Link', s.Order_Link, 'text', 'placeholder="paste the product page / reorder link"') + '</label>' +
       '<label>Bought per' + inp('Supplies', s.id, 'Buy_Unit', s.Buy_Unit, 'text', 'placeholder="lb, jar, pack, each"') + '</label>' +
       '<label>Used per' + inp('Supplies', s.id, 'Use_Unit', s.Use_Unit, 'text', 'placeholder="g, label, each"') + '</label>' +
       '<label>' + esc(s.Use_Unit || 'use units') + ' per ' + esc(s.Buy_Unit || 'buy unit') + inp('Supplies', s.id, 'Use_Per_Buy', s.Use_Per_Buy, 'num') + '</label>' +
@@ -869,7 +872,8 @@ function supplyRow(s) {
   const src = s.Price_Source === 'Order' ? '' : s.Price_Source === 'Manual' ? '<span class="chip est">manual</span>' : '<span class="chip warn">no price</span>';
   const conv = num(s.Use_Per_Buy) && s.Use_Unit && s.Use_Unit !== s.Buy_Unit;
   return '<tr class="click' + (open ? ' open' : '') + '" onclick="S.openSupply=' + (open ? 'null' : s.id) + '; render()">' +
-    '<td>' + esc(s.Name || '(unnamed)') + (s.Retired ? ' <span class="chip est">retired</span>' : '') + '</td>' +
+    '<td>' + esc(s.Name || '(unnamed)') + (s.Retired ? ' <span class="chip est">retired</span>' : '') +
+      (s.Order_Link ? ' <a href="' + esc(s.Order_Link) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open the order page" style="text-decoration:none">↗</a>' : '') + '</td>' +
     '<td class="sub">' + esc(supplierName(s.Supplier)) + '</td>' +
     '<td class="num">' + unitMoney(s.Landed_Per_Buy) + ' <span class="sub">/' + esc(s.Buy_Unit || '') + '</span></td>' +
     '<td class="num">' + (conv ? unitMoney(s.Cost_Per_Use) + ' <span class="sub">/' + esc(s.Use_Unit) + '</span>' : '') + '</td>' +
