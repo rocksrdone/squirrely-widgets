@@ -615,6 +615,12 @@ async function refreshUsage() {
 
 // One-line dose summary for a component row, skipping anything blank so an
 // under-filled recipe doesn't render as a row of stray separators.
+/* Links that open a recipe on its Grist page with that row selected:
+   the Recipes page (card) and the Recipe Builder page. */
+const DOC_URL = 'https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations';
+const RECIPE_URL = (id) => `${DOC_URL}/p/2#a1.s111.r${id}`;
+const BUILDER_URL = (id) => `${DOC_URL}/p/28#a1.s89.r${id}`;
+
 function usageDoseLine(u) {
   const bits = [];
   if (u.step !== '' && u.step !== null && u.step !== undefined) bits.push('Step ' + u.step);
@@ -646,7 +652,8 @@ function renderUsageSection() {
         <div class="usage-row">
           <span class="status-dot ${statusClass}" title="${esc(u.status || 'No status')}"></span>
           <div class="usage-main">
-            <div class="usage-recipe">${esc(u.recipeName)}${u.sku ? `<span class="usage-sku">${esc(u.sku)}</span>` : ''}${u.isPowder ? '<span class="usage-tag">powder</span>' : ''}</div>
+            <div class="usage-recipe"><a href="${RECIPE_URL(u.recipeId)}" target="_top" title="Open this recipe's card" style="color:inherit;text-decoration:underline;text-decoration-color:#D4C9BC">${esc(u.recipeName)}</a>
+              <a href="${BUILDER_URL(u.recipeId)}" target="_top" title="Open in the Recipe Builder" style="font-size:10px;font-weight:500;color:#8B3A2A;margin-left:4px">✎ builder</a>${u.sku ? `<span class="usage-sku">${esc(u.sku)}</span>` : ''}${u.isPowder ? '<span class="usage-tag">powder</span>' : ''}</div>
             ${dose ? `<div class="usage-detail">${esc(dose)}</div>` : ''}
           </div>
         </div>`;
