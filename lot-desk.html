@@ -206,6 +206,7 @@ function renderList() {
 }
 
 const RECENT_DAYS = 14;
+const BUILDER_URL = (id) => `https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations/p/28#a1.s89.r${id}`;
 function recentlyPutAway() {
   const since = Date.now() / 1000 - RECENT_DAYS * 86400;
   return S.model.lots.filter(l => l.recipe.id && l.waiting <= 0 && l.date >= since
@@ -295,7 +296,7 @@ function renderMain() {
    For when Grist and the shelf disagree outside a job: set what's really
    there (wound / hank / listed on vendor), zero a lot that's gone, or delete
    a lot that was entered twice. Store numbers stay yours to set. */
-function openFix(id) { S.fix = id; S.fixDone = null; S.delAsk = false; S.moveTo = null; S.sel = null; S.plan = null; S.prob = null; render(); }
+function openFix(id) { S.fix = id; S.fixDone = null; S.delAsk = false; S.moveTo = null; S.leAsk = false; S.sel = null; S.plan = null; S.prob = null; render(); }
 
 function renderFix(box) {
   const lot = S.model.lots.find(l => l.id === S.fix);
@@ -329,7 +330,13 @@ function renderFix(box) {
 
     <div class="step"><div class="hd">Came out a different colourway?</div>
       ${lot.allocs.length ? `<div class="lab">Can't move — ${lot.alloc} spools of this lot are already on orders. Take them off the orders first.</div>` : `
-      <div class="lab" style="margin-bottom:6px">Move this lot to the recipe it really is — e.g. a new Limited Edition made with <b>⧉ Duplicate as LE</b> in the Recipe Builder. ${esc(lot.recipe.name)}'s orders then show these spools as still to make.</div>
+      ${S.leMade && S.leMade.lot === lot.id ? `<div class="lab" style="margin-bottom:8px;color:var(--teal);font-weight:600">✓ Now ${esc(S.leMade.name)} (${esc(S.leMade.sku)}) — ${S.leMade.dyes} dyes and ${S.leMade.segs} layout pieces copied.
+          <a href="${BUILDER_URL(S.leMade.id)}" target="_top" style="color:var(--accent);margin-left:4px">Open it in the Recipe Builder ✎</a></div>`
+      : S.leAsk ? `<div class="lab" style="margin-bottom:6px;color:var(--accent);font-weight:600">Make a new Limited Edition from ${esc(lot.recipe.name)} (same dyes and layout) and move ${esc(lot.lotNumber)} onto it?</div>
+          <div class="actions" style="margin:0 0 10px"><button class="btn small" id="leyes">Yes, make the LE</button><button class="btn ghost small" id="leno">Cancel</button></div>`
+      : `<button class="btn small" id="leask" style="margin-bottom:8px">⚡ Make it a new Limited Edition</button>
+          <div class="lab" style="margin-bottom:8px">Copies ${esc(lot.recipe.name)}'s dyes and layout into a new LE, moves this lot onto it, and leaves ${esc(lot.recipe.name)} in the batch to make again. Tweak the LE in the Recipe Builder afterwards.</div>`}
+      <div class="lab" style="margin-bottom:6px">Or move it to a recipe that already exists:</div>
       <div class="picker-wrap" style="position:relative">
         <input class="search" id="mvq" placeholder="Search the recipe to move it to (name or SKU)…" style="margin:0" autocomplete="off">
         <div id="mvlist"></div>
@@ -351,6 +358,19 @@ function renderFix(box) {
   </div>`;
 
   const $ = (id) => document.getElementById(id);
+  if ($('leask')) $('leask').addEventListener('click', () => { S.leAsk = true; renderMain(); });
+  if ($('leno')) $('leno').addEventListener('click', () => { S.leAsk = false; renderMain(); });
+  if ($('leyes')) $('leyes').addEventListener('click', async () => {
+    if (S.busy) return;
+    S.busy = true; $('leyes').disabled = true; $('leyes').textContent = 'Making…';
+    try {
+      const r = await StockOps.makeLeFromLot(grist.docApi, S.model, lot);
+      S.leMade = Object.assign({ lot: lot.id }, r); S.leAsk = false;
+      toast(`${r.sku} made — ${lot.lotNumber} moved onto it`);
+      await load();
+    } catch (e) { console.error(e); toast(e.message || 'Could not make the LE'); S.leAsk = false; renderMain(); }
+    finally { S.busy = false; }
+  });
   // Move to another recipe
   const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const mvq = document.getElementById('mvq');

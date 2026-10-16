@@ -852,6 +852,85 @@
     return { acts };
   }
 
+  /* ── A pot came out wrong: turn it into a new Limited Edition ─────────────
+     Same result as "⧉ Duplicate as LE" in the Recipe Builder — a coded LE
+     (LE 2610_01, SKU FFN_LE_2610_01) with the parent's dyes and ring layout,
+     the parent recorded in its notes and change log — and then the lot moves
+     onto it. The parent recipe is untouched, so its orders show the spools as
+     still to make. Returns { id, name, sku }. */
+  async function writableCols(docApi, tableId) {
+    const out = new Set();
+    try {
+      const [tables, cols] = await Promise.all([docApi.fetchTable('_grist_Tables'), docApi.fetchTable('_grist_Tables_column')]);
+      const tIdx = (tables.tableId || []).indexOf(tableId);
+      const ref = tIdx >= 0 ? tables.id[tIdx] : null;
+      (cols.id || []).forEach((id, i) => {
+        if (cols.parentId[i] !== ref) return;
+        const c = cols.colId[i];
+        if (c === 'manualSort' || c.startsWith('gristHelper')) return;
+        if (cols.isFormula[i] && String(cols.formula[i] || '').trim()) return;
+        out.add(c);
+      });
+    } catch (e) { return null; }
+    return out;
+  }
+  async function copyChildRows(docApi, tableId, recipeCol, fromId, toId) {
+    const t = await docApi.fetchTable(tableId);
+    const ok = await writableCols(docApi, tableId);
+    const keys = Object.keys(t).filter(k => k !== 'id' && k !== 'manualSort' && !k.startsWith('gristHelper') && (!ok || ok.has(k)));
+    const acts = [];
+    (t.id || []).forEach((id, i) => {
+      if (refId(t[recipeCol][i]) !== fromId) return;
+      const f = {};
+      keys.forEach(k => { let v = t[k][i]; if (Array.isArray(v) && v[0] === 'L') v = null; f[k] = v === undefined ? null : v; });
+      f[recipeCol] = toId;
+      acts.push(['AddRecord', tableId, null, f]);
+    });
+    if (acts.length) await docApi.applyUserActions(acts);
+    return acts.length;
+  }
+  async function makeLeFromLot(docApi, model, lot) {
+    if (lot.allocs.length) throw new Error(`${lot.lotNumber} has spools on orders — take them off first.`);
+    const recT = await docApi.fetchTable('Recipes');
+    const i = (recT.id || []).indexOf(lot.recipe.id);
+    if (i < 0) throw new Error('The recipe for this lot is gone.');
+    const g = (c) => (recT[c] ? recT[c][i] : null);
+    const now = new Date();
+    const ym = String(now.getFullYear()).slice(2) + String(now.getMonth() + 1).padStart(2, '0');
+    let max = 0;
+    (recT.SKU_Base || []).forEach(v => { const m = new RegExp('_LE_' + ym + '_(\\d+)', 'i').exec(String(v || '')); if (m) max = Math.max(max, parseInt(m[1], 10) || 0); });
+    const code = `${ym}_${String(max + 1).padStart(2, '0')}`;
+    const fc = fiberCode(g('Fiber_Type')) || 'GEN';
+    const name = `LE ${code}`, sku = `${fc}_LE_${code}`;
+    const srcName = String(g('Recipe_Name') || lot.recipe.name);
+    const stamp = now.toISOString().slice(0, 10);
+    const parentLine = `[${stamp}] Limited edition from "${srcName}" (recipe #${lot.recipe.id}) — ${lot.lotNumber} came out a different colourway`;
+    const fields = {
+      Recipe_Name: name, Status: 'Researching', Created_Date: Math.floor(Date.now() / 1000),
+      Year_Made: String(now.getFullYear()), Fiber_Type: g('Fiber_Type'), Dye_Method: g('Dye_Method'),
+      Recipe_Scope: 'Limited Edition', SKU_Base: sku,
+      Notes: parentLine + (g('Notes') ? '\n' + g('Notes') : ''),
+      Layout_Description: g('Layout_Description') || '', Inspiration_Hex_Codes: g('Inspiration_Hex_Codes') || '',
+    };
+    Object.keys(fields).forEach(k => { if (!(k in recT)) delete fields[k]; });
+    const res = await docApi.applyUserActions([['AddRecord', 'Recipes', null, fields]]);
+    const newId = res && res.retValues && res.retValues[0];
+    if (!newId) throw new Error('Grist did not return the new recipe.');
+    let dyes = 0, segs = 0;
+    try { dyes = await copyChildRows(docApi, 'Recipe_Dye_Components', 'Recipe', lot.recipe.id, newId); } catch (e) { console.error('dye copy', e); }
+    try { segs = await copyChildRows(docApi, 'Recipe_Layout_Segments', 'Recipe', lot.recipe.id, newId); } catch (e) { console.error('layout copy', e); }
+    // Move the lot (and its jobs) onto the LE, and note where it came from.
+    const day = now.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+    const acts = [['UpdateRecord', 'Production_Lots', lot.id, { Recipe: newId,
+      Notes: (lot.notes ? lot.notes + '\n' : '') + `${day} came out a different colourway — moved from ${srcName} to ${name}` }]];
+    const T = model.cols.T;
+    if (T && T.recipe) model.taskRows.filter(t => t.lotId === lot.id).forEach(t => acts.push(['UpdateRecord', 'Worker_Tasks', t.id, { [T.recipe]: newId }]));
+    try { acts.push(['AddRecord', 'Recipe_Change_Log', null, { Recipe: newId, Change_Date: Math.floor(Date.now() / 1000),
+      Change_Note: `Made from ${lot.lotNumber}, a pot of "${srcName}" (recipe #${lot.recipe.id}) that came out different. Dyes and layout copied from the parent — adjust to what was really done.` }]); } catch (e) {}
+    await docApi.applyUserActions(acts);
+    return { id: newId, name, sku, dyes, segs };
+  }
+
   function openVendorStock(sku, opts) {
     opts = opts || {};
     if (!document.getElementById('so-vs-style')) {
@@ -968,7 +1047,7 @@
     check();
   }
 
-  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+  root.StockOps = { vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, makeLeFromLot, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);
