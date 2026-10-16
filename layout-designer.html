@@ -699,6 +699,7 @@ async function loadLayout(record) {
         dilution: columnAsArray(table, 'Dilution')[i] || '',
         blendRatio: Number(columnAsArray(table, 'Blend_Ratio')[i]) || 50,
         applicationType: columnAsArray(table, 'Application_Type')[i] || 'Dye',
+        stripes: Number(columnAsArray(table, 'Stripe_Count')[i]) || 0,
       };
       if (layer === 'Overlay') overlays.push(row);
       else bases.push(row);
@@ -819,10 +820,37 @@ function renderRing() {
   overlayMarks.forEach(mark => {
     const path = describeAnnulusSector(OVERLAY_R_OUT, OVERLAY_R_IN, mark.startPct, mark.endPct);
     const strokeW = mark.clientKey === selectedOverlayKey ? 3 : 1;
-    const isPowder = mark.applicationType === 'Powder';
-    const dash = isPowder ? 'stroke-dasharray="3,2"' : '';
-    const opacity = isPowder ? 0.55 : 1;
-    html += `<path d="${path}" fill="${guessColor(mark.dyeName)}" fill-opacity="${opacity}" ${dash} stroke="${strokeW === 3 ? '#1A1614' : 'white'}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+    const app = mark.applicationType || 'Dye';
+    const isPowder = /^Powder/.test(app);
+    const col = guessColor(mark.dyeName);
+    const stroke = strokeW === 3 ? '#1A1614' : (isPowder ? '#B9AC9D' : 'white');
+    if (!isPowder) {
+      html += `<path d="${path}" fill="${col}" stroke="${stroke}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+      return;
+    }
+    // Powder: a faint area (still clickable) with the powder drawn on top —
+    // speckles for scattered, radial lines for stripes, both for both.
+    html += `<path d="${path}" fill="${col}" fill-opacity="0.12" stroke-dasharray="3,2" stroke="${stroke}" stroke-width="${strokeW}" style="cursor:pointer" onclick="selectOverlay(${mark.clientKey})"></path>`;
+    let a0 = mark.startPct, a1 = mark.endPct; if (a1 <= a0) a1 += 100;
+    const span = a1 - a0;
+    if (app === 'Powder' || /scattered/.test(app)) {
+      // Fixed pseudo-random speckles, so the ring doesn't shimmer on every redraw.
+      let seed = 1 + Math.round(a0 * 1000) % 9973;
+      const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      const dots = Math.max(6, Math.round(span * 2.2));
+      for (let k = 0; k < dots; k++) {
+        const p = polarToCartesian(OVERLAY_R_IN + 2 + rnd() * (OVERLAY_R_OUT - OVERLAY_R_IN - 4), ((a0 + rnd() * span) / 100) * 360);
+        html += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(1.1 + rnd() * 1.1).toFixed(1)}" fill="${col}" style="pointer-events:none"></circle>`;
+      }
+    }
+    if (/stripes/.test(app)) {
+      const n = Math.max(1, Math.min(40, Number(mark.stripes) || 5));
+      for (let k = 0; k < n; k++) {
+        const deg = ((a0 + span * (k + 0.5) / n) / 100) * 360;
+        const p = polarToCartesian(OVERLAY_R_IN - 1, deg), q = polarToCartesian(OVERLAY_R_OUT + 1, deg);
+        html += `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${q.x.toFixed(1)}" y2="${q.y.toFixed(1)}" stroke="${col}" stroke-width="3" stroke-linecap="round" style="pointer-events:none"></line>`;
+      }
+    }
   });
 
   // Labels on each base segment
@@ -1279,11 +1307,21 @@ function renderSegmentEditor() {
       </div>
       <div class="field-row">
         <span class="field-label">Application</span>
-        <select class="field-select" onchange="updateOverlay(${mark.clientKey}, 'applicationType', this.value)">
-          <option ${!mark.applicationType || mark.applicationType === 'Dye' ? 'selected' : ''}>Dye</option>
-          <option ${mark.applicationType === 'Powder' ? 'selected' : ''}>Powder</option>
+        <select class="field-select" onchange="updateOverlay(${mark.clientKey}, 'applicationType', this.value); renderSegmentEditor();">
+          <option value="Dye" ${!mark.applicationType || mark.applicationType === 'Dye' ? 'selected' : ''}>Dye (liquid)</option>
+          <option value="Powder" ${mark.applicationType === 'Powder' ? 'selected' : ''}>Powder — scattered</option>
+          <option value="Powder stripes" ${mark.applicationType === 'Powder stripes' ? 'selected' : ''}>Powder — stripes</option>
+          <option value="Powder scattered + stripes" ${mark.applicationType === 'Powder scattered + stripes' ? 'selected' : ''}>Powder — scattered + stripes</option>
         </select>
+        <div style="font-size:10px;color:#8B7D72;">Powder sprinkles on top of what's under it. For all over, set Width to 100.</div>
       </div>
+      ${/stripes/.test(mark.applicationType || '') ? `
+      <div class="field-row">
+        <span class="field-label">Stripes</span>
+        <input class="field-input" type="number" min="1" max="40" value="${Number(mark.stripes) || 5}"
+          oninput="updateOverlay(${mark.clientKey}, 'stripes', Number(this.value) || 0)">
+        <div style="font-size:10px;color:#8B7D72;">How many lines across this area, with bare thread between them.</div>
+      </div>` : ''}
       <div class="field-row">
         <span class="field-label">Position (center %)</span>
         <input class="field-input" type="number" min="0" max="100" value="${((mark.startPct + mark.endPct) / 2).toFixed(0)}"
@@ -1669,7 +1707,8 @@ function renderOverlayList() {
   wrap.innerHTML = overlayMarks.map(m => `
     <div class="overlay-list-item ${m.clientKey === selectedOverlayKey ? 'selected' : ''}" onclick="selectOverlay(${m.clientKey})">
       <span class="overlay-swatch" style="background:${guessColor(m.dyeName)}"></span>
-      <span class="overlay-item-label">${esc(m.dyeName || 'Unnamed')} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%</span>
+      <span class="overlay-item-label">${esc(m.dyeName || 'Unnamed')} — ${((m.startPct + m.endPct) / 2).toFixed(0)}%${
+        /^Powder/.test(m.applicationType || '') ? ` <span style="color:#8B7D72;font-size:10.5px">· ${esc(({ 'Powder': 'scattered', 'Powder stripes': (Number(m.stripes) || 5) + ' stripes', 'Powder scattered + stripes': 'scattered + ' + (Number(m.stripes) || 5) + ' stripes' })[m.applicationType] || 'powder')}</span>` : ''}</span>
       <button class="icon-btn" onclick="event.stopPropagation(); removeOverlay(${m.clientKey})">✕</button>
     </div>
   `).join('');
@@ -1780,6 +1819,7 @@ async function saveLayout() {
         Segment_Order: i + 1,
         Notes: mark.notes || '',
         Application_Type: mark.applicationType || 'Dye',
+        Stripe_Count: /stripes/.test(mark.applicationType || '') ? (Number(mark.stripes) || 5) : null,
       };
       queue(mark, fields);
     });

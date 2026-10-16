@@ -1005,10 +1005,30 @@ function buildLayoutRingSvg(baseSegs, overlays) {
 
   overlays.forEach(mark => {
     const path = ringDescribeAnnulusSector(CX, CY, OVERLAY_R_OUT, OVERLAY_R_IN, mark.startPct, mark.endPct);
-    const isPowder = mark.applicationType === 'Powder';
-    const dash = isPowder ? 'stroke-dasharray="3,2"' : '';
-    const opacity = isPowder ? 0.55 : 1;
-    inner += `<path d="${path}" fill="${guessColor(mark.dyeName)}" fill-opacity="${opacity}" ${dash} stroke="white" stroke-width="1"></path>`;
+    const app = mark.applicationType || 'Dye';
+    const col = guessColor(mark.dyeName);
+    if (!/^Powder/.test(app)) { inner += `<path d="${path}" fill="${col}" stroke="white" stroke-width="1"></path>`; return; }
+    // Same drawing as the layout designer: speckles = scattered, lines = stripes.
+    inner += `<path d="${path}" fill="${col}" fill-opacity="0.12" stroke-dasharray="3,2" stroke="#B9AC9D" stroke-width="1"></path>`;
+    let a0 = mark.startPct, a1 = mark.endPct; if (a1 <= a0) a1 += 100;
+    const span = a1 - a0;
+    if (app === 'Powder' || /scattered/.test(app)) {
+      let seed = 1 + Math.round(a0 * 1000) % 9973;
+      const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      const dots = Math.max(6, Math.round(span * 2.2));
+      for (let k = 0; k < dots; k++) {
+        const p = ringPolarToCartesian(CX, CY, OVERLAY_R_IN + 2 + rnd() * (OVERLAY_R_OUT - OVERLAY_R_IN - 4), ((a0 + rnd() * span) / 100) * 360);
+        inner += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(1.1 + rnd() * 1.1).toFixed(1)}" fill="${col}"></circle>`;
+      }
+    }
+    if (/stripes/.test(app)) {
+      const n = Math.max(1, Math.min(40, Number(mark.stripes) || 5));
+      for (let k = 0; k < n; k++) {
+        const deg = ((a0 + span * (k + 0.5) / n) / 100) * 360;
+        const p = ringPolarToCartesian(CX, CY, OVERLAY_R_IN - 1, deg), q = ringPolarToCartesian(CX, CY, OVERLAY_R_OUT + 1, deg);
+        inner += `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${q.x.toFixed(1)}" y2="${q.y.toFixed(1)}" stroke="${col}" stroke-width="3" stroke-linecap="round"></line>`;
+      }
+    }
   });
 
   baseSegs.forEach((seg, idx) => {
@@ -1665,6 +1685,7 @@ grist.onRecord(async (record) => {
         type: get('Segment_Type') || 'Solid',
         blendRatio: Number(get('Blend_Ratio')) || 50,
         applicationType: get('Application_Type') || 'Dye',
+        stripes: Number(get('Stripe_Count')) || 0,
         order: get('Segment_Order') || 0,
       };
       if (get('Layer') === 'Overlay') overlays.push(row);
