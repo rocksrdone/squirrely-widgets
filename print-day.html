@@ -1,6 +1,7 @@
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Print today's tags &amp; sheets</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="dye-mix.js"></script>
 <style>
 @page { size: Letter; margin: 0.25in; }
 * { box-sizing: border-box; }
@@ -506,6 +507,8 @@ async function load() {
     });
 
     PULL = PULL_READY ? buildPullState(compT, dyeT, stkT, today) : null;
+    // Custom mixes (Brand X): their formulas, so the pull lists each ingredient.
+    PULL_MIX = PULL && window.DyeMix ? await DyeMix.load(grist.docApi) : null;
     if (!PULL) pullNote = compT || dyeT || stkT
       ? 'Dye pull sheet is off \u2014 one of Recipe_Dye_Components, Dyes or Dye_Stock could not be read.'
       : '';
@@ -1082,6 +1085,7 @@ function buildPullState(compT, dyeT, stkT, planDate) {
   }
 }
 
+let PULL_MIX = null;
 function buildPull(printable) {
   if (!PULL) return null;
   const { stgRows, stgCols } = PULL_CFG;
@@ -1112,8 +1116,34 @@ function buildPull(printable) {
       cl.need += need;
       cl.users.push({ batch: b, comp: c, need });
       b.manifest.push({ kind: 'liquid', comp: c, dye: d, claim: cl });
+      if (PULL_MIX && DyeMix.isMix(PULL_MIX, d.id)) addMixIngredients(b, d, claims, powders);
     });
   });
+
+  /* A custom mix: its own jar is claimed above. Each ingredient's jar is pulled
+     too when one exists (so the mix can be checked or remade), and its powder
+     comes along when the mix says always pull powder, is a dry mix, or the
+     ingredient has no jar. */
+  function addMixIngredients(b, mixDye, claims, powders) {
+    const hasJar = (id) => (PULL.jarsByDye[id] || []).some(j => j.qty > 0);
+    DyeMix.expand(PULL_MIX, mixDye.id).forEach(p => {
+      const dIng = PULL.dye[p.dyeId];
+      if (!dIng) return;
+      const info = PULL_MIX.mixInfo[p.parentMix] || {};
+      const via = (PULL.dye[p.parentMix] || {}).name || mixDye.name;
+      const pseudo = { dyeId: p.dyeId, isPowder: false, mode: '', rate: 0, viaMix: via, parts: p.parts, strength: p.strength };
+      if (hasJar(p.dyeId)) {
+        let cl = claims.get(p.dyeId);
+        if (!cl) { cl = { dye: dIng, owner: b, need: 0, users: [], comp: pseudo }; claims.set(p.dyeId, cl); }
+        cl.users.push({ batch: b, comp: pseudo, need: 0 });
+        b.manifest.push({ kind: 'liquid', comp: pseudo, dye: dIng, claim: cl, viaMix: via });
+      }
+      if (!p.isMix && (info.alwaysPowder !== false || info.form === 'Dry' || !hasJar(p.dyeId))) {
+        powders.push({ batch: b, comp: pseudo, dye: dIng });
+        b.manifest.push({ kind: 'powder', comp: pseudo, dye: dIng, viaMix: via });
+      }
+    });
+  }
 
   /* Skip anything past shelf life, take the oldest jar first so stock rotates,
      and add a second jar only when the first cannot cover the estimate. */
@@ -1132,7 +1162,9 @@ function buildPull(printable) {
     cl.dupes = all.length > 1 ? all.length : 0;
     if (!jar) {
       cl.jar = null;
-      noStock.push({ claim: cl, reason: all.length ? 'jar is empty' : 'no premade jar' });
+      const isMix = PULL_MIX && DyeMix.isMix(PULL_MIX, cl.dye.id);
+      cl.isMix = isMix;
+      noStock.push({ claim: cl, reason: isMix ? 'custom mix — make it' : (all.length ? 'jar is empty' : 'no premade jar') });
       return;
     }
     cl.jar = jar;
@@ -1229,7 +1261,8 @@ function pl_powder(p) {
     <div class="body"><div class="nm">${esc(d.name)}${needTag('powder')}</div>
       ${pl_idLine(d, c)}
       ${spec.length ? `<div class="sub2">${spec.join(' \u00b7 ')}</div>` : ''}
-      ${c.notes ? `<div class="sub2">${esc(c.notes)}</div>` : ''}</div>
+      ${c.notes ? `<div class="sub2">${esc(c.notes)}</div>` : ''}
+      ${c.viaMix ? `<div class="sub2">for ${esc(c.viaMix)} \u2014 ${esc(String(c.parts))} part${c.parts === 1 ? '' : 's'}${c.strength ? ' \u00b7 ' + esc(c.strength) : ''}</div>` : ''}</div>
     <div class="qty"><div class="have">&mdash;</div><div class="need">from the powder shelf</div></div>
     ${pl_dest(p.batch)}</div>`;
 }
@@ -1238,7 +1271,7 @@ function pl_noStock(n) {
   return `<div class="pl-ln"><div class="cb"></div>
     <div class="body"><div class="nm">${esc(d.name)} <span class="pl-flag hot">${esc(n.reason)}</span></div>
       ${pl_idLine(d, cl.comp)}
-      <div class="sub2">Grab the dry powder instead, or tell control before the pot goes on.</div>
+      <div class="sub2">${cl.isMix ? 'Mixed from its ingredients — they are on this sheet: = ' + esc(DyeMix.formula(PULL_MIX, d.id, id => PULL.dye[id])) : 'Grab the dry powder instead, or tell control before the pot goes on.'}</div>
       ${pl_also(cl)}</div>
     <div class="qty"><div class="have">&mdash;</div>
       <div class="need">${cl.need > 0 ? 'need ~' + Math.round(cl.need) + ' mL' : 'no rate set'}</div></div>
@@ -1349,7 +1382,7 @@ function pl_manifest(b) {
   const items = b.manifest.map(m => {
     // Powder BY DESIGN — no jar has ever existed for this dye, so nobody should
     // go looking in a bin for one.
-    if (m.kind === 'powder') return `<li><span class="mf-back none">\u2014</span><b>${dyeWithBrand(m.dye)}</b> <em>powder \u2014 no jar</em></li>`;
+    if (m.kind === 'powder') return `<li><span class="mf-back none">\u2014</span><b>${dyeWithBrand(m.dye)}</b> <em>powder${m.viaMix ? ' \u2014 for ' + esc(m.viaMix) : ' \u2014 no jar'}</em></li>`;
     if (m.kind === 'orphan') return `<li class="fyi"><span class="mf-back none">?</span><b>${esc(m.comp.rawName || m.comp.full || '?')}</b> <em>no dye record \u2014 ask control</em></li>`;
     const cl = m.claim;
     // A LIQUID dye whose jar is missing. Reads almost identically to the line
@@ -1357,7 +1390,7 @@ function pl_manifest(b) {
     // pulls a bin out looking for a jar that was never there.
     // Mixed fresh today, so it has no home bin yet — control gives it one when
     // the new jar is put away. Saying so beats printing a blank.
-    if (!cl.jar) return `<li><span class="mf-back new">NEW</span><b>${dyeWithBrand(m.dye)}</b><em>mix from powder</em></li>`;
+    if (!cl.jar) return `<li><span class="mf-back new">NEW</span><b>${dyeWithBrand(m.dye)}</b><em>${cl.isMix ? 'mix from its ingredients' : 'mix from powder'}</em></li>`;
     if (cl.owner !== b) return `<li class="fyi"><span class="mf-back">${esc((cl.jar && cl.jar.bin && cl.jar.bin.code) || '\u2014')}</span><b>${dyeWithBrand(m.dye)}</b> <em>shared \u2014 sits in ${esc(cl.owner.stage || '?')}</em></li>`;
     const from = cl.jar.bin
       ? cl.jar.bin.code + (cl.jar.bin.legacy ? ' (' + cl.jar.bin.legacy + ')' : '')
@@ -1366,7 +1399,7 @@ function pl_manifest(b) {
     // page, and a variable-width chip threw every name out of alignment.
     const backTo = cl.jar.bin ? cl.jar.bin.code : '\u2014';
     return `<li><span class="mf-back">${esc(backTo)}</span><b>${dyeWithBrand(m.dye)}</b><em>${
-      cl.jar.expired ? 'plus powder \u2014 remake' : ''}</em></li>`;
+      m.viaMix ? 'for ' + esc(m.viaMix) + ' (if usable) ' : ''}${cl.jar.expired ? 'plus powder \u2014 remake' : ''}</em></li>`;
   }).join('');
   return `<div class="pl-mfb">
     <div class="h"><div class="s">${esc(b.stage || '\u2014')}</div>

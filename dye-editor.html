@@ -115,6 +115,17 @@ body {
 .field-input:focus, .field-select:focus { border-color: var(--accent); }
 textarea.field-input { resize: vertical; min-height: 44px; }
 .checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+:root { color-scheme: light; }
+button { color: var(--ink); }
+.kind-seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; margin: 6px 0 4px; }
+.kind-seg button { border: none; background: #fff; font: inherit; font-size: 12px; padding: 7px 14px; cursor: pointer; color: #6B5E52; }
+.kind-seg button.on { background: var(--ink); color: #fff; }
+.mix-part { display: grid; grid-template-columns: 1fr 70px 90px 22px; gap: 6px; align-items: center; margin-bottom: 6px; }
+.mix-part .picker-chip { padding: 4px 8px; }
+.mix-x { border: 1px solid var(--rule); background: #fff; border-radius: 4px; cursor: pointer; font-size: 11px; height: 26px; }
+.mix-line { font-family: 'DM Mono', monospace; font-size: 12px; background: var(--paper, #F7F3EE); border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+.mix-old { font-size: 11.5px; color: #6B5E52; background: #F5EDD8; border: 1px solid #E2C98F; border-radius: 6px; padding: 8px 10px; margin: 8px 0; white-space: pre-line; }
+.draft-tag { font-size: 9px; font-weight: 700; color: #B07D2A; background: #F5EDD8; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
 .checkbox-row label { font-size: 12px; color: #6B5E52; }
 
 .swatch-editor { display: flex; align-items: center; gap: 10px; }
@@ -329,6 +340,115 @@ async function loadColumnChoices() {
 // ── STATE ──
 let allDyes = [];       // full catalog, each: {id, Dye_Name, Brand, ..., Swatch_Hex}
 let editingDye = null;  // working copy of the currently-selected dye
+/* Custom mixes: their formula is rows in Dye_Mix_Parts (one per ingredient).
+   editingParts is the working copy for the selected dye; saved with the dye. */
+let partsByMix = {};
+let editingParts = [];
+let hasMixTable = false;
+function isCustom(d) { return !!d && (d.Dye_Source_Type === 'Custom Color' || d.Dye_Type === 'Custom Mix'); }
+async function loadMixParts() {
+  partsByMix = {};
+  try {
+    const t = await grist.docApi.fetchTable('Dye_Mix_Parts');
+    hasMixTable = true;
+    (t.id || []).forEach((id, i) => {
+      const mix = getRefId(t.Mix[i]);
+      if (!mix) return;
+      (partsByMix[mix] = partsByMix[mix] || []).push({ id, ingredient: getRefId(t.Ingredient[i]), parts: t.Parts[i] ?? '',
+        strength: t.Strength[i] || '', notes: t.Notes[i] || '', sort: Number(t.Sort[i]) || 0 });
+    });
+    Object.values(partsByMix).forEach(l => l.sort((a, b) => a.sort - b.sort || a.id - b.id));
+  } catch (e) { hasMixTable = false; }
+}
+function fmtParts(p) { const n = Number(p); return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : String(p || '?'); }
+/* "2 Hot Fuchsia (J 1-160) : 1.5 Sun Yellow (Pro 1-80) : 1 True Black (Dh 1-80) : 4 water" */
+function formulaLine(parts, form, water) {
+  const dry = form === 'Dry';
+  const bits = parts.filter(p => p.ingredient).map(p => {
+    const d = allDyes.find(x => x.id === p.ingredient);
+    const tag = [d ? brandLabel(d) : '', p.strength].filter(Boolean).join(' ');
+    return `${fmtParts(p.parts)}${dry ? ' tsp' : ''} ${d ? d.Dye_Name : '?'}${tag ? ' (' + tag + ')' : ''}`;
+  });
+  if (Number(water)) bits.push(`${fmtParts(water)}${dry ? ' mL' : ''} water`);
+  return bits.join(dry ? ' + ' : ' : ');
+}
+function setKind(kind) {
+  if (!editingDye) return;
+  if (kind === 'custom') {
+    editingDye.Dye_Source_Type = 'Custom Color';
+    editingDye.Dye_Type = 'Custom Mix';
+    if (!brandColIsRef) editingDye.Brand = 'X';
+    if (!editingDye.Mix_Form) editingDye.Mix_Form = 'Liquid';
+    if (!editingParts.length) { editingDye.Always_Pull_Powder = true; editingParts = [{ id: null, ingredient: null, parts: 1, strength: '', notes: '' }]; }
+  } else {
+    editingDye.Dye_Source_Type = 'Commercial Dye';
+    if (editingDye.Dye_Type === 'Custom Mix') editingDye.Dye_Type = '';
+  }
+  markUnsaved(); renderEditPanel();
+}
+function setPart(i, field, value) { if (editingParts[i]) { editingParts[i][field] = value; markUnsaved(); } const el = document.getElementById('mixLine'); if (el) el.textContent = formulaLine(editingParts, editingDye.Mix_Form, editingDye.Mix_Water_Parts) || '—'; }
+function addPart() { editingParts.push({ id: null, ingredient: null, parts: 1, strength: '', notes: '' }); markUnsaved(); renderEditPanel(); }
+function removePart(i) { editingParts.splice(i, 1); markUnsaved(); renderEditPanel(); }
+function searchPartDye(i, query) {
+  const box = document.getElementById('partSug' + i);
+  const q = normalize(query);
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = allDyes.filter(d => d.id !== currentDyeId && (normalize(d.Dye_Name).includes(q) || normalize(brandLabel(d)) === q)).slice(0, 8);
+  box.innerHTML = matches.length ? matches.map(d => `
+    <div class="picker-suggestion-row" onmousedown="event.preventDefault(); setPart(${i}, 'ingredient', ${d.id}); renderEditPanel();">
+      <span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(d)}"></span>
+      <div><div>${esc(d.Dye_Name)}</div><div style="font-size:10px;color:#8B7D72;">${esc(dyeDetailLine(d))}${isCustom(d) ? ' · custom' : ''}</div></div>
+    </div>`).join('') : `<div class="picker-suggestion-row" style="color:#8B7D72;font-style:italic">No matches</div>`;
+  box.style.display = 'block';
+}
+function renderFormulaSection(d) {
+  const dry = d.Mix_Form === 'Dry';
+  const rows = editingParts.map((p, i) => {
+    const ing = p.ingredient ? allDyes.find(x => x.id === p.ingredient) : null;
+    const pick = ing ? `<div class="picker-chip"><span class="swatch-dot" style="width:12px;height:12px;background:${resolvedColor(ing)}"></span>
+        <div><div>${esc(ing.Dye_Name)}${isCustom(ing) ? ' <span class="draft-tag" style="color:#5B4A8B;background:#EEE8F7">custom</span>' : ''}</div><div style="font-size:10px;color:#8B7D72;">${esc(dyeDetailLine(ing))}</div></div>
+        <span class="clear-link" onclick="setPart(${i}, 'ingredient', null); renderEditPanel();">change</span></div>`
+      : `<div class="picker-wrap"><input class="field-input" placeholder="Search a dye…" oninput="searchPartDye(${i}, this.value)"
+          onblur="setTimeout(() => { const b = document.getElementById('partSug${i}'); if (b) b.style.display='none'; }, 150)">
+          <div class="picker-suggestions" id="partSug${i}" style="display:none"></div></div>`;
+    return `<div class="mix-part">${pick}
+      <input class="field-input" type="number" step="any" min="0" value="${esc(p.parts)}" title="${dry ? 'tsp of powder' : 'parts'}" oninput="setPart(${i}, 'parts', this.value)">
+      <input class="field-input" value="${esc(p.strength)}" placeholder="${dry ? 'powder' : '1-80'}" title="Solution strength — tsp powder to mL water, e.g. 1-80 or 1/2-160" oninput="setPart(${i}, 'strength', this.value)">
+      <button class="mix-x" onclick="removePart(${i})" title="Remove">✕</button>
+      ${p.notes ? `<div style="grid-column:1/-1;font-size:10.5px;color:#B07D2A;margin-top:-3px">${esc(p.notes)}</div>` : ''}
+    </div>`;
+  }).join('');
+  const old = [d.Notes && 'Notes: ' + d.Notes, d.Status_Notes && 'Status notes: ' + d.Status_Notes].filter(Boolean).join('\n');
+  return `
+    <div class="section-title">Formula ${d.Mix_Confirmed ? '' : '<span class="draft-tag">draft — check it</span>'}</div>
+    <div class="field-grid-2">
+      <div class="field-row">
+        <span class="field-label">Made by</span>
+        <select class="field-select" onchange="updateField('Mix_Form', this.value); renderEditPanel();">
+          <option value="Liquid" ${!dry ? 'selected' : ''}>Combining made solutions</option>
+          <option value="Dry" ${dry ? 'selected' : ''}>Mixing powders (dry)</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">${dry ? 'Water (mL)' : 'Water (parts)'}</span>
+        <input class="field-input" type="number" step="any" min="0" value="${esc(d.Mix_Water_Parts)}" placeholder="0" oninput="updateField('Mix_Water_Parts', this.value); setPart(-1)">
+      </div>
+    </div>
+    <div class="mix-part" style="font-size:9.5px;color:#8B7D72;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">
+      <span>Ingredient</span><span>${dry ? 'tsp' : 'Parts'}</span><span>${dry ? '' : 'Strength'}</span><span></span></div>
+    ${rows}
+    <button class="btn" onclick="addPart()">+ Ingredient</button>
+    <div class="mix-line" id="mixLine">${esc(formulaLine(editingParts, d.Mix_Form, d.Mix_Water_Parts)) || '—'}</div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="alwaysPowderBox" ${d.Always_Pull_Powder ? 'checked' : ''} onchange="updateField('Always_Pull_Powder', this.checked)">
+      <label for="alwaysPowderBox">Always pull the ingredient powders when picking (made solutions are listed too). Untick for simple mixes — then powder is only listed when no made solution is on the rack.</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="mixConfirmedBox" ${d.Mix_Confirmed ? 'checked' : ''} onchange="updateField('Mix_Confirmed', this.checked); renderEditPanel();">
+      <label for="mixConfirmedBox">Formula checked and correct</label>
+    </div>
+    ${!d.Mix_Confirmed && old ? `<div class="mix-old"><b>Drafted from the old notes — compare:</b>\n${esc(old)}</div>` : ''}`;
+}
 let currentDyeId = null;
 let listFilter = 'all';
 let unsavedChanges = false;
@@ -593,6 +713,10 @@ async function loadAllDyes() {
       notes: col(['Notes']),
       blendDesc: col(['Blend_Description']),
       replacementDye: col(['Replacement_Dye']),
+      mixForm: col(['Mix_Form']),
+      mixWater: col(['Mix_Water_Parts']),
+      alwaysPowder: col(['Always_Pull_Powder']),
+      mixConfirmed: col(['Mix_Confirmed']),
     };
     colMap = c;
 
@@ -624,7 +748,12 @@ async function loadAllDyes() {
       Blend_Description: columnAsArray(table, c.blendDesc)[i] || '',
       Replacement_Dye: getRefId(columnAsArray(table, c.replacementDye)[i]),
       Swatch_Hex: swatchCol ? (columnAsArray(table, swatchCol)[i] || '') : '',
+      Mix_Form: columnAsArray(table, c.mixForm)[i] || '',
+      Mix_Water_Parts: columnAsArray(table, c.mixWater)[i] ?? '',
+      Always_Pull_Powder: !!columnAsArray(table, c.alwaysPowder)[i],
+      Mix_Confirmed: !!columnAsArray(table, c.mixConfirmed)[i],
     })).filter(d => d.Dye_Name);
+    await loadMixParts();
 
     allDyes.sort((a, b) => a.Dye_Name.localeCompare(b.Dye_Name));
 
@@ -664,7 +793,7 @@ function renderDyeList() {
   const q = normalize(document.getElementById('dyeSearch').value);
   let list = allDyes;
   if (listFilter === 'missing') list = list.filter(d => !d.Swatch_Hex);
-  if (listFilter === 'custom') list = list.filter(d => d.Dye_Source_Type === 'Custom Color');
+  if (listFilter === 'custom') list = list.filter(isCustom);
   if (listFilter === 'unused') list = list.filter(d => usageRecipeCount(d.id) === 0);
   if (q) list = list.filter(d => normalize(d.Dye_Name).includes(q) || normalize(brandLabel(d)).includes(q));
 
@@ -678,7 +807,7 @@ function renderDyeList() {
     return `
     <div class="dye-row ${d.id === currentDyeId ? 'selected' : ''}" onclick="selectDye(${d.id})">
       <span class="swatch-dot ${d.Swatch_Hex ? '' : 'no-manual'}" style="background:${resolvedColor(d)}"></span>
-      <span class="dye-row-name">${esc(d.Dye_Name)}</span>
+      <span class="dye-row-name">${esc(d.Dye_Name)}${isCustom(d) && !d.Mix_Confirmed ? '<span class="draft-tag" title="Formula not checked yet">draft</span>' : ''}</span>
       <span class="dye-row-brand">${esc(brandLabel(d))}</span>
       <span class="use-badge ${n ? '' : 'zero'}" title="${n} recipe${n === 1 ? '' : 's'} use this dye">${n || '\u2013'}</span>
     </div>`;
@@ -700,6 +829,7 @@ function selectDye(id) {
   if (unsavedChanges && !confirm('Discard unsaved changes to the current dye?')) return;
   currentDyeId = id;
   editingDye = { ...allDyes.find(d => d.id === id) };
+  editingParts = (partsByMix[id] || []).map(p => ({ ...p }));
   viewMode = 'edit';
   setViewMode('edit');
   renderDyeList();
@@ -822,6 +952,7 @@ function renderEditPanel() {
   }
   const d = editingDye;
   const guess = guessColor(d.Dye_Name);
+  const custom = isCustom(d);
 
   panel.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -831,13 +962,17 @@ function renderEditPanel() {
 
     ${renderUsageSection()}
 
+    <div class="kind-seg">
+      <button class="${custom ? '' : 'on'}" onclick="setKind('commercial')">Commercial dye</button>
+      <button class="${custom ? 'on' : ''}" onclick="setKind('custom')">Custom mix (Brand X)</button>
+    </div>
     <div class="section-title">Identity</div>
     <div class="field-grid-2">
       <div class="field-row">
         <span class="field-label">Dye Name</span>
         <input class="field-input" value="${(d.Dye_Name || '').replace(/"/g, '&quot;')}" oninput="updateField('Dye_Name', this.value)">
       </div>
-      <div class="field-row">
+      ${custom ? '' : `<div class="field-row">
         <span class="field-label">Brand <span style="font-weight:400;color:#8B7D72;font-size:9px;">${esc(brandSource())}</span></span>
         <div style="display:flex; gap:6px;">
           <select class="field-select" style="flex:1" onchange="updateField('Brand', ${brandColIsRef ? '(Number(this.value) || null)' : 'this.value'})">${brandSelectOptions(d)}</select>
@@ -849,13 +984,9 @@ function renderEditPanel() {
         <input class="field-input" value="${(d.Serial || '').replace(/"/g, '&quot;')}" oninput="updateField('Serial', this.value)">
       </div>
       <div class="field-row">
-        <span class="field-label">Source Type</span>
-        <select class="field-select" onchange="updateField('Dye_Source_Type', this.value)">${selectOption('Dye_Source_Type', SOURCE_TYPE_CHOICES, d.Dye_Source_Type)}</select>
-      </div>
-      <div class="field-row">
         <span class="field-label">Dye Type</span>
-        <select class="field-select" onchange="updateField('Dye_Type', this.value)">${selectOption('Dye_Type', DYE_TYPE_CHOICES, d.Dye_Type)}</select>
-      </div>
+        <select class="field-select" onchange="updateField('Dye_Type', this.value)">${selectOption('Dye_Type', DYE_TYPE_CHOICES.filter(x => x !== 'Custom Mix'), d.Dye_Type)}</select>
+      </div>`}
       <div class="field-row">
         <span class="field-label">Status</span>
         <select class="field-select" onchange="updateField('Status', this.value)">${selectOption('Status', STATUS_CHOICES, d.Status)}</select>
@@ -878,24 +1009,26 @@ function renderEditPanel() {
     </div>
     ${!hasSwatchColumn ? '<div style="font-size:11px;color:var(--accent);margin-top:6px;">⚠ No Swatch_Hex column found on the Dyes table yet — add a Text column named "Swatch_Hex" in Grist so this saves correctly.</div>' : ''}
 
-    <div class="section-title">Standard Usage Ratios</div>
+    ${custom ? renderFormulaSection(d) : ''}
+
+    <div class="section-title">${custom ? 'Usage' : 'Standard Usage Ratios'}</div>
     <div class="field-grid-2">
-      <div class="field-row">
+      ${custom ? '' : `<div class="field-row">
         <span class="field-label">Std Powder (tsp)</span>
         <input class="field-input" type="number" step="0.1" value="${d.Std_Powder_tsp}" oninput="updateField('Std_Powder_tsp', this.value)">
       </div>
       <div class="field-row">
         <span class="field-label">Std Water (mL)</span>
         <input class="field-input" type="number" step="1" value="${d.Std_Water_mL}" oninput="updateField('Std_Water_mL', this.value)">
-      </div>
+      </div>`}
       <div class="field-row">
         <span class="field-label">Default mL per 100 yds</span>
         <input class="field-input" type="number" step="0.1" value="${d.Default_mL_per_100_yds}" oninput="updateField('Default_mL_per_100_yds', this.value)">
       </div>
-      <div class="field-row">
+      ${custom ? '' : `<div class="field-row">
         <span class="field-label">Std Dry Weight (g)</span>
         <input class="field-input" type="number" step="0.1" value="${d.Std_Dry_Weight_g}" oninput="updateField('Std_Dry_Weight_g', this.value)">
-      </div>
+      </div>`}
     </div>
 
     <div class="section-title">Handling</div>
@@ -1023,14 +1156,32 @@ async function saveDye() {
   put('notes', editingDye.Notes);
   put('blendDesc', editingDye.Blend_Description);
   put('replacementDye', editingDye.Replacement_Dye || null);
+  if (isCustom(editingDye)) {
+    put('mixForm', editingDye.Mix_Form || 'Liquid');
+    put('mixWater', num(editingDye.Mix_Water_Parts));
+    put('alwaysPowder', !!editingDye.Always_Pull_Powder);
+    put('mixConfirmed', !!editingDye.Mix_Confirmed);
+  }
   if (hasSwatchColumn && swatchColId) fields[swatchColId] = editingDye.Swatch_Hex;
 
   if (skipped.length) console.warn('No matching Dyes column for:', skipped.join(', '));
 
   try {
     if (!currentDyeId) throw new Error('No row selected — cannot save.');
-    await grist.docApi.applyUserActions([['UpdateRecord', 'Dyes', currentDyeId, fields]]);
+    const actions = [['UpdateRecord', 'Dyes', currentDyeId, fields]];
+    // Formula rows: remove dropped ones, update kept ones, add new ones — one bundle.
+    if (hasMixTable && isCustom(editingDye)) {
+      const before = partsByMix[currentDyeId] || [];
+      const keep = editingParts.filter(p => p.ingredient);
+      before.filter(b => !keep.some(p => p.id === b.id)).forEach(b => actions.push(['RemoveRecord', 'Dye_Mix_Parts', b.id]));
+      keep.forEach((p, k) => {
+        const row = { Mix: currentDyeId, Ingredient: p.ingredient, Parts: num(p.parts), Strength: p.strength || '', Sort: k + 1, Notes: p.notes || '' };
+        actions.push(p.id ? ['UpdateRecord', 'Dye_Mix_Parts', p.id, row] : ['AddRecord', 'Dye_Mix_Parts', null, row]);
+      });
+    }
+    await grist.docApi.applyUserActions(actions);
     Object.assign(allDyes.find(d => d.id === currentDyeId), editingDye);
+    if (hasMixTable) { await loadMixParts(); editingParts = (partsByMix[currentDyeId] || []).map(p => ({ ...p })); renderEditPanel(); }
     clearUnsaved();
     showToast('Saved.');
     renderDyeList();

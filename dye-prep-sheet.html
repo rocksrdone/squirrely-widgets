@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dye Prep Sheet</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="dye-mix.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700&family=Inter:wght@300;400;500;600;700&display=swap');
 
@@ -113,6 +114,7 @@
   .bring.made { color: #1F5A4C; }
   .bring.both { color: #7A5410; }
   .bring.dry  { color: #4B3A73; }
+  .bring.mix  { color: #8B3A2A; }
 
   .box {
     display: block; width: 21px; height: 21px; border: 2px solid var(--ink);
@@ -360,6 +362,7 @@ let dyeById = {};
 let dyeNameCounts = {};
 let compsByRecipe = {};
 let stockByDyeId = {};
+let mixModel = { partsByMix: {}, mixInfo: {}, dye: {} };   // custom dye formulas (dye-mix.js)
 let loadError = null;
 
 // A name shared by two brands is never shown bare — brand is the only thing
@@ -383,6 +386,7 @@ async function loadEverything() {
   loadError = null;
   document.getElementById('content').innerHTML = '<div class="empty-state">Loading…</div>';
   try {
+    if (window.DyeMix) mixModel = await DyeMix.load(grist.docApi);
     const [planTable, recipesTable, compTable, dyesTable, stockTable] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
       grist.docApi.fetchTable('Recipes'),
@@ -765,13 +769,65 @@ function trayFooter() {
   </div>`;
 }
 
-function itemRow(comp, it, slot, extraSub, id) {
+/* A custom mix becomes its own line (its made jar, if any) followed by one line
+   per ingredient — nested customs indented beneath. Each ingredient brings its
+   made jar if there is one ("if usable"), and its powder tub when the mix says
+   always pull powder, it's a dry mix, or there's no jar. */
+function mixItemFor(comp) {
+  const rows = comp.dyeId ? (stockByDyeId[comp.dyeId] || []) : [];
+  const total = rows.reduce((s, r) => s + r.qty, 0);
+  const bins = [...new Set(rows.map(r => r.bin).filter(Boolean))].sort(binSortFn);
+  if (total > 0) return { jar: { bins, total }, powder: null, bins, total, form: 'made', label: 'Made mix — check it', icons: ICO_JAR };
+  return { jar: null, powder: null, bins: [], total: 0, form: 'mix', label: 'Mix it ↓', icons: '' };
+}
+function ingredientEntries(comp) {
+  return DyeMix.expand(mixModel, comp.dyeId).map(p => {
+    const info = dyeById[p.dyeId];
+    const mixInfo = mixModel.mixInfo[p.parentMix] || {};
+    const sub = {
+      key: comp.key + '>' + p.dyeId + '@' + p.depth, dyeId: p.dyeId,
+      name: info ? info.name : '?', label: info ? dyeLabel(info) : '?',
+      swatch: info ? info.swatch : null, powder: powderAddress(info), notes: '', unresolved: !info,
+    };
+    let it;
+    if (p.isMix) it = mixItemFor(sub);
+    else {
+      const rows = stockByDyeId[p.dyeId] || [];
+      const total = rows.reduce((s, r) => s + r.qty, 0);
+      const bins = [...new Set(rows.map(r => r.bin).filter(Boolean))].sort(binSortFn);
+      const wantPowder = mixInfo.alwaysPowder !== false || mixInfo.form === 'Dry' || total <= 0;
+      if (total > 0 && wantPowder) it = { jar: { bins, total }, powder: sub.powder, bins, total, form: 'both', label: 'Made (if usable) + powder', icons: ICO_JAR + ICO_TUB };
+      else if (total > 0) it = { jar: { bins, total }, powder: null, bins, total, form: 'made', label: 'Made dye', icons: ICO_JAR };
+      else it = { jar: null, powder: sub.powder, bins: [], total: 0, form: 'dry', label: 'Powder', icons: ICO_TUB };
+    }
+    const amt = `${Math.round(p.parts * 1000) / 1000}${mixInfo.form === 'Dry' ? ' tsp' : ' part' + (p.parts === 1 ? '' : 's')}`;
+    return { sub, it, depth: p.depth, extra: `<span class="sub">${esc(amt)}${p.strength ? ' · ' + esc(p.strength) : ''} for ${esc((dyeById[p.parentMix] || {}).name || 'the mix')}</span>` };
+  });
+}
+function rowsFor(comp, lowMl, slot, extraSub, scope, showPA, last) {
+  if (!(window.DyeMix && DyeMix.isMix(mixModel, comp.dyeId))) {
+    const it = itemFor(comp, lowMl);
+    return itemRow(comp, it, slot, extraSub, tickId(scope.date, scope.key, comp.key)) + (showPA ? putAwayRow(comp, it, last) : '');
+  }
+  const it = mixItemFor(comp);
+  const f = DyeMix.formula(mixModel, comp.dyeId, (id) => dyeById[id] ? { name: dyeById[id].name, brand: dyeById[id].brand } : null);
+  let html = itemRow(comp, it, slot, (extraSub || '') + `<span class="sub mono">= ${esc(f)}</span>`, tickId(scope.date, scope.key, comp.key))
+    + (showPA && it.jar ? putAwayRow(comp, it, false) : '');
+  const ings = ingredientEntries(comp);
+  ings.forEach((e, k) => {
+    html += itemRow(e.sub, e.it, null, e.extra, tickId(scope.date, scope.key, e.sub.key), e.depth)
+      + (showPA && !e.it.form.startsWith('mix') ? putAwayRow(e.sub, e.it, last && k === ings.length - 1) : '');
+  });
+  return html;
+}
+
+function itemRow(comp, it, slot, extraSub, id, depth) {
   const on = ticks.has(id);
   return `<tr class="${on ? 'ticked' : ''}">
     <td class="c-box"><span class="box${on ? ' checked' : ''}" data-tick="${esc(id)}"
       onclick="toggleTick('${esc(id)}', this)" title="Tick when it's on the tray"></span></td>
-    <td class="c-dye">
-      <span class="dye-name">${dot(comp.swatch)}${nameHtml(comp)}</span>
+    <td class="c-dye"${depth ? ` style="padding-left:${10 + 16 * depth}px"` : ''}>
+      <span class="dye-name">${depth ? '<span style="color:#8B7D72">↳ </span>' : ''}${dot(comp.swatch)}${nameHtml(comp)}</span>
       ${slot ? `<span class="sub"><span class="tag slot">${esc(slot)}</span></span>` : ''}
       ${comp.notes ? `<span class="sub">${esc(comp.notes)}</span>` : ''}
       ${extraSub || ''}
@@ -786,6 +842,7 @@ const LEGEND = `<div class="legend">
   <span>${ICO_JAR} <strong>Made dye</strong> — the container, from its bin</span>
   <span>${ICO_TUB} <strong>Powder</strong> — the powder tub</span>
   <span>${ICO_JAR}${ICO_TUB} <strong>Made dye + powder</strong> — both; the container is nearly out</span>
+  <span>↳ <strong>Custom mix</strong> — its ingredients are listed under it; bring each one so the mix can be checked or remade</span>
 </div>`;
 
 function render() {
@@ -823,12 +880,10 @@ function render() {
 
       const rows = comps.map((comp, i) => {
         if (comp.unresolved) unresolved++;
-        const it = itemFor(comp, lowMl);
         const others = (usedIn[comp.key] || []).filter(s => s !== b.seq);
         const again = others.length
           ? `<span class="sub again">also batch ${others.join(', ')} — don't put it back</span>` : '';
-        return itemRow(comp, it, slots[normalize(comp.name)], again, tickId(dateVal, b.seq, comp.key))
-             + (showPA ? putAwayRow(comp, it, i === comps.length - 1) : '');
+        return rowsFor(comp, lowMl, slots[normalize(comp.name)], again, { date: dateVal, key: b.seq }, showPA, i === comps.length - 1);
       }).join('') || `<tr><td class="c-box"></td><td colspan="4"><span class="where none">No dyes recorded for this recipe.</span></td></tr>`;
 
       const strip = comps.slice(0, 6).map(c => dot(c.swatch)).join('');
@@ -860,11 +915,8 @@ function render() {
     flat.sort((a, b) => (usedIn[a.key][0] - usedIn[b.key][0]) || a.label.localeCompare(b.label));
     const rows = flat.map(comp => {
       if (comp.unresolved) unresolved++;
-      const it = itemFor(comp, lowMl);
       const seqs = [...new Set(usedIn[comp.key])].sort((a, b) => a - b);
-      return itemRow(comp, it, null, `<span class="sub">batch ${seqs.join(', ')}</span>`,
-                     tickId(dateVal, 'day', comp.key))
-           + (showPA ? putAwayRow(comp, it, false) : '');
+      return rowsFor(comp, lowMl, null, `<span class="sub">batch ${seqs.join(', ')}</span>`, { date: dateVal, key: 'day' }, showPA, false);
     }).join('');
     body = `<div class="tray">
       <div class="tray-head">

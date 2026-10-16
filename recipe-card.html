@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Recipe Card</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="dye-mix.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 
@@ -492,6 +493,13 @@
   .stash-info { flex: 1 1 auto; min-width: 0; }
   .stash-name { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
   .stash-sub { font-size: 10.5px; color: #8B7D72; margin-top: 2px; line-height: 1.45; }
+  .mix-formula { font-family: 'DM Mono', monospace; font-size: 10.5px; color: #6B5E52; margin-top: 2px; line-height: 1.4; }
+  .mix-formula .draft { font-family: Inter, sans-serif; font-size: 9px; font-weight: 700; color: #B07D2A; background: #F5EDD8; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+  .ing-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0 4px 18px; border-top: 1px dashed #E8DFD4; font-size: 11.5px; }
+  .ing-row .ing-name { flex: 1; min-width: 0; }
+  .ing-row .ing-pull { font-family: 'DM Mono', monospace; font-size: 10.5px; color: #6B5E52; text-align: right; }
+  body.big-mode .mix-formula { font-size: 13px; }
+  body.big-mode .ing-row { font-size: 14px; }
   .stash-qty { flex: 0 0 auto; text-align: right; }
   .stash-have { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
   .stash-need { font-size: 9.5px; color: #8B7D72; }
@@ -721,6 +729,13 @@ function closeLightbox() {
 let currentYardage = 100;
 let currentRecipe = null;
 let currentComponents = [];
+let currentMix = { partsByMix: {}, mixInfo: {}, dye: {} };   // custom dye formulas (dye-mix.js)
+/* "= 2 Hot Fuchsia (J 1-160) : 1.5 Sun Yellow (Pro 1-80) : …" under a custom dye. */
+function mixLineHtml(dyeId) {
+  if (!window.DyeMix || !DyeMix.isMix(currentMix, dyeId)) return '';
+  const info = currentMix.mixInfo[dyeId] || {};
+  return `<div class="mix-formula">= ${esc(DyeMix.formula(currentMix, dyeId))}${info.form === 'Dry' ? ' · mix powders' : ''}${info.confirmed ? '' : '<span class="draft" title="Formula not checked yet in the Dye Library">draft</span>'}</div>`;
+}
 let currentPhotoIndex = 0;
 let currentPreviewUrl = null;
 let currentBaseSegments = [];
@@ -1184,8 +1199,36 @@ function buildStashLines() {
       // A dye with no row ID can't be looked up at all — say that rather than
       // reporting "no premade jar", which would be a guess dressed as a fact.
       unresolved: !line.dyeId,
+      ingredients: mixIngredients(line.dyeId),
     };
   });
+}
+
+/* A custom mix's ingredients for the pull list: each one's made jar if there
+   is one ("if usable"), and its powder when the mix says always pull powder or
+   there's no jar to use. */
+function mixIngredients(dyeId) {
+  if (!window.DyeMix || !DyeMix.isMix(currentMix, dyeId)) return null;
+  return DyeMix.expand(currentMix, dyeId).map(p => {
+    const jars = stashState ? (stashState.jarsByDye[p.dyeId] || []) : [];
+    const jar = jars.find(j => j.qty > 0) || null;
+    const info = currentMix.mixInfo[p.parentMix] || {};
+    const powder = !p.isMix && (info.alwaysPowder !== false || !jar || info.form === 'Dry');
+    return { ...p, name: (currentMix.dye[p.dyeId] || {}).name || '?', brand: (currentMix.dye[p.dyeId] || {}).brand || '', jar, powder };
+  });
+}
+function ingredientRowsHtml(L) {
+  if (!L.ingredients || !L.ingredients.length) return '';
+  return L.ingredients.map(p => {
+    const pull = [];
+    if (p.jar) pull.push(`made: ${esc(binLabel(p.jar.bin))} · ${p.jar.qty} mL${p.powder ? ' (if usable)' : ''}`);
+    if (p.powder) pull.push('powder');
+    if (p.isMix) pull.push(p.jar ? '' : 'mix it ↓');
+    return `<div class="ing-row" style="padding-left:${18 * p.depth}px">
+      <span class="ing-name">↳ ${esc(String(Math.round(p.parts * 1000) / 1000))} ${esc(p.name)}${p.brand ? ` <span class="brand">${esc(p.brand)}</span>` : ''}${p.strength ? ` <span style="color:#8B7D72">${esc(p.strength)}</span>` : ''}</span>
+      <span class="ing-pull">${pull.filter(Boolean).join(' + ') || '—'}</span>
+    </div>`;
+  }).join('');
 }
 
 function stashRowHtml(L) {
@@ -1206,7 +1249,7 @@ function stashRowHtml(L) {
     qty = `<div class="stash-have">&mdash;</div><div class="stash-need">&nbsp;</div>`;
   } else if (!L.jar) {
     bin = `<div class="stash-bin none">NO<br>PREMADE</div>`;
-    sub = 'No jar logged for this dye — mix it from powder.';
+    sub = L.ingredients ? 'No jar of this mix — make it from the ingredients below.' : 'No jar logged for this dye — mix it from powder.';
     qty = `<div class="stash-have">&mdash;</div><div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}</div>`;
   } else if (L.empty) {
     bin = `<div class="stash-bin">${esc(binLabel(L.jar.bin))}</div>`;
@@ -1214,7 +1257,7 @@ function stashRowHtml(L) {
     qty = `<div class="stash-have">0 mL</div><div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}</div>`;
   } else {
     bin = `<div class="stash-bin">${esc(binLabel(L.jar.bin))}</div>`;
-    sub = '';
+    sub = L.ingredients ? 'Mix on the shelf — the ingredients are listed below in case it needs topping up or remaking.' : '';
     qty = `<div class="stash-have">${L.jar.qty} mL</div>
       <div class="stash-need">${L.need > 0 ? 'need ~' + Math.round(L.need) + ' mL' : 'no rate set'}${
         L.jar.mixed ? ' · mixed ' + esc(stockShortDate(L.jar.mixed)) : ''}</div>`;
@@ -1267,7 +1310,7 @@ function stashBodyHtml() {
 
   return `
     ${walkBits.length ? `<div class="stash-walk">${walkBits.join(' &nbsp;·&nbsp; ')}</div>` : ''}
-    ${lines.map(stashRowHtml).join('')}
+    ${lines.map(L => stashRowHtml(L) + ingredientRowsHtml(L)).join('')}
     <div class="stash-foot">Put-back: each jar returns to the bin shown beside it.
       Nothing on this panel writes to Grist — if you mix a fresh jar or move one, log it in Dye Stock.</div>
   `;
@@ -1309,7 +1352,7 @@ function renderLeft() {
         <span class="swatch" style="background:${col}"></span>
         ${esc(c.Dye_Name || '—')}
         ${brand ? `<span class="brand">${brand[1]}</span>` : ''}
-      </div></td>
+      </div>${mixLineHtml(c.Dye_Id)}</td>
       <td><span class="amt">${calcTsp(rowField(c, ['Std_Powder_tsp_']))}</span></td>
       <td><span class="amt">${calcMl(rowField(c, ['Std_Water_mL_']))}</span></td>
       <td><span class="amt">${calcMl(rowField(c, ['Effective_mL_per_100_yd']) || rowField(c, ['Default_mL_per_100_yds']))}</span></td>
@@ -1342,7 +1385,7 @@ function renderLeft() {
       <div class="step-item" onclick="toggleStep(this)">
         <div class="step-num">${i+1}</div>
         <div class="step-content">
-          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${esc(c.Dye_Name)}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>` : ''}
+          ${c.Dye_Name ? `<div class="step-dye" style="color:${col}">${esc(c.Dye_Name)}${stepBrandMatch ? ` <span class="brand">${stepBrandMatch[1]}</span>` : ''}</div>${mixLineHtml(c.Dye_Id)}` : ''}
           <div class="step-text">${c.Is_Powder ? '<b>Sprinkle dry powder.</b> ' : ''}${esc(c.Application_Notes || '')}</div>
           ${c.Position ? `<div class="step-pos">📍 ${esc(c.Position)}</div>` : ''}
           ${c.Technique ? `<div class="step-pos">✋ ${c.Technique}</div>` : ''}
@@ -1642,6 +1685,7 @@ grist.onRecord(async (record) => {
   // display for whatever recipe is actually selected now.
 
   let localComponents = [];
+  const localMix = window.DyeMix ? await DyeMix.load(grist.docApi) : currentMix;
   try {
     const [tableData, dyesTable] = await Promise.all([
       grist.docApi.fetchTable('Recipe_Dye_Components'),
@@ -1857,6 +1901,7 @@ grist.onRecord(async (record) => {
   currentPhotoIndex = 0;
   previewPickerOpen = false;
   currentComponents = localComponents;
+  currentMix = localMix;
   currentBaseSegments = localBaseSegments;
   currentOverlayMarks = localOverlayMarks;
   currentSpoolStats = localSpoolStats;
