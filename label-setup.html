@@ -105,6 +105,10 @@ section.blk{margin-bottom:18px}
 
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script>
+/* Printable scale-test page, folded in from its own Grist page (retired as a
+   page 2026-10-19). The file stays in the repo; it is opened from the printer
+   calibration block rather than living as a widget. */
+const TEST_SHEETS_URL = 'https://raw.githack.com/rocksrdone/squirrely-widgets/main/label-test-sheets.html';
 /* ============================================================
    Label Template Setup — Squirrely Stash
 
@@ -418,6 +422,7 @@ function renderMain(){
     const pills=b.id==='cal'?pcPills:'';
     return `<section class="blk"><div class="blk-title">${esc(b.t)}${b.id==='cal'&&S.pc?' — '+esc(S.printer):''}</div>
       ${b.n?`<div class="blk-note">${esc(b.n)}</div>`:''}
+      ${b.id==='cal'?`<div class="blk-note">New printer or new label stock? <a href="${TEST_SHEETS_URL}" target="_blank" rel="noopener">Open the label test sheets</a> — print at 100%, check the one-inch bar, then calibrate here.</div>`:''}
       ${pills}<div class="grid">${fs.map(fieldHtml).join('')}</div>${extra}</section>`;
   }).join('');
 

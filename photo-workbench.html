@@ -328,6 +328,13 @@ img.lazy-photo { transition: opacity 0.2s; }
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const LIST_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/inbox-photos';
+/* SS - Import Lot Photos: scans product-photos/lots/ and adds a Product_Photos
+   row for any file not yet in Grist. Moved here from the retired Order Sync
+   widget. It used to run every 15 minutes (a fifth of the n8n plan for a folder
+   that changes a few times a week), so it runs only when asked. */
+const IMPORT_LOTS_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/import-lot-photos';
+let lotImportBusy = false;
+let lotImportMsg = '';   // HTML, already escaped
 const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
 const PRODUCT_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-product-photo';
 const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
@@ -791,8 +798,42 @@ function renderAll() {
 }
 
 /* ══ TAB: INBOX ════════════════════════════════════════════════════════════ */
+function lotImportBarHTML() {
+  return `<div class="section-note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span style="flex:1;min-width:200px">Photos dropped straight into the <strong>lots</strong> folder aren't in Grist until they're imported. Imported ones show up under <strong>To link</strong>.</span>
+      <button class="btn" data-action="importlots" ${lotImportBusy ? 'disabled' : ''}>${lotImportBusy ? 'Importing…' : 'Import lot photos'}</button>
+    </div>${lotImportMsg ? `<div class="section-note">${lotImportMsg}</div>` : ''}`;
+}
+async function importLotPhotos() {
+  if (lotImportBusy) return;
+  lotImportBusy = true; lotImportMsg = ''; renderInbox();
+  try {
+    const res = await fetch(IMPORT_LOTS_WEBHOOK_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', cache: 'no-store',
+    });
+    if (!res.ok) throw new Error(`webhook returned ${res.status} ${res.statusText}`);
+    const r = (await res.json()) || {};
+    const n = Number(r.imported) || 0;
+    const files = Array.isArray(r.files) ? r.files : [];
+    lotImportMsg = n
+      ? `Imported ${n} new lot photo${n === 1 ? '' : 's'} — now under <strong>To link</strong>.` +
+        (files.length ? ` <span style="color:#8B7D72">${esc(files.slice(0, 12).join(', '))}${files.length > 12 || r.truncated ? ' …' : ''}</span>` : '')
+      : 'No new lot photos — everything in the lots folder is already in Grist.';
+    if (n) { const ok = await loadGrist(); if (ok) { lotImportBusy = false; renderAll(); return; } }
+  } catch (e) {
+    lotImportMsg = `Couldn't reach the lot photo import (${esc(e.message)}). Check that <strong>SS - Import Lot Photos</strong> is active in n8n.`;
+  } finally {
+    lotImportBusy = false;
+  }
+  renderInbox();
+}
+
 function renderInbox() {
   const v = document.getElementById('viewInbox');
+  renderInboxBody(v);
+  v.insertAdjacentHTML('afterbegin', lotImportBarHTML());
+}
+function renderInboxBody(v) {
 
   if (inboxScanning) {
     v.innerHTML = `<div class="scan-prompt"><p>Scanning the inbox folders…</p></div>`;
@@ -1467,6 +1508,7 @@ document.body.addEventListener('click', (e) => {
   else if (action === 'hideallthumbs') { shownThumbs.clear(); renderRecipes(); }
   // Inbox-side
   else if (action === 'scaninbox') scanInbox();
+  else if (action === 'importlots') importLotPhotos();
   else if (action === 'loadmore') { visibleCount += 30; renderInbox(); }
   else if (action === 'pickrecipe') pickInboxRecipe(key, recipeId);
   else if (action === 'clearrecipe') clearInboxRecipe(key);
