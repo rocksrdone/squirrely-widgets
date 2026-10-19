@@ -17,3 +17,10 @@ Grist page still pointing at an old URL can be found and switched, then deleted.
 | record-edit.html | — (not a Squirrely Stash widget: a film-collection record editor uploaded by mistake) | 2026-10-19 |
 | dye-pull-sheet.html | print-day.html (prints the dye pull sheet with staging bins; knows custom mixes) | 2026-10-19 |
 | dye-prep-sequence.html | dye-prep-sheet.html (prep list, knows custom mixes) + dye-stock.html (logging a freshly mixed jar) | 2026-10-19 |
+| thread-board.html | lot-desk.html (waiting lots, put away, fix or zero a lot) | 2026-10-19 |
+| back-stock.html | lot-desk.html (put-away, bin suggestion) + inventory-desk.html (browse, counts) + bin-audit.html (repair bin links saved as text) | 2026-10-19 |
+| time-clock.html | day-board.html (punch in/out) + payroll-hours.html (hours per period) | 2026-10-19 |
+| makeable-now.html | morning-batch-planning.html | 2026-10-19 |
+| order-overview.html | order-picker.html | 2026-10-19 |
+| daily-work-list.html | order-picker.html | 2026-10-19 |
+| work-overview.html | order-picker.html | 2026-10-19 |

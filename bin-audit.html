@@ -688,6 +688,13 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
        nobody can act on — "0 spools, currently bin 1" is noise in a list whose
        whole purpose is spools that cannot be counted against a bin. */
     unknownBin: lots.filter(l => l.bin && l.inBin > 0 && locations.length && !locByCode[normalize(l.bin)]),
+    /* Bin saved as TEXT in a reference column (moved here from the retired
+       Back Stock widget). Grist shows "#Invalid Ref: A6" even though A6 is a
+       real bin, and every screen reading the lot gets an error instead of a
+       location. Only lots whose text names a real bin are listed — those can
+       be re-pointed safely; ones naming no bin already show in unknownBin. */
+    textBin: BIN_IS_REF ? lots.filter(l => typeof l.binRaw === 'string' && l.binRaw.trim()
+      && BIN_BY_CODE[normalize(l.binRaw.trim())]) : [],
     fiberMismatch: lots.filter(l => {
       const loc = l.bin ? locByCode[normalize(l.bin)] : null;
       return !!(loc && loc.fiber && l.fiber && fiberKey(loc.fiber) !== fiberKey(l.fiber));
@@ -727,6 +734,23 @@ function groupLots(lots, amountOf, showEmpty) {
 // BEFORE the change. A re-added row gets a new row id, which matters only if
 // something else referenced it — Dye_Stock rows aren't referenced anywhere,
 // so an undo restores the jar exactly.
+
+/* ── Repair bin links saved as text (from the retired Back Stock) ──────────
+   Each lot is re-pointed at the bin it already names. Nothing physically
+   moves and no bin changes; undo puts the original text back. */
+async function repairTextBins() {
+  const list = (T && T.problems.textBin) || [];
+  if (!list.length) { showToast('Nothing to repair', false); return; }
+  if (!confirm(`Repair ${list.length} lot${list.length === 1 ? '' : 's'}?\n\n` +
+    `Their bin was saved as text instead of a link, so Grist shows an error instead of a location. ` +
+    `Each is re-pointed at the bin it already names — nothing moves.\n\n` +
+    list.slice(0, 10).map(l => `${l.lotNumber} → ${l.binRaw.trim()}`).join('\n') +
+    (list.length > 10 ? `\n…and ${list.length - 10} more` : ''))) return;
+  const col = COLS.lot.bin;
+  runFix(list.map(l => ['UpdateRecord', 'Production_Lots', l.id, { [col]: BIN_BY_CODE[normalize(l.binRaw.trim())] }]),
+    `Repaired ${list.length} bin link${list.length === 1 ? '' : 's'}`,
+    () => list.map(l => ['UpdateRecord', 'Production_Lots', l.id, { [col]: l.binRaw }]));
+}
 
 async function runFix(actions, label, buildUndo) {
   if (busy) return;
@@ -1210,6 +1234,13 @@ function renderThread(stamp) {
          where a lot belongs needs to know WHAT it is, and a screen of
          "LOT-260909-7 — bin 5" tells you nothing you can act on. The colourway,
          spool count and fibre were on the lot object the whole time. */
+      P.textBin.length ? `<div class="prob-group">
+        <div class="prob-title">Bin saved as text, not a link — ${P.textBin.length}</div>
+        <div class="prob-why">Grist shows an error instead of the bin on these lots, though the bin they name is real. Repair re-points each one at that bin; nothing moves.</div>
+        ${P.textBin.slice(0, 12).map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} → bin <span class="mono">${esc(l.binRaw.trim())}</span></div>`).join('')}
+        ${P.textBin.length > 12 ? `<div class="prob-item">…and ${P.textBin.length - 12} more</div>` : ''}
+        <div class="fixrow"><button class="fixbtn" onclick="repairTextBins()">Repair ${P.textBin.length} bin link${P.textBin.length === 1 ? '' : 's'}</button></div>
+      </div>` : '',
       probGroup('Bin code not in Storage_Locations',
         'The bin on the lot is not a code in Storage_Locations — a typo, a bin that was never set up, or an older numbering.',
         P.unknownBin.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.fiber)} · currently bin <span class="mono">${esc(l.bin)}</span>${l.date ? ` · ${esc(shortDate(l.date))}` : ''}
@@ -1253,7 +1284,7 @@ function renderThread(stamp) {
   const total = T.lots.reduce((s, l) => s + Math.max(0, l.inBin), 0);
   const binned = T.lots.filter(l => l.bin).reduce((s, l) => s + Math.max(0, l.inBin), 0);
   // Drying lots aren't faults, so they don't inflate the count of things to fix.
-  const probCount = P.unbinned.length + P.unknownBin.length + P.fiberMismatch.length + P.negative.length;
+  const probCount = P.unbinned.length + P.unknownBin.length + P.textBin.length + P.fiberMismatch.length + P.negative.length;
   return `
     <div class="sheet-head">
       <div class="sheet-title">Thread bin audit</div>

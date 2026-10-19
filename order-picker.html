@@ -259,11 +259,11 @@ function fmtDate(dateVal) {
    word, so anything else leaves the order looking finished in one view and
    still active in another:
      - renderSummaryStrip() below counts active orders as status !== 'closed'
-     - order-overview.html lists active orders as Status === 'Active' || blank
+     - (order-overview.html, now retired, listed active orders as Status === 'Active' || blank)
    A blank status therefore also means OPEN everywhere, which is why an order
    never leaves a list until this field is written.
    Kept as a constant so there is one place to change if the vocabulary ever
-   moves — and if it moves, order-overview has to move with it.            */
+   moves — Quick Log's isClosedStatus() tests the same word.               */
 const CLOSED_STATUS = 'Closed';
 function isClosedValue(s) { return (s || '').toString().trim().toLowerCase() === 'closed'; }
 
