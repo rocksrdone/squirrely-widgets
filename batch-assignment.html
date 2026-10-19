@@ -317,6 +317,8 @@ let sessionPots = [];
 let potSpoolsVal = '';
 let potCountVal = 1;
 let potBusy = false;
+/* Quick-pick pot sizes — the counts used most. Edit this list to change the buttons. */
+const POT_SIZES = [5, 6, 7, 8, 9, 10];
 // Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
 let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '', RC_STOCK2 = {};
 let RC_ALLOC = null, RC_WOL = null;
@@ -1106,7 +1108,7 @@ function render() {
           onkeydown="if(event.key==='Enter')logPot()">
         <button class="log-btn" id="pot-go" onclick="logPot()">${potN > 1 ? `✓ Log ${potN} pots` : '✓ Log pot'}</button>
       </div>
-      <div class="pot-quick">${[10, 12, 15].map(n => `<button class="${String(potSpoolsVal) === String(n) ? 'on' : ''}" onclick="potSpoolsVal='${n}';render()">${n}</button>`).join('')}</div>
+      <div class="pot-quick">${POT_SIZES.map(n => `<button class="${String(potSpoolsVal) === String(n) ? 'on' : ''}" onclick="potSpoolsVal='${n}';render()">${n}</button>`).join('')}</div>
     </div>`;
 
   // One bordered block per dye. Previously the description and the control were
