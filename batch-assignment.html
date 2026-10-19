@@ -468,12 +468,12 @@ function assignBin(state, idx, recipeId, fiberName, qty) {
 }
 
 // ── STAGING SHELF ──────────────────────────────────────────────────
-// Must match stgCols in dye-pull-sheet.html and PULL_CFG.stgCols in
-// print-day.html. If those change and this doesn't, this widget will name a
-// staging bin the printed sheet never assigned.
+// Must match PULL_CFG.stgCols in print-day.html (dye-pull-sheet.html, which
+// also carried it, is retired). If that changes and this doesn't, this widget
+// will name a staging bin the printed sheet never assigned.
 const STG_COLS = 5;
 
-// Byte-identical to stageCode() in both print widgets — keep them in sync.
+// Byte-identical to stageCode() in print-day.html — keep them in sync.
 // Fills across a shelf before dropping down: A1 B1 C1 D1 E1, then A2.
 function stageCode(index0, cols) {
   return 'S-' + BIN_LETTERS[index0 % cols] + String(Math.floor(index0 / cols) + 1);
