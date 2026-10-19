@@ -129,19 +129,22 @@ table.days td.num { font-family: 'DM Mono', monospace; text-align: right; white-
    one pay period. No rounding: exact minutes, which is the always-defensible
    choice and what was asked for.
 
-   Pay periods are the 1st–15th and the 16th–end of each month.
+   Pay periods are the 1st–14th and the 15th–end of each month (changed
+   2026-10-19; was 1st–15th / 16th–end). FIRST_HALF_LAST_DAY is the one place
+   that sets it.
 
    OVERTIME: no 1.5x rate is applied, because these hours are not expected to
    pass 40 in a week. That expectation is CHECKED rather than assumed — hours
    are also totalled per workweek (Sunday–Saturday) and any week over 40 raises
    a banner. A semi-monthly period cuts across workweeks, so a week straddling
-   the 15th/16th is counted from its own punches across both halves, not from
+   the 14th/15th is counted from its own punches across both halves, not from
    the half being displayed. Getting that wrong is how a real overtime week
    hides in plain sight.
 
    This is a view of hours and gross pay. It is not a payroll system: nothing
    here withholds tax, files anything, or knows about deductions. */
 
+const FIRST_HALF_LAST_DAY = 14;          // 1st–14th, then 15th–end of month
 const PERIOD_ATTRIBUTION = 'clock-in';   // a shift is counted in the period its clock-in falls in
 
 function esc(s) {
@@ -187,11 +190,11 @@ const MONTHS = ['January','February','March','April','May','June',
 
 // ── semi-monthly period maths ───────────────────────────────────────────────
 function periodOf(date) {
-  return { y: date.getFullYear(), m: date.getMonth(), half: date.getDate() <= 15 ? 1 : 2 };
+  return { y: date.getFullYear(), m: date.getMonth(), half: date.getDate() <= FIRST_HALF_LAST_DAY ? 1 : 2 };
 }
-function periodStart(p) { return new Date(p.y, p.m, p.half === 1 ? 1 : 16, 0, 0, 0, 0); }
+function periodStart(p) { return new Date(p.y, p.m, p.half === 1 ? 1 : FIRST_HALF_LAST_DAY + 1, 0, 0, 0, 0); }
 function periodEndExclusive(p) {
-  return p.half === 1 ? new Date(p.y, p.m, 16, 0, 0, 0, 0) : new Date(p.y, p.m + 1, 1, 0, 0, 0, 0);
+  return p.half === 1 ? new Date(p.y, p.m, FIRST_HALF_LAST_DAY + 1, 0, 0, 0, 0) : new Date(p.y, p.m + 1, 1, 0, 0, 0, 0);
 }
 function periodShift(p, delta) {
   let idx = p.y * 24 + p.m * 2 + (p.half - 1) + delta;
@@ -200,7 +203,7 @@ function periodShift(p, delta) {
 }
 function periodLabel(p) {
   const endIncl = new Date(periodEndExclusive(p).getTime() - 1);
-  return `${MONTHS[p.m]} ${p.half === 1 ? 1 : 16}–${endIncl.getDate()}, ${p.y}`;
+  return `${MONTHS[p.m]} ${p.half === 1 ? 1 : FIRST_HALF_LAST_DAY + 1}–${endIncl.getDate()}, ${p.y}`;
 }
 function periodKeyNum(p) { return p.y * 24 + p.m * 2 + (p.half - 1); }
 
