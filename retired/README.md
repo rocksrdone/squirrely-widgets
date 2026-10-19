@@ -11,3 +11,4 @@ Grist page still pointing at an old URL can be found and switched, then deleted.
 | sequence-preview.html | — (August design mockup, static example data) | 2026-10-19 |
 | tag-preview.html | — (August design mockup) | 2026-10-19 |
 | dilution-ratio-converter.html | dilution-converter.html ("Re-base an old recipe" tab) | 2026-10-19 |
+| recipe-doc-viewer.html | — (old recipe PDFs no longer being retyped; n8n `nc-list` / `nc-file` workflows now unused) | 2026-10-19 |
