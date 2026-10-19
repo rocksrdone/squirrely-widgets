@@ -528,6 +528,10 @@ async function loadAll() {
     const o = S.orders[woId];
     if (!o) return;
     if (/cancel/i.test(o.status)) return;
+    // Closed orders are history — off every filter, not just Open. This is how
+    // old shipped lines with no lot behind them (logged before every colourway
+    // had a lot) get cleared: close the order, don't box it.
+    if (isClosedStatus(o.status)) return;
     const sku = normalize(columnAsArray(wolT, WOL.sku)[i] || '');
     const recipeId = getRefId(columnAsArray(wolT, WOL.recipe)[i]) || recipeIdBySku[sku] || null;
     const rec = S.recipes[recipeId] || null;
@@ -668,7 +672,9 @@ function render() {
               rem ? ` &middot; ${rem} to go${inBin ? `, ${inBin} in the bin` : ''}` : ' &middot; complete'}${
               o.due ? ` &middot; due ${esc(fmtDate(o.due))}` : ''}</span>
           </td>
-          <td class="acts"><button class="btn tiny" data-boxorder="${woId}" ${rem ? '' : 'disabled'}>Box all ${rem || ''}</button></td>
+          <td class="acts"><button class="btn tiny" data-boxorder="${woId}" ${rem ? '' : 'disabled'}>Box all ${rem || ''}</button>
+            <button class="btn tiny" data-closeorder="${woId}"
+              title="Already shipped? Set the order's Status to Closed. Nothing else changes — allocations and lots stay as they are.">Close order</button></td>
         </tr>` + ls.map(lineRowHtml).join('');
     }).join('');
 
@@ -955,6 +961,35 @@ function newAllocAction(line, lotId, qty, status) {
    allocation, not add a second one beside it. Adding left the original row
    sitting at "Wound - Needs Labels" forever, so Wind & Box kept asking for it
    and the spools were counted twice. Only the shortfall becomes a new row. */
+/* ---------- closing an order ----------
+   Same word Order Picker writes ("Closed") — Order Picker and Order Overview
+   both test for exactly that. Writes ONLY Work_Orders.Status; production
+   records are left alone, so it is safe for an order that shipped before its
+   lines could be boxed here. Undoable from the log like everything else. */
+const CLOSED_STATUS = 'Closed';
+function isClosedStatus(s) { return (s || '').toString().trim().toLowerCase() === 'closed'; }
+async function closeOrder(woId) {
+  const o = S.orders[woId];
+  const col = S.cols && S.cols.WO && S.cols.WO.status;
+  if (!o || !col) { showToast('No Status column on Work_Orders'); return; }
+  const who = [o.num, o.custName].filter(Boolean).join(' — ') || 'this order';
+  if (!confirm(`Close ${who}?\n\nUse this for an order that has already shipped. Status becomes "${CLOSED_STATUS}" and it leaves Quick Log, Order Picker and Order Overview. Allocations and lots are not touched.\n\nReopen it from Order Picker, or undo it here.`)) return;
+  const before = o.status || '';
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', woId, { [col]: CLOSED_STATUS }]]);
+    S.log.unshift({
+      text: `${o.num || 'Order'} closed`,
+      cls: '',
+      inverse: [['UpdateRecord', 'Work_Orders', woId, { [col]: before }]],
+    });
+    showToast('Closed ✓');
+    await loadAll();
+  } catch (e) {
+    console.error('Quick Log: could not close the order', e);
+    showToast(/choice/i.test(String(e && e.message)) ? 'Add "Closed" to the Status choices on Work_Orders' : 'Could not close — check Work_Orders');
+  }
+}
+
 /* Writes ONLY Work_Order_Lines.Recipe. See linkBlockHtml for why the SKU is
    left alone — writing it would make the Shopify sync cancel this very line. */
 async function doLink(lineId) {
@@ -1719,6 +1754,8 @@ function bind() {
     const ls = visibleLines().filter(l => l.woId === woId && openQty(l) > 0);
     if (ls.length) logSpools(ls, S.packedStatus, 'wound & boxed');
   }));
+  document.querySelectorAll('[data-closeorder]').forEach(el => el.addEventListener('click', () =>
+    closeOrder(Number(el.dataset.closeorder))));
   document.querySelectorAll('[data-doxfer]').forEach(el =>
     el.addEventListener('click', () => doTransfer(Number(el.dataset.doxfer))));
   document.querySelectorAll('[data-dostock]').forEach(el =>
