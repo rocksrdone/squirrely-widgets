@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Inventory Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
-<script src="stock-ops.js"></script>
+<script src="stock-ops.js?v=20261019b"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@300;400;500;600;700&display=swap');
 :root {
@@ -326,76 +326,9 @@ let S = {
    a live storefront off a number that might itself be the stale one. */
 const STORE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/store-inventory';
 
-/* ── Stock model v2 (2026-10-05) ──────────────────────────────────────────
-   Production_Lots stock columns:
-     On_Hand_Spools        typed    wound spools physically here, counted
-     Hank_Est_Spools       typed    thread still in hank, estimated in spools
-     Vendor_Stock_Spools   typed    listed on the vendor store (wound or hank)
-     Store_Stock_Spools    typed    listed on retail (wound only)
-     General_Stock_Spools  FORMULA  On_Hand + Hank − Vendor − Store = held back
-   Total stock is still General + Vendor + Store, so code that only READS
-   stock is unchanged. General can no longer be written: every stock write
-   goes through stockMove()/stockSet(), which turn the old idea "change
-   General/Vendor/Store by n" into the typed columns it means physically:
-     +n to general  → On_Hand +n
-     +n to vendor   → On_Hand +n, Vendor +n
-     +n to store    → On_Hand +n, Store +n
-     −n from any    → vendor/store listing −n, and n spools leave the shelf:
-                      wound first, then hank (retail never holds hank). A hank
-                      that leaves had to be wound, so Spools_Made rises by it.
-   The same block is pasted into every widget that writes stock. Change them
-   together. */
-function stock2Cols(lotsT) {
-  const keys = Object.keys(lotsT || {});
-  const f = name => keys.find(k => k.toLowerCase() === name.toLowerCase()) || null;
-  return {
-    onHand: f('On_Hand_Spools'), hank: f('Hank_Est_Spools'),
-    vendor: f('Vendor_Stock_Spools'), store: f('Store_Stock_Spools'),
-    general: f('General_Stock_Spools'), made: f('Spools_Made'),
-  };
-}
-function stock2Row(lotsT, C, i) {
-  const n = c => (c && Array.isArray(lotsT[c])) ? (Number(lotsT[c][i]) || 0) : 0;
-  return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
-}
-function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
-const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
-function stock2Diff(before, row, C) {
-  const fields = {}, inverse = {};
-  STOCK2_KEYS.forEach(k => {
-    if (row[k] !== before[k] && C[k]) { fields[C[k]] = row[k]; inverse[C[k]] = before[k]; }
-  });
-  return { fields, inverse };
-}
-/* Mutates `row` so several moves on one lot accumulate correctly. */
-function stockMove(row, C, where, delta) {
-  const before = Object.assign({}, row);
-  let short = 0;
-  if (delta > 0) {
-    row.onHand += delta;
-    if (where === 'vendor') row.vendor += delta;
-    else if (where === 'store') row.store += delta;
-  } else if (delta < 0) {
-    let n = -delta;
-    if (where === 'vendor') row.vendor = Math.max(0, row.vendor - n);
-    else if (where === 'store') row.store = Math.max(0, row.store - n);
-    const w = Math.min(n, row.onHand); row.onHand -= w; n -= w;
-    if (where !== 'store' && C.hank) {
-      const h = Math.min(n, row.hank); row.hank -= h; row.made += h; n -= h;
-    }
-    short = n;
-  }
-  return Object.assign(stock2Diff(before, row, C), { short });
-}
-/* Absolute values, for editors. Only keys present in `vals` change. */
-function stockSet(row, C, vals) {
-  const before = Object.assign({}, row);
-  STOCK2_KEYS.forEach(k => { if (vals[k] != null) row[k] = Math.max(0, Number(vals[k]) || 0); });
-  return stock2Diff(before, row, C);
-}
-/* Shown when a write is refused because the switch-over hasn't happened. */
-const STOCK2_NOT_READY =
-  'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
+/* Stock column maths (stock model v2) now lives in stock-ops.js, the one
+   shared copy. See stockMove() there for what each move does. */
+const { stock2Cols, stock2Row, stock2Held, stockMove, stockSet, STOCK2_NOT_READY } = StockOps;
 
 /* ── Spools spoken for by orders ──────────────────────────────────────────
    Reserving stock for an order (the order builder for manual orders, Wind &
