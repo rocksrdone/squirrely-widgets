@@ -171,6 +171,11 @@ body {
 .method-note { font-size: 10px; color: #8B7D72; font-style: italic; }
 .pot-row { display: flex; gap: 5px; align-items: center; }
 .pot-row input { flex: 1; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 4px; font-size: 13px; }
+.pot-row input.pot-n { flex: 0 0 52px; text-align: center; }
+.pot-row .pot-x { font-size: 12px; color: var(--muted, #8B7D72); }
+.pot-quick { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+.pot-quick button { font-size: 11px; padding: 2px 8px; border: 1px solid var(--rule); border-radius: 10px; background: white; cursor: pointer; }
+.pot-quick button.on { border-color: var(--teal); color: var(--teal); font-weight: 600; }
 .running-total { font-size: 11px; color: var(--done-text); background: var(--done-bg); border: 1px solid var(--done-text); border-radius: 5px; padding: 5px 8px; margin-bottom: 4px; }
 .pot-done { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink); background: #F7F3EE; border: 1px solid var(--rule); border-radius: 5px; padding: 4px 8px; margin-bottom: 3px; }
 </style>
@@ -304,6 +309,12 @@ function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : In
 
 // Pots logged for the currently-selected colorway this session (for running total + undo).
 let sessionPots = [];
+/* Pot entry. The spool count is KEPT after logging (most pots are the same
+   size, so retyping 10 every time was the slow part), and a pot count lets
+   several identical pots go in one click: 10 × 5 logs five lots of 10. */
+let potSpoolsVal = '';
+let potCountVal = 1;
+let potBusy = false;
 // Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
 let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '', RC_STOCK2 = {};
 let RC_ALLOC = null, RC_WOL = null;
@@ -1081,12 +1092,19 @@ function render() {
   // Just the count and the button. The destination radios and stock-bucket select
   // are gone: every pot stays free for orders, and where spools end up is decided
   // at winding when the real yield is known. logPot() defaults accordingly.
+  const potN = Math.max(1, Number(potCountVal) || 1);
   const potPanelHtml = `
     <div class="pot-panel">
       <div class="pot-row">
-        <input type="number" id="pot-spools" placeholder="Spools this pot" min="1">
-        <button class="log-btn" onclick="logPot()">✓ Log pot</button>
+        <input type="number" id="pot-spools" placeholder="Spools per pot" min="1" value="${esc(potSpoolsVal)}"
+          oninput="potSpoolsVal=this.value" onkeydown="if(event.key==='Enter')logPot()">
+        <span class="pot-x">×</span>
+        <input type="number" id="pot-count" class="pot-n" min="1" max="20" value="${potN}" title="How many pots of this size"
+          oninput="potCountVal=this.value;document.getElementById('pot-go').textContent=(Number(this.value)>1?'✓ Log '+Number(this.value)+' pots':'✓ Log pot')"
+          onkeydown="if(event.key==='Enter')logPot()">
+        <button class="log-btn" id="pot-go" onclick="logPot()">${potN > 1 ? `✓ Log ${potN} pots` : '✓ Log pot'}</button>
       </div>
+      <div class="pot-quick">${[10, 12, 15].map(n => `<button class="${String(potSpoolsVal) === String(n) ? 'on' : ''}" onclick="potSpoolsVal='${n}';render()">${n}</button>`).join('')}</div>
     </div>`;
 
   // One bordered block per dye. Previously the description and the control were
@@ -1303,11 +1321,52 @@ function nextLotNumber(lotsTable, lotNumberCol) {
 // (soonest-due first) by bumping Qty_Dyed, and sends any leftover to a stock bucket.
 // Per-customer physical assignment is deferred to winding — no allocations here.
 async function logPot() {
-  const spoolsInput = document.getElementById('pot-spools');
-  const spools = Number(spoolsInput.value) || 0;
-  if (spools <= 0) { showToast('Enter how many spools this pot made'); return; }
-
+  const spoolsEl = document.getElementById('pot-spools');
+  const countEl = document.getElementById('pot-count');
+  const spools = Math.round(Number(spoolsEl ? spoolsEl.value : potSpoolsVal) || 0);
+  const pots = Math.min(20, Math.max(1, Math.round(Number(countEl ? countEl.value : potCountVal) || 1)));
+  if (spools <= 0) { showToast('Enter how many spools each pot made'); return; }
+  if (potBusy) return;            // a double-tap must not log the pots twice
+  potBusy = true;
+  potSpoolsVal = String(spools);
   const e = currentEntry;
+  const logged = [], bins = [];
+  let failed = '';
+  try {
+    // One lot per pot (a lot is one kettle run). Each is written on its own so
+    // every lot gets its own number and bin, counted after the ones before it.
+    for (let i = 0; i < pots; i++) {
+      const r = await logOnePot(e, spools);
+      logged.push(r.lotNumber);
+      if (r.binCode) bins.push(r.binCode);
+    }
+  } catch (err) {
+    console.error('Failed to log pot:', err);
+    failed = 'x';
+    showToast(logged.length
+      ? `Logged ${logged.length} of ${pots} — then: ${err.message || 'failed'}`
+      : (err.message || 'Failed — check Production_Lots / Work_Order_Lines'));
+  }
+  if (!logged.length) { potBusy = false; return; }
+  potCountVal = 1;
+  paRegisterPot(e);
+  paSync();
+  try { await loadForRecipe({ id: e.recipeId }); } // recompute coverage from the new lots
+  catch (err) { console.error('Reload after logging failed', err); }
+  /* The put-away panel no longer pops open after every pot: when several pots
+     of one colourway go in back to back it interrupted each one. The Put away
+     dyes button stays highlighted until done, and "Dyes still on the table"
+     catches anything left when you move to the next colourway. */
+  potBusy = false;
+  if (failed) return;              // the partial-failure message stays up
+  const uniqBins = [...new Set(bins)];
+  showToast(logged.length === 1
+    ? `Logged ${logged[0]} — ${spools} spool${spools === 1 ? '' : 's'}${uniqBins.length ? ` · bag to ${uniqBins[0]}` : ''}`
+    : `Logged ${logged.length} pots of ${spools} (${logged[0]}–${logged[logged.length - 1]})${uniqBins.length ? ` · bag to ${uniqBins.join(', ')}` : ''}`);
+}
+
+/* Writes ONE lot for one pot. Throws on failure; the caller reports it. */
+async function logOnePot(e, spools) {
   // Every pot stays free for orders. Sending spools to a stock bucket is a
   // sit-down inventory decision, not a wet-gloves-at-the-kettle one.
   const mode = 'cover';
@@ -1319,7 +1378,7 @@ async function logPot() {
   // orders (unassigned on the lot) or goes straight to a stock bucket.
   const leftover = mode === 'stock' ? spools : 0;
 
-  try {
+  {
     // Resolve Production_Lots columns fresh (rename-proof) and mint a lot number.
     const lotsTable = await grist.docApi.fetchTable('Production_Lots');
     const lm = [];
@@ -1333,7 +1392,7 @@ async function logPot() {
       generalStock: opt(['General_Stock_Spools']), bin: opt(['Storage_Bin']),
       broken: opt(['Broken_Spools']),
     }, lm);
-    if (lm.length) { showToast('Production_Lots missing ' + lm.join(', ')); return; }
+    if (lm.length) throw new Error('Production_Lots missing ' + lm.join(', '));
 
     // Which bin this pot is bagged into. Recorded here rather than at the rack:
     // walking to a computer to log something already done physically is the step
@@ -1373,7 +1432,7 @@ async function logPot() {
     if (leftover > 0) {
       // Wound and straight onto a store: On_Hand and that listing, never General.
       const C2 = stock2Cols(lotsTable);
-      if (!C2.onHand) { showToast(STOCK2_NOT_READY); return; }
+      if (!C2.onHand) throw new Error(STOCK2_NOT_READY);
       lotFields[C2.onHand] = leftover;
       const lc = bucket === 'vendor' ? C2.vendor : C2.store;
       if (lc) lotFields[lc] = leftover;
@@ -1381,19 +1440,8 @@ async function logPot() {
 
     const addRes = await grist.docApi.applyUserActions([['AddRecord', 'Production_Lots', null, lotFields]]);
     const newLotId = addRes.retValues[0];
-
     sessionPots.push({ lotId: newLotId, lotNumber, spools, leftover, bucket });
-    spoolsInput.value = '';
-    paRegisterPot(e);
-    paSync();
-    await loadForRecipe({ id: e.recipeId }); // recompute coverage from the new lot
-    // The pot's done — the dyes on the table are the next thing to deal with.
-    if (currentEntry && currentEntry.cleanupInfo.some((c, idx) => !completedActions[idx])) { paOpen = true; render(); }
-    showToast(`Logged ${lotNumber} — ${spools} spool${spools === 1 ? '' : 's'}`
-      + (binPick ? ` · bag to ${binPick.code}` : ''));
-  } catch (err) {
-    console.error('Failed to log pot:', err);
-    showToast('Failed — check Production_Lots / Work_Order_Lines');
+    return { lotNumber, binCode: binPick ? binPick.code : '' };
   }
 }
 
