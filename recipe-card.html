@@ -1697,7 +1697,7 @@ async function loadKettle(recipeId) {
   const [kd, ks, dy, st, df, rc, pr] = await Promise.all(['Kettle_Dyes', 'Kettle_Steps', 'Dyes', 'Dye_Stock', 'Kettle_Dye_Defaults', 'Recipes', 'Products'].map(safe));
   const g = (t, c, i) => (t && Array.isArray(t[c]) ? t[c][i] : undefined);
   if (!kd) { K.err = 'Kettle_Dyes table not found.'; return K; }
-  if (rc) { const i = (rc.id || []).indexOf(recipeId); if (i >= 0) { K.temp = Number(g(rc, 'Kettle_Temp_F', i)) || null; K.heat = Number(g(rc, 'Kettle_Heat_min', i)) || null; K.burnerMetal = Number(g(rc, 'Kettle_Burner_Metal', i)) || null; K.burnerGlass = Number(g(rc, 'Kettle_Burner_Glass', i)) || null; K.name = g(rc, 'Recipe_Name', i) || ''; } }
+  if (rc) { const i = (rc.id || []).indexOf(recipeId); if (i >= 0) { K.temp = Number(g(rc, 'Kettle_Temp_F', i)) || null; K.heat = Number(g(rc, 'Kettle_Heat_min', i)) || null; K.burnerMetal = Number(g(rc, 'Kettle_Burner_Large', i)) || null; K.burnerGlass = Number(g(rc, 'Kettle_Burner_Small', i)) || null; K.name = g(rc, 'Recipe_Name', i) || ''; } }
   if (df && df.id && df.id.length) { K.defaults.ties = Number(g(df, 'Yarn_Ties_Weight', 0)) || 2.1; K.defaults.burner = Number(g(df, 'Large_Burner_Gauge', 0)) || 3; }
   /* Thread per spool, from Products (nylon, thread only, no spool). */
   if (pr) { const i = (pr.id || []).findIndex((id, j) => /nylon/i.test(String(g(pr, 'Fiber', j) || '')) && Number(g(pr, 'Thread_Weight_g', j)) > 0);
