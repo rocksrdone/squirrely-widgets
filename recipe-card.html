@@ -1720,7 +1720,7 @@ let KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;   // Glass_Pot_Max_
 const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
   totalMin: 60, recipeName: '', tick: null, done: false };
 let kettleAudio = null;
-const KETTLE_DEFAULT_TEMP = 185, KETTLE_DEFAULT_HEAT = 60;
+let KETTLE_DEFAULT_TEMP = 180, KETTLE_DEFAULT_HEAT = 60;
 /* Standard burners: metal pot on the large burner at 3.5, glass pot on the
    small burner at 3; both drop by 1 once at temperature. Per recipe in Builder. */
 let KETTLE_BURNER_METAL = 3.5, KETTLE_BURNER_GLASS = 3;   // Burner_Large_Default / Burner_Small_Default
@@ -1758,6 +1758,7 @@ async function loadKettle(recipeId) {
     if (set.Burner_Large_Default) KETTLE_BURNER_METAL = set.Burner_Large_Default;
     if (set.Burner_Small_Default) KETTLE_BURNER_GLASS = set.Burner_Small_Default;
     if (set.Yarn_Ties_Weight_g) K.defaults.ties = set.Yarn_Ties_Weight_g;
+    if (set.Kettle_Pot_Temp_F_Default) KETTLE_DEFAULT_TEMP = set.Kettle_Pot_Temp_F_Default;
   }
   /* Thread per spool, from Products (nylon, thread only, no spool). */
   if (pr) { const i = (pr.id || []).findIndex((id, j) => /nylon/i.test(String(g(pr, 'Fiber', j) || '')) && Number(g(pr, 'Thread_Weight_g', j)) > 0);
