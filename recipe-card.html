@@ -1712,16 +1712,18 @@ function kettleRemoveBundle(i) {
   kettleSaveJob(); kettleRedraw();
 }
 const kettleLetter = i => String.fromCharCode(65 + i);
-const KETTLE_STOCK_SPARE_ML = 5;
-const KETTLE_STOCK_CONTAINER_ML = 160;   // largest container used for stock solution   // extra stock made so the pot never runs short
-const KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;
+/* Shop settings, read from the Settings table (Key / Value) on load; these
+   are only the fallbacks when a key is missing. */
+let KETTLE_STOCK_SPARE_ML = 5;           // Stock_Spare_mL: extra stock so the pot never runs short
+let KETTLE_STOCK_CONTAINER_ML = 350;     // Stock_Container_mL: largest container for stock solution
+let KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;   // Glass_Pot_Max_mL / Metal_Pot_Max_mL
 const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
   totalMin: 60, recipeName: '', tick: null, done: false };
 let kettleAudio = null;
 const KETTLE_DEFAULT_TEMP = 185, KETTLE_DEFAULT_HEAT = 60;
 /* Standard burners: metal pot on the large burner at 3.5, glass pot on the
    small burner at 3; both drop by 1 once at temperature. Per recipe in Builder. */
-const KETTLE_BURNER_METAL = 3.5, KETTLE_BURNER_GLASS = 3;
+let KETTLE_BURNER_METAL = 3.5, KETTLE_BURNER_GLASS = 3;   // Burner_Large_Default / Burner_Small_Default
 const KETTLE_STANDARD_STEPS = [
   { at: 0, every: null, until: null, text: 'Thread in — stir constantly', beeps: 1 },
   { at: 5, every: null, until: null, text: 'Constant stirring done — stir every 10 min from here', beeps: 3 },
@@ -1742,11 +1744,21 @@ function kettleFmt(n, dp) { const p = Math.pow(10, dp); return (Math.round(n * p
 async function loadKettle(recipeId) {
   const K = { recipeId, temp: null, heat: null, burner: null, name: '', dyes: [], steps: [], standardSteps: false, defaults: { ties: 2.1, burner: 3 }, spoolG: 11.27, spoolYds: 100, err: '' };
   const safe = async t => { try { return await grist.docApi.fetchTable(t); } catch (e) { return null; } };
-  const [kd, ks, dy, st, df, rc, pr] = await Promise.all(['Kettle_Dyes', 'Kettle_Steps', 'Dyes', 'Dye_Stock', 'Kettle_Dye_Defaults', 'Recipes', 'Products'].map(safe));
+  const [kd, ks, dy, st, df, rc, pr, cfg] = await Promise.all(['Kettle_Dyes', 'Kettle_Steps', 'Dyes', 'Dye_Stock', 'Kettle_Dye_Defaults', 'Recipes', 'Products', 'Settings'].map(safe));
   const g = (t, c, i) => (t && Array.isArray(t[c]) ? t[c][i] : undefined);
   if (!kd) { K.err = 'Kettle_Dyes table not found.'; return K; }
   if (rc) { const i = (rc.id || []).indexOf(recipeId); if (i >= 0) { K.temp = Number(g(rc, 'Kettle_Temp_F', i)) || null; K.heat = Number(g(rc, 'Kettle_Heat_min', i)) || null; K.burnerMetal = Number(g(rc, 'Kettle_Burner_Large', i)) || null; K.burnerGlass = Number(g(rc, 'Kettle_Burner_Small', i)) || null; K.name = g(rc, 'Recipe_Name', i) || ''; } }
   if (df && df.id && df.id.length) { K.defaults.ties = Number(g(df, 'Yarn_Ties_Weight', 0)) || 2.1; K.defaults.burner = Number(g(df, 'Large_Burner_Gauge', 0)) || 3; }
+  if (cfg && cfg.id) {
+    const set = {}; cfg.id.forEach((id, i) => { const k = g(cfg, 'Key', i), v = Number(g(cfg, 'Value', i)); if (k && v > 0) set[k] = v; });
+    if (set.Stock_Container_mL) KETTLE_STOCK_CONTAINER_ML = set.Stock_Container_mL;
+    if (set.Glass_Pot_Max_mL) KETTLE_GLASS_MAX_ML = set.Glass_Pot_Max_mL;
+    if (set.Metal_Pot_Max_mL) KETTLE_METAL_MAX_ML = set.Metal_Pot_Max_mL;
+    if (set.Stock_Spare_mL) KETTLE_STOCK_SPARE_ML = set.Stock_Spare_mL;
+    if (set.Burner_Large_Default) KETTLE_BURNER_METAL = set.Burner_Large_Default;
+    if (set.Burner_Small_Default) KETTLE_BURNER_GLASS = set.Burner_Small_Default;
+    if (set.Yarn_Ties_Weight_g) K.defaults.ties = set.Yarn_Ties_Weight_g;
+  }
   /* Thread per spool, from Products (nylon, thread only, no spool). */
   if (pr) { const i = (pr.id || []).findIndex((id, j) => /nylon/i.test(String(g(pr, 'Fiber', j) || '')) && Number(g(pr, 'Thread_Weight_g', j)) > 0);
     if (i >= 0) { K.spoolG = Number(g(pr, 'Thread_Weight_g', i)); K.spoolYds = Number(g(pr, 'Yards_Per_Spool', i)) || 100; } }
@@ -1844,7 +1856,7 @@ function kettleSameStrength(r) {
   if (r.unit === 'tsp' && r.amt > 0 && d.tsp) return close(r.amt / r.water, d.tsp / d.ml);
   return null;
 }
-/* Stock is mixed in containers of at most 160 mL; bigger amounts are split
+/* Stock is mixed in containers of at most Stock_Container_mL; bigger amounts are split
    into equal containers. */
 function kettleMakeText(d, html) {
   const b = x => html ? `<b>${x}</b>` : x;
@@ -1978,13 +1990,14 @@ function kettleBurnerLabel(K, M) {
   const one = pot => `${pot === 'metal' ? 'Large' : 'Small'} ${kettleFmt(kettleBurner(K, pot), 1)} → ${kettleFmt(kettleBurner(K, pot) - 1, 1)}`;
   return M.net > 0 ? one(kettlePot(M.total)) : `${one('glass')} · ${one('metal')}`;
 }
-/* Glass pot up to 2,000 mL; over that the metal pot (up to 13,000 mL). */
+/* Glass pot up to Glass_Pot_Max_mL; over that the metal pot (up to Metal_Pot_Max_mL). */
+function kettleML(n) { return Math.round(n).toLocaleString('en-US'); }
 function kettlePot(total) { return total > KETTLE_GLASS_MAX_ML ? 'metal' : 'glass'; }
 function kettlePotAdvice(total) {
   if (!(total > 0)) return '';
-  if (total > KETTLE_METAL_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>${kettleFmt(total, 0)} mL is more than the metal pot holds</b> (13,000 mL max). Split the thread into two pots.</div>`;
-  if (total > KETTLE_GLASS_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>Use the metal pot</b> — ${kettleFmt(total, 0)} mL is over the glass pot’s 2,000 mL.</div>`;
-  return `<div class="kt-small">Glass pot is fine (under 2,000 mL).</div>`;
+  if (total > KETTLE_METAL_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>${kettleFmt(total, 0)} mL is more than the metal pot holds</b> (${kettleML(KETTLE_METAL_MAX_ML)} mL max). Split the thread into bundles.</div>`;
+  if (total > KETTLE_GLASS_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>Use the metal pot</b> — ${kettleFmt(total, 0)} mL is over the glass pot’s ${kettleML(KETTLE_GLASS_MAX_ML)} mL.</div>`;
+  return `<div class="kt-small">Glass pot is fine (under ${kettleML(KETTLE_GLASS_MAX_ML)} mL).</div>`;
 }
 
 /* Worker steps, filled in with this recipe's numbers. Shared by the on-screen
@@ -2001,7 +2014,7 @@ function kettleWorkerSteps(K, M) {
   const adds = M.dyes.map(d => has && d.dos ? `<b>${kettleFmt(d.stock, 1)} mL</b> of ${esc(nm(d))} stock` : `${blank} mL of ${esc(nm(d))} stock`);
   const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
   const leftStep = 'Leftover stock solution — ' + (M.dyes.length > 1 ? 'for each dye:' + list(lefts) : (M.dyes[0] ? `<b>${esc(kettleLeftoverText(M.dyes[0]))}</b>.` : 'discard it.'));
-  const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : 'glass pot if under 2,000 mL total, metal pot if over';
+  const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : `glass pot if under ${kettleML(KETTLE_GLASS_MAX_ML)} mL total, metal pot if over`;
   if (M.multi) {
     const rinse = ['Rinse the thread.', 'Fill a container with water and <b>1 tablespoon of Synthrapol</b>. Mix the Synthrapol in until bubbly.',
       'Add the thread and leave it for <b>20 minutes</b>.', 'Do a second rinse. If there is a lot of excess dye, use fresh water (no Synthrapol needed the second time).',
@@ -2024,7 +2037,7 @@ function kettleWorkerSteps(K, M) {
   return [
     'Presoak the thread in the water tub.',
     has ? `Put ${pot} on the <b>${potKind === 'metal' ? 'LARGE' : 'SMALL'} burner</b> and set it to <b>${kettleFmt(b, 1)}</b>.`
-        : `Glass pot (up to 2,000 mL): <b>small burner at ${kettleFmt(kettleBurner(K, 'glass'), 1)}</b>. Metal pot: <b>large burner at ${kettleFmt(kettleBurner(K, 'metal'), 1)}</b>.`,
+        : `Glass pot (up to ${kettleML(KETTLE_GLASS_MAX_ML)} mL): <b>small burner at ${kettleFmt(kettleBurner(K, 'glass'), 1)}</b>. Metal pot: <b>large burner at ${kettleFmt(kettleBurner(K, 'metal'), 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to the pot. Measure the temperature until it reaches <b>${temp}°F</b>.`,
     'While it heats, mix the dye solution:' + `<ul>${makes.map(t => `<li>${t}</li>`).join('')}</ul>`,
     `Once it reaches ${temp}°F, add the dye stock to the pot:` + list(adds),
@@ -2086,12 +2099,12 @@ function kettlePrintWorkerSheet() {
       : `<div><span>Thread (dry)</span><b>${M.net > 0 ? kettleFmt(M.bundles[0].weight, 1) + ' g' : '______ g'}</b></div>
       <div><span>Water</span><b>${M.net > 0 ? kettleFmt(M.water, 0) + ' mL' : '______ mL'}</b></div>
       <div><span>Total pot</span><b>${M.net > 0 ? kettleFmt(M.total, 0) + ' mL' : '______ mL'}</b></div>
-      <div><span>Pot</span><b>${M.net > 0 ? (kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass') : 'Glass ≤ 2,000 mL'}</b></div>
+      <div><span>Pot</span><b>${M.net > 0 ? (kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass') : `Glass ≤ ${kettleML(KETTLE_GLASS_MAX_ML)} mL`}</b></div>
       <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div>`}
       <div><span>Pot temp</span><b>${temp}°F</b></div>
       <div><span>Heat time</span><b>${heat} min</b></div></div>
-    ${M.multi ? (M.bundles.some(x => x.total > KETTLE_METAL_MAX_ML) ? '<div class="warn">A bundle is more than the metal pot holds (13,000 mL) — split it.</div>' : '')
-      : M.total > KETTLE_METAL_MAX_ML ? '<div class="warn">More than the metal pot holds (13,000 mL) — split into bundles.</div>' : M.total > KETTLE_GLASS_MAX_ML ? '<div class="warn">Over 2,000 mL — use the METAL pot.</div>' : ''}
+    ${M.multi ? (M.bundles.some(x => x.total > KETTLE_METAL_MAX_ML) ? `<div class="warn">A bundle is more than the metal pot holds (${kettleML(KETTLE_METAL_MAX_ML)} mL) — split it.</div>` : '')
+      : M.total > KETTLE_METAL_MAX_ML ? `<div class="warn">More than the metal pot holds (${kettleML(KETTLE_METAL_MAX_ML)} mL) — split into bundles.</div>` : M.total > KETTLE_GLASS_MAX_ML ? `<div class="warn">Over ${kettleML(KETTLE_GLASS_MAX_ML)} mL — use the METAL pot.</div>` : ''}
     <table><tr><th>Dye</th><th>Premade dye bin</th><th>Make stock (only this)</th><th>${M.multi ? 'Into pots (all)' : 'Add to pot'}</th><th>Leftover</th></tr>${dyeRows || '<tr><td colspan="5">No dyes set up</td></tr>'}</table>
     ${M.multi ? `<h2>Bundles — one at a time</h2><table><tr><th>Bundle</th><th>Dry weight</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(d.d ? d.d.name : 'dye')} cup</th>`).join('')}<th>Done</th></tr>
       ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleFmt(x.weight, 1) + ' g' : `______ g${x.target ? ` <small>(aim ${kettleFmt(x.target, 0)})</small>` : ''}`}</td>
