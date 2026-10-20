@@ -64,7 +64,8 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 <div class="header">
   <div class="controls">
     <input class="search-input" id="searchBox" placeholder="Search name, SKU, colorway, customer..." oninput="onFilterChange()">
-    <select class="sel" id="scopeSelect" onchange="onFilterChange()"></select>
+    <select class="sel" id="scopeSelect" onchange="onScopeChange()"></select>
+    <select class="sel" id="customerSelect" onchange="onFilterChange()" title="Reserved for" style="display:none"></select>
     <select class="sel" id="fiberSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="statusSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="methodSelect" onchange="onFilterChange()" title="Dye method"></select>
@@ -296,6 +297,23 @@ function renderFilters() {
   mSel.style.display = methods.length ? '' : 'none';
 }
 
+/* Customer dropdown appears only when a reserved scope is picked, listing the
+   customers that scope's recipes are reserved for. */
+function onScopeChange() {
+  const scope = document.getElementById('scopeSelect').value, sel = document.getElementById('customerSelect');
+  const show = scope !== 'ALL' && scopeKind(scope) === 'reserved';
+  if (show) {
+    const names = [...new Set(allRecipes.filter(r => r.scope === scope).map(r => r.customerName).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    const blank = allRecipes.some(r => r.scope === scope && !r.customerName);
+    const prev = sel.value;
+    fillSelect(sel, names, 'All Customers', blank ? { value: '__NONE__', label: 'No customer set' } : null);
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  } else sel.value = 'ALL';
+  sel.style.display = show ? '' : 'none';
+  onFilterChange();
+}
+
 function onFilterChange() {
   visibleCount = 30;
   const q = normalize(document.getElementById('searchBox').value);
@@ -304,6 +322,8 @@ function onFilterChange() {
   const fiberFilter = document.getElementById('fiberSelect').value;
   const statusFilter = document.getElementById('statusSelect').value;
   const methodFilter = document.getElementById('methodSelect').value;
+  const custSel = document.getElementById('customerSelect');
+  const custFilter = custSel.style.display === 'none' ? 'ALL' : (custSel.value || 'ALL');
 
   // Limited editions stay out unless the scope filter asks for them by name.
   // Reusing the existing control rather than adding a toggle: "show me the
@@ -319,6 +339,8 @@ function onFilterChange() {
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
     if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
     if (methodFilter !== 'ALL' && r.method !== methodFilter) return false;
+    if (custFilter === '__NONE__') { if (r.customerName) return false; }
+    else if (custFilter !== 'ALL' && r.customerName !== custFilter) return false;
     if (statusFilter === '__NONE__') { if (r.status) return false; }
     else if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (q) {
