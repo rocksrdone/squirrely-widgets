@@ -1571,7 +1571,7 @@ function renderRight() {
   // unless it's been marked as not needed for this recipe.
   const needPhoto = !!r.Needs_Layout_Photo, noFinished = !r.Photo_Finished && !r.Layout_Photo_Not_Needed;
   const fbtn = (label, on, title) => `<button onclick="${on}" title="${title}" style="font:inherit;font-size:11.5px;padding:4px 10px;border:1px solid #D4C9BC;border-radius:5px;background:#fff;color:#1A1614;cursor:pointer">${label}</button>`;
-  const photoFlag = (needPhoto || noFinished) ? `
+  const photoFlag = (needPhoto || noFinished) && !isKettleRecipe(r) ? `
     <div style="background:#F5EDD8;border:1px solid #E2C98F;border-radius:7px;padding:9px 11px;margin-bottom:12px;font-size:12.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <span style="font-size:16px">📷</span>
       <span style="flex:1;min-width:160px"><b>${needPhoto ? 'New layout photo needed' : 'No finished layout photo yet'}</b>${needPhoto && noFinished ? ' — and there is no finished photo yet' : ''}. Take one of the finished layout while it's out.</span>
@@ -1579,7 +1579,7 @@ function renderRight() {
       ${!needPhoto && noFinished ? fbtn('Not needed', 'setLayoutPhotoNotNeeded(true)', 'Stop asking for a finished photo on this recipe') : ''}
     </div>` : '';
   // Small, quiet links under the photos — flag a new photo, or undo "not needed".
-  const flagLinks = [
+  const flagLinks = isKettleRecipe(r) ? '' : [
     !needPhoto ? `<a href="#" onclick="event.preventDefault(); setLayoutPhotoFlag(true)" style="color:#8B3A2A">flag: new photo needed</a>` : '',
     r.Layout_Photo_Not_Needed && !r.Photo_Finished ? `<a href="#" onclick="event.preventDefault(); setLayoutPhotoNotNeeded(false)" style="color:#8B7D72">ask for a finished photo again</a>` : '',
   ].filter(Boolean).join(' · ');
@@ -1712,7 +1712,7 @@ function kettlePanelHtml() {
     'One-shot (acid in dye)': `<b>No acid to add</b> — it is already in the dye.`,
   }[r.acid] || `<b>Water only</b> — no acid.`;
   const citricHelp = r.acid !== 'Citric acid' ? `
-    <div class="kt-small"><a href="#" onclick="event.preventDefault();kettleState.showCitric=!kettleState.showCitric;renderLeft()">${kettleState.showCitric ? 'Hide' : 'If it won’t exhaust:'} citric acid instructions</a></div>
+    <div class="kt-small"><a href="#" onclick="event.preventDefault();kettleState.showCitric=!kettleState.showCitric;kettleRedraw()">${kettleState.showCitric ? 'Hide' : 'If it won’t exhaust:'} citric acid instructions</a></div>
     ${kettleState.showCitric ? `<div class="kt-note">Citric acid: <b>1 Tbsp per lb of dry thread</b>${net ? ` — about <b>${kettleFmt(citricTsp, 2)} tsp</b> for ${kettleFmt(net, 1)} g` : ''}. Dissolve in a little hot water. Add it <b>after</b> the first ${r.stirConst} minutes of constant stirring, not at the start, so the colour spreads evenly before it fixes. Pour it beside the thread, not on it. If a colour still won’t exhaust, a little more can go in.</div>` : ''}` : '';
   const T = kettleTimer;
   return box(`
@@ -1837,16 +1837,18 @@ function kettleReset() {
   const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml();
 }
 
-// Kettle recipes get their panel at the top of the left side; hand-dye recipes
-// are untouched.
-const __renderLeftHandDye = renderLeft;
-renderLeft = function () {
-  __renderLeftHandDye();
+// Kettle recipes get their panel at the top of the RIGHT side (the left keeps
+// the usual details); hand-dye recipes are untouched. Its own redraws go
+// through kettleRedraw() so they don't rebuild the whole card.
+const __renderRightHandDye = renderRight;
+renderRight = function () {
+  __renderRightHandDye();
   if (currentRecipe && isKettleRecipe(currentRecipe)) {
-    const lp = document.getElementById('leftPanel');
-    if (lp) lp.insertAdjacentHTML('afterbegin', kettlePanelHtml());
+    const rp = document.getElementById('rightPanel');
+    if (rp) rp.insertAdjacentHTML('afterbegin', '<div id="ktPanel">' + kettlePanelHtml() + '</div>');
   }
 };
+function kettleRedraw() { const el = document.getElementById('ktPanel'); if (el) el.innerHTML = kettlePanelHtml(); }
 
 // ── GRIST INTEGRATION ──
 grist.ready({
