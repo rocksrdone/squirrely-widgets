@@ -1827,7 +1827,9 @@ function kettleMaths(K) {
       left: Math.max(0, make - (net > 0 ? stock : need)), same: kettleSameStrength(r),
       short: net > 0 && estNet > 0 && stock > estNeed + KETTLE_STOCK_SPARE_ML ? stock - (estNeed + KETTLE_STOCK_SPARE_ML) : 0 });
   });
-  const one = B[0];
+  const one = B[0], open = B.filter(x => !(x.net > 0));
+  const remaining = Math.max(0, estNet - net);
+  B.forEach(x => { x.target = !(x.net > 0) && estNet > 0 && open.length ? remaining / open.length + K.defaults.ties : 0; });
   return { net, estNet, spools, planNet, water, dyes, bundles: B, multi, allWeighed,
     total: multi ? B.reduce((t, x) => t + x.total, 0) : one.total, split: kettleSplit(K, estNet || net) };
 }
@@ -1857,10 +1859,9 @@ function kettleJarText(d, html) {
   if (!d.jar) return 'no premade jar yet';
   return `premade jar in bin ${b(d.jar.bin || 'no bin set')}` + (d.same === true ? '' : ' (different strength — don’t combine)');
 }
-function kettleLeftoverText(d) {
-  if (d.same === true) return d.jar ? `pour into the made-dye jar in bin ${d.jar.bin || '(no bin set)'}` : 'pour into a new made-dye jar, label it, put it on the made-dye rack';
-  if (d.same === false) return 'DISCARD — this recipe’s stock is a different strength from the standard jar';
-  return 'DISCARD — the dye’s standard strength isn’t recorded, so it can’t be combined';
+function kettleLeftoverText(d, why) {
+  if (d.same === true) return d.jar ? `pour it into the premade jar in bin ${d.jar.bin || '(no bin set)'}` : 'start a new premade jar, label it, put it on the rack';
+  return 'discard it' + (why ? (d.same === false ? ' (this recipe’s stock is a different strength from the jar)' : ' (the dye’s standard strength isn’t recorded)') : '');
 }
 
 function kettlePanelHtml() {
@@ -1884,7 +1885,7 @@ function kettlePanelHtml() {
           <div class="kt-small">Enough for ${M.multi ? 'all bundles' : has ? 'this pot' : esc(kettleFmt(M.spools, 0)) + ' spools'} plus ${KETTLE_STOCK_SPARE_ML} mL spare.${M.multi ? ' Pour each bundle’s share into its own cup (table above).' : ''}</div>` : ''}
       ${d.short ? `<div class="kt-warn">Thread weighs more than the spool estimate — if stock is already mixed, make about ${kettleFmt(Math.ceil(d.short), 0)} mL more.</div>` : ''}
       <div class="kt-small">${jar}</div>
-      ${d.make ? `<div class="kt-small">Leftover: <b>${esc(kettleLeftoverText(d))}</b></div>` : ''}
+      ${d.make ? `<div class="kt-small">Leftover: <b>${esc(kettleLeftoverText(d, true))}</b></div>` : ''}
       ${has && d.dos && d.left > 0.5 && d.dyeId && d.same === true ? `<button class="kt-btn sm" onclick="kettleLogLeftover(${d.id})">Put leftover stock into the jar</button>` : ''}
       ${d.notes ? `<div class="kt-note">${esc(d.notes)}</div>` : ''}
     </div>`; }).join('');
@@ -1922,19 +1923,22 @@ function kettlePanelHtml() {
 
 
 
+/* Fewest pots, as even as possible: one pot when the job fits (glass if it
+   fits, else metal), else equal bundles that each fit the metal pot. */
 function kettleSplitHtml(K, M) {
   const S = M.split; if (!S || !M.estNet) return '';
   const where = S.pot === 'metal' ? 'metal pot, large burner' : 'glass pot, small burner';
-  if (S.n === 1) return `<div class="kt-small">${kettleFmt(M.spools, 0)} spools fit one pot (${where}).</div>`;
-  const perW = S.per + K.defaults.ties, perSp = M.spools / S.n;
-  return `<div class="kt-note">Too much for one pot — split into <b>${S.n} bundles of about ${kettleFmt(perW, 0)} g</b> dry each (≈ ${kettleFmt(perSp, 1)} spools; ${where}).
+  const perW = S.per + K.defaults.ties;
+  if (S.n === 1) return `<div class="kt-note">Target: <b>one pot of about ${kettleFmt(perW, 0)} g</b> dry, with ties (${where}).
+    ${kettleState.bundles.length !== 1 ? `<button class="kt-btn sm" onclick="kettleSetBundles(1)">Back to one pot</button>` : ''}</div>`;
+  return `<div class="kt-note">Too much for one pot — target <b>${S.n} pots of about ${kettleFmt(perW, 0)} g</b> dry each, with ties (≈ ${kettleFmt(M.spools / S.n, 1)} spools each; ${where}). Keep the pots as even as you can.
     ${kettleState.bundles.length !== S.n ? `<button class="kt-btn sm" onclick="kettleSetBundles(${S.n})">Set up ${S.n} bundles</button>` : ''}</div>`;
 }
 /* One row per bundle: what goes in its pot, and its cup of stock per dye. */
 function kettleBundleTableHtml(K, M) {
   const dn = d => d.d ? d.d.name : 'dye';
   return `<table class="kt-bt"><tr><th>Bundle</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(dn(d))} cup</th>`).join('')}<th>Done</th></tr>
-    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleFmt(x.weight, 0) + ' g' : '—'}</td>
+    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleFmt(x.weight, 0) + ' g' : x.target ? `<span class="kt-small">aim ${kettleFmt(x.target, 0)} g</span>` : '—'}</td>
       <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · large' : 'Glass · small'} ${kettleFmt(x.burner, 1)}→${kettleFmt(x.burner - 1, 1)}${x.total > KETTLE_METAL_MAX_ML ? ' <b class="kt-bad">too full</b>' : ''}` : ''}</td>
       <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : ''}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : ''}</td>`).join('')}
       <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>`;
@@ -1994,6 +1998,7 @@ function kettleWorkerSteps(K, M) {
     : `<b>${esc(nm(d))}</b>: ${blank} g powder + ${blank} mL water`);
   const adds = M.dyes.map(d => has && d.dos ? `<b>${kettleFmt(d.stock, 1)} mL</b> of ${esc(nm(d))} stock` : `${blank} mL of ${esc(nm(d))} stock`);
   const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
+  const leftStep = 'Leftover stock solution — ' + (M.dyes.length > 1 ? 'for each dye:' + list(lefts) : (M.dyes[0] ? `<b>${esc(kettleLeftoverText(M.dyes[0]))}</b>.` : 'discard it.'));
   const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : 'glass pot if under 2,000 mL total, metal pot if over';
   if (M.multi) {
     const rinse = ['Rinse the thread.', 'Fill a container with water and <b>1 tablespoon of Synthrapol</b>. Mix the Synthrapol in until bubbly.',
@@ -2011,7 +2016,7 @@ function kettleWorkerSteps(K, M) {
         <li>Drop the burner by 1.</li>
         <li>Press <b>Start</b> on the timer and follow its instructions. Tick the bundle Done when it comes out.</li></ul>`,
       'While each bundle cooks, rinse the one before it:' + list(rinse),
-      'Leftover stock — only combine stock that is the same strength as the jar:' + list(lefts),
+      leftStep,
     ];
   }
   return [
@@ -2029,7 +2034,7 @@ function kettleWorkerSteps(K, M) {
     'Add the thread and leave it for <b>20 minutes</b>.',
     'Do a second rinse. If there is a lot of excess dye, use fresh water (no Synthrapol needed the second time).',
     'Repeat periodically until the water is mostly clear.',
-    'Leftover stock — only combine stock that is the same strength as the jar:' + list(lefts),
+    leftStep,
   ];
 }
 function kettleWorkerStepsHtml(K, M) {
@@ -2087,7 +2092,7 @@ function kettlePrintWorkerSheet() {
       : M.total > KETTLE_METAL_MAX_ML ? '<div class="warn">More than the metal pot holds (13,000 mL) — split into bundles.</div>' : M.total > KETTLE_GLASS_MAX_ML ? '<div class="warn">Over 2,000 mL — use the METAL pot.</div>' : ''}
     <table><tr><th>Dye</th><th>Premade dye bin</th><th>Make stock (only this)</th><th>${M.multi ? 'Into pots (all)' : 'Add to pot'}</th><th>Leftover</th></tr>${dyeRows || '<tr><td colspan="5">No dyes set up</td></tr>'}</table>
     ${M.multi ? `<h2>Bundles — one at a time</h2><table><tr><th>Bundle</th><th>Dry weight</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(d.d ? d.d.name : 'dye')} cup</th>`).join('')}<th>Done</th></tr>
-      ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleFmt(x.weight, 1) + ' g' : '______ g'}</td>
+      ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleFmt(x.weight, 1) + ' g' : `______ g${x.target ? ` <small>(aim ${kettleFmt(x.target, 0)})</small>` : ''}`}</td>
         <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · LARGE' : 'Glass · SMALL'} ${kettleFmt(x.burner, 1)} → ${kettleFmt(x.burner - 1, 1)}` : ''}</td>
         <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : '______'}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : '______'}</td>`).join('')}<td><span class="box"></span></td></tr>`).join('')}</table>` : ''}
     <h2>Steps</h2><ol>${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol>
