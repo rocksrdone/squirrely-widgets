@@ -1834,6 +1834,21 @@ function kettleWorkerStepsHtml(K, M) {
 /* Printable sheet: the worker steps plus the timer schedule, for the bench.
    Printed from a hidden frame so only the sheet prints; "Save as PDF" in the
    print dialog gives a PDF. */
+
+/* Timer rows for the printed sheet: repeats of the same instruction share one
+   row with a tick box per time, so a long stir schedule stays short. */
+function kettleTimerGroups(ev) {
+  const out = [], by = {};
+  ev.forEach(e => { const k = e.text; if (!by[k]) { by[k] = { text: e.text, times: [] }; out.push(by[k]); } by[k].times.push(e.t); });
+  return out;
+}
+/* Letter page less margins is 10.1in tall; shrink the sheet to fit if needed. */
+function kettleFitOnePage(doc) {
+  const page = 10 * 96, b = doc.body, tall = () => b.getBoundingClientRect().height;
+  b.style.zoom = '';
+  let z = 1;
+  while (tall() > page && z > 0.4) { z = Math.round((z - 0.03) * 100) / 100; b.style.zoom = String(z); }
+}
 function kettlePrintWorkerSheet() {
   const K = currentKettle; if (!K) return;
   const M = kettleMaths(K), ev = kettleEvents(K), name = K.name || (currentRecipe && currentRecipe.Recipe_Name) || 'Kettle recipe';
@@ -1841,15 +1856,15 @@ function kettlePrintWorkerSheet() {
   const dyeRows = M.dyes.map(d => `<tr><td>${d.d ? esc(d.d.brand + ' ' + d.d.name) : '—'}</td><td>${d.dos ? kettleFmt(d.dos, 2) + '%' : '—'}</td>
     <td>${kettleFmt(d.amt, 2)} ${esc(d.unit)} in ${kettleFmt(d.water, 0)} mL</td><td>${M.net > 0 && d.dos ? kettleFmt(d.stock, 1) + ' mL' : '______'}</td></tr>`).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} — kettle</title><style>
-    @page { size: Letter; margin: .5in; } body { font-family: Arial, sans-serif; font-size: 12pt; color: #000; }
-    h1 { font-size: 20pt; margin: 0 0 2pt; } .sub { font-size: 10pt; color: #444; margin-bottom: 10pt; }
-    .facts { display: flex; gap: 18pt; border: 1.5pt solid #000; padding: 6pt 10pt; margin-bottom: 10pt; flex-wrap: wrap; }
-    .facts div span { display: block; font-size: 8pt; text-transform: uppercase; color: #444; } .facts b { font-size: 14pt; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 10pt; } th, td { border: 1pt solid #000; padding: 4pt 6pt; text-align: left; font-size: 11pt; }
-    th { background: #eee; font-size: 9pt; text-transform: uppercase; } ol { padding-left: 20pt; margin: 0; } li { margin: 0 0 6pt; line-height: 1.35; }
-    h2 { font-size: 12pt; text-transform: uppercase; margin: 12pt 0 6pt; border-bottom: 1.5pt solid #000; }
+    @page { size: Letter; margin: .45in; } html, body { margin: 0; } body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; width: 7.6in; }
+    h1 { font-size: 18pt; margin: 0 0 1pt; } .sub { font-size: 9pt; color: #444; margin-bottom: 7pt; }
+    .facts { display: flex; gap: 14pt; border: 1.5pt solid #000; padding: 5pt 9pt; margin-bottom: 7pt; flex-wrap: wrap; }
+    .facts div span { display: block; font-size: 8pt; text-transform: uppercase; color: #444; } .facts b { font-size: 13pt; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 7pt; } th, td { border: 1pt solid #000; padding: 3pt 6pt; text-align: left; font-size: 10.5pt; }
+    th { background: #eee; font-size: 9pt; text-transform: uppercase; } ol { padding-left: 20pt; margin: 0; } li { margin: 0 0 3.5pt; line-height: 1.3; }
+    h2 { font-size: 11pt; text-transform: uppercase; margin: 8pt 0 4pt; border-bottom: 1.5pt solid #000; }
     .warn { border: 2pt solid #000; padding: 6pt; font-weight: bold; margin-bottom: 8pt; } .kt-fill { font-weight: bold; }
-    .tl td:first-child { width: 60pt; font-weight: bold; font-family: monospace; } .tick { width: 24pt; }
+    .tl td:first-child { width: 58%; } .tl b { font-family: monospace; } .box { display: inline-block; white-space: nowrap; margin: 1pt 8pt 1pt 0; font-family: monospace; font-weight: bold; } .box::before { content: ''; display: inline-block; width: 9pt; height: 9pt; border: 1pt solid #000; margin-right: 3pt; vertical-align: -1pt; }
   </style></head><body>
     <h1>${esc(name)}</h1><div class="sub">Kettle dye — solid colour${currentRecipe && currentRecipe.SKU_Base ? ' · ' + esc(currentRecipe.SKU_Base) : ''} · printed ${new Date().toLocaleDateString()}</div>
     <div class="facts">
@@ -1862,15 +1877,15 @@ function kettlePrintWorkerSheet() {
     ${M.total > KETTLE_METAL_MAX_ML ? '<div class="warn">More than the metal pot holds (13,000 mL) — split into two pots.</div>' : M.total > KETTLE_GLASS_MAX_ML ? '<div class="warn">Over 2,000 mL — use the METAL pot.</div>' : ''}
     <table><tr><th>Dye</th><th>DOS</th><th>Make stock</th><th>Add to pot</th></tr>${dyeRows || '<tr><td colspan="4">No dyes set up</td></tr>'}</table>
     <h2>Steps</h2><ol>${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol>
-    <h2>Timer</h2><table class="tl">${ev.map(e => `<tr><td>${kettleClock(e.t * 60000)}</td><td>${esc(e.text)}</td><td class="tick"></td></tr>`).join('')}</table>
+    <h2>Timer</h2><table class="tl">${kettleTimerGroups(ev).map(g => `<tr><td>${esc(g.text)}</td><td>${g.times.map(t => `<span class="box">${kettleClock(t * 60000)}</span>`).join('')}</td></tr>`).join('')}</table>
   </body></html>`;
   let fr = document.getElementById('ktPrintFrame');
   if (fr) fr.remove();
   fr = document.createElement('iframe'); fr.id = 'ktPrintFrame';
-  fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  fr.style.cssText = 'position:fixed;left:-10000px;top:0;width:7.6in;height:10in;border:0;visibility:hidden';
   document.body.appendChild(fr);
   const doc = fr.contentWindow.document; doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (e) { console.error('Print failed', e); kettleToast('Could not open printing'); } }, 250);
+  setTimeout(() => { try { kettleFitOnePage(fr.contentWindow.document); fr.contentWindow.focus(); fr.contentWindow.print(); } catch (e) { console.error('Print failed', e); kettleToast('Could not open printing'); } }, 250);
 }
 
 let kettleRecalcT = null;
