@@ -1814,11 +1814,12 @@ function kettlePanelHtml() {
     <div class="kt-row"><label>Spools to make (${esc(kettleFmt(K.spoolYds, 0))} yd each)</label>
       <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
         oninput="kettleState.spools=this.value;kettleRecalcSoon()">
-      <span class="kt-small">${M.estNet > 0 ? '≈ ' + kettleFmt(M.estNet, 0) + ' g thread' : ''}</span></div>
+      <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleFmt(M.estNet, 0) + ' g thread' : ''}</span></div>
     <div class="kt-row"><label>Thread weight with ties (g)</label>
       <input id="ktWeight" type="number" inputmode="decimal" value="${esc(kettleState.weight)}" placeholder="0"
         oninput="kettleState.weight=this.value;kettleRecalcSoon()">
       <span class="kt-small">ties ${kettleFmt(K.defaults.ties, 1)} g</span></div>
+    <div id="ktCalc">
     ${has ? `<div class="kt-grid kt-pot">
       <div><span>Net thread</span><b>${kettleFmt(M.net, 1)} g</b></div>
       <div><span>Water to add</span><b>${kettleFmt(M.water, 0)} mL</b></div>
@@ -1832,7 +1833,7 @@ function kettlePanelHtml() {
       <button class="kt-btn sm" onclick="kettlePrintWorkerSheet()">🖨 Print worker sheet</button>
     </div>
     ${kettleState.showWorker ? `<div class="kt-worker">${kettleWorkerStepsHtml(K, M)}</div>` : ''}
-    <div class="kt-timer" id="ktTimer">${kettleTimerHtml()}</div></div>`;
+    <div class="kt-timer" id="ktTimer">${kettleTimerHtml()}</div></div></div>`;
 }
 
 
@@ -1946,11 +1947,14 @@ let kettleRecalcT = null;
 function kettleRecalcSoon() {
   clearTimeout(kettleRecalcT);
   kettleRecalcT = setTimeout(() => {
-    const a = document.activeElement, fid = a && (a.id === 'ktSpools' || a.id === 'ktWeight') ? a.id : 'ktWeight';
-    const el = document.getElementById(fid), pos = el ? el.selectionStart : null;
-    kettleRedraw();
-    const n = document.getElementById(fid); if (n) { n.focus(); try { if (pos != null) n.setSelectionRange(pos, pos); } catch (e) {} }
-  }, 250);
+    /* Only the figures below the boxes are redrawn, never the box being typed in. */
+    const calc = document.getElementById('ktCalc'), est = document.getElementById('ktEst');
+    if (!calc) { kettleRedraw(); return; }
+    const tmp = document.createElement('div'); tmp.innerHTML = kettlePanelHtml();
+    const nc = tmp.querySelector('#ktCalc'), ne = tmp.querySelector('#ktEst');
+    if (nc) calc.replaceWith(nc);
+    if (est && ne) est.textContent = ne.textContent;
+  }, 400);
 }
 
 async function kettleLogLeftover(kettleDyeId) {
