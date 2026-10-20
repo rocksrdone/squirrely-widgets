@@ -1851,7 +1851,9 @@ function kettleMakeText(d, html) {
   const n = Math.max(1, Math.ceil(d.make / KETTLE_STOCK_CONTAINER_ML)), ml = Math.ceil(d.make / n);
   const f = n > 1 ? ml / d.make : 1;
   const powder = d.powderG ? `${kettleFmt(d.powderG * f, 2)} g powder` : `${kettleFmt(d.powderAmt * f, 2)} ${d.unit} powder`;
-  return (n > 1 ? `${b(n + ' containers')}, each ` : '') + `${b(powder)} + ${b(ml + ' mL water')}`;
+  const one = `${b(powder)} + ${b(ml + ' mL water')}`;
+  if (n === 1) return one;
+  return `${b((n * ml) + ' mL')} in total, too much for one container (${KETTLE_STOCK_CONTAINER_ML} mL max) — mix ${b(n + ' containers')}, each ${one}`;
 }
 /* Where this dye's premade stock already is (the jar excess goes into). */
 function kettleJarText(d, html) {
@@ -2006,7 +2008,7 @@ function kettleWorkerSteps(K, M) {
       'Repeat periodically until the water is mostly clear.'];
     return [
       `Presoak all <b>${M.bundles.length} bundles</b> in the water tub.`,
-      'Mix the dye solution for the whole job:' + list(makes),
+      'Mix the dye solution for the whole job:' + `<ul>${makes.map(t => `<li>${t}</li>`).join('')}</ul>`,
       'Pour each bundle’s share into its own small cup, labelled with the bundle letter (amounts in the bundle table). Set each cup beside its bundle.',
       `Cook one bundle at a time, A first. For each bundle:<ul>
         <li>Put its pot on its burner and set it as the bundle table says (metal → <b>large</b> burner, glass → <b>small</b>).</li>
@@ -2024,7 +2026,7 @@ function kettleWorkerSteps(K, M) {
     has ? `Put ${pot} on the <b>${potKind === 'metal' ? 'LARGE' : 'SMALL'} burner</b> and set it to <b>${kettleFmt(b, 1)}</b>.`
         : `Glass pot (up to 2,000 mL): <b>small burner at ${kettleFmt(kettleBurner(K, 'glass'), 1)}</b>. Metal pot: <b>large burner at ${kettleFmt(kettleBurner(K, 'metal'), 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to the pot. Measure the temperature until it reaches <b>${temp}°F</b>.`,
-    'While it heats, mix the dye solution:' + list(makes),
+    'While it heats, mix the dye solution:' + `<ul>${makes.map(t => `<li>${t}</li>`).join('')}</ul>`,
     `Once it reaches ${temp}°F, add the dye stock to the pot:` + list(adds),
     'Squeeze the excess water out of the thread before adding it.',
     has ? `Once the thread is in, drop the burner to <b>${kettleFmt(b - 1, 1)}</b>.` : 'Once the thread is in, drop the burner by 1.',
