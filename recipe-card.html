@@ -582,6 +582,8 @@
   @media (max-width: 760px) { .kt-fs-body { grid-template-columns: 1fr; } .kt-fs-side { position: static; order: -1; } .kt-fs-steps .kt-wsteps { font-size: 16.5px; } }
   .kt-x { border: 1px solid #D4C9BC; background: #fff; color: #8B3A2A; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; }
   .kt-links { margin: 2px 0 8px; }
+  .kt-sched { background: #EEF4F7; border: 1px solid #C9DCE6; border-radius: 7px; padding: 8px 10px; margin: 6px 0 8px; font-size: 13px; line-height: 1.45; }
+  .kt-sched .kt-btn { margin-top: 4px; }
   .kt-check { display: inline-flex; gap: 6px; align-items: center; margin: 6px 10px 0 0; font-size: 13px; cursor: pointer; }
   .kt-unit { border: 1px solid #D4C9BC; background: #fff; color: #6B5E52; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; font-size: 12.5px; white-space: nowrap; }
   .kt-unit b { color: #2C6B5E; }
@@ -1684,26 +1686,26 @@ function resetSteps() {
    Stock is made in whole batches of the recipe strength; what is left over
    goes into that dye's jar on the made-dye rack (Dye_Stock). */
 let currentKettle = null;
-const kettleState = { bundles: [''], units: [], burners: [], twoPots: true, done: [], spools: '', showCitric: false, showWorker: false, recipeId: null };
+const kettleState = { bundles: [''], units: [], burners: [], twoPots: true, done: [], spools: '', hours: '', daySpools: 0, showCitric: false, showWorker: false, recipeId: null };
 /* A job's spools and bundle weights are kept on this device only (not in
    Grist) so a refresh doesn't lose them. Cleared by "Clear job" or after a day. */
 const KETTLE_JOB_KEY = 'ssKettleJob:', KETTLE_JOB_MAX_MS = 24 * 3600 * 1000;
 function kettleSaveJob() {
-  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, units: kettleState.units, burners: kettleState.burners, twoPots: kettleState.twoPots, done: kettleState.done, t: Date.now() })); } catch (e) {}
+  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, units: kettleState.units, burners: kettleState.burners, twoPots: kettleState.twoPots, done: kettleState.done, hours: kettleState.hours, daySpools: kettleState.daySpools, t: Date.now() })); } catch (e) {}
 }
 function kettleLoadJob(recipeId) {
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.twoPots = true; kettleState.done = [];
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.twoPots = true; kettleState.done = []; kettleState.hours = ''; kettleState.daySpools = 0;
   try {
     const j = JSON.parse(localStorage.getItem(KETTLE_JOB_KEY + recipeId) || 'null');
     if (j && Date.now() - j.t < KETTLE_JOB_MAX_MS) {
-      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.units = j.units || []; kettleState.burners = j.burners || []; kettleState.twoPots = j.twoPots !== false; kettleState.done = j.done || [];
+      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.units = j.units || []; kettleState.burners = j.burners || []; kettleState.twoPots = j.twoPots !== false; kettleState.done = j.done || []; kettleState.hours = j.hours || ''; kettleState.daySpools = j.daySpools || 0;
     } else if (j) localStorage.removeItem(KETTLE_JOB_KEY + recipeId);
   } catch (e) {}
 }
 function kettleClearJob() {
   if (!confirm('Clear the spools and bundle weights for this job?')) return;
   try { localStorage.removeItem(KETTLE_JOB_KEY + kettleState.recipeId); } catch (e) {}
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.done = []; kettleRedraw();
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.done = []; kettleState.daySpools = 0; kettleRedraw();
 }
 /* plan: which pot each bundle goes in (from the split); omitted = pick by weight. */
 function kettleSetBundles(n, plan) {
@@ -1755,6 +1757,9 @@ let KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;   // Glass_Pot_Max_
    burner's load limit (Burner_Max_Load_kg; Waring rates the WDB600X at
    15 lb per burner). 'glass' is the small-burner pot, 'metal' the large. */
 let KETTLE_LOAD_MAX_G = 6800, KETTLE_WET_FACTOR = 2;   // Burner_Max_Load_kg / Wet_Thread_Factor
+/* Rough timing: heat-up from burner watts, how much of that reaches the water,
+   and the starting water temperature; plus a changeover between rounds. */
+let KETTLE_W_LARGE = 1300, KETTLE_W_SMALL = 500, KETTLE_HEAT_EFF = 0.7, KETTLE_START_F = 60, KETTLE_TURNOVER_MIN = 15, KETTLE_DAY_HOURS = 5;
 const KETTLE_POTS = { glass: { name: 'Glass pot', empty: 1488 }, metal: { name: 'Metal pot', empty: 1958 } };
 const kettleNewTimer = () => ({ running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
   totalMin: 60, recipeName: '', tick: null, done: false });
@@ -1803,6 +1808,12 @@ async function loadKettle(recipeId) {
     if (set.Kettle_Pot_Temp_F_Default) KETTLE_DEFAULT_TEMP = set.Kettle_Pot_Temp_F_Default;
     if (set.Burner_Max_Load_kg) KETTLE_LOAD_MAX_G = set.Burner_Max_Load_kg * 1000;
     if (set.Wet_Thread_Factor) KETTLE_WET_FACTOR = set.Wet_Thread_Factor;
+    if (set.Burner_Large_W) KETTLE_W_LARGE = set.Burner_Large_W;
+    if (set.Burner_Small_W) KETTLE_W_SMALL = set.Burner_Small_W;
+    if (set.Heat_Efficiency) KETTLE_HEAT_EFF = set.Heat_Efficiency;
+    if (set.Start_Water_Temp_F) KETTLE_START_F = set.Start_Water_Temp_F;
+    if (set.Turnover_min) KETTLE_TURNOVER_MIN = set.Turnover_min;
+    if (set.Kettle_Day_Hours) KETTLE_DAY_HOURS = set.Kettle_Day_Hours;
     if (set.Glass_Pot_Empty_kg) KETTLE_POTS.glass.empty = set.Glass_Pot_Empty_kg * 1000;
     if (set.Metal_Pot_Empty_kg) KETTLE_POTS.metal.empty = set.Metal_Pot_Empty_kg * 1000;
     cfg.id.forEach((id, i) => { const k = g(cfg, 'Key', i), t = String(g(cfg, 'Text', i) || '').trim();
@@ -1886,7 +1897,8 @@ function kettleSplit(K, net, two) {
 }
 
 function kettleMaths(K) {
-  const spools = Math.max(0, Number(kettleState.spools) || 0), estNet = spools * K.spoolG;
+  const spoolsJob = Math.max(0, Number(kettleState.spools) || 0);
+  const spools = kettleState.daySpools > 0 && spoolsJob > 0 ? Math.min(kettleState.daySpools, spoolsJob) : spoolsJob, estNet = spools * K.spoolG;
   const B = kettleState.bundles.map((w, i) => Object.assign(kettlePotMaths(K, kettleGrams(K, i), kettleState.burners[i]), { letter: kettleLetter(i), done: !!kettleState.done[i] }));
   const weighed = B.filter(x => x.net > 0), allWeighed = weighed.length === B.length;
   const net = weighed.reduce((t, x) => t + x.net, 0), multi = B.length > 1;
@@ -1911,9 +1923,9 @@ function kettleMaths(K) {
      to what their pot can take. */
   const capOf = (x, i) => kettleCap(K, kettleState.burners[i] || 'metal');
   const capSum = B.reduce((t, x, i) => t + (x.net > 0 ? 0 : capOf(x, i)), 0);
-  B.forEach((x, i) => { x.target = !(x.net > 0) && estNet > 0 && capSum > 0 ? remaining * capOf(x, i) / capSum + K.defaults.ties : 0; });
+  B.forEach((x, i) => { x.target = !(x.net > 0) && estNet > 0 && capSum > 0 ? Math.min(remaining * capOf(x, i) / capSum, capOf(x, i)) + K.defaults.ties : 0; });
   const twoNow = multi && new Set(B.map(x => x.pot)).size > 1 && B.some((x, i) => kettleState.burners[i]);
-  return { net, estNet, spools, planNet, water, dyes, bundles: B, multi, allWeighed, twoNow,
+  return { net, estNet, spools, spoolsJob, planNet, water, dyes, bundles: B, multi, allWeighed, twoNow,
     total: multi ? B.reduce((t, x) => t + x.total, 0) : one.total, split: kettleSplit(K, estNet || net, kettleState.twoPots) };
 }
 
@@ -1981,8 +1993,13 @@ function kettlePanelHtml() {
     <div class="kt-row"><label>Spools to make (${esc(kettleFmt(K.spoolYds, 0))} yd each)</label>
       <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
         oninput="kettleState.spools=this.value;kettleRecalcSoon()">
-      <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleWt(M.estNet) + ' thread' : ''}</span></div>
-    ${M.bundles.map((x, i) => { const u = kettleUnit(K, i); return `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter}${kettleState.burners[i] ? ` <span class="kt-small">(${esc(KETTLE_POTS[kettleState.burners[i]].name.toLowerCase())})</span>` : ''} — DRY weight with ties` : 'DRY thread weight with ties'}${i === 0 ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
+      <span class="kt-small" id="ktEst">${M.spoolsJob > 0 ? '≈ ' + kettleWt(M.spoolsJob * K.spoolG) + ' thread' : ''}</span></div>
+    <div class="kt-row"><label>Hours for dyeing today</label>
+      <input id="ktHours" type="number" inputmode="decimal" step="0.5" value="${esc(kettleState.hours)}" placeholder="${esc(kettleFmt(KETTLE_DAY_HOURS, 1))}"
+        oninput="kettleState.hours=this.value;kettleHoursChanged()">
+      <span class="kt-small">for the time estimate</span></div>
+    ${M.multi ? '<div class="kt-small" style="margin:4px 0 2px">Weigh each bundle <b>DRY, with ties</b>, before presoaking.</div>' : ''}
+    ${M.bundles.map((x, i) => { const u = kettleUnit(K, i); return `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter}${kettleState.burners[i] ? ` <span class="kt-small">(${esc(KETTLE_POTS[kettleState.burners[i]].name.toLowerCase())})</span>` : ''}` : 'DRY thread weight with ties'}${i === 0 && !M.multi ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
       <input id="ktW${i}" type="number" inputmode="decimal" step="any" value="${esc(kettleState.bundles[i])}" placeholder="0"
         oninput="kettleState.bundles[${i}]=this.value;kettleWeightInput(currentKettle, ${i})">
       <button class="kt-unit" title="Switch between grams and kilograms" onclick="kettleToggleUnit(${i})"><b>${u}</b> / ${u === 'kg' ? 'g' : 'kg'}</button>
@@ -1990,9 +2007,10 @@ function kettlePanelHtml() {
     <div class="kt-small kt-links"><a href="#" onclick="event.preventDefault();kettleSetBundles(kettleState.bundles.length + 1)">+ Add a bundle</a>
       ${kettleState.spools || kettleState.bundles.some(Boolean) ? ` · <a href="#" onclick="event.preventDefault();kettleClearJob()">Clear job</a>` : ''}</div>
     <div id="ktCalc">
+    ${kettleScheduleHtml(K, M)}
     ${kettleSplitHtml(K, M)}
     ${M.multi ? kettleBundleTableHtml(K, M) : has ? `<div class="kt-grid kt-pot">
-      <div><span>Net thread</span><b>${kettleWt(M.net, 1)}</b></div>
+      <div><span>Net thread</span><b>${kettleWt(M.net, 1)}</b><span>≈ ${kettleFmt(M.net / K.spoolG, 0)} spools</span></div>
       <div><span>Water to add</span><b>${kettleFmt(M.water, 0)} mL</b></div>
       <div><span>Total pot</span><b>${kettleFmt(M.total, 0)} mL</b></div>
       <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div></div>${kettlePotAdvice(M.bundles[0])}`
@@ -2009,6 +2027,61 @@ function kettlePanelHtml() {
 
 
 
+
+/* ── Rough timing ── Minutes to bring a pot's liquid from the starting water
+   temperature to pot temperature on its burner. */
+function kettleHeatMin(K, pot, liquidMl) {
+  const dC = Math.max(0, ((K.temp || KETTLE_DEFAULT_TEMP) - KETTLE_START_F) * 5 / 9);
+  const W = (pot === 'metal' ? KETTLE_W_LARGE : KETTLE_W_SMALL) * KETTLE_HEAT_EFF;
+  return W > 0 ? liquidMl / 1000 * 4186 * dC / W / 60 : 0;
+}
+/* One round = slowest pot's heat-up + cook time + changeover. For the job:
+   rounds at the planned (even) size; for a day: how many full-size rounds
+   fit the hours, and how many spools that is. */
+function kettleSchedule(K, M) {
+  const jobNet = M.spoolsJob * K.spoolG; if (!(jobNet > 0)) return null;
+  const k = kettleMlPerGram(K), cook = K.heat || KETTLE_DEFAULT_HEAT, two = kettleState.twoPots;
+  const S = kettleSplit(K, jobNet, two); if (!S) return null;
+  const rounds = S.two ? S.rounds : S.n;
+  const heatOf = (pot, net) => kettleHeatMin(K, pot, net * k);
+  const heat = S.two ? Math.max(heatOf('metal', S.per[0]), heatOf('glass', S.per[1])) : heatOf(S.plan[0], S.per[0]);
+  const roundMin = heat + cook + (rounds > 1 ? KETTLE_TURNOVER_MIN : 0);
+  const capM = kettleCap(K, 'metal'), capG = kettleCap(K, 'glass');
+  const fullNet = two ? capM + capG : capM;
+  const fullRound = Math.max(heatOf('metal', capM), two ? heatOf('glass', capG) : 0) + cook + KETTLE_TURNOVER_MIN;
+  const windowMin = (Number(kettleState.hours) || KETTLE_DAY_HOURS) * 60;
+  const perDay = Math.max(1, Math.floor((windowMin + KETTLE_TURNOVER_MIN) / fullRound));
+  const daySpools = Math.min(M.spoolsJob, Math.floor(perDay * fullNet / K.spoolG));
+  return { rounds, heat, roundMin, total: rounds * roundMin - (rounds > 1 ? KETTLE_TURNOVER_MIN : 0), windowMin, perDay, daySpools,
+    days: Math.ceil(M.spoolsJob / Math.max(1, daySpools)), two: !!S.two, cook, heatSlow: S.two && heatOf('glass', S.per[1]) > heatOf('metal', S.per[0]) };
+}
+function kettleDur(min) { const m = Math.round(min / 5) * 5, h = Math.floor(m / 60), r = m % 60; return h ? `${h} h${r ? ' ' + r + ' min' : ''}` : `${r} min`; }
+function kettleHoursChanged() {
+  const K = currentKettle;
+  if (K && kettleState.daySpools > 0) { const T = kettleSchedule(K, kettleMaths(K)); if (T) kettleState.daySpools = T.daySpools; }
+  kettleSaveJob(); kettleRecalcSoon();
+}
+function kettlePlanDay(on) {
+  const K = currentKettle; if (!K) return;
+  const T = kettleSchedule(K, kettleMaths(K));
+  kettleState.daySpools = on && T ? T.daySpools : 0;
+  kettleSaveJob(); kettleApplySplit();
+}
+function kettleScheduleHtml(K, M) {
+  const T = kettleSchedule(K, M); if (!T) return '';
+  const hrs = kettleDur(T.windowMin);
+  const what = T.rounds > 1 ? `${T.rounds} ${T.two ? 'rounds of two pots' : 'pots'} × ~${kettleDur(T.roundMin)}` : 'one pot';
+  const parts = `heat-up ~${kettleDur(T.heat)}${T.heatSlow ? ' (small burner is the slow one)' : ''}, ${T.cook} min cook${T.rounds > 1 ? `, ${KETTLE_TURNOVER_MIN} min changeover` : ''}`;
+  let day = '';
+  if (kettleState.daySpools > 0 && kettleState.daySpools < M.spoolsJob) {
+    day = `<div class="kt-small"><b>Today: ${kettleFmt(M.spools, 0)} of ${kettleFmt(M.spoolsJob, 0)} spools</b> (${T.perDay} ${T.two ? 'round' : 'pot'}${T.perDay > 1 ? 's' : ''} at full pots) — ${kettleFmt(M.spoolsJob - M.spools, 0)} left for another day.
+      <a href="#" onclick="event.preventDefault();kettlePlanDay(false)">Plan the whole job instead</a></div>`;
+  } else if (T.total > T.windowMin) {
+    day = `<div class="kt-small">More than your ${hrs}. In ${hrs}: <b>${T.perDay} ${T.two ? 'round' : 'pot'}${T.perDay > 1 ? 's' : ''} at full pots ≈ ${kettleFmt(T.daySpools, 0)} spools</b>; the whole job ≈ ${T.days} days.
+      <button class="kt-btn sm" onclick="kettlePlanDay(true)">Plan today: ${kettleFmt(T.daySpools, 0)} spools</button></div>`;
+  }
+  return `<div class="kt-sched">⏱ About <b>${kettleDur(T.total)}</b> for ${kettleFmt(M.spoolsJob, 0)} spools — ${what} (${parts}). Rough guide only.${day}</div>`;
+}
 /* Fewest pots, as even as possible: one pot when the job fits (glass if it
    fits, else metal), else equal bundles that each fit the metal pot. */
 function kettleSplitHtml(K, M) {
@@ -2040,10 +2113,11 @@ function kettlePotCell(x, i) {
 function kettleBundleTableHtml(K, M) {
   const dn = d => d.d ? d.d.name : 'dye';
   return `<table class="kt-bt"><tr><th>Bundle</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(dn(d))} cup</th>`).join('')}<th>Done</th></tr>
-    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleWt(x.weight, 1) : x.target ? `<span class="kt-small">aim ${kettleWt(x.target)}</span>` : '—'}</td>
+    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? `${kettleWt(x.weight, 1)}<br><span class="kt-small">≈ ${kettleFmt(x.net / currentKettle.spoolG, 0)} spools</span>` : x.target ? `<span class="kt-small">aim ${kettleWt(x.target)}<br>≈ ${kettleFmt((x.target - currentKettle.defaults.ties) / currentKettle.spoolG, 0)} spools</span>` : '—'}</td>
       <td>${kettlePotCell(x, i)}</td>
       <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : ''}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : ''}</td>`).join('')}
-      <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>`;
+      <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>
+    ${M.net > 0 ? `<div class="kt-small">Weighed so far: <b>≈ ${kettleFmt(M.net / K.spoolG, 0)} spools</b> in ${M.bundles.filter(x => x.net > 0).length} of ${M.bundles.length} bundles${M.spools ? ` (planned ${kettleFmt(M.spools, 0)})` : ''}. Rough — from ${kettleFmt(K.spoolG, 2)} g of thread per spool.</div>` : ''}`;
 }
 
 /* Worker steps as a full-screen view: what this pot (or each bundle) needs,
