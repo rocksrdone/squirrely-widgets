@@ -76,12 +76,16 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   <div class="controls">
     <label>Daily capacity</label>
     <input type="number" id="capacityInput" value="20" min="1">
+    <select id="dayMode" onchange="planMode=this.value;runPlan()" title="Hand-dye and kettle need different setups, so a day is one or the other"
+      style="font:inherit;font-size:12px;padding:5px 8px;border:1px solid var(--rule);border-radius:5px;background:#fff;color:var(--ink,#1A1614)">
+      <option value="hand">Hand-dye day</option><option value="kettle">Kettle day</option></select>
     <button class="btn btn-teal" onclick="loadAll()">↻ Generate Today's Plan</button>
     <button class="btn" id="savePlanBtn" onclick="saveTodaysPlan()">⤓ Save Today's Plan</button>
   </div>
 </div>
 
 <div id="planStatus" style="font-size:11px; color:#8B7D72; margin-bottom:10px;"></div>
+<div id="otherModeNote"></div>
 <div id="planOutput"></div>
 
 <div class="section-title">Waiting (not in today's plan)</div>
@@ -209,7 +213,15 @@ function showToast(msg) {
 }
 
 let workOrders = {};   // id -> {Due_Date, Customer_Name, Order_Number}
-let recipes = {};      // id -> {Recipe_Name, SKU_Base, Cleanup_Order}
+let recipes = {};      // id -> {Recipe_Name, SKU_Base, Cleanup_Order, kettle}
+/* Hand-dye and kettle (solid) dyeing need different setups and can't share a
+   day, so the plan is built for one or the other. Kettle recipes are those
+   whose Dye_Method says "Kettle". */
+let planMode = 'hand';
+function esc(v) {
+  return (v == null ? '' : String(v)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 let dyes = {};          // id -> {Dye_Name, Brand, Serial, Swatch_Hex, Shelf_Life_days, Cleanup_Order}
 let dyeStockByDye = {}; // dyeId -> [{qty, mixedDate, binLocation}]
 let recipeDyes = {};    // recipeId -> [dyeId,...]
@@ -271,6 +283,7 @@ async function loadAll() {
         Recipe_Name: columnAsArray(recipesTable, rNameCol)[i] || '',
         SKU_Base: rSkuCol ? columnAsArray(recipesTable, rSkuCol)[i] : '',
         Cleanup_Order: rCleanupCol ? columnAsArray(recipesTable, rCleanupCol)[i] : '',
+        kettle: /kettle/i.test(String((rc(['Dye_Method']) ? columnAsArray(recipesTable, rc(['Dye_Method']))[i] : '') || '')),
       };
     });
 
@@ -627,7 +640,21 @@ function allocatePrepZones(recipeIds, dyesForRecipe, zoneCount) {
 
 function runPlan() {
   const capacity = Number(document.getElementById('capacityInput').value) || 20;
-  const { selected, waiting } = selectToday(capacity);
+  // Only the day's kind of work goes into the plan; the rest is counted.
+  const allJobs = queueJobs;
+  const isK = j => !!(recipes[j.recipeId] || {}).kettle;
+  queueJobs = allJobs.filter(j => isK(j) === (planMode === 'kettle'));
+  const otherJobs = allJobs.filter(j => isK(j) !== (planMode === 'kettle'));
+  let picked;
+  try { picked = selectToday(capacity); } finally { queueJobs = allJobs; }
+  const { selected, waiting } = picked;
+  const otherBox = document.getElementById('otherModeNote');
+  if (otherBox) otherBox.innerHTML = otherJobs.length
+    ? `<div style="background:#F5EDD8;border:1px solid #E2C98F;border-radius:7px;padding:8px 12px;margin-bottom:10px;font-size:12.5px">
+        <b>${otherJobs.length} ${planMode === 'kettle' ? 'hand-dye' : 'kettle'} job${otherJobs.length === 1 ? '' : 's'} waiting</b> —
+        ${otherJobs.slice(0, 6).map(j => esc((recipes[j.recipeId] || {}).Recipe_Name || '')).join(', ')}${otherJobs.length > 6 ? '…' : ''}.
+        Switch to <a href="#" onclick="event.preventDefault();planMode='${planMode === 'kettle' ? 'hand' : 'kettle'}';document.getElementById('dayMode').value=planMode;runPlan()">${planMode === 'kettle' ? 'Hand-dye' : 'Kettle'} day</a> to plan them.</div>`
+    : '';
   const groups = sequenceSelected(selected);
   lastGroups = groups;
 
