@@ -1664,7 +1664,8 @@ function resetSteps() {
    goes into that dye's jar on the made-dye rack (Dye_Stock). */
 let currentKettle = null;
 const kettleState = { weight: '', spools: '', showCitric: false, showWorker: false, recipeId: null };
-const KETTLE_STOCK_SPARE_ML = 5;   // extra stock made so the pot never runs short
+const KETTLE_STOCK_SPARE_ML = 5;
+const KETTLE_STOCK_CONTAINER_ML = 160;   // largest container used for stock solution   // extra stock made so the pot never runs short
 const KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;
 const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
   totalMin: 60, recipeName: '', tick: null, done: false };
@@ -1765,10 +1766,14 @@ function kettleSameStrength(r) {
   if (r.unit === 'tsp' && r.amt > 0 && d.tsp) return close(r.amt / r.water, d.tsp / d.ml);
   return null;
 }
+/* Stock is mixed in containers of at most 160 mL; bigger amounts are split
+   into equal containers. */
 function kettleMakeText(d, html) {
   const b = x => html ? `<b>${x}</b>` : x;
-  const powder = d.powderG ? `${kettleFmt(d.powderG, 2)} g powder` : `${kettleFmt(d.powderAmt, 2)} ${d.unit} powder`;
-  return `${b(powder)} + ${b(kettleFmt(d.make, 0) + ' mL water')}`;
+  const n = Math.max(1, Math.ceil(d.make / KETTLE_STOCK_CONTAINER_ML)), ml = Math.ceil(d.make / n);
+  const f = n > 1 ? ml / d.make : 1;
+  const powder = d.powderG ? `${kettleFmt(d.powderG * f, 2)} g powder` : `${kettleFmt(d.powderAmt * f, 2)} ${d.unit} powder`;
+  return (n > 1 ? `${b(n + ' containers')}, each ` : '') + `${b(powder)} + ${b(ml + ' mL water')}`;
 }
 /* Where this dye's premade stock already is (the jar excess goes into). */
 function kettleJarText(d, html) {
@@ -1856,8 +1861,8 @@ function kettleWorkerSteps(K, M) {
   const nm = d => d.d ? `${d.d.brand} ${d.d.name}` : 'dye';
   const list = items => items.length > 1 ? `<ul>${items.map(t => `<li>${t}</li>`).join('')}</ul>` : ' ' + (items[0] || '');
   const makes = M.dyes.map(d => d.make
-    ? `<b>${esc(nm(d))}</b>: ${kettleMakeText(d, true)} — ${kettleJarText(d, true)}`
-    : `<b>${esc(nm(d))}</b>: ${blank} g powder + ${blank} mL water (strength ${kettleFmt(d.amt, 2)} ${esc(d.unit)} per ${kettleFmt(d.water, 0)} mL)`);
+    ? `<b>${esc(nm(d))}</b>: ${kettleMakeText(d, true)}`
+    : `<b>${esc(nm(d))}</b>: ${blank} g powder + ${blank} mL water`);
   const adds = M.dyes.map(d => has && d.dos ? `<b>${kettleFmt(d.stock, 1)} mL</b> of ${esc(nm(d))} stock` : `${blank} mL of ${esc(nm(d))} stock`);
   const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
   const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : 'glass pot if under 2,000 mL total, metal pot if over';
@@ -1865,7 +1870,7 @@ function kettleWorkerSteps(K, M) {
     'Presoak the thread in the water tub.',
     `Set the burner to <b>${kettleFmt(b, 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to ${pot}. Measure the temperature until it reaches <b>${temp}°F</b>.`,
-    `While it heats, make the stock solution — <b>only this much</b> (enough for this pot plus ${KETTLE_STOCK_SPARE_ML} mL spare). Weigh the dry powder, add it to the water and mix until fully dissolved:` + list(makes),
+    'While it heats, mix the dye solution:' + list(makes),
     `Once it reaches ${temp}°F, add the dye stock to the pot:` + list(adds),
     'Squeeze the excess water out of the thread before adding it.',
     `Once the thread is in, drop the burner to <b>${kettleFmt(b - 1, 1)}</b>.`,
