@@ -1752,10 +1752,9 @@ function kettlePanelHtml() {
       ${std ? `<div class="kt-small">${std}${differs ? ' · <b>this recipe uses a different strength</b>' : ''}</div>` : ''}
       ${has && d.dos ? `<div class="kt-grid">
           <div><span>Make stock</span><b>${d.batches > 1 ? d.batches + ' × ' : ''}${kettleFmt(d.amt, 2)} ${esc(d.unit)} / ${kettleFmt(d.water, 0)} mL</b></div>
-          <div><span>Add to pot</span><b>${kettleFmt(d.stock, 1)} mL</b></div>
-          <div><span>Left over</span><b>${kettleFmt(d.left, 0)} mL</b></div></div>` : ''}
+          <div><span>Add to pot</span><b>${kettleFmt(d.stock, 1)} mL</b></div></div>` : ''}
       <div class="kt-small">${jar}</div>
-      ${has && d.dos && d.left > 0.5 && d.dyeId ? `<button class="kt-btn sm" onclick="kettleLogLeftover(${d.id})">Put ${kettleFmt(d.left, 0)} mL left over into the jar</button>` : ''}
+      ${has && d.dos && d.left > 0.5 && d.dyeId ? `<button class="kt-btn sm" onclick="kettleLogLeftover(${d.id})">Put leftover stock into the jar</button>` : ''}
       ${d.notes ? `<div class="kt-note">${esc(d.notes)}</div>` : ''}
     </div>`; }).join('');
   const citric = `<div class="kt-small"><a href="#" onclick="event.preventDefault();kettleState.showCitric=!kettleState.showCitric;kettleRedraw()">${kettleState.showCitric ? 'Hide' : 'If it won’t exhaust:'} citric acid instructions</a></div>
