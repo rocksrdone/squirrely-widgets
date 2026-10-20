@@ -3797,7 +3797,8 @@ async function saveRecipe() {
    Saves to its own tables, with its own Save button, so it can never touch
    the hand-dye step rows:
      Recipes.Kettle_Temp_F / Kettle_Heat_min   pot temperature and heat time
-     Recipes.Kettle_Burner                     burner to heat on (drops by 1 once thread is in)
+     Recipes.Kettle_Burner_Metal / _Glass      burner to heat on: large burner + metal pot, small burner + glass pot
+                                               (standard 3.5 / 3; drops by 1 once at temperature)
      Kettle_Dyes   one row per dye: DOS %, and the stock solution it is made
                    into (powder amount + unit, powder grams, stock water mL).
                    Dye is never added to the pot as powder — always as stock.
@@ -3810,7 +3811,7 @@ const KB_STANDARD_STEPS = [
   { at: 5, every: null, until: null, text: 'Constant stirring done — stir every 10 min from here', beeps: 3 },
   { at: 15, every: 10, until: null, text: 'Stir', beeps: 2 },
 ];
-const KB = { recipeId: null, temp: '', heat: '', burner: '', dyes: [], steps: [], removedDyes: [], removedSteps: [],
+const KB = { recipeId: null, temp: '', heat: '', burnerMetal: '', burnerGlass: '', dyes: [], steps: [], removedDyes: [], removedSteps: [],
   dyeList: [], dyeById: {}, loaded: false, dirty: false, usingStandard: false };
 
 function kbIsKettle() { return /kettle/i.test(document.getElementById('dyeMethod').value || ''); }
@@ -3840,7 +3841,8 @@ async function kbLoad(recipeId, record) {
     const ri = (rT.id || []).indexOf(recipeId);
     KB.temp = ri >= 0 && g(rT, 'Kettle_Temp_F', ri) != null ? g(rT, 'Kettle_Temp_F', ri) : '';
     KB.heat = ri >= 0 && g(rT, 'Kettle_Heat_min', ri) != null ? g(rT, 'Kettle_Heat_min', ri) : '';
-    KB.burner = ri >= 0 && g(rT, 'Kettle_Burner', ri) != null ? g(rT, 'Kettle_Burner', ri) : '';
+    KB.burnerMetal = ri >= 0 && g(rT, 'Kettle_Burner_Metal', ri) != null ? g(rT, 'Kettle_Burner_Metal', ri) : '';
+    KB.burnerGlass = ri >= 0 && g(rT, 'Kettle_Burner_Glass', ri) != null ? g(rT, 'Kettle_Burner_Glass', ri) : '';
     KB.dyes = (dT.id || []).map((id, i) => ({ id, rec: getRefId(g(dT, 'Recipe', i)), dye: getRefId(g(dT, 'Dye', i)) || null,
       dos: g(dT, 'DOS_pct', i), amt: g(dT, 'Powder_Amount', i), unit: g(dT, 'Powder_Unit', i) || 'tsp', grams: g(dT, 'Powder_g', i),
       water: g(dT, 'Stock_Water_mL', i), sort: Number(g(dT, 'Sort', i)) || 0, notes: g(dT, 'Notes', i) || '' }))
@@ -3872,7 +3874,8 @@ function kbRender() {
     <div class="kb-grid2">
       <label><span class="field-label">Pot temp (°F)</span><input class="field-input" type="number" value="${v(KB.temp)}" placeholder="${KB_DEFAULT_TEMP}" oninput="KB.temp=this.value;kbDirty()"></label>
       <label><span class="field-label">Heat time (min)</span><input class="field-input" type="number" value="${v(KB.heat)}" placeholder="${KB_DEFAULT_HEAT}" oninput="KB.heat=this.value;kbDirty()"></label>
-      <label><span class="field-label">Burner setting</span><input class="field-input" type="number" step="0.5" value="${v(KB.burner)}" placeholder="3" oninput="KB.burner=this.value;kbDirty()"></label>
+      <label><span class="field-label">Burner — metal pot (large)</span><input class="field-input" type="number" step="0.5" value="${v(KB.burnerMetal)}" placeholder="3.5" oninput="KB.burnerMetal=this.value;kbDirty()"></label>
+      <label><span class="field-label">Burner — glass pot (small)</span><input class="field-input" type="number" step="0.5" value="${v(KB.burnerGlass)}" placeholder="3" oninput="KB.burnerGlass=this.value;kbDirty()"></label>
     </div>
     <div class="kb-h">Dyes <span class="kb-muted">— each made into stock solution, never added as powder</span></div>
     ${KB.dyes.map((d, i) => {
@@ -3930,7 +3933,7 @@ function kbStandardSteps() {
 async function kbSave() {
   if (!currentRecipeId) return;
   const rid = currentRecipeId, A = [];
-  A.push(['UpdateRecord', 'Recipes', rid, { Kettle_Temp_F: kbNum(KB.temp), Kettle_Heat_min: kbNum(KB.heat), Kettle_Burner: kbNum(KB.burner) }]);
+  A.push(['UpdateRecord', 'Recipes', rid, { Kettle_Temp_F: kbNum(KB.temp), Kettle_Heat_min: kbNum(KB.heat), Kettle_Burner_Metal: kbNum(KB.burnerMetal), Kettle_Burner_Glass: kbNum(KB.burnerGlass) }]);
   KB.dyes.forEach((d, i) => {
     if (!d.dye && !d.id && !kbNum(d.dos)) return;          // an untouched blank line
     const f = { Recipe: rid, Dye: d.dye || 0, DOS_pct: kbNum(d.dos), Powder_Amount: kbNum(d.amt), Powder_Unit: d.unit || 'tsp',
