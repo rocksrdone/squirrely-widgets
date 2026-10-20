@@ -3021,6 +3021,18 @@ async function loadRecipe(record) {
   loadLayoutShape(currentRecipeId);
   const existingVendor = vendorCodeFromExistingSku(rowField(record, ['SKU_Base']) || rowField(record, ['Shopify_SKU']));
   if (existingVendor) document.getElementById('reservedFor').value = existingVendor;
+  /* Reserved For is read from the SKU's vendor ending, but other widgets go by
+     Linked_Customer. When the SKU names a vendor and nothing is linked, store
+     the link straight away (the load clears the unsaved flag, so waiting for
+     Save would lose it). */
+  const skuVendor = existingVendor && allVendors.find(v => v.code === existingVendor);
+  if (skuVendor && !document.getElementById('linkedCustomer').value && currentRecipeId) {
+    document.getElementById('linkedCustomer').value = skuVendor.id;
+    renderLinkedCustomerState();
+    grist.docApi.applyUserActions([['UpdateRecord', 'Recipes', currentRecipeId, { Linked_Customer: skuVendor.id }]])
+      .then(() => showToast(`Linked to ${skuVendor.name} (from the SKU)`))
+      .catch(e => console.error('Could not store the linked customer', e));
+  }
   renderSkuSuggestion();
   updateFinalizeGate();
 
