@@ -572,6 +572,7 @@
   .kt-worker { border: 1px solid #E8DFD4; border-radius: 7px; padding: 8px 10px; margin-top: 8px; background: #FDFBF8; }
   .kt-wsteps { margin: 4px 0 0 20px; padding: 0; font-size: 13px; line-height: 1.45; }
   .kt-wsteps li { margin-bottom: 5px; }
+  .kt-wsteps ul { margin: 3px 0 0 16px; padding: 0; }
   .kt-fill { background: #E5F2EF; border-radius: 3px; padding: 0 4px; font-weight: 700; }
   .kt-dye { border: 1px solid #E8DFD4; border-radius: 7px; padding: 8px 10px; margin: 8px 0; }
   .kt-dyename { font-weight: 700; font-size: 14px; margin-bottom: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -1662,7 +1663,8 @@ function resetSteps() {
    Stock is made in whole batches of the recipe strength; what is left over
    goes into that dye's jar on the made-dye rack (Dye_Stock). */
 let currentKettle = null;
-const kettleState = { weight: '', showCitric: false, showWorker: false, recipeId: null };
+const kettleState = { weight: '', spools: '', showCitric: false, showWorker: false, recipeId: null };
+const KETTLE_STOCK_SPARE_ML = 5;   // extra stock made so the pot never runs short
 const KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;
 const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
   totalMin: 60, recipeName: '', tick: null, done: false };
@@ -1686,16 +1688,26 @@ function isKettleRecipe(r) { return /kettle/i.test(String((r && rowField(r, ['Dy
 function kettleFmt(n, dp) { const p = Math.pow(10, dp); return (Math.round(n * p) / p).toString(); }
 
 async function loadKettle(recipeId) {
-  const K = { recipeId, temp: null, heat: null, burner: null, name: '', dyes: [], steps: [], standardSteps: false, defaults: { ties: 2.1, burner: 3 }, err: '' };
+  const K = { recipeId, temp: null, heat: null, burner: null, name: '', dyes: [], steps: [], standardSteps: false, defaults: { ties: 2.1, burner: 3 }, spoolG: 11.27, spoolYds: 100, err: '' };
   const safe = async t => { try { return await grist.docApi.fetchTable(t); } catch (e) { return null; } };
-  const [kd, ks, dy, st, df, rc] = await Promise.all(['Kettle_Dyes', 'Kettle_Steps', 'Dyes', 'Dye_Stock', 'Kettle_Dye_Defaults', 'Recipes'].map(safe));
+  const [kd, ks, dy, st, df, rc, pr, dp] = await Promise.all(['Kettle_Dyes', 'Kettle_Steps', 'Dyes', 'Dye_Stock', 'Kettle_Dye_Defaults', 'Recipes', 'Products', 'Dye_Powder'].map(safe));
   const g = (t, c, i) => (t && Array.isArray(t[c]) ? t[c][i] : undefined);
   if (!kd) { K.err = 'Kettle_Dyes table not found.'; return K; }
   if (rc) { const i = (rc.id || []).indexOf(recipeId); if (i >= 0) { K.temp = Number(g(rc, 'Kettle_Temp_F', i)) || null; K.heat = Number(g(rc, 'Kettle_Heat_min', i)) || null; K.burner = Number(g(rc, 'Kettle_Burner', i)) || null; K.name = g(rc, 'Recipe_Name', i) || ''; } }
   if (df && df.id && df.id.length) { K.defaults.ties = Number(g(df, 'Yarn_Ties_Weight', 0)) || 2.1; K.defaults.burner = Number(g(df, 'Large_Burner_Gauge', 0)) || 3; }
+  /* Thread per spool, from Products (nylon, thread only, no spool). */
+  if (pr) { const i = (pr.id || []).findIndex((id, j) => /nylon/i.test(String(g(pr, 'Fiber', j) || '')) && Number(g(pr, 'Thread_Weight_g', j)) > 0);
+    if (i >= 0) { K.spoolG = Number(g(pr, 'Thread_Weight_g', i)); K.spoolYds = Number(g(pr, 'Yards_Per_Spool', i)) || 100; } }
+  /* Where each dye's powder lives: the open container first. */
+  const powderAt = {};
+  if (dp) (dp.id || []).forEach((id, i) => { const d = stockRefId(g(dp, 'Dye', i)); if (!d) return;
+    const state = String(g(dp, 'State', i) || ''); if (/empty|used up|gone/i.test(state)) return;
+    const where = [g(dp, 'Box', i), g(dp, 'Location', i)].filter(Boolean).join(' · ');
+    if (!where) return;
+    if (!powderAt[d] || (/open/i.test(state) && !powderAt[d].open)) powderAt[d] = { where, open: /open/i.test(state) }; });
   const dye = {};
   if (dy) (dy.id || []).forEach((id, i) => { dye[id] = { name: g(dy, 'Dye_Name', i) || '', brand: g(dy, 'Brand', i) || '',
-    tsp: Number(g(dy, 'Std_Powder_tsp_', i)) || null, ml: Number(g(dy, 'Std_Water_mL_', i)) || null }; });
+    tsp: Number(g(dy, 'Std_Powder_tsp_', i)) || null, ml: Number(g(dy, 'Std_Water_mL_', i)) || null, g: Number(g(dy, 'Std_Dry_Weight_g_', i)) || null }; });
   const jar = {};
   if (st) {
     const S = { dye: findColumn(st, ['Dye']), qty: findColumn(st, ['Quantity_mL']), bin: findColumn(st, ['Bin_Location']), mixed: findColumn(st, ['Mixed_Date']) };
@@ -1706,7 +1718,7 @@ async function loadKettle(recipeId) {
     amt: Number(g(kd, 'Powder_Amount', i)) || 0, unit: g(kd, 'Powder_Unit', i) || 'tsp', grams: Number(g(kd, 'Powder_g', i)) || 0,
     water: Number(g(kd, 'Stock_Water_mL', i)) || 0, sort: Number(g(kd, 'Sort', i)) || 0, notes: g(kd, 'Notes', i) || '' }))
     .filter(r => r.rec === recipeId).sort((a, b) => a.sort - b.sort)
-    .map(r => Object.assign(r, { d: dye[r.dyeId] || null, jar: jar[r.dyeId] || null }));
+    .map(r => Object.assign(r, { d: dye[r.dyeId] || null, jar: jar[r.dyeId] || null, powderAt: powderAt[r.dyeId] ? powderAt[r.dyeId].where : '' }));
   K.steps = ks ? (ks.id || []).map((id, i) => ({ rec: stockRefId(g(ks, 'Recipe', i)), at: Number(g(ks, 'At_min', i)) || 0,
     every: Number(g(ks, 'Repeat_Every_min', i)) || 0, until: Number(g(ks, 'Until_min', i)) || 0, text: g(ks, 'Instruction', i) || '',
     beeps: Number(g(ks, 'Beeps', i)) || 1, sort: Number(g(ks, 'Sort', i)) || 0 })).filter(r => r.rec === recipeId) : [];
@@ -1732,13 +1744,43 @@ function kettleEvents(K) {
 
 function kettleMaths(K) {
   const w = Number(kettleState.weight) || 0, net = Math.max(0, w - K.defaults.ties), base = net * 7;
+  const spools = Math.max(0, Number(kettleState.spools) || 0), estNet = spools * K.spoolG;
+  /* Stock is sized to the weighed thread once there is a weight, otherwise to
+     the spool estimate, plus a 5 mL spare. Only that much gets made. */
+  const planNet = net > 0 ? net : estNet;
   const water = base * 1.1;
   const dyes = K.dyes.map(r => {
-    const stock = base * 0.01 * r.dos;
-    const batches = r.water > 0 && stock > 0 ? Math.ceil(stock / r.water - 1e-9) : 0;
-    return Object.assign({}, r, { stock, batches, made: batches * r.water, powder: batches * r.amt, left: batches * r.water - stock });
+    const stock = base * 0.01 * r.dos;                       // into the pot
+    const need = planNet * 7 * 0.01 * r.dos;
+    const make = need > 0 && r.water > 0 ? Math.ceil(need + KETTLE_STOCK_SPARE_ML) : 0;   // mL of stock to mix
+    const f = r.water > 0 ? make / r.water : 0;
+    const estNeed = estNet * 7 * 0.01 * r.dos;
+    return Object.assign({}, r, { stock, need, make, powderG: r.grams ? r.grams * f : 0, powderAmt: r.amt * f,
+      left: Math.max(0, make - (net > 0 ? stock : need)), same: kettleSameStrength(r),
+      short: net > 0 && estNet > 0 && stock > estNeed + KETTLE_STOCK_SPARE_ML ? stock - (estNeed + KETTLE_STOCK_SPARE_ML) : 0 });
   });
-  return { net, water, dyes, total: water + dyes.reduce((t, d) => t + d.stock, 0) };
+  return { net, estNet, spools, planNet, water, dyes, total: water + dyes.reduce((t, d) => t + d.stock, 0) };
+}
+
+/* Can leftover stock go into this dye's standard jar? Only when the recipe's
+   stock is the same strength as the dye's standard (within 3%). By weight
+   when both have grams, otherwise by teaspoons. null = can't tell. */
+function kettleSameStrength(r) {
+  const d = r.d; if (!d || !d.ml || !(r.water > 0)) return null;
+  const close = (a, b) => Math.abs(a - b) <= 0.03 * b;
+  if (r.grams > 0 && d.g) return close(r.grams / r.water, d.g / d.ml);
+  if (r.unit === 'tsp' && r.amt > 0 && d.tsp) return close(r.amt / r.water, d.tsp / d.ml);
+  return null;
+}
+function kettleMakeText(d, html) {
+  const b = x => html ? `<b>${x}</b>` : x;
+  const powder = d.powderG ? `${kettleFmt(d.powderG, 2)} g powder` : `${kettleFmt(d.powderAmt, 2)} ${d.unit} powder`;
+  return `${b(powder)} + ${b(kettleFmt(d.make, 0) + ' mL water')}`;
+}
+function kettleLeftoverText(d) {
+  if (d.same === true) return d.jar ? `pour into the made-dye jar in bin ${d.jar.bin || '(no bin set)'}` : 'pour into a new made-dye jar, label it, put it on the made-dye rack';
+  if (d.same === false) return 'DISCARD — this recipe’s stock is a different strength from the standard jar';
+  return 'DISCARD — the dye’s standard strength isn’t recorded, so it can’t be combined';
 }
 
 function kettlePanelHtml() {
@@ -1756,17 +1798,25 @@ function kettlePanelHtml() {
       <div class="kt-dyename">${name}${d.dos ? ` <span class="kt-tag">${kettleFmt(d.dos, 2)}% DOS</span>` : ' <span class="kt-tag warn">set DOS in Recipe Builder</span>'}</div>
       <div class="kt-line">Stock strength: <b>${kettleFmt(d.amt, 2)} ${esc(d.unit)}</b> in <b>${kettleFmt(d.water, 0)} mL</b> water${d.grams ? ` (${kettleFmt(d.grams, 2)} g powder)` : ''}</div>
       ${std ? `<div class="kt-small">${std}${differs ? ' · <b>this recipe uses a different strength</b>' : ''}</div>` : ''}
-      ${has && d.dos ? `<div class="kt-grid">
-          <div><span>Make stock</span><b>${d.batches > 1 ? d.batches + ' × ' : ''}${kettleFmt(d.amt, 2)} ${esc(d.unit)} / ${kettleFmt(d.water, 0)} mL</b></div>
-          <div><span>Add to pot</span><b>${kettleFmt(d.stock, 1)} mL</b></div></div>` : ''}
+      ${d.make ? `<div class="kt-grid">
+          <div><span>Make stock (only this much)</span><b>${kettleMakeText(d, false)}</b></div>
+          ${has ? `<div><span>Add to pot</span><b>${kettleFmt(d.stock, 1)} mL</b></div>` : ''}</div>
+          <div class="kt-small">Enough for ${has ? 'this pot' : esc(kettleFmt(M.spools, 0)) + ' spools'} plus ${KETTLE_STOCK_SPARE_ML} mL spare.</div>` : ''}
+      ${d.short ? `<div class="kt-warn">Thread weighs more than the spool estimate — if stock is already mixed, make about ${kettleFmt(Math.ceil(d.short), 0)} mL more.</div>` : ''}
+      ${d.powderAt ? `<div class="kt-small">Powder: <b>${esc(d.powderAt)}</b></div>` : ''}
       <div class="kt-small">${jar}</div>
-      ${has && d.dos && d.left > 0.5 && d.dyeId ? `<button class="kt-btn sm" onclick="kettleLogLeftover(${d.id})">Put leftover stock into the jar</button>` : ''}
+      ${d.make ? `<div class="kt-small">Leftover: <b>${esc(kettleLeftoverText(d))}</b></div>` : ''}
+      ${has && d.dos && d.left > 0.5 && d.dyeId && d.same === true ? `<button class="kt-btn sm" onclick="kettleLogLeftover(${d.id})">Put leftover stock into the jar</button>` : ''}
       ${d.notes ? `<div class="kt-note">${esc(d.notes)}</div>` : ''}
     </div>`; }).join('');
   const citric = `<div class="kt-small"><a href="#" onclick="event.preventDefault();kettleState.showCitric=!kettleState.showCitric;kettleRedraw()">${kettleState.showCitric ? 'Hide' : 'If it won’t exhaust:'} citric acid instructions</a></div>
     ${kettleState.showCitric ? `<div class="kt-note">Citric acid: <b>1 Tbsp per lb of dry thread</b>${has ? ` — about <b>${kettleFmt(M.net * 3 / 453.6, 2)} tsp</b> for ${kettleFmt(M.net, 1)} g` : ''}. Dissolve in a little hot water and add it <b>after</b> the constant-stir period, beside the thread, not on it. To make it part of the recipe, add a timer step in Recipe Builder (e.g. “6 min — add citric acid”).</div>` : ''}`;
   return `<div class="kt-box">
     <div class="kt-h">Kettle dye — solid colour <span class="kt-tag">${temp}°F</span><span class="kt-tag">${heat} min</span></div>
+    <div class="kt-row"><label>Spools to make (${esc(kettleFmt(K.spoolYds, 0))} yd each)</label>
+      <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
+        oninput="kettleState.spools=this.value;kettleRecalcSoon()">
+      <span class="kt-small">${M.estNet > 0 ? '≈ ' + kettleFmt(M.estNet, 0) + ' g thread' : ''}</span></div>
     <div class="kt-row"><label>Thread weight with ties (g)</label>
       <input id="ktWeight" type="number" inputmode="decimal" value="${esc(kettleState.weight)}" placeholder="0"
         oninput="kettleState.weight=this.value;kettleRecalcSoon()">
@@ -1776,7 +1826,7 @@ function kettlePanelHtml() {
       <div><span>Water to add</span><b>${kettleFmt(M.water, 0)} mL</b></div>
       <div><span>Total pot</span><b>${kettleFmt(M.total, 0)} mL</b></div>
       <div><span>Burner</span><b>${kettleFmt(kettleBurner(K), 1)} → ${kettleFmt(kettleBurner(K) - 1, 1)}</b></div></div>${kettlePotAdvice(M.total)}`
-      : `<div class="kt-small">Weigh the thread first — water and dye amounts work out from it.</div>`}
+      : `<div class="kt-small">${M.estNet > 0 ? 'Stock amounts below are from the spool count — weigh the thread for the pot amounts.' : 'Enter spools for a heads-up on stock to mix, then weigh the thread — water and dye amounts work out from it.'}</div>`}
     ${noDyes ? `<div class="kt-warn">No dyes set up yet — add them in Recipe Builder’s Kettle section.</div>` : dyeCards}
     ${citric}
     <div class="kt-btns" style="margin-top:8px">
@@ -1804,19 +1854,22 @@ function kettlePotAdvice(total) {
 function kettleWorkerSteps(K, M) {
   const has = M.net > 0, b = kettleBurner(K), temp = K.temp || KETTLE_DEFAULT_TEMP;
   const blank = '______';
-  const dyeList = M.dyes.length ? M.dyes.map(d => {
-    const nm = d.d ? `${d.d.brand} ${d.d.name}` : 'dye';
-    return has && d.dos ? `${kettleFmt(d.stock, 1)} mL of ${nm} stock (${kettleFmt(d.amt, 2)} ${d.unit} in ${kettleFmt(d.water, 0)} mL water${d.batches > 1 ? ', make ' + d.batches + '×' : ''})`
-      : `${nm} stock (${kettleFmt(d.amt, 2)} ${d.unit} in ${kettleFmt(d.water, 0)} mL water) — amount: ${blank} mL`;
-  }) : ['the dye stock'];
+  const nm = d => d.d ? `${d.d.brand} ${d.d.name}` : 'dye';
+  const list = items => items.length > 1 ? `<ul>${items.map(t => `<li>${t}</li>`).join('')}</ul>` : ' ' + (items[0] || '');
+  const makes = M.dyes.map(d => d.make
+    ? `<b>${esc(nm(d))}</b>: ${kettleMakeText(d, true)}${d.powderAt ? ` — powder in <b>${esc(d.powderAt)}</b>` : ''}`
+    : `<b>${esc(nm(d))}</b>: ${blank} g powder + ${blank} mL water (strength ${kettleFmt(d.amt, 2)} ${esc(d.unit)} per ${kettleFmt(d.water, 0)} mL)`);
+  const adds = M.dyes.map(d => has && d.dos ? `<b>${kettleFmt(d.stock, 1)} mL</b> of ${esc(nm(d))} stock` : `${blank} mL of ${esc(nm(d))} stock`);
+  const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
   const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : 'glass pot if under 2,000 mL total, metal pot if over';
   return [
     'Weigh the <b>DRY</b> thread on the scale in grams.' + (has ? ` <span class="kt-fill">${kettleFmt(Number(kettleState.weight), 1)} g</span>` : ` ${blank} g`),
-    'Enter the weight into <b>Thread weight</b> on the recipe card.',
+    'Enter the weight into <b>Thread weight</b> on the recipe card' + (M.spools ? ` (job: <b>${kettleFmt(M.spools, 0)} spools</b>).` : ', and the number of spools if it isn’t there yet.'),
     'Presoak the thread in the water tub.',
     `Set the burner to <b>${kettleFmt(b, 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to ${pot}. Measure the temperature until it reaches <b>${temp}°F</b>.`,
-    `Once it reaches ${temp}°F, add ${dyeList.length > 1 ? 'the dyes' : 'the dye'} to the pot: <b>${dyeList.join('; ')}</b>.`,
+    `While it heats, make the stock solution — <b>only this much</b> (enough for this pot plus ${KETTLE_STOCK_SPARE_ML} mL spare). Weigh the dry powder, add it to the water and mix until fully dissolved:` + list(makes),
+    `Once it reaches ${temp}°F, add the dye stock to the pot:` + list(adds),
     'Squeeze the excess water out of the thread before adding it.',
     `Once the thread is in, drop the burner to <b>${kettleFmt(b - 1, 1)}</b>.`,
     'Press <b>Start</b> on the timer and follow its instructions.',
@@ -1825,6 +1878,7 @@ function kettleWorkerSteps(K, M) {
     'Add the thread and leave it for <b>20 minutes</b>.',
     'Do a second rinse. If there is a lot of excess dye, use fresh water (no Synthrapol needed the second time).',
     'Repeat periodically until the water is mostly clear.',
+    'Leftover stock — only combine stock that is the same strength as the jar:' + list(lefts),
   ];
 }
 function kettleWorkerStepsHtml(K, M) {
@@ -1853,21 +1907,23 @@ function kettlePrintWorkerSheet() {
   const K = currentKettle; if (!K) return;
   const M = kettleMaths(K), ev = kettleEvents(K), name = K.name || (currentRecipe && currentRecipe.Recipe_Name) || 'Kettle recipe';
   const temp = K.temp || KETTLE_DEFAULT_TEMP, heat = K.heat || KETTLE_DEFAULT_HEAT;
-  const dyeRows = M.dyes.map(d => `<tr><td>${d.d ? esc(d.d.brand + ' ' + d.d.name) : '—'}</td><td>${d.dos ? kettleFmt(d.dos, 2) + '%' : '—'}</td>
-    <td>${kettleFmt(d.amt, 2)} ${esc(d.unit)} in ${kettleFmt(d.water, 0)} mL</td><td>${M.net > 0 && d.dos ? kettleFmt(d.stock, 1) + ' mL' : '______'}</td></tr>`).join('');
+  const dyeRows = M.dyes.map(d => `<tr><td>${d.d ? esc(d.d.brand + ' ' + d.d.name) : '—'}<br><small>${d.dos ? kettleFmt(d.dos, 2) + '% DOS' : ''}</small></td>
+    <td>${esc(d.powderAt || '—')}</td><td>${d.make ? kettleMakeText(d, false) : '______ g + ______ mL'}</td>
+    <td>${M.net > 0 && d.dos ? kettleFmt(d.stock, 1) + ' mL' : '______'}</td><td>${d.same === true ? 'Jar ' + esc(d.jar && d.jar.bin || '(new)') : '<b>Discard</b>'}</td></tr>`).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} — kettle</title><style>
     @page { size: Letter; margin: .45in; } html, body { margin: 0; } body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; width: 7.6in; }
     h1 { font-size: 18pt; margin: 0 0 1pt; } .sub { font-size: 9pt; color: #444; margin-bottom: 7pt; }
     .facts { display: flex; gap: 14pt; border: 1.5pt solid #000; padding: 5pt 9pt; margin-bottom: 7pt; flex-wrap: wrap; }
     .facts div span { display: block; font-size: 8pt; text-transform: uppercase; color: #444; } .facts b { font-size: 13pt; }
     table { border-collapse: collapse; width: 100%; margin-bottom: 7pt; } th, td { border: 1pt solid #000; padding: 3pt 6pt; text-align: left; font-size: 10.5pt; }
-    th { background: #eee; font-size: 9pt; text-transform: uppercase; } ol { padding-left: 20pt; margin: 0; } li { margin: 0 0 3.5pt; line-height: 1.3; }
+    th { background: #eee; font-size: 9pt; text-transform: uppercase; } ol { padding-left: 20pt; margin: 0; } li { margin: 0 0 3.5pt; line-height: 1.3; } li ul { margin: 2pt 0 0; padding-left: 14pt; } li ul li { margin: 0 0 1pt; } small { color: #444; }
     h2 { font-size: 11pt; text-transform: uppercase; margin: 8pt 0 4pt; border-bottom: 1.5pt solid #000; }
     .warn { border: 2pt solid #000; padding: 6pt; font-weight: bold; margin-bottom: 8pt; } .kt-fill { font-weight: bold; }
     .tl td:first-child { width: 58%; } .tl b { font-family: monospace; } .box { display: inline-block; white-space: nowrap; margin: 1pt 8pt 1pt 0; font-family: monospace; font-weight: bold; } .box::before { content: ''; display: inline-block; width: 9pt; height: 9pt; border: 1pt solid #000; margin-right: 3pt; vertical-align: -1pt; }
   </style></head><body>
     <h1>${esc(name)}</h1><div class="sub">Kettle dye — solid colour${currentRecipe && currentRecipe.SKU_Base ? ' · ' + esc(currentRecipe.SKU_Base) : ''} · printed ${new Date().toLocaleDateString()}</div>
     <div class="facts">
+      ${M.spools ? `<div><span>Spools</span><b>${kettleFmt(M.spools, 0)}</b></div>` : ''}
       <div><span>Thread (dry)</span><b>${M.net > 0 ? kettleFmt(Number(kettleState.weight), 1) + ' g' : '______ g'}</b></div>
       <div><span>Water</span><b>${M.net > 0 ? kettleFmt(M.water, 0) + ' mL' : '______ mL'}</b></div>
       <div><span>Total pot</span><b>${M.net > 0 ? kettleFmt(M.total, 0) + ' mL' : '______ mL'}</b></div>
@@ -1875,7 +1931,7 @@ function kettlePrintWorkerSheet() {
       <div><span>Pot temp</span><b>${temp}°F</b></div><div><span>Burner</span><b>${kettleFmt(kettleBurner(K), 1)} → ${kettleFmt(kettleBurner(K) - 1, 1)}</b></div>
       <div><span>Heat time</span><b>${heat} min</b></div></div>
     ${M.total > KETTLE_METAL_MAX_ML ? '<div class="warn">More than the metal pot holds (13,000 mL) — split into two pots.</div>' : M.total > KETTLE_GLASS_MAX_ML ? '<div class="warn">Over 2,000 mL — use the METAL pot.</div>' : ''}
-    <table><tr><th>Dye</th><th>DOS</th><th>Make stock</th><th>Add to pot</th></tr>${dyeRows || '<tr><td colspan="4">No dyes set up</td></tr>'}</table>
+    <table><tr><th>Dye</th><th>Powder at</th><th>Make stock (only this)</th><th>Add to pot</th><th>Leftover</th></tr>${dyeRows || '<tr><td colspan="5">No dyes set up</td></tr>'}</table>
     <h2>Steps</h2><ol>${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol>
     <h2>Timer</h2><table class="tl">${kettleTimerGroups(ev).map(g => `<tr><td>${esc(g.text)}</td><td>${g.times.map(t => `<span class="box">${kettleClock(t * 60000)}</span>`).join('')}</td></tr>`).join('')}</table>
   </body></html>`;
@@ -1892,9 +1948,10 @@ let kettleRecalcT = null;
 function kettleRecalcSoon() {
   clearTimeout(kettleRecalcT);
   kettleRecalcT = setTimeout(() => {
-    const el = document.getElementById('ktWeight'), pos = el ? el.selectionStart : null;
+    const a = document.activeElement, fid = a && (a.id === 'ktSpools' || a.id === 'ktWeight') ? a.id : 'ktWeight';
+    const el = document.getElementById(fid), pos = el ? el.selectionStart : null;
     kettleRedraw();
-    const n = document.getElementById('ktWeight'); if (n) { n.focus(); try { if (pos != null) n.setSelectionRange(pos, pos); } catch (e) {} }
+    const n = document.getElementById(fid); if (n) { n.focus(); try { if (pos != null) n.setSelectionRange(pos, pos); } catch (e) {} }
   }, 250);
 }
 
@@ -2342,7 +2399,7 @@ grist.onRecord(async (record) => {
   if (isKettleRecipe(record)) {
     const k = await loadKettle(recipeRowId);
     if (myGeneration !== loadGeneration) return;
-    if (kettleState.recipeId !== recipeRowId) { kettleState.weight = ''; kettleState.showCitric = false; kettleState.recipeId = recipeRowId; }
+    if (kettleState.recipeId !== recipeRowId) { kettleState.weight = ''; kettleState.spools = ''; kettleState.showCitric = false; kettleState.recipeId = recipeRowId; }
     currentKettle = k;
   } else currentKettle = null;
 
