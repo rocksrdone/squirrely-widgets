@@ -67,6 +67,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
     <select class="sel" id="scopeSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="fiberSelect" onchange="onFilterChange()"></select>
     <select class="sel" id="statusSelect" onchange="onFilterChange()"></select>
+    <select class="sel" id="methodSelect" onchange="onFilterChange()" title="Dye method"></select>
     <div class="le-note" id="leNote"></div>
     <select class="sel" id="sortSelect" onchange="onFilterChange()">
       <option value="name">Sort: Name A–Z</option>
@@ -215,6 +216,7 @@ async function loadRecipes() {
     const scopeCol = c(['Recipe_Scope']);
     const skuCol = c(['SKU_Base']);
     const statusCol = c(['Status']);
+    const methodCol = findColumn(table, ['Dye_Method']);
     const colorwayCol = c(['Colorway']);
     const createdCol = c(['Created_Date']);
     const cleanupCol = c(['Cleanup_Order']);
@@ -244,6 +246,7 @@ async function loadRecipes() {
         scope: scopeCol ? (columnAsArray(table, scopeCol)[i] || '') : '',
         sku: skuCol ? (columnAsArray(table, skuCol)[i] || '') : '',
         status: statusCol ? (columnAsArray(table, statusCol)[i] || '') : '',
+        method: methodCol ? (columnAsArray(table, methodCol)[i] || '') : '',
         colorway: (() => {
           if (!colorwayCol) return '';
           const raw = columnAsArray(table, colorwayCol)[i];
@@ -286,6 +289,11 @@ function renderFilters() {
   const hasBlank = allRecipes.some(r => !r.status);
   fillSelect(document.getElementById('statusSelect'), statuses, 'All Statuses',
     hasBlank ? { value: '__NONE__', label: 'No Status' } : null);
+
+  const methods = [...new Set(allRecipes.map(r => r.method).filter(Boolean))].sort();
+  const mSel = document.getElementById('methodSelect');
+  fillSelect(mSel, methods, 'All Dye Methods');
+  mSel.style.display = methods.length ? '' : 'none';
 }
 
 function onFilterChange() {
@@ -295,6 +303,7 @@ function onFilterChange() {
   const scopeFilter = document.getElementById('scopeSelect').value;
   const fiberFilter = document.getElementById('fiberSelect').value;
   const statusFilter = document.getElementById('statusSelect').value;
+  const methodFilter = document.getElementById('methodSelect').value;
 
   // Limited editions stay out unless the scope filter asks for them by name.
   // Reusing the existing control rather than adding a toggle: "show me the
@@ -309,6 +318,7 @@ function onFilterChange() {
     if (!wantE && isEVariant(r, FF_NAMES)) return false;
     if (scopeFilter !== 'ALL' && r.scope !== scopeFilter) return false;
     if (fiberFilter !== 'ALL' && r.fiberType !== fiberFilter) return false;
+    if (methodFilter !== 'ALL' && r.method !== methodFilter) return false;
     if (statusFilter === '__NONE__') { if (r.status) return false; }
     else if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (q) {
@@ -383,6 +393,7 @@ function cardHtml(r) {
             ${fiber ? `<span class="badge fiber">${fiber}</span>` : ''}
             ${scope ? `<span class="badge ${scopeCls}">${scope}</span>` : ''}
             ${status ? `<span class="badge status">${status}</span>` : ''}
+            ${/kettle/i.test(r.method) ? `<span class="badge status">Kettle</span>` : ''}
           </div>
         </div>
         <div class="rc-meta-row">
