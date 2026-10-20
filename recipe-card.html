@@ -569,6 +569,17 @@
   .kt-btn.sm { font-size: 12.5px; padding: 7px 11px; background: #fff; color: #2C6B5E; }
   .kt-btn.ghost { border-color: #D4C9BC; color: #6B5E52; }
   .kt-pot-warn { margin-top: 6px; font-weight: 400; }
+  .kt-fs { position: fixed; inset: 0; z-index: 1500; background: #FDFBF8; overflow: auto; padding: 0 0 24px; outline: none; }
+  .kt-fs-bar { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 10px 18px; background: #F7F3EE; border-bottom: 1px solid #D4C9BC; }
+  .kt-fs-bar .kt-btn { margin-top: 0; }
+  .kt-fs-title .kt-tag { font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; vertical-align: 3px; }
+  .kt-fs-title { flex: 1; font-family: 'Libre Baskerville', serif; font-size: 19px; font-weight: 700; }
+  .kt-fs-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 22px; padding: 16px 18px; max-width: 1200px; margin: 0 auto; }
+  .kt-fs-steps .kt-wsteps { font-size: 18px; line-height: 1.5; margin-left: 26px; }
+  .kt-fs-steps .kt-wsteps > li { margin-bottom: 12px; padding-left: 4px; }
+  .kt-fs-side { align-self: start; position: sticky; top: 64px; }
+  .kt-fs-side .kt-bt { font-size: 14px; }
+  @media (max-width: 760px) { .kt-fs-body { grid-template-columns: 1fr; } .kt-fs-side { position: static; order: -1; } .kt-fs-steps .kt-wsteps { font-size: 16.5px; } }
   .kt-x { border: 1px solid #D4C9BC; background: #fff; color: #8B3A2A; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; }
   .kt-links { margin: 2px 0 8px; }
   .kt-bt { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0 8px; }
@@ -1902,11 +1913,11 @@ function kettlePanelHtml() {
     ${noDyes ? `<div class="kt-warn">No dyes set up yet — add them in Recipe Builder’s Kettle section.</div>` : dyeCards}
     ${citric}
     <div class="kt-btns" style="margin-top:8px">
-      <button class="kt-btn sm" onclick="kettleState.showWorker=!kettleState.showWorker;kettleRedraw()">${kettleState.showWorker ? 'Hide worker steps' : '📋 Worker steps'}</button>
+      <button class="kt-btn sm" onclick="kettleOpenWorker(true)">📋 Worker steps</button>
       <button class="kt-btn sm" onclick="kettlePrintWorkerSheet()">🖨 Print worker sheet</button>
     </div>
-    ${kettleState.showWorker ? `<div class="kt-worker">${kettleWorkerStepsHtml(K, M)}</div>` : ''}
-    <div class="kt-timer" id="ktTimer">${kettleTimerHtml()}</div></div></div>`;
+    ${kettleState.showWorker ? kettleWorkerScreenHtml(K, M) : ''}
+    <div class="kt-timer kt-timer-live" id="ktTimer">${kettleTimerHtml()}</div></div></div>`;
 }
 
 
@@ -1927,6 +1938,33 @@ function kettleBundleTableHtml(K, M) {
       <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · large' : 'Glass · small'} ${kettleFmt(x.burner, 1)}→${kettleFmt(x.burner - 1, 1)}${x.total > KETTLE_METAL_MAX_ML ? ' <b class="kt-bad">too full</b>' : ''}` : ''}</td>
       <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : ''}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : ''}</td>`).join('')}
       <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>`;
+}
+
+/* Worker steps as a full-screen view: what this pot (or each bundle) needs,
+   the steps in large type, and the timer. Opened from the card. */
+function kettleOpenWorker(on) {
+  kettleState.showWorker = on; kettleRedraw();
+  if (on) { const f = document.getElementById('ktFS'); if (f) f.focus(); }
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && kettleState.showWorker) kettleOpenWorker(false); });
+function kettleWorkerScreenHtml(K, M) {
+  const temp = K.temp || KETTLE_DEFAULT_TEMP, heat = K.heat || KETTLE_DEFAULT_HEAT, has = M.net > 0;
+  const name = K.name || (currentRecipe && currentRecipe.Recipe_Name) || 'Kettle recipe';
+  const summary = M.multi ? kettleBundleTableHtml(K, M)
+    : has ? `<div class="kt-grid kt-pot">
+        <div><span>Water</span><b>${kettleFmt(M.water, 0)} mL</b></div>
+        <div><span>Pot</span><b>${kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass'}</b></div>
+        <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div>
+        <div><span>Temp · time</span><b>${temp}°F · ${heat} min</b></div></div>${kettlePotAdvice(M.total)}`
+    : `<div class="kt-warn">Enter the dry thread weight on the card first — the amounts fill in from it.</div>`;
+  return `<div class="kt-fs" id="ktFS" tabindex="-1" role="dialog" aria-label="Worker steps">
+    <div class="kt-fs-bar"><div class="kt-fs-title">${esc(name)} <span class="kt-tag">${temp}°F</span><span class="kt-tag">${heat} min</span></div>
+      <button class="kt-btn sm" onclick="kettlePrintWorkerSheet()">🖨 Print</button>
+      <button class="kt-btn sm" onclick="kettleOpenWorker(false)">✕ Close</button></div>
+    <div class="kt-fs-body">
+      <div class="kt-fs-steps"><ol class="kt-wsteps">${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol></div>
+      <div class="kt-fs-side">${summary}<div class="kt-timer kt-timer-live">${kettleTimerHtml()}</div></div>
+    </div></div>`;
 }
 function kettleBurner(K, pot) { return pot === 'metal' ? (K.burnerMetal || KETTLE_BURNER_METAL) : (K.burnerGlass || KETTLE_BURNER_GLASS); }
 /* "Small 3 → 2" for the pot this job needs; both when there is no weight yet. */
@@ -2073,7 +2111,9 @@ function kettleRecalcSoon() {
     if (!calc) { kettleRedraw(); return; }
     const tmp = document.createElement('div'); tmp.innerHTML = kettlePanelHtml();
     const nc = tmp.querySelector('#ktCalc'), ne = tmp.querySelector('#ktEst');
+    const fs = document.getElementById('ktFS'), top = fs ? fs.scrollTop : 0;
     if (nc) calc.replaceWith(nc);
+    const fs2 = document.getElementById('ktFS'); if (fs2) fs2.scrollTop = top;
     if (est && ne) est.textContent = ne.textContent;
   }, 400);
 }
@@ -2143,7 +2183,7 @@ function kettleTick() {
   if (beeps) kettleBeep(beeps);
   kettlePaintTimer();
 }
-function kettlePaintTimer() { const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml(); }
+function kettlePaintTimer() { const h = kettleTimerHtml(); document.querySelectorAll('.kt-timer-live').forEach(box => { box.innerHTML = h; }); }
 function kettleStart() {
   const K = currentKettle; if (!K) return;
   Object.assign(kettleTimer, { running: true, paused: false, startedAt: Date.now(), pausedMs: 0, pauseAt: 0, done: false, fired: 0,
