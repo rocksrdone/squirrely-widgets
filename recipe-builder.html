@@ -263,6 +263,24 @@
     opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 999;
   }
   .toast.show { opacity: 1; }
+
+  /* kettle section */
+  .kb-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .kb-grid4 { display: grid; grid-template-columns: 72px minmax(140px, 1.5fr) minmax(90px, 1fr) minmax(90px, 1fr); gap: 6px; margin-top: 6px; }
+  .kb-grid4 .kb-row .field-input { flex: 1; min-width: 0; }
+  .kb-grid4 .field-input { min-width: 0; width: 100%; box-sizing: border-box; }
+  .kb-grid2 label, .kb-grid4 label { display: flex; flex-direction: column; gap: 3px; }
+  .kb-h { font-size: 12px; font-weight: 700; margin: 4px 0 6px; }
+  .kb-muted { font-size: 11px; color: #8B7D72; font-weight: 400; }
+  .kb-warn { font-size: 12px; background: #F5EDD8; border-radius: 6px; padding: 8px 10px; }
+  .kb-dye { border: 1px solid var(--rule); border-radius: 7px; padding: 8px; margin-bottom: 7px; background: #FDFBF8; }
+  .kb-row { display: flex; gap: 6px; align-items: center; }
+  .kb-x { padding: 4px 8px; flex: none; }
+  .kb-note { margin-top: 6px; font-size: 12px; }
+  .kb-steps { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+  .kb-steph, .kb-step { display: grid; grid-template-columns: 58px 72px 64px 1fr 54px 34px; gap: 4px; align-items: center; }
+  .kb-steph span { font-size: 9.5px; color: #8B7D72; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .kb-step .field-input, .kb-step .field-select { padding: 5px 6px; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -392,6 +410,11 @@
       </div>
     </div>
     </div>
+  </div>
+
+  <div class="section" id="kettleSection" style="display:none">
+    <div class="section-title" onclick="toggleSection('kettle')"><span>Kettle (solid colour)</span><span class="section-chevron" id="chevron-kettle">▾</span></div>
+    <div class="section-body" id="body-kettle"><div id="kettleBody"></div></div>
   </div>
 
   <div class="section">
@@ -3766,6 +3789,180 @@ async function saveRecipe() {
 }
 
 // ── GRIST INTEGRATION ──
+/* ══ KETTLE (solid colours) — builder section ═══════════════════════════════
+   Shown instead of Dye Steps / Layout / step photos when Dye Method is
+   "Kettle Dye". Everything else (scope, reservation, SKU, fiber, product
+   photos) stays exactly as for hand-dye.
+
+   Saves to its own tables, with its own Save button, so it can never touch
+   the hand-dye step rows:
+     Recipes.Kettle_Temp_F / Kettle_Heat_min   pot temperature and heat time
+     Kettle_Dyes   one row per dye: DOS %, and the stock solution it is made
+                   into (powder amount + unit, powder grams, stock water mL).
+                   Dye is never added to the pot as powder — always as stock.
+     Kettle_Steps  the timer: at minute N do X, optionally repeating every M
+                   minutes until a minute (blank = to the end), with a number
+                   of beeps. No rows = the standard steps below. */
+const KB_DEFAULT_TEMP = 185, KB_DEFAULT_HEAT = 60;
+const KB_STANDARD_STEPS = [
+  { at: 0, every: null, until: null, text: 'Thread in — stir constantly', beeps: 1 },
+  { at: 5, every: null, until: null, text: 'Constant stirring done — stir every 10 min from here', beeps: 3 },
+  { at: 15, every: 10, until: null, text: 'Stir', beeps: 2 },
+];
+const KB = { recipeId: null, temp: '', heat: '', dyes: [], steps: [], removedDyes: [], removedSteps: [],
+  dyeList: [], dyeById: {}, loaded: false, dirty: false, usingStandard: false };
+
+function kbIsKettle() { return /kettle/i.test(document.getElementById('dyeMethod').value || ''); }
+function kbSectionFor(bodyId) { const b = document.getElementById(bodyId); return b ? b.closest('.section') : null; }
+function kbApplyMode() {
+  const k = kbIsKettle();
+  ['body-dyesteps', 'body-layout', 'body-photos'].forEach(id => { const s = kbSectionFor(id); if (s) s.style.display = k ? 'none' : ''; });
+  const ks = document.getElementById('kettleSection'); if (ks) ks.style.display = k ? '' : 'none';
+  if (k && currentRecipeId && KB.recipeId !== currentRecipeId) kbLoad(currentRecipeId, currentRecord);
+}
+function kbNum(v) { const n = Number(v); return v === '' || v == null || !isFinite(n) ? null : n; }
+
+async function kbLoad(recipeId, record) {
+  KB.recipeId = recipeId; KB.loaded = false; KB.dirty = false; KB.removedDyes = []; KB.removedSteps = [];
+  kbRender();
+  try {
+    const [dT, sT, yT, rT] = await Promise.all([
+      grist.docApi.fetchTable('Kettle_Dyes'), grist.docApi.fetchTable('Kettle_Steps'),
+      grist.docApi.fetchTable('Dyes'), grist.docApi.fetchTable('Recipes')]);
+    if (KB.recipeId !== recipeId) return;
+    const g = (t, c, i) => (Array.isArray(t[c]) ? t[c][i] : undefined);
+    KB.dyeList = (yT.id || []).map((id, i) => ({ id, name: g(yT, 'Dye_Name', i) || '', brand: g(yT, 'Brand', i) || '',
+      status: g(yT, 'Status', i) || '', tsp: Number(g(yT, 'Std_Powder_tsp_', i)) || null, ml: Number(g(yT, 'Std_Water_mL_', i)) || null,
+      g: Number(g(yT, 'Std_Dry_Weight_g_', i)) || null }))
+      .filter(d => d.name).sort((a, b) => (a.status === 'Active' ? 0 : 1) - (b.status === 'Active' ? 0 : 1) || (a.brand + a.name).localeCompare(b.brand + b.name));
+    KB.dyeById = Object.fromEntries(KB.dyeList.map(d => [d.id, d]));
+    const ri = (rT.id || []).indexOf(recipeId);
+    KB.temp = ri >= 0 && g(rT, 'Kettle_Temp_F', ri) != null ? g(rT, 'Kettle_Temp_F', ri) : '';
+    KB.heat = ri >= 0 && g(rT, 'Kettle_Heat_min', ri) != null ? g(rT, 'Kettle_Heat_min', ri) : '';
+    KB.dyes = (dT.id || []).map((id, i) => ({ id, rec: getRefId(g(dT, 'Recipe', i)), dye: getRefId(g(dT, 'Dye', i)) || null,
+      dos: g(dT, 'DOS_pct', i), amt: g(dT, 'Powder_Amount', i), unit: g(dT, 'Powder_Unit', i) || 'tsp', grams: g(dT, 'Powder_g', i),
+      water: g(dT, 'Stock_Water_mL', i), sort: Number(g(dT, 'Sort', i)) || 0, notes: g(dT, 'Notes', i) || '' }))
+      .filter(r => r.rec === recipeId).sort((a, b) => a.sort - b.sort);
+    KB.steps = (sT.id || []).map((id, i) => ({ id, rec: getRefId(g(sT, 'Recipe', i)), at: g(sT, 'At_min', i), every: g(sT, 'Repeat_Every_min', i),
+      until: g(sT, 'Until_min', i), text: g(sT, 'Instruction', i) || '', beeps: g(sT, 'Beeps', i) || 1, sort: Number(g(sT, 'Sort', i)) || 0 }))
+      .filter(r => r.rec === recipeId).sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0) || a.sort - b.sort);
+    KB.usingStandard = !KB.steps.length;
+    if (KB.usingStandard) KB.steps = KB_STANDARD_STEPS.map(s => Object.assign({ id: null }, s));
+    if (!KB.dyes.length) KB.dyes = [{ id: null, dye: null, dos: '', amt: 1, unit: 'tsp', grams: '', water: 80, notes: '' }];
+    KB.loaded = true;
+  } catch (e) {
+    console.error('Kettle section load failed', e);
+    KB.error = 'Could not read Kettle_Dyes / Kettle_Steps — ' + (e.message || e);
+  }
+  kbRender();
+}
+
+function kbDyeOptions(sel) {
+  return '<option value="">— pick dye —</option>' + KB.dyeList.map(d =>
+    `<option value="${d.id}" ${d.id === sel ? 'selected' : ''}>${esc(d.brand)} ${esc(d.name)}${d.status && d.status !== 'Active' ? ' (' + esc(d.status) + ')' : ''}</option>`).join('');
+}
+function kbRender() {
+  const el = document.getElementById('kettleBody'); if (!el) return;
+  if (KB.error) { el.innerHTML = `<div class="kb-warn">${esc(KB.error)}</div>`; return; }
+  if (!KB.loaded) { el.innerHTML = '<div class="kb-muted">Loading kettle details…</div>'; return; }
+  const v = x => (x == null ? '' : esc(x));
+  el.innerHTML = `
+    <div class="kb-grid2">
+      <label><span class="field-label">Pot temp (°F)</span><input class="field-input" type="number" value="${v(KB.temp)}" placeholder="${KB_DEFAULT_TEMP}" oninput="KB.temp=this.value;kbDirty()"></label>
+      <label><span class="field-label">Heat time (min)</span><input class="field-input" type="number" value="${v(KB.heat)}" placeholder="${KB_DEFAULT_HEAT}" oninput="KB.heat=this.value;kbDirty()"></label>
+    </div>
+    <div class="kb-h">Dyes <span class="kb-muted">— each made into stock solution, never added as powder</span></div>
+    ${KB.dyes.map((d, i) => {
+      const std = d.dye && KB.dyeById[d.dye];
+      return `<div class="kb-dye">
+        <div class="kb-row"><select class="field-select" style="flex:1;min-width:0" onchange="kbPickDye(${i},this.value)">${kbDyeOptions(d.dye)}</select>
+          <button class="btn btn-danger kb-x" title="Remove this dye" onclick="kbRemoveDye(${i})">✕</button></div>
+        <div class="kb-grid4">
+          <label><span class="field-label">DOS %</span><input class="field-input" type="number" step="0.05" value="${v(d.dos)}" oninput="KB.dyes[${i}].dos=this.value;kbDirty()"></label>
+          <label><span class="field-label">Powder</span><span class="kb-row"><input class="field-input" type="number" step="0.25" value="${v(d.amt)}" oninput="KB.dyes[${i}].amt=this.value;kbDirty()">
+            <select class="field-select" style="width:64px" onchange="KB.dyes[${i}].unit=this.value;kbDirty()">${['tsp', 'tbsp', 'g'].map(u => `<option ${d.unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></span></label>
+          <label><span class="field-label">Stock water mL</span><input class="field-input" type="number" value="${v(d.water)}" oninput="KB.dyes[${i}].water=this.value;kbDirty()"></label>
+          <label><span class="field-label">Powder weight g</span><input class="field-input" type="number" step="0.01" value="${v(d.grams)}" oninput="KB.dyes[${i}].grams=this.value;kbDirty()"></label>
+        </div>
+        ${std && (std.tsp || std.ml) ? `<div class="kb-muted">Standard stock for this dye: ${std.tsp || '?'} tsp in ${std.ml || '?'} mL${(Number(d.amt) !== std.tsp || Number(d.water) !== std.ml) && d.unit === 'tsp' ? ' · <b>this recipe differs</b>' : ''}</div>` : ''}
+        <input class="field-input kb-note" placeholder="note (optional)" value="${v(d.notes)}" oninput="KB.dyes[${i}].notes=this.value;kbDirty()">
+      </div>`; }).join('')}
+    <button class="add-dye-btn" onclick="kbAddDye()">Add dye</button>
+    <div class="kb-h" style="margin-top:12px">Timer steps <span class="kb-muted">— what the timer calls out. Blank "until" = to the end of heat time.</span></div>
+    ${KB.usingStandard ? '<div class="kb-muted" style="margin-bottom:4px">Standard steps — change any of them and they become this recipe’s own.</div>' : ''}
+    <div class="kb-steps">
+      <div class="kb-steph"><span>At min</span><span>Repeat every</span><span>Until min</span><span>Instruction</span><span>Beeps</span><span></span></div>
+      ${KB.steps.map((s, i) => `<div class="kb-step">
+        <input class="field-input" type="number" value="${v(s.at)}" oninput="KB.steps[${i}].at=this.value;kbDirty(true)">
+        <input class="field-input" type="number" value="${v(s.every)}" placeholder="—" oninput="KB.steps[${i}].every=this.value;kbDirty(true)">
+        <input class="field-input" type="number" value="${v(s.until)}" placeholder="end" oninput="KB.steps[${i}].until=this.value;kbDirty(true)">
+        <input class="field-input" value="${v(s.text)}" placeholder="e.g. add citric acid" oninput="KB.steps[${i}].text=this.value;kbDirty(true)">
+        <select class="field-select" onchange="KB.steps[${i}].beeps=Number(this.value);kbDirty(true)">${[1, 2, 3, 4].map(b => `<option ${Number(s.beeps) === b ? 'selected' : ''}>${b}</option>`).join('')}</select>
+        <button class="btn btn-danger kb-x" onclick="kbRemoveStep(${i})">✕</button></div>`).join('')}
+    </div>
+    <button class="add-dye-btn" onclick="kbAddStep()">Add step</button>
+    ${!KB.usingStandard ? '<button class="btn" style="margin-top:6px" onclick="kbStandardSteps()">Reset to standard steps</button>' : ''}
+    <div class="kb-row" style="margin-top:12px"><button class="btn btn-primary" id="kbSave" onclick="kbSave()" ${KB.dirty ? '' : 'disabled'}>💾 Save kettle details</button>
+      <span class="kb-muted" id="kbStatus">${KB.dirty ? 'Unsaved changes' : 'Saved'}</span></div>`;
+}
+function kbDirty(stepsTouched) {
+  KB.dirty = true; if (stepsTouched) KB.usingStandard = false;
+  const b = document.getElementById('kbSave'); if (b) b.disabled = false;
+  const s = document.getElementById('kbStatus'); if (s) s.textContent = 'Unsaved changes';
+}
+function kbPickDye(i, val) {
+  const d = KB.dyes[i]; d.dye = Number(val) || null;
+  const std = d.dye && KB.dyeById[d.dye];
+  if (std) { if (std.tsp) { d.amt = std.tsp; d.unit = 'tsp'; } if (std.ml) d.water = std.ml; if (std.g && d.amt) d.grams = Math.round(std.g * Number(d.amt) * 1000) / 1000; }
+  kbDirty(); kbRender();
+}
+function kbAddDye() { KB.dyes.push({ id: null, dye: null, dos: '', amt: 1, unit: 'tsp', grams: '', water: 80, notes: '' }); kbDirty(); kbRender(); }
+function kbRemoveDye(i) { const d = KB.dyes.splice(i, 1)[0]; if (d && d.id) KB.removedDyes.push(d.id); kbDirty(); kbRender(); }
+function kbAddStep() { const last = KB.steps[KB.steps.length - 1]; KB.steps.push({ id: null, at: last ? (Number(last.at) || 0) + 10 : 0, every: null, until: null, text: '', beeps: 2 }); kbDirty(true); kbRender(); }
+function kbRemoveStep(i) { const s = KB.steps.splice(i, 1)[0]; if (s && s.id) KB.removedSteps.push(s.id); kbDirty(true); kbRender(); }
+function kbStandardSteps() {
+  KB.steps.forEach(s => { if (s.id) KB.removedSteps.push(s.id); });
+  KB.steps = KB_STANDARD_STEPS.map(s => Object.assign({ id: null }, s)); KB.usingStandard = true; kbDirty(); kbRender();
+}
+async function kbSave() {
+  if (!currentRecipeId) return;
+  const rid = currentRecipeId, A = [];
+  A.push(['UpdateRecord', 'Recipes', rid, { Kettle_Temp_F: kbNum(KB.temp), Kettle_Heat_min: kbNum(KB.heat) }]);
+  KB.dyes.forEach((d, i) => {
+    if (!d.dye && !d.id && !kbNum(d.dos)) return;          // an untouched blank line
+    const f = { Recipe: rid, Dye: d.dye || 0, DOS_pct: kbNum(d.dos), Powder_Amount: kbNum(d.amt), Powder_Unit: d.unit || 'tsp',
+      Powder_g: kbNum(d.grams), Stock_Water_mL: kbNum(d.water), Sort: i + 1, Notes: d.notes || '' };
+    A.push(d.id ? ['UpdateRecord', 'Kettle_Dyes', d.id, f] : ['AddRecord', 'Kettle_Dyes', null, f]);
+  });
+  KB.removedDyes.forEach(id => A.push(['RemoveRecord', 'Kettle_Dyes', id]));
+  // Standard steps are not written: no rows means "standard" everywhere.
+  if (!KB.usingStandard) KB.steps.forEach((s, i) => {
+    const f = { Recipe: rid, At_min: kbNum(s.at) || 0, Repeat_Every_min: kbNum(s.every), Until_min: kbNum(s.until),
+      Instruction: s.text || '', Beeps: Number(s.beeps) || 1, Sort: i + 1 };
+    A.push(s.id ? ['UpdateRecord', 'Kettle_Steps', s.id, f] : ['AddRecord', 'Kettle_Steps', null, f]);
+  });
+  KB.removedSteps.forEach(id => A.push(['RemoveRecord', 'Kettle_Steps', id]));
+  try {
+    await grist.docApi.applyUserActions(A);
+    showToast('Kettle details saved ✓');
+    await kbLoad(rid, currentRecord);
+  } catch (e) {
+    console.error('Kettle save failed', e);
+    showToast('Save failed — ' + (e.message || 'check Kettle_Dyes / Kettle_Steps'));
+  }
+}
+
+// Load the kettle details whenever a recipe loads, and follow the Dye Method field.
+const __kbLoadRecipe = loadRecipe;
+loadRecipe = async function (record) {
+  await __kbLoadRecipe(record);
+  KB.recipeId = null;
+  kbApplyMode();
+};
+document.addEventListener('DOMContentLoaded', () => {});
+(function () { const m = document.getElementById('dyeMethod'); if (m) m.addEventListener('change', kbApplyMode); })();
+
+
 grist.ready({
   requiredAccess: 'full'
 });
