@@ -582,6 +582,8 @@
   @media (max-width: 760px) { .kt-fs-body { grid-template-columns: 1fr; } .kt-fs-side { position: static; order: -1; } .kt-fs-steps .kt-wsteps { font-size: 16.5px; } }
   .kt-x { border: 1px solid #D4C9BC; background: #fff; color: #8B3A2A; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; }
   .kt-links { margin: 2px 0 8px; }
+  .kt-unit { border: 1px solid #D4C9BC; background: #fff; color: #6B5E52; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; font-size: 12.5px; white-space: nowrap; }
+  .kt-unit b { color: #2C6B5E; }
   .kt-bt { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0 8px; }
   .kt-bt th, .kt-bt td { border-bottom: 1px solid #E8DFD4; padding: 4px 5px; text-align: left; }
   .kt-bt th { font-size: 10.5px; text-transform: uppercase; color: #6B5E52; font-weight: 600; }
@@ -1681,37 +1683,63 @@ function resetSteps() {
    Stock is made in whole batches of the recipe strength; what is left over
    goes into that dye's jar on the made-dye rack (Dye_Stock). */
 let currentKettle = null;
-const kettleState = { bundles: [''], done: [], spools: '', showCitric: false, showWorker: false, recipeId: null };
+const kettleState = { bundles: [''], units: [], done: [], spools: '', showCitric: false, showWorker: false, recipeId: null };
 /* A job's spools and bundle weights are kept on this device only (not in
    Grist) so a refresh doesn't lose them. Cleared by "Clear job" or after a day. */
 const KETTLE_JOB_KEY = 'ssKettleJob:', KETTLE_JOB_MAX_MS = 24 * 3600 * 1000;
 function kettleSaveJob() {
-  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, done: kettleState.done, t: Date.now() })); } catch (e) {}
+  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, units: kettleState.units, done: kettleState.done, t: Date.now() })); } catch (e) {}
 }
 function kettleLoadJob(recipeId) {
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.done = [];
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.done = [];
   try {
     const j = JSON.parse(localStorage.getItem(KETTLE_JOB_KEY + recipeId) || 'null');
     if (j && Date.now() - j.t < KETTLE_JOB_MAX_MS) {
-      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.done = j.done || [];
+      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.units = j.units || []; kettleState.done = j.done || [];
     } else if (j) localStorage.removeItem(KETTLE_JOB_KEY + recipeId);
   } catch (e) {}
 }
 function kettleClearJob() {
   if (!confirm('Clear the spools and bundle weights for this job?')) return;
   try { localStorage.removeItem(KETTLE_JOB_KEY + kettleState.recipeId); } catch (e) {}
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.done = []; kettleRedraw();
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.done = []; kettleRedraw();
 }
 function kettleSetBundles(n) {
   const b = kettleState.bundles.slice(0, n); while (b.length < n) b.push('');
-  kettleState.bundles = b; kettleState.done = kettleState.done.slice(0, n); kettleSaveJob(); kettleRedraw();
+  kettleState.bundles = b; kettleState.units = kettleState.units.slice(0, n); kettleState.done = kettleState.done.slice(0, n); kettleSaveJob(); kettleRedraw();
 }
 function kettleRemoveBundle(i) {
-  kettleState.bundles.splice(i, 1); kettleState.done.splice(i, 1);
+  kettleState.bundles.splice(i, 1); kettleState.units.splice(i, 1); kettleState.done.splice(i, 1);
   if (!kettleState.bundles.length) kettleState.bundles = [''];
   kettleSaveJob(); kettleRedraw();
 }
 const kettleLetter = i => String.fromCharCode(65 + i);
+/* The scale reads grams up to 1 kg and kilograms above, so weights show the
+   same way and each weight box has a g / kg switch. A box starts in kg when
+   its pot's target is 1 kg or more; the unit is fixed once something is typed. */
+function kettleWt(g, dpG) {
+  if (!(g > 0)) return '';
+  return g >= 1000 ? (g / 1000).toFixed(3) + ' kg' : kettleFmt(g, dpG == null ? 0 : dpG) + ' g';
+}
+function kettleDefaultUnit(K) {
+  const spools = Number(kettleState.spools) || 0, S = kettleSplit(K, spools * K.spoolG);
+  return S && S.per + K.defaults.ties >= 1000 ? 'kg' : 'g';
+}
+function kettleUnit(K, i) { return kettleState.units[i] || kettleDefaultUnit(K); }
+function kettleGrams(K, i) {
+  const v = Number(kettleState.bundles[i]) || 0;
+  return kettleUnit(K, i) === 'kg' ? v * 1000 : v;
+}
+function kettleWeightInput(K, i) {
+  if (!kettleState.units[i]) kettleState.units[i] = kettleUnit(K, i);   // lock the unit once typing starts
+  kettleSaveJob(); kettleRecalcSoon();
+}
+function kettleToggleUnit(i) {
+  const K = currentKettle; if (!K) return;
+  kettleState.units[i] = kettleUnit(K, i) === 'kg' ? 'g' : 'kg';
+  kettleSaveJob(); kettleRedraw();
+  const el = document.getElementById('ktW' + i); if (el) el.focus();
+}
 /* Shop settings, read from the Settings table (Key / Value) on load; these
    are only the fallbacks when a key is missing. */
 let KETTLE_STOCK_SPARE_ML = 5;           // Stock_Spare_mL: extra stock so the pot never runs short
@@ -1822,7 +1850,7 @@ function kettleSplit(K, net) {
 
 function kettleMaths(K) {
   const spools = Math.max(0, Number(kettleState.spools) || 0), estNet = spools * K.spoolG;
-  const B = kettleState.bundles.map((w, i) => Object.assign(kettlePotMaths(K, w), { letter: kettleLetter(i), done: !!kettleState.done[i] }));
+  const B = kettleState.bundles.map((w, i) => Object.assign(kettlePotMaths(K, kettleGrams(K, i)), { letter: kettleLetter(i), done: !!kettleState.done[i] }));
   const weighed = B.filter(x => x.net > 0), allWeighed = weighed.length === B.length;
   const net = weighed.reduce((t, x) => t + x.net, 0), multi = B.length > 1;
   /* Stock is mixed once for the whole job: sized to the weighed thread when
@@ -1911,17 +1939,18 @@ function kettlePanelHtml() {
     <div class="kt-row"><label>Spools to make (${esc(kettleFmt(K.spoolYds, 0))} yd each)</label>
       <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
         oninput="kettleState.spools=this.value;kettleRecalcSoon()">
-      <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleFmt(M.estNet, 0) + ' g thread' : ''}</span></div>
-    ${M.bundles.map((x, i) => `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter} — DRY weight with ties (g)` : 'DRY thread weight with ties (g)'}${i === 0 ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
-      <input id="ktW${i}" type="number" inputmode="decimal" value="${esc(kettleState.bundles[i])}" placeholder="0"
-        oninput="kettleState.bundles[${i}]=this.value;kettleSaveJob();kettleRecalcSoon()">
-      ${M.multi ? `<button class="kt-x" title="Remove bundle ${x.letter}" onclick="kettleRemoveBundle(${i})">✕</button>` : `<span class="kt-small">ties ${kettleFmt(K.defaults.ties, 1)} g</span>`}</div>`).join('')}
+      <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleWt(M.estNet) + ' thread' : ''}</span></div>
+    ${M.bundles.map((x, i) => { const u = kettleUnit(K, i); return `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter} — DRY weight with ties` : 'DRY thread weight with ties'}${i === 0 ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
+      <input id="ktW${i}" type="number" inputmode="decimal" step="any" value="${esc(kettleState.bundles[i])}" placeholder="0"
+        oninput="kettleState.bundles[${i}]=this.value;kettleWeightInput(currentKettle, ${i})">
+      <button class="kt-unit" title="Switch between grams and kilograms" onclick="kettleToggleUnit(${i})"><b>${u}</b> / ${u === 'kg' ? 'g' : 'kg'}</button>
+      ${M.multi ? `<button class="kt-x" title="Remove bundle ${x.letter}" onclick="kettleRemoveBundle(${i})">✕</button>` : `<span class="kt-small">ties ${kettleFmt(K.defaults.ties, 1)} g</span>`}</div>`; }).join('')}
     <div class="kt-small kt-links"><a href="#" onclick="event.preventDefault();kettleSetBundles(kettleState.bundles.length + 1)">+ Add a bundle</a>
       ${kettleState.spools || kettleState.bundles.some(Boolean) ? ` · <a href="#" onclick="event.preventDefault();kettleClearJob()">Clear job</a>` : ''}</div>
     <div id="ktCalc">
     ${kettleSplitHtml(K, M)}
     ${M.multi ? kettleBundleTableHtml(K, M) : has ? `<div class="kt-grid kt-pot">
-      <div><span>Net thread</span><b>${kettleFmt(M.net, 1)} g</b></div>
+      <div><span>Net thread</span><b>${kettleWt(M.net, 1)}</b></div>
       <div><span>Water to add</span><b>${kettleFmt(M.water, 0)} mL</b></div>
       <div><span>Total pot</span><b>${kettleFmt(M.total, 0)} mL</b></div>
       <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div></div>${kettlePotAdvice(M.total)}`
@@ -1944,16 +1973,16 @@ function kettleSplitHtml(K, M) {
   const S = M.split; if (!S || !M.estNet) return '';
   const where = S.pot === 'metal' ? 'metal pot, large burner' : 'glass pot, small burner';
   const perW = S.per + K.defaults.ties;
-  if (S.n === 1) return `<div class="kt-note">Target: <b>one pot of about ${kettleFmt(perW, 0)} g</b> dry, with ties (${where}).
+  if (S.n === 1) return `<div class="kt-note">Target: <b>one pot of about ${kettleWt(perW)}</b> dry, with ties (${where}).
     ${kettleState.bundles.length !== 1 ? `<button class="kt-btn sm" onclick="kettleSetBundles(1)">Back to one pot</button>` : ''}</div>`;
-  return `<div class="kt-note">Too much for one pot — target <b>${S.n} pots of about ${kettleFmt(perW, 0)} g</b> dry each, with ties (≈ ${kettleFmt(M.spools / S.n, 1)} spools each; ${where}). Keep the pots as even as you can.
+  return `<div class="kt-note">Too much for one pot — target <b>${S.n} pots of about ${kettleWt(perW)}</b> dry each, with ties (≈ ${kettleFmt(M.spools / S.n, 1)} spools each; ${where}). Keep the pots as even as you can.
     ${kettleState.bundles.length !== S.n ? `<button class="kt-btn sm" onclick="kettleSetBundles(${S.n})">Set up ${S.n} bundles</button>` : ''}</div>`;
 }
 /* One row per bundle: what goes in its pot, and its cup of stock per dye. */
 function kettleBundleTableHtml(K, M) {
   const dn = d => d.d ? d.d.name : 'dye';
   return `<table class="kt-bt"><tr><th>Bundle</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(dn(d))} cup</th>`).join('')}<th>Done</th></tr>
-    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleFmt(x.weight, 0) + ' g' : x.target ? `<span class="kt-small">aim ${kettleFmt(x.target, 0)} g</span>` : '—'}</td>
+    ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleWt(x.weight, 1) : x.target ? `<span class="kt-small">aim ${kettleWt(x.target)}</span>` : '—'}</td>
       <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · large' : 'Glass · small'} ${kettleFmt(x.burner, 1)}→${kettleFmt(x.burner - 1, 1)}${x.total > KETTLE_METAL_MAX_ML ? ' <b class="kt-bad">too full</b>' : ''}` : ''}</td>
       <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : ''}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : ''}</td>`).join('')}
       <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>`;
@@ -2096,8 +2125,8 @@ function kettlePrintWorkerSheet() {
     <h1>${esc(name)}</h1><div class="sub">Kettle dye — solid colour${currentRecipe && currentRecipe.SKU_Base ? ' · ' + esc(currentRecipe.SKU_Base) : ''} · printed ${new Date().toLocaleDateString()}</div>
     <div class="facts">
       ${M.spools ? `<div><span>Spools</span><b>${kettleFmt(M.spools, 0)}</b></div>` : ''}
-      ${M.multi ? `<div><span>Bundles</span><b>${M.bundles.length}</b></div><div><span>Thread (dry, all)</span><b>${M.net > 0 ? kettleFmt(M.bundles.reduce((t, x) => t + x.weight, 0), 0) + ' g' : '______ g'}</b></div>`
-      : `<div><span>Thread (dry)</span><b>${M.net > 0 ? kettleFmt(M.bundles[0].weight, 1) + ' g' : '______ g'}</b></div>
+      ${M.multi ? `<div><span>Bundles</span><b>${M.bundles.length}</b></div><div><span>Thread (dry, all)</span><b>${M.net > 0 ? kettleWt(M.bundles.reduce((t, x) => t + x.weight, 0)) : '______'}</b></div>`
+      : `<div><span>Thread (dry)</span><b>${M.net > 0 ? kettleWt(M.bundles[0].weight, 1) : '______'}</b></div>
       <div><span>Water</span><b>${M.net > 0 ? kettleFmt(M.water, 0) + ' mL' : '______ mL'}</b></div>
       <div><span>Total pot</span><b>${M.net > 0 ? kettleFmt(M.total, 0) + ' mL' : '______ mL'}</b></div>
       <div><span>Pot</span><b>${M.net > 0 ? (kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass') : `Glass ≤ ${kettleML(KETTLE_GLASS_MAX_ML)} mL`}</b></div>
@@ -2108,7 +2137,7 @@ function kettlePrintWorkerSheet() {
       : M.total > KETTLE_METAL_MAX_ML ? `<div class="warn">More than the metal pot holds (${kettleML(KETTLE_METAL_MAX_ML)} mL) — split into bundles.</div>` : M.total > KETTLE_GLASS_MAX_ML ? `<div class="warn">Over ${kettleML(KETTLE_GLASS_MAX_ML)} mL — use the METAL pot.</div>` : ''}
     <table><tr><th>Dye</th><th>Premade dye bin</th><th>Make stock (only this)</th><th>${M.multi ? 'Into pots (all)' : 'Add to pot'}</th><th>Leftover</th></tr>${dyeRows || '<tr><td colspan="5">No dyes set up</td></tr>'}</table>
     ${M.multi ? `<h2>Bundles — one at a time</h2><table><tr><th>Bundle</th><th>Dry weight</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(d.d ? d.d.name : 'dye')} cup</th>`).join('')}<th>Done</th></tr>
-      ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleFmt(x.weight, 1) + ' g' : `______ g${x.target ? ` <small>(aim ${kettleFmt(x.target, 0)})</small>` : ''}`}</td>
+      ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleWt(x.weight, 1) : `______${x.target ? ` <small>(aim ${kettleWt(x.target)})</small>` : ''}`}</td>
         <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · LARGE' : 'Glass · SMALL'} ${kettleFmt(x.burner, 1)} → ${kettleFmt(x.burner - 1, 1)}` : ''}</td>
         <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : '______'}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : '______'}</td>`).join('')}<td><span class="box"></span></td></tr>`).join('')}</table>` : ''}
     <h2>Steps</h2><ol>${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol>
