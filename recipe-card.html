@@ -1815,7 +1815,7 @@ function kettlePanelHtml() {
       <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
         oninput="kettleState.spools=this.value;kettleRecalcSoon()">
       <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleFmt(M.estNet, 0) + ' g thread' : ''}</span></div>
-    <div class="kt-row"><label>Thread weight with ties (g)</label>
+    <div class="kt-row"><label>DRY thread weight with ties (g)<br><span class="kt-small">weigh before presoaking</span></label>
       <input id="ktWeight" type="number" inputmode="decimal" value="${esc(kettleState.weight)}" placeholder="0"
         oninput="kettleState.weight=this.value;kettleRecalcSoon()">
       <span class="kt-small">ties ${kettleFmt(K.defaults.ties, 1)} g</span></div>
@@ -1862,8 +1862,6 @@ function kettleWorkerSteps(K, M) {
   const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
   const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : 'glass pot if under 2,000 mL total, metal pot if over';
   return [
-    'Weigh the <b>DRY</b> thread on the scale in grams.' + (has ? ` <span class="kt-fill">${kettleFmt(Number(kettleState.weight), 1)} g</span>` : ` ${blank} g`),
-    'Enter the weight into <b>Thread weight</b> on the recipe card' + (M.spools ? ` (job: <b>${kettleFmt(M.spools, 0)} spools</b>).` : ', and the number of spools if it isn’t there yet.'),
     'Presoak the thread in the water tub.',
     `Set the burner to <b>${kettleFmt(b, 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to ${pot}. Measure the temperature until it reaches <b>${temp}°F</b>.`,
