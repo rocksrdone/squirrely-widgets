@@ -582,6 +582,7 @@
   @media (max-width: 760px) { .kt-fs-body { grid-template-columns: 1fr; } .kt-fs-side { position: static; order: -1; } .kt-fs-steps .kt-wsteps { font-size: 16.5px; } }
   .kt-x { border: 1px solid #D4C9BC; background: #fff; color: #8B3A2A; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; }
   .kt-links { margin: 2px 0 8px; }
+  .kt-check { display: inline-flex; gap: 6px; align-items: center; margin: 6px 10px 0 0; font-size: 13px; cursor: pointer; }
   .kt-unit { border: 1px solid #D4C9BC; background: #fff; color: #6B5E52; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; font-size: 12.5px; white-space: nowrap; }
   .kt-unit b { color: #2C6B5E; }
   .kt-bt { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0 8px; }
@@ -1683,33 +1684,38 @@ function resetSteps() {
    Stock is made in whole batches of the recipe strength; what is left over
    goes into that dye's jar on the made-dye rack (Dye_Stock). */
 let currentKettle = null;
-const kettleState = { bundles: [''], units: [], done: [], spools: '', showCitric: false, showWorker: false, recipeId: null };
+const kettleState = { bundles: [''], units: [], burners: [], twoPots: true, done: [], spools: '', showCitric: false, showWorker: false, recipeId: null };
 /* A job's spools and bundle weights are kept on this device only (not in
    Grist) so a refresh doesn't lose them. Cleared by "Clear job" or after a day. */
 const KETTLE_JOB_KEY = 'ssKettleJob:', KETTLE_JOB_MAX_MS = 24 * 3600 * 1000;
 function kettleSaveJob() {
-  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, units: kettleState.units, done: kettleState.done, t: Date.now() })); } catch (e) {}
+  try { localStorage.setItem(KETTLE_JOB_KEY + kettleState.recipeId, JSON.stringify({ spools: kettleState.spools, bundles: kettleState.bundles, units: kettleState.units, burners: kettleState.burners, twoPots: kettleState.twoPots, done: kettleState.done, t: Date.now() })); } catch (e) {}
 }
 function kettleLoadJob(recipeId) {
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.done = [];
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.twoPots = true; kettleState.done = [];
   try {
     const j = JSON.parse(localStorage.getItem(KETTLE_JOB_KEY + recipeId) || 'null');
     if (j && Date.now() - j.t < KETTLE_JOB_MAX_MS) {
-      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.units = j.units || []; kettleState.done = j.done || [];
+      kettleState.spools = j.spools || ''; kettleState.bundles = Array.isArray(j.bundles) && j.bundles.length ? j.bundles : ['']; kettleState.units = j.units || []; kettleState.burners = j.burners || []; kettleState.twoPots = j.twoPots !== false; kettleState.done = j.done || [];
     } else if (j) localStorage.removeItem(KETTLE_JOB_KEY + recipeId);
   } catch (e) {}
 }
 function kettleClearJob() {
   if (!confirm('Clear the spools and bundle weights for this job?')) return;
   try { localStorage.removeItem(KETTLE_JOB_KEY + kettleState.recipeId); } catch (e) {}
-  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.done = []; kettleRedraw();
+  kettleState.spools = ''; kettleState.bundles = ['']; kettleState.units = []; kettleState.burners = []; kettleState.done = []; kettleRedraw();
 }
-function kettleSetBundles(n) {
+/* plan: which pot each bundle goes in (from the split); omitted = pick by weight. */
+function kettleSetBundles(n, plan) {
   const b = kettleState.bundles.slice(0, n); while (b.length < n) b.push('');
-  kettleState.bundles = b; kettleState.units = kettleState.units.slice(0, n); kettleState.done = kettleState.done.slice(0, n); kettleSaveJob(); kettleRedraw();
+  kettleState.bundles = b; kettleState.units = kettleState.units.slice(0, n); kettleState.done = kettleState.done.slice(0, n);
+  kettleState.burners = plan ? plan.slice(0, n) : kettleState.burners.slice(0, n);
+  kettleSaveJob(); kettleRedraw();
 }
+function kettleApplySplit() { const K = currentKettle, M = K && kettleMaths(K); if (M && M.split) kettleSetBundles(M.split.n, M.split.plan); }
+function kettleSetTwoPots(on) { kettleState.twoPots = on; kettleSaveJob(); kettleRedraw(); }
 function kettleRemoveBundle(i) {
-  kettleState.bundles.splice(i, 1); kettleState.units.splice(i, 1); kettleState.done.splice(i, 1);
+  kettleState.bundles.splice(i, 1); kettleState.units.splice(i, 1); kettleState.burners.splice(i, 1); kettleState.done.splice(i, 1);
   if (!kettleState.bundles.length) kettleState.bundles = [''];
   kettleSaveJob(); kettleRedraw();
 }
@@ -1722,8 +1728,8 @@ function kettleWt(g, dpG) {
   return g >= 1000 ? (g / 1000).toFixed(3) + ' kg' : kettleFmt(g, dpG == null ? 0 : dpG) + ' g';
 }
 function kettleDefaultUnit(K) {
-  const spools = Number(kettleState.spools) || 0, S = kettleSplit(K, spools * K.spoolG);
-  return S && S.per + K.defaults.ties >= 1000 ? 'kg' : 'g';
+  const spools = Number(kettleState.spools) || 0, S = kettleSplit(K, spools * K.spoolG, kettleState.twoPots);
+  return S && Math.max(...S.per) + K.defaults.ties >= 1000 ? 'kg' : 'g';
 }
 function kettleUnit(K, i) { return kettleState.units[i] || kettleDefaultUnit(K); }
 function kettleGrams(K, i) {
@@ -1745,8 +1751,16 @@ function kettleToggleUnit(i) {
 let KETTLE_STOCK_SPARE_ML = 5;           // Stock_Spare_mL: extra stock so the pot never runs short
 let KETTLE_STOCK_CONTAINER_ML = 350;     // Stock_Container_mL: largest container for stock solution
 let KETTLE_GLASS_MAX_ML = 2000, KETTLE_METAL_MAX_ML = 13000;   // Glass_Pot_Max_mL / Metal_Pot_Max_mL
-const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
-  totalMin: 60, recipeName: '', tick: null, done: false };
+/* Weight on a burner: pot + water + stock + wet thread must stay under the
+   burner's load limit (Burner_Max_Load_kg; Waring rates the WDB600X at
+   15 lb per burner). 'glass' is the small-burner pot, 'metal' the large. */
+let KETTLE_LOAD_MAX_G = 6800, KETTLE_WET_FACTOR = 2;   // Burner_Max_Load_kg / Wet_Thread_Factor
+const KETTLE_POTS = { glass: { name: 'Glass pot', empty: 1488 }, metal: { name: 'Metal pot', empty: 1958 } };
+const kettleNewTimer = () => ({ running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0, events: [], fired: 0,
+  totalMin: 60, recipeName: '', tick: null, done: false });
+/* One timer per burner: 'metal' = large burner, 'glass' = small. */
+const kettleTimers = { metal: kettleNewTimer(), glass: kettleNewTimer() };
+let kettleTickId = null;
 let kettleAudio = null;
 let KETTLE_DEFAULT_TEMP = 180, KETTLE_DEFAULT_HEAT = 60;
 /* Standard burners: metal pot on the large burner at 3.5, glass pot on the
@@ -1787,6 +1801,13 @@ async function loadKettle(recipeId) {
     if (set.Burner_Small_Default) KETTLE_BURNER_GLASS = set.Burner_Small_Default;
     if (set.Yarn_Ties_Weight_g) K.defaults.ties = set.Yarn_Ties_Weight_g;
     if (set.Kettle_Pot_Temp_F_Default) KETTLE_DEFAULT_TEMP = set.Kettle_Pot_Temp_F_Default;
+    if (set.Burner_Max_Load_kg) KETTLE_LOAD_MAX_G = set.Burner_Max_Load_kg * 1000;
+    if (set.Wet_Thread_Factor) KETTLE_WET_FACTOR = set.Wet_Thread_Factor;
+    if (set.Glass_Pot_Empty_kg) KETTLE_POTS.glass.empty = set.Glass_Pot_Empty_kg * 1000;
+    if (set.Metal_Pot_Empty_kg) KETTLE_POTS.metal.empty = set.Metal_Pot_Empty_kg * 1000;
+    cfg.id.forEach((id, i) => { const k = g(cfg, 'Key', i), t = String(g(cfg, 'Text', i) || '').trim();
+      if (k === 'Small_Burner_Pot' && t) KETTLE_POTS.glass.name = t;
+      if (k === 'Large_Burner_Pot' && t) KETTLE_POTS.metal.name = t; });
   }
   /* Thread per spool, from Products (nylon, thread only, no spool). */
   if (pr) { const i = (pr.id || []).findIndex((id, j) => /nylon/i.test(String(g(pr, 'Fiber', j) || '')) && Number(g(pr, 'Thread_Weight_g', j)) > 0);
@@ -1829,28 +1850,44 @@ function kettleEvents(K) {
 }
 
 /* One pot: water, stock per dye, total, pot and burner for one bundle. */
-function kettlePotMaths(K, weight) {
+function kettlePotMax(pot) { return pot === 'metal' ? KETTLE_METAL_MAX_ML : KETTLE_GLASS_MAX_ML; }
+/* Grams on the burner: empty pot + liquid (1 mL ≈ 1 g) + wet thread. */
+function kettlePotLoad(pot, total, net) { return KETTLE_POTS[pot].empty + total + net * KETTLE_WET_FACTOR; }
+function kettleFits(pot, total, net) { return total <= kettlePotMax(pot) && kettlePotLoad(pot, total, net) <= KETTLE_LOAD_MAX_G; }
+function kettlePotMaths(K, weight, forced) {
   const net = Math.max(0, (Number(weight) || 0) - K.defaults.ties), base = net * 7, water = base * 1.1;
   const stocks = K.dyes.map(r => base * 0.01 * r.dos), total = water + stocks.reduce((t, x) => t + x, 0);
-  const pot = kettlePot(total);
-  return { weight: Number(weight) || 0, net, water, stocks, total, pot, burner: kettleBurner(K, pot) };
+  const pot = forced || (kettleFits('glass', total, net) ? 'glass' : 'metal');
+  const load = kettlePotLoad(pot, total, net);
+  return { weight: Number(weight) || 0, net, water, stocks, total, pot, burner: kettleBurner(K, pot), load,
+    overVol: total > kettlePotMax(pot), overLoad: load > KETTLE_LOAD_MAX_G };
 }
 /* mL in the pot per gram of thread for this recipe (water + stock). */
 function kettleMlPerGram(K) { return 7 * 1.1 + 7 * 0.01 * K.dyes.reduce((t, r) => t + r.dos, 0); }
-/* Suggest pots for the spool estimate: glass if it fits, else one metal pot,
-   else equal bundles that each fit the metal pot. */
-function kettleSplit(K, net) {
+/* Most dry thread (net g) a pot can take: the lower of its volume and the
+   burner's weight limit. */
+function kettleCap(K, pot) {
+  const k = kettleMlPerGram(K);
+  return Math.max(0, Math.min(kettlePotMax(pot) / k, (KETTLE_LOAD_MAX_G - KETTLE_POTS[pot].empty) / (k + KETTLE_WET_FACTOR)));
+}
+/* Fewest pots, as even as possible. One pot when the job fits (small-burner
+   pot if it fits, else large). Otherwise equal large-burner bundles, or with
+   both burners at once, rounds of one large + one small pot, each filled to
+   the same share of what it can take. */
+function kettleSplit(K, net, two) {
   if (!(net > 0)) return null;
-  const k = kettleMlPerGram(K), glassMax = KETTLE_GLASS_MAX_ML / k, metalMax = KETTLE_METAL_MAX_ML / k;
-  if (net <= glassMax) return { n: 1, pot: 'glass', per: net };
-  if (net <= metalMax) return { n: 1, pot: 'metal', per: net };
-  const n = Math.ceil(net / metalMax);
-  return { n, pot: kettlePot(net / n * k), per: net / n };
+  const capG = kettleCap(K, 'glass'), capM = kettleCap(K, 'metal');
+  if (net <= capG) return { n: 1, plan: ['glass'], per: [net] };
+  if (net <= capM) return { n: 1, plan: ['metal'], per: [net] };
+  if (!two || !(capG > 0)) { const n = Math.ceil(net / capM); return { n, plan: Array(n).fill('metal'), per: Array(n).fill(net / n), two: false }; }
+  const r = Math.ceil(net / (capM + capG)), f = net / r / (capM + capG), plan = [], per = [];
+  for (let i = 0; i < r; i++) { plan.push('metal', 'glass'); per.push(capM * f, capG * f); }
+  return { n: 2 * r, plan, per, two: true, rounds: r };
 }
 
 function kettleMaths(K) {
   const spools = Math.max(0, Number(kettleState.spools) || 0), estNet = spools * K.spoolG;
-  const B = kettleState.bundles.map((w, i) => Object.assign(kettlePotMaths(K, kettleGrams(K, i)), { letter: kettleLetter(i), done: !!kettleState.done[i] }));
+  const B = kettleState.bundles.map((w, i) => Object.assign(kettlePotMaths(K, kettleGrams(K, i), kettleState.burners[i]), { letter: kettleLetter(i), done: !!kettleState.done[i] }));
   const weighed = B.filter(x => x.net > 0), allWeighed = weighed.length === B.length;
   const net = weighed.reduce((t, x) => t + x.net, 0), multi = B.length > 1;
   /* Stock is mixed once for the whole job: sized to the weighed thread when
@@ -1870,9 +1907,14 @@ function kettleMaths(K) {
   });
   const one = B[0], open = B.filter(x => !(x.net > 0));
   const remaining = Math.max(0, estNet - net);
-  B.forEach(x => { x.target = !(x.net > 0) && estNet > 0 && open.length ? remaining / open.length + K.defaults.ties : 0; });
-  return { net, estNet, spools, planNet, water, dyes, bundles: B, multi, allWeighed,
-    total: multi ? B.reduce((t, x) => t + x.total, 0) : one.total, split: kettleSplit(K, estNet || net) };
+  /* Bundles still to weigh share what's left of the estimate in proportion
+     to what their pot can take. */
+  const capOf = (x, i) => kettleCap(K, kettleState.burners[i] || 'metal');
+  const capSum = B.reduce((t, x, i) => t + (x.net > 0 ? 0 : capOf(x, i)), 0);
+  B.forEach((x, i) => { x.target = !(x.net > 0) && estNet > 0 && capSum > 0 ? remaining * capOf(x, i) / capSum + K.defaults.ties : 0; });
+  const twoNow = multi && new Set(B.map(x => x.pot)).size > 1 && B.some((x, i) => kettleState.burners[i]);
+  return { net, estNet, spools, planNet, water, dyes, bundles: B, multi, allWeighed, twoNow,
+    total: multi ? B.reduce((t, x) => t + x.total, 0) : one.total, split: kettleSplit(K, estNet || net, kettleState.twoPots) };
 }
 
 /* Can leftover stock go into this dye's standard jar? Only when the recipe's
@@ -1940,7 +1982,7 @@ function kettlePanelHtml() {
       <input id="ktSpools" type="number" inputmode="numeric" value="${esc(kettleState.spools)}" placeholder="0"
         oninput="kettleState.spools=this.value;kettleRecalcSoon()">
       <span class="kt-small" id="ktEst">${M.estNet > 0 ? '≈ ' + kettleWt(M.estNet) + ' thread' : ''}</span></div>
-    ${M.bundles.map((x, i) => { const u = kettleUnit(K, i); return `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter} — DRY weight with ties` : 'DRY thread weight with ties'}${i === 0 ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
+    ${M.bundles.map((x, i) => { const u = kettleUnit(K, i); return `<div class="kt-row"><label>${M.multi ? `Bundle ${x.letter}${kettleState.burners[i] ? ` <span class="kt-small">(${esc(KETTLE_POTS[kettleState.burners[i]].name.toLowerCase())})</span>` : ''} — DRY weight with ties` : 'DRY thread weight with ties'}${i === 0 ? '<br><span class="kt-small">weigh before presoaking</span>' : ''}</label>
       <input id="ktW${i}" type="number" inputmode="decimal" step="any" value="${esc(kettleState.bundles[i])}" placeholder="0"
         oninput="kettleState.bundles[${i}]=this.value;kettleWeightInput(currentKettle, ${i})">
       <button class="kt-unit" title="Switch between grams and kilograms" onclick="kettleToggleUnit(${i})"><b>${u}</b> / ${u === 'kg' ? 'g' : 'kg'}</button>
@@ -1953,7 +1995,7 @@ function kettlePanelHtml() {
       <div><span>Net thread</span><b>${kettleWt(M.net, 1)}</b></div>
       <div><span>Water to add</span><b>${kettleFmt(M.water, 0)} mL</b></div>
       <div><span>Total pot</span><b>${kettleFmt(M.total, 0)} mL</b></div>
-      <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div></div>${kettlePotAdvice(M.total)}`
+      <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div></div>${kettlePotAdvice(M.bundles[0])}`
       : `<div class="kt-small">${M.estNet > 0 ? 'Stock amounts below are from the spool count — weigh the thread for the pot amounts.' : 'Enter spools for a heads-up on stock to mix, then weigh the thread — water and dye amounts work out from it.'}</div>`}
     ${noDyes ? `<div class="kt-warn">No dyes set up yet — add them in Recipe Builder’s Kettle section.</div>` : dyeCards}
     ${citric}
@@ -1962,7 +2004,7 @@ function kettlePanelHtml() {
       <button class="kt-btn sm" onclick="kettlePrintWorkerSheet()">🖨 Print worker sheet</button>
     </div>
     ${kettleState.showWorker ? kettleWorkerScreenHtml(K, M) : ''}
-    <div class="kt-timer kt-timer-live" id="ktTimer">${kettleTimerHtml()}</div></div></div>`;
+    ${kettleTimersHtml(M)}</div></div>`;
 }
 
 
@@ -1971,19 +2013,35 @@ function kettlePanelHtml() {
    fits, else metal), else equal bundles that each fit the metal pot. */
 function kettleSplitHtml(K, M) {
   const S = M.split; if (!S || !M.estNet) return '';
-  const where = S.pot === 'metal' ? 'metal pot, large burner' : 'glass pot, small burner';
-  const perW = S.per + K.defaults.ties;
-  if (S.n === 1) return `<div class="kt-note">Target: <b>one pot of about ${kettleWt(perW)}</b> dry, with ties (${where}).
-    ${kettleState.bundles.length !== 1 ? `<button class="kt-btn sm" onclick="kettleSetBundles(1)">Back to one pot</button>` : ''}</div>`;
-  return `<div class="kt-note">Too much for one pot — target <b>${S.n} pots of about ${kettleWt(perW)}</b> dry each, with ties (≈ ${kettleFmt(M.spools / S.n, 1)} spools each; ${where}). Keep the pots as even as you can.
-    ${kettleState.bundles.length !== S.n ? `<button class="kt-btn sm" onclick="kettleSetBundles(${S.n})">Set up ${S.n} bundles</button>` : ''}</div>`;
+  const P = KETTLE_POTS, where = pot => pot === 'metal' ? `${P.metal.name.toLowerCase()}, large burner` : `${P.glass.name.toLowerCase()}, small burner`;
+  const tw = per => kettleWt(per + K.defaults.ties), sp = per => kettleFmt(per / K.spoolG, 0);
+  const same = kettleState.bundles.length === S.n && S.plan.every((p, i) => !kettleState.burners[i] || kettleState.burners[i] === p);
+  const capM = kettleCap(K, 'metal'), capG = kettleCap(K, 'glass');
+  const why = `Each pot is limited by volume and by the burner’s ${kettleFmt(KETTLE_LOAD_MAX_G / 1000, 1)} kg weight limit: ${P.metal.name.toLowerCase()} up to about ${kettleWt(capM + K.defaults.ties)} of thread, ${P.glass.name.toLowerCase()} about ${kettleWt(capG + K.defaults.ties)}.`;
+  if (S.n === 1) return `<div class="kt-note">Target: <b>one pot of about ${tw(S.per[0])}</b> dry, with ties (${where(S.plan[0])}).
+    ${kettleState.bundles.length !== 1 ? `<button class="kt-btn sm" onclick="kettleSetBundles(1, [])">Back to one pot</button>` : ''}</div>`;
+  const toggle = `<label class="kt-check"><input type="checkbox" ${kettleState.twoPots ? 'checked' : ''} onchange="kettleSetTwoPots(this.checked)"> Run both burners at once</label>`;
+  const body = S.two
+    ? `<b>${S.rounds} round${S.rounds > 1 ? 's' : ''} of two pots</b> at once — each round: <b>${tw(S.per[0])}</b> in the ${where('metal')} (≈ ${sp(S.per[0])} spools) and <b>${tw(S.per[1])}</b> in the ${where('glass')} (≈ ${sp(S.per[1])} spools).`
+    : `<b>${S.n} pots of about ${tw(S.per[0])}</b> dry each, with ties (≈ ${sp(S.per[0])} spools each; ${where('metal')}), one at a time.`;
+  return `<div class="kt-note">Too much for one pot — ${body} Keep the pots as even as you can.<div class="kt-small">${why}</div>
+    ${toggle} ${same ? '' : `<button class="kt-btn sm" onclick="kettleApplySplit()">Set up ${S.n} bundles</button>`}</div>`;
+}
+
+/* Pot, burner setting and weight on the burner for one bundle. Before it is
+   weighed, just the planned pot. */
+function kettlePotCell(x, i) {
+  const P = KETTLE_POTS[x.pot], size = x.pot === 'metal' ? 'large' : 'small';
+  if (!(x.net > 0)) return kettleState.burners[i] ? `<span class="kt-small">${esc(P.name)} · ${size}</span>` : '';
+  const flag = x.overLoad ? ` <b class="kt-bad">too heavy (${kettleFmt(x.load / 1000, 1)} kg)</b>` : x.overVol ? ' <b class="kt-bad">too full</b>' : '';
+  return `${esc(P.name)} · ${size} ${kettleFmt(x.burner, 1)}→${kettleFmt(x.burner - 1, 1)}<br><span class="kt-small">${kettleFmt(x.load / 1000, 1)} kg on burner</span>${flag}`;
 }
 /* One row per bundle: what goes in its pot, and its cup of stock per dye. */
 function kettleBundleTableHtml(K, M) {
   const dn = d => d.d ? d.d.name : 'dye';
   return `<table class="kt-bt"><tr><th>Bundle</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(dn(d))} cup</th>`).join('')}<th>Done</th></tr>
     ${M.bundles.map((x, i) => `<tr class="${x.done ? 'kt-done' : ''}"><td><b>${x.letter}</b> ${x.net > 0 ? kettleWt(x.weight, 1) : x.target ? `<span class="kt-small">aim ${kettleWt(x.target)}</span>` : '—'}</td>
-      <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · large' : 'Glass · small'} ${kettleFmt(x.burner, 1)}→${kettleFmt(x.burner - 1, 1)}${x.total > KETTLE_METAL_MAX_ML ? ' <b class="kt-bad">too full</b>' : ''}` : ''}</td>
+      <td>${kettlePotCell(x, i)}</td>
       <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : ''}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : ''}</td>`).join('')}
       <td><input type="checkbox" ${x.done ? 'checked' : ''} onchange="kettleState.done[${i}]=this.checked;kettleSaveJob();kettleRecalcSoon()"></td></tr>`).join('')}</table>`;
 }
@@ -2001,9 +2059,9 @@ function kettleWorkerScreenHtml(K, M) {
   const summary = M.multi ? kettleBundleTableHtml(K, M)
     : has ? `<div class="kt-grid kt-pot">
         <div><span>Water</span><b>${kettleFmt(M.water, 0)} mL</b></div>
-        <div><span>Pot</span><b>${kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass'}</b></div>
+        <div><span>Pot</span><b>${esc(KETTLE_POTS[M.bundles[0].pot].name)}</b></div>
         <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div>
-        <div><span>Temp · time</span><b>${temp}°F · ${heat} min</b></div></div>${kettlePotAdvice(M.total)}`
+        <div><span>Temp · time</span><b>${temp}°F · ${heat} min</b></div></div>${kettlePotAdvice(M.bundles[0])}`
     : `<div class="kt-warn">Enter the dry thread weight on the card first — the amounts fill in from it.</div>`;
   return `<div class="kt-fs" id="ktFS" tabindex="-1" role="dialog" aria-label="Worker steps">
     <div class="kt-fs-bar"><div class="kt-fs-title">${esc(name)} <span class="kt-tag">${temp}°F</span><span class="kt-tag">${heat} min</span></div>
@@ -2011,30 +2069,32 @@ function kettleWorkerScreenHtml(K, M) {
       <button class="kt-btn sm" onclick="kettleOpenWorker(false)">✕ Close</button></div>
     <div class="kt-fs-body">
       <div class="kt-fs-steps"><ol class="kt-wsteps">${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol></div>
-      <div class="kt-fs-side">${summary}<div class="kt-timer kt-timer-live">${kettleTimerHtml()}</div></div>
+      <div class="kt-fs-side">${summary}${kettleTimersHtml(M)}</div>
     </div></div>`;
 }
 function kettleBurner(K, pot) { return pot === 'metal' ? (K.burnerMetal || KETTLE_BURNER_METAL) : (K.burnerGlass || KETTLE_BURNER_GLASS); }
 /* "Small 3 → 2" for the pot this job needs; both when there is no weight yet. */
 function kettleBurnerLabel(K, M) {
   const one = pot => `${pot === 'metal' ? 'Large' : 'Small'} ${kettleFmt(kettleBurner(K, pot), 1)} → ${kettleFmt(kettleBurner(K, pot) - 1, 1)}`;
-  return M.net > 0 ? one(kettlePot(M.total)) : `${one('glass')} · ${one('metal')}`;
+  return M.net > 0 ? one(M.bundles[0].pot) : `${one('glass')} · ${one('metal')}`;
 }
 /* Glass pot up to Glass_Pot_Max_mL; over that the metal pot (up to Metal_Pot_Max_mL). */
 function kettleML(n) { return Math.round(n).toLocaleString('en-US'); }
 function kettlePot(total) { return total > KETTLE_GLASS_MAX_ML ? 'metal' : 'glass'; }
-function kettlePotAdvice(total) {
-  if (!(total > 0)) return '';
-  if (total > KETTLE_METAL_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>${kettleFmt(total, 0)} mL is more than the metal pot holds</b> (${kettleML(KETTLE_METAL_MAX_ML)} mL max). Split the thread into bundles.</div>`;
-  if (total > KETTLE_GLASS_MAX_ML) return `<div class="kt-warn kt-pot-warn">⚠ <b>Use the metal pot</b> — ${kettleFmt(total, 0)} mL is over the glass pot’s ${kettleML(KETTLE_GLASS_MAX_ML)} mL.</div>`;
-  return `<div class="kt-small">Glass pot is fine (under ${kettleML(KETTLE_GLASS_MAX_ML)} mL).</div>`;
+function kettlePotAdvice(x) {
+  if (!x || !(x.total > 0)) return '';
+  const P = KETTLE_POTS, kg = v => kettleFmt(v / 1000, 1), lim = kg(KETTLE_LOAD_MAX_G);
+  if (x.overLoad) return `<div class="kt-warn kt-pot-warn">⚠ <b>Too heavy for the burner</b> — about ${kg(x.load)} kg with the ${esc(P[x.pot].name.toLowerCase())} (limit ${lim} kg). Split the thread into bundles.</div>`;
+  if (x.overVol) return `<div class="kt-warn kt-pot-warn">⚠ <b>${kettleFmt(x.total, 0)} mL is more than the ${esc(P[x.pot].name.toLowerCase())} holds</b> (${kettleML(kettlePotMax(x.pot))} mL max). Split the thread into bundles.</div>`;
+  if (x.pot === 'metal') return `<div class="kt-small">Use the <b>${esc(P.metal.name.toLowerCase())}</b> on the large burner — too much for the ${esc(P.glass.name.toLowerCase())}. About ${kg(x.load)} kg on the burner (limit ${lim} kg).</div>`;
+  return `<div class="kt-small">${esc(P.glass.name)} on the small burner is fine — about ${kg(x.load)} kg on the burner (limit ${lim} kg).</div>`;
 }
 
 /* Worker steps, filled in with this recipe's numbers. Shared by the on-screen
    list and the printed sheet, so the two can never disagree. Blanks to write
    in when no weight has been entered yet. */
 function kettleWorkerSteps(K, M) {
-  const has = M.net > 0, temp = K.temp || KETTLE_DEFAULT_TEMP, potKind = kettlePot(M.total), b = kettleBurner(K, potKind);
+  const has = M.net > 0, temp = K.temp || KETTLE_DEFAULT_TEMP, one = M.bundles[0], potKind = one.pot, b = kettleBurner(K, potKind), P = KETTLE_POTS;
   const blank = '______';
   const nm = d => d.d ? `${d.d.brand} ${d.d.name}` : 'dye';
   const list = items => items.length > 1 ? `<ul>${items.map(t => `<li>${t}</li>`).join('')}</ul>` : ' ' + (items[0] || '');
@@ -2044,7 +2104,7 @@ function kettleWorkerSteps(K, M) {
   const adds = M.dyes.map(d => has && d.dos ? `<b>${kettleFmt(d.stock, 1)} mL</b> of ${esc(nm(d))} stock` : `${blank} mL of ${esc(nm(d))} stock`);
   const lefts = M.dyes.map(d => `${esc(nm(d))}: <b>${esc(kettleLeftoverText(d))}</b>`);
   const leftStep = 'Leftover stock solution — ' + (M.dyes.length > 1 ? 'for each dye:' + list(lefts) : (M.dyes[0] ? `<b>${esc(kettleLeftoverText(M.dyes[0]))}</b>.` : 'discard it.'));
-  const pot = has ? (M.total > KETTLE_METAL_MAX_ML ? 'two pots — too much for one' : kettlePot(M.total) === 'metal' ? 'the METAL pot' : 'the glass pot') : `glass pot if under ${kettleML(KETTLE_GLASS_MAX_ML)} mL total, metal pot if over`;
+  const pot = has ? (one.overLoad || one.overVol ? 'the pot (too much for one — split into bundles)' : `the <b>${esc(P[potKind].name)}</b>`) : 'the pot';
   if (M.multi) {
     const rinse = ['Rinse the thread.', 'Fill a container with water and <b>1 tablespoon of Synthrapol</b>. Mix the Synthrapol in until bubbly.',
       'Add the thread and leave it for <b>20 minutes</b>.', 'Do a second rinse. If there is a lot of excess dye, use fresh water (no Synthrapol needed the second time).',
@@ -2053,13 +2113,14 @@ function kettleWorkerSteps(K, M) {
       `Presoak all <b>${M.bundles.length} bundles</b> in the water tub.`,
       'Mix the dye solution for the whole job:' + `<ul>${makes.map(t => `<li>${t}</li>`).join('')}</ul>`,
       'Pour each bundle’s share into its own small cup, labelled with the bundle letter (amounts in the bundle table). Set each cup beside its bundle.',
-      `Cook one bundle at a time, A first. For each bundle:<ul>
-        <li>Put its pot on its burner and set it as the bundle table says (metal → <b>large</b> burner, glass → <b>small</b>).</li>
+      (M.twoNow ? `Cook <b>two bundles at a time</b>, one on each burner, in the order of the table (A and B together, then C and D…). Each burner has its own timer. For each bundle:<ul>`
+                 : 'Cook one bundle at a time, A first. For each bundle:<ul>') + `
+        <li>Put its pot on its burner and set it as the bundle table says (${esc(P.metal.name.toLowerCase())} → <b>large</b> burner, ${esc(P.glass.name.toLowerCase())} → <b>small</b>).</li>
         <li>Add that bundle’s water and heat to <b>${temp}°F</b>.</li>
         <li>At ${temp}°F, add the bundle’s cup of dye.</li>
         <li>Squeeze the excess water out of the thread and add it.</li>
         <li>Drop the burner by 1.</li>
-        <li>Press <b>Start</b> on the timer and follow its instructions. Tick the bundle Done when it comes out.</li></ul>`,
+        <li>Press <b>Start</b> on ${M.twoNow ? 'that burner’s' : 'the'} timer and follow its instructions. Tick the bundle Done when it comes out.</li></ul>`,
       'While each bundle cooks, rinse the one before it:' + list(rinse),
       leftStep,
     ];
@@ -2067,7 +2128,7 @@ function kettleWorkerSteps(K, M) {
   return [
     'Presoak the thread in the water tub.',
     has ? `Put ${pot} on the <b>${potKind === 'metal' ? 'LARGE' : 'SMALL'} burner</b> and set it to <b>${kettleFmt(b, 1)}</b>.`
-        : `Glass pot (up to ${kettleML(KETTLE_GLASS_MAX_ML)} mL): <b>small burner at ${kettleFmt(kettleBurner(K, 'glass'), 1)}</b>. Metal pot: <b>large burner at ${kettleFmt(kettleBurner(K, 'metal'), 1)}</b>.`,
+        : `${esc(P.glass.name)}: <b>small burner at ${kettleFmt(kettleBurner(K, 'glass'), 1)}</b>. ${esc(P.metal.name)}: <b>large burner at ${kettleFmt(kettleBurner(K, 'metal'), 1)}</b>.`,
     `Add <b>${has ? kettleFmt(M.water, 0) + ' mL' : blank + ' mL'}</b> of water to the pot. Measure the temperature until it reaches <b>${temp}°F</b>.`,
     'While it heats, mix the dye solution:' + `<ul>${makes.map(t => `<li>${t}</li>`).join('')}</ul>`,
     `Once it reaches ${temp}°F, add the dye stock to the pot:` + list(adds),
@@ -2129,16 +2190,16 @@ function kettlePrintWorkerSheet() {
       : `<div><span>Thread (dry)</span><b>${M.net > 0 ? kettleWt(M.bundles[0].weight, 1) : '______'}</b></div>
       <div><span>Water</span><b>${M.net > 0 ? kettleFmt(M.water, 0) + ' mL' : '______ mL'}</b></div>
       <div><span>Total pot</span><b>${M.net > 0 ? kettleFmt(M.total, 0) + ' mL' : '______ mL'}</b></div>
-      <div><span>Pot</span><b>${M.net > 0 ? (kettlePot(M.total) === 'metal' ? 'Metal' : 'Glass') : `Glass ≤ ${kettleML(KETTLE_GLASS_MAX_ML)} mL`}</b></div>
+      <div><span>Pot</span><b>${M.net > 0 ? esc(KETTLE_POTS[M.bundles[0].pot].name) : '—'}</b></div>
       <div><span>Burner</span><b>${kettleBurnerLabel(K, M)}</b></div>`}
       <div><span>Pot temp</span><b>${temp}°F</b></div>
       <div><span>Heat time</span><b>${heat} min</b></div></div>
-    ${M.multi ? (M.bundles.some(x => x.total > KETTLE_METAL_MAX_ML) ? `<div class="warn">A bundle is more than the metal pot holds (${kettleML(KETTLE_METAL_MAX_ML)} mL) — split it.</div>` : '')
-      : M.total > KETTLE_METAL_MAX_ML ? `<div class="warn">More than the metal pot holds (${kettleML(KETTLE_METAL_MAX_ML)} mL) — split into bundles.</div>` : M.total > KETTLE_GLASS_MAX_ML ? `<div class="warn">Over ${kettleML(KETTLE_GLASS_MAX_ML)} mL — use the METAL pot.</div>` : ''}
+    ${M.bundles.some(x => x.overLoad) ? `<div class="warn">${M.multi ? 'A bundle is' : 'This is'} too heavy for the burner (limit ${kettleFmt(KETTLE_LOAD_MAX_G / 1000, 1)} kg with the pot) — split it.</div>`
+      : M.bundles.some(x => x.overVol) ? `<div class="warn">${M.multi ? 'A bundle is' : 'This is'} more than its pot holds — split it.</div>` : ''}
     <table><tr><th>Dye</th><th>Premade dye bin</th><th>Make stock (only this)</th><th>${M.multi ? 'Into pots (all)' : 'Add to pot'}</th><th>Leftover</th></tr>${dyeRows || '<tr><td colspan="5">No dyes set up</td></tr>'}</table>
-    ${M.multi ? `<h2>Bundles — one at a time</h2><table><tr><th>Bundle</th><th>Dry weight</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(d.d ? d.d.name : 'dye')} cup</th>`).join('')}<th>Done</th></tr>
+    ${M.multi ? `<h2>Bundles — ${M.twoNow ? 'two at a time, one per burner' : 'one at a time'}</h2><table><tr><th>Bundle</th><th>Dry weight</th><th>Pot · burner</th><th>Water</th>${K.dyes.map(d => `<th>${esc(d.d ? d.d.name : 'dye')} cup</th>`).join('')}<th>Done</th></tr>
       ${M.bundles.map(x => `<tr><td><b>${x.letter}</b></td><td>${x.net > 0 ? kettleWt(x.weight, 1) : `______${x.target ? ` <small>(aim ${kettleWt(x.target)})</small>` : ''}`}</td>
-        <td>${x.net > 0 ? `${x.pot === 'metal' ? 'Metal · LARGE' : 'Glass · SMALL'} ${kettleFmt(x.burner, 1)} → ${kettleFmt(x.burner - 1, 1)}` : ''}</td>
+        <td>${x.net > 0 || kettleState.burners[M.bundles.indexOf(x)] ? `${esc(KETTLE_POTS[x.pot].name)} · ${x.pot === 'metal' ? 'LARGE' : 'SMALL'}${x.net > 0 ? ` ${kettleFmt(x.burner, 1)} → ${kettleFmt(x.burner - 1, 1)}` : ''}` : ''}</td>
         <td>${x.net > 0 ? kettleFmt(x.water, 0) + ' mL' : '______'}</td>${x.stocks.map(v => `<td>${x.net > 0 ? kettleFmt(v, 1) + ' mL' : '______'}</td>`).join('')}<td><span class="box"></span></td></tr>`).join('')}</table>` : ''}
     <h2>Steps</h2><ol>${kettleWorkerSteps(K, M).map(t => `<li>${t}</li>`).join('')}</ol>
     <h2>Timer</h2><table class="tl">${kettleTimerGroups(ev).map(g => `<tr><td>${esc(g.text)}</td><td>${g.times.map(t => `<span class="box">${kettleClock(t * 60000)}</span>`).join('')}</td></tr>`).join('')}</table>
@@ -2188,38 +2249,53 @@ async function kettleLogLeftover(kettleDyeId) {
 }
 
 /* ── Timer ── Calls out each step at its minute, from the recipe's steps. */
-function kettleElapsedMs() { const T = kettleTimer; if (!T.running) return 0; return (T.paused ? T.pauseAt : Date.now()) - T.startedAt - T.pausedMs; }
+function kettleElapsedMs(k) { const T = kettleTimers[k]; if (!T.running) return 0; return (T.paused ? T.pauseAt : Date.now()) - T.startedAt - T.pausedMs; }
 function kettleClock(ms) { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-function kettleTimerHtml() {
-  const T = kettleTimer, K = currentKettle;
+/* Which timers to show: both burners when bundles run two at a time, else
+   the burner this pot goes on (large when not known yet). */
+function kettleTimerKeys(M) {
+  if (M && M.twoNow) return ['metal', 'glass'];
+  const running = Object.keys(kettleTimers).filter(k => kettleTimers[k].running);
+  if (running.length > 1) return running;
+  const k = M && M.bundles && M.bundles[0] && M.bundles[0].net > 0 && !M.multi ? M.bundles[0].pot : (running[0] || 'metal');
+  return [k];
+}
+function kettleTimersHtml(M) {
+  const keys = kettleTimerKeys(M), two = keys.length > 1;
+  return keys.map(k => `<div class="kt-timer kt-timer-live" data-k="${k}" data-two="${two ? 1 : ''}">${kettleTimerHtml(k, two)}</div>`).join('');
+}
+function kettleTimerHtml(k, two) {
+  const T = kettleTimers[k], K = currentKettle;
+  const label = two ? ` — ${k === 'metal' ? 'large burner' : 'small burner'} (${esc(KETTLE_POTS[k].name.toLowerCase())})` : '';
   if (!T.running) {
     const ev = K ? kettleEvents(K) : [];
-    return `<div class="kt-h2">Timer</div>
-      <ol class="kt-plan">${ev.slice(0, 8).map(e => `<li><b>${kettleClock(e.t * 60000)}</b> ${esc(e.text)}</li>`).join('')}${ev.length > 8 ? `<li>…${ev.length - 8} more</li>` : ''}</ol>
-      ${K && K.standardSteps ? '<div class="kt-small">Standard steps — set this recipe’s own in Recipe Builder.</div>' : ''}
-      <button class="kt-btn" onclick="kettleStart()">▶ Start — thread is in the pot</button>`;
+    return `<div class="kt-h2">Timer${label}</div>
+      ${two ? '' : `<ol class="kt-plan">${ev.slice(0, 8).map(e => `<li><b>${kettleClock(e.t * 60000)}</b> ${esc(e.text)}</li>`).join('')}${ev.length > 8 ? `<li>…${ev.length - 8} more</li>` : ''}</ol>
+      ${K && K.standardSteps ? '<div class="kt-small">Standard steps — set this recipe’s own in Recipe Builder.</div>' : ''}`}
+      <button class="kt-btn" onclick="kettleStart('${k}')">▶ Start${two ? ` ${k === 'metal' ? 'large' : 'small'} burner` : ''} — thread is in the pot</button>`;
   }
-  const el = kettleElapsedMs(), ev = T.events, last = ev[T.fired - 1], next = ev[T.fired];
+  const el = kettleElapsedMs(k), ev = T.events, last = ev[T.fired - 1], next = ev[T.fired];
   const totalMs = T.totalMin * 60000;
   const other = T.recipeName && currentRecipe && T.recipeName !== currentRecipe.Recipe_Name ? ` <span class="kt-small">(${esc(T.recipeName)})</span>` : '';
-  return `<div class="kt-h2">Timer${other}</div>
+  return `<div class="kt-h2">Timer${label}${other}</div>
     <div class="kt-clock">${kettleClock(el)} <span>/ ${kettleClock(totalMs)}</span></div>
     ${last ? `<div class="kt-now">${T.done ? '✓ ' : 'Now: '}<b>${esc(last.text)}</b></div>` : ''}
     ${next && !T.done ? `<div class="kt-next">Next at ${kettleClock(next.t * 60000)} — ${esc(next.text)} <b>(in ${kettleClock(next.t * 60000 - el)})</b></div>` : ''}
     <div class="kt-bar"><i style="width:${Math.min(100, el / totalMs * 100)}%"></i></div>
     <div class="kt-btns">
-      ${T.done ? '' : `<button class="kt-btn sm" onclick="kettlePause()">${T.paused ? '▶ Resume' : '❚❚ Pause'}</button>
-      <button class="kt-btn sm" onclick="kettleFinish()">Exhausted — finish early</button>`}
-      <button class="kt-btn sm ghost" onclick="kettleReset()">${T.done ? 'Clear' : 'Reset'}</button>
+      ${T.done ? '' : `<button class="kt-btn sm" onclick="kettlePause('${k}')">${T.paused ? '▶ Resume' : '❚❚ Pause'}</button>
+      <button class="kt-btn sm" onclick="kettleFinish('${k}')">Exhausted — finish early</button>`}
+      <button class="kt-btn sm ghost" onclick="kettleReset('${k}')">${T.done ? 'Clear' : 'Reset'}</button>
     </div>`;
 }
-function kettleBeep(times) {
+/* Large burner beeps high, small burner low, so you can tell them apart. */
+function kettleBeep(times, k) {
   try {
     if (!kettleAudio) kettleAudio = new (window.AudioContext || window.webkitAudioContext)();
     const ctx = kettleAudio; if (ctx.state === 'suspended') ctx.resume();
     for (let i = 0; i < times; i++) {
       const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + i * 0.45;
-      o.type = 'sine'; o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      o.type = 'sine'; o.frequency.value = k === 'glass' ? 587 : 880; o.connect(g); g.connect(ctx.destination);
       g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35); o.start(t0); o.stop(t0 + 0.4);
     }
@@ -2227,26 +2303,33 @@ function kettleBeep(times) {
   try { if (navigator.vibrate) navigator.vibrate(300); } catch (e) {}
 }
 function kettleTick() {
-  const T = kettleTimer; if (!T.running || T.paused || T.done) { kettlePaintTimer(); return; }
-  const el = kettleElapsedMs(); let beeps = 0;
-  while (T.fired < T.events.length && T.events[T.fired].t * 60000 <= el) { beeps = Math.max(beeps, T.events[T.fired].beeps || 1); if (T.events[T.fired].end) T.done = true; T.fired++; }
-  if (beeps) kettleBeep(beeps);
+  let any = false;
+  Object.keys(kettleTimers).forEach((k, n) => {
+    const T = kettleTimers[k]; if (!T.running || T.paused || T.done) return;
+    any = true;
+    const el = kettleElapsedMs(k); let beeps = 0;
+    while (T.fired < T.events.length && T.events[T.fired].t * 60000 <= el) { beeps = Math.max(beeps, T.events[T.fired].beeps || 1); if (T.events[T.fired].end) T.done = true; T.fired++; }
+    if (beeps) setTimeout(() => kettleBeep(beeps, k), n * 900);
+  });
   kettlePaintTimer();
+  if (!any && !Object.values(kettleTimers).some(T => T.running && !T.done)) { clearInterval(kettleTickId); kettleTickId = null; }
 }
-function kettlePaintTimer() { const h = kettleTimerHtml(); document.querySelectorAll('.kt-timer-live').forEach(box => { box.innerHTML = h; }); }
-function kettleStart() {
+function kettlePaintTimer() {
+  document.querySelectorAll('.kt-timer-live').forEach(box => { box.innerHTML = kettleTimerHtml(box.dataset.k || 'metal', !!box.dataset.two); });
+}
+function kettleStart(k) {
   const K = currentKettle; if (!K) return;
-  Object.assign(kettleTimer, { running: true, paused: false, startedAt: Date.now(), pausedMs: 0, pauseAt: 0, done: false, fired: 0,
+  Object.assign(kettleTimers[k], { running: true, paused: false, startedAt: Date.now(), pausedMs: 0, pauseAt: 0, done: false, fired: 0,
     events: kettleEvents(K), totalMin: K.heat || KETTLE_DEFAULT_HEAT, recipeName: currentRecipe ? currentRecipe.Recipe_Name : '' });
-  if (!kettleTimer.tick) kettleTimer.tick = setInterval(kettleTick, 1000);
+  if (!kettleTickId) kettleTickId = setInterval(kettleTick, 1000);
   kettleTick();
 }
-function kettlePause() { const T = kettleTimer; if (!T.running) return;
+function kettlePause(k) { const T = kettleTimers[k]; if (!T.running) return;
   if (T.paused) { T.pausedMs += Date.now() - T.pauseAt; T.paused = false; } else { T.paused = true; T.pauseAt = Date.now(); } kettlePaintTimer(); }
-function kettleFinish() { const T = kettleTimer; if (!T.running) return; T.done = true; T.fired = T.events.length;
-  T.events = T.events.concat([{ t: kettleElapsedMs() / 60000, text: 'Finished early — exhausted', beeps: 1 }]); T.fired = T.events.length; kettlePaintTimer(); }
-function kettleReset() { if (kettleTimer.running && !kettleTimer.done && !confirm('Stop the timer?')) return;
-  kettleTimer.running = false; kettleTimer.done = false; kettlePaintTimer(); }
+function kettleFinish(k) { const T = kettleTimers[k]; if (!T.running) return; T.done = true;
+  T.events = T.events.slice(0, T.fired).concat([{ t: kettleElapsedMs(k) / 60000, text: 'Finished early — exhausted', beeps: 1 }]); T.fired = T.events.length; kettlePaintTimer(); }
+function kettleReset(k) { const T = kettleTimers[k]; if (T.running && !T.done && !confirm('Stop the timer?')) return;
+  T.running = false; T.done = false; kettlePaintTimer(); }
 
 // Kettle recipes get their panel at the top of the RIGHT side (the left keeps
 // the usual details); hand-dye recipes are untouched. Its own redraws go
