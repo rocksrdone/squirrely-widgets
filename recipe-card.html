@@ -540,6 +540,34 @@
   body.big-mode .stash-walk { font-size: 14px; }
   body.big-mode .stash-walk b { font-size: 16px; }
   body.big-mode .stash-foot { font-size: 13px; }
+
+  /* kettle dye panel */
+  .kt-box { border: 2px solid var(--teal, #3A8B7A); border-radius: 9px; padding: 11px 13px; margin-bottom: 12px; background: #fff; color: #1A1614; }
+  .kt-h { font-weight: 700; font-size: 14px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .kt-h2 { font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: #6B5E52; margin-bottom: 4px; }
+  .kt-tag { font-size: 11.5px; font-weight: 600; background: #E5F2EF; color: #2C6B5E; border-radius: 4px; padding: 2px 7px; }
+  .kt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px 12px; margin: 6px 0; }
+  .kt-grid div { display: flex; flex-direction: column; }
+  .kt-grid span { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #8B7D72; }
+  .kt-grid b { font-size: 16px; font-family: 'DM Mono', monospace; }
+  .kt-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 2px; }
+  .kt-row label { font-size: 12px; font-weight: 600; }
+  .kt-row input { width: 100px; padding: 6px 8px; font-size: 16px; border: 1.5px solid #D4C9BC; border-radius: 6px; background: #fff; color: #1A1614; font-family: 'DM Mono', monospace; }
+  .kt-acid { margin: 8px 0 4px; font-size: 13px; padding: 6px 9px; background: #F7F3EE; border-radius: 6px; }
+  .kt-note { font-size: 12px; background: #F5EDD8; border: 1px solid #E2C98F; border-radius: 6px; padding: 7px 9px; margin: 6px 0; line-height: 1.45; }
+  .kt-warn { font-size: 12.5px; background: #F5EDD8; border-radius: 6px; padding: 8px 10px; line-height: 1.45; }
+  .kt-small { font-size: 11.5px; color: #6B5E52; margin: 3px 0; }
+  .kt-small a { color: #8B3A2A; }
+  .kt-timer { margin-top: 10px; border-top: 1px solid #E8DFD4; padding-top: 9px; }
+  .kt-clock { font-family: 'DM Mono', monospace; font-size: 30px; font-weight: 700; }
+  .kt-clock span { font-size: 14px; color: #8B7D72; }
+  .kt-phase { font-size: 15px; margin: 2px 0 6px; }
+  .kt-bar { height: 7px; background: #E8DFD4; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+  .kt-bar i { display: block; height: 100%; background: #3A8B7A; }
+  .kt-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .kt-btn { font: inherit; font-size: 14px; font-weight: 600; padding: 10px 16px; border-radius: 7px; border: 1.5px solid #3A8B7A; background: #3A8B7A; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kt-btn.sm { font-size: 12.5px; padding: 7px 11px; background: #fff; color: #2C6B5E; }
+  .kt-btn.ghost { border-color: #D4C9BC; color: #6B5E52; }
 </style>
 </head>
 <body>
@@ -1605,6 +1633,221 @@ function resetSteps() {
   updateProgress();
 }
 
+/* ══ KETTLE DYE (solid colours) ═════════════════════════════════════════════
+   Recipes whose Dye_Method is "Kettle Dye" are a different product made a
+   different way: one dye, cooked in a pot at a set temperature for a set time,
+   all dye made fresh. Their card shows the kettle method instead of the
+   hand-dye steps, worked out for today's thread weight, plus a stir timer.
+
+   The recipe itself is a row in Kettle_Dye_Recipes (the table Kettle Dye
+   Calculator saves test batches to), linked by its Recipe column; the row
+   ticked Use_This wins, else the newest linked row, else a row whose Names
+   matches the recipe name. Pot maths mirrors Kettle Dye Calculator:
+     net thread = weighed thread − ties
+     water      = net × 7 mL
+     dye stock  = water × 1% × DOS mL     (stock made at Standard_Ratio)
+   Acid: "Water only" by default. Citric acid instructions are always one tap
+   away (1 Tbsp per lb of dry thread, Dharma's figure), added after the first
+   constant-stir period so the colour spreads before it fixes. */
+let currentKettle = null;          // { row, defaults } for the recipe on screen
+const kettleState = { weight: '', showCitric: false };
+const kettleTimer = { running: false, paused: false, startedAt: 0, pausedMs: 0, pauseAt: 0,
+  constMin: 5, everyMin: 10, totalMin: 70, recipeName: '', lastBeepKey: '', tick: null, done: false };
+let kettleAudio = null;
+
+function isKettleRecipe(r) { return /kettle/i.test(String((r && rowField(r, ['Dye_Method'])) || '')); }
+
+async function loadKettle(recipeId, recipeName) {
+  const out = { row: null, defaults: { ties: 2.1, burner: 3, pot: '' }, found: 'none' };
+  try {
+    const t = await grist.docApi.fetchTable('Kettle_Dye_Recipes');
+    const ids = t.id || [];
+    const g = (c, i) => (Array.isArray(t[c]) ? t[c][i] : undefined);
+    const norm = s => String(s || '').replace(/\(.*?\)/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const rows = ids.map((id, i) => ({ id, i, rec: stockRefId(g('Recipe', i)), use: !!g('Use_This', i), name: g('Names', i) }));
+    let pick = rows.filter(r => r.rec === recipeId);
+    if (pick.length) { out.found = 'linked'; pick = pick.filter(r => r.use).concat(pick.filter(r => !r.use)); }
+    else { pick = rows.filter(r => norm(r.name) && norm(r.name) === norm(recipeName)); if (pick.length) out.found = 'name'; }
+    if (pick.length) {
+      const best = out.found === 'linked' ? pick[0] : pick[pick.length - 1];
+      const i = best.i;
+      out.row = { id: best.id, names: g('Names', i), dye: [g('Dye_Brand', i), g('Dye_Name', i)].filter(Boolean).join(' '),
+        type: g('Attributes', i), ratio: g('Standard_Ratio', i), dryG: Number(g('Dry_Weight_g_', i)) || 0, dryRef: g('Dry_Ref', i),
+        dos: Number(g('DOS', i)) || 0, burner: Number(g('Temp_', i)) || 0, tempF: Number(g('Temp_F', i)) || 170,
+        minutes: Number(g('Mix_Time_min_', i)) || 70, pot: g('Pot', i), exhausts: g('Exhausts', i), solid: g('Solidness', i),
+        notes: g('Notes', i), acid: g('Acid', i) || 'Water only',
+        stirConst: Number(g('Stir_Constant_min', i)) || 5, stirEvery: Number(g('Stir_Every_min', i)) || 10,
+        others: pick.length - 1 };
+    }
+  } catch (e) { console.warn('Kettle_Dye_Recipes not readable', e); out.error = true; }
+  try {
+    const d = await grist.docApi.fetchTable('Kettle_Dye_Defaults');
+    if (d.id && d.id.length) {
+      if (Array.isArray(d.Yarn_Ties_Weight)) out.defaults.ties = Number(d.Yarn_Ties_Weight[0]) || 2.1;
+      if (Array.isArray(d.Large_Burner_Gauge)) out.defaults.burner = Number(d.Large_Burner_Gauge[0]) || 3;
+      if (Array.isArray(d.Pot_Type)) out.defaults.pot = d.Pot_Type[0] || '';
+    }
+  } catch (e) { /* defaults are optional */ }
+  return out;
+}
+
+function kettleFmt(n, dp) { return (Math.round(n * Math.pow(10, dp)) / Math.pow(10, dp)).toString(); }
+
+function kettlePanelHtml() {
+  const K = currentKettle, r = K && K.row;
+  const box = (inner) => `<div class="kt-box">${inner}</div>`;
+  if (!r) return box(`<div class="kt-h">Kettle dye</div>
+    <div class="kt-warn">No kettle recipe linked yet. In <b>Kettle_Dye_Recipes</b>, set this recipe in the <b>Recipe</b> column on the test batch you use, and tick <b>Use_This</b>.${K && K.error ? ' (The table could not be read.)' : ''}</div>`);
+  const w = Number(kettleState.weight) || 0;
+  const net = Math.max(0, w - K.defaults.ties);
+  const water = net * 7, stock = water * 0.01 * r.dos;
+  const m = String(r.ratio || '').match(/([\d.]+)\s*(tsp|tbsp|g)\b.*?([\d.]+)\s*ml/i);
+  const ratioNote = m ? `${m[1]} ${m[2]} powder in ${m[3]} mL water` : (r.ratio || '');
+  const powderForStock = m && stock ? (stock / Number(m[3])) * Number(m[1]) : 0;
+  const citricTsp = net * 3 / 453.6;
+  const burner = r.burner || K.defaults.burner;
+  const acidLine = {
+    'Citric acid': `<b>Citric acid</b> ≈ ${net ? kettleFmt(citricTsp, 2) + ' tsp' : '1 Tbsp per lb of dry thread'} — dissolve in a little hot water, add after the first ${r.stirConst}-minute stir.`,
+    'Vinegar': `<b>Vinegar</b> ${net ? kettleFmt(water * 0.1, 0) + ' mL' : '10% of the water'} — add after the first ${r.stirConst}-minute stir.`,
+    'One-shot (acid in dye)': `<b>No acid to add</b> — it is already in the dye.`,
+  }[r.acid] || `<b>Water only</b> — no acid.`;
+  const citricHelp = r.acid !== 'Citric acid' ? `
+    <div class="kt-small"><a href="#" onclick="event.preventDefault();kettleState.showCitric=!kettleState.showCitric;renderLeft()">${kettleState.showCitric ? 'Hide' : 'If it won’t exhaust:'} citric acid instructions</a></div>
+    ${kettleState.showCitric ? `<div class="kt-note">Citric acid: <b>1 Tbsp per lb of dry thread</b>${net ? ` — about <b>${kettleFmt(citricTsp, 2)} tsp</b> for ${kettleFmt(net, 1)} g` : ''}. Dissolve in a little hot water. Add it <b>after</b> the first ${r.stirConst} minutes of constant stirring, not at the start, so the colour spreads evenly before it fixes. Pour it beside the thread, not on it. If a colour still won’t exhaust, a little more can go in.</div>` : ''}` : '';
+  const T = kettleTimer;
+  return box(`
+    <div class="kt-h">Kettle dye — solid colour <span class="kt-tag">${esc(r.dye || '—')}</span></div>
+    <div class="kt-grid">
+      <div><span>Depth of shade</span><b>${kettleFmt(r.dos, 2)}%</b></div>
+      <div><span>Pot temp</span><b>${r.tempF}°F</b></div>
+      <div><span>Cook</span><b>${r.minutes} min</b></div>
+      <div><span>Burner large / small</span><b>${kettleFmt(burner, 1)} / ${kettleFmt(burner + 0.5, 1)}</b></div>
+    </div>
+    <div class="kt-row"><label>Thread weight with ties (g)</label>
+      <input id="ktWeight" type="number" inputmode="decimal" value="${esc(kettleState.weight)}" placeholder="weigh it"
+        oninput="kettleState.weight=this.value;kettleRecalc()">
+      <span class="kt-small">ties ${kettleFmt(K.defaults.ties, 1)} g</span></div>
+    <div id="ktCalc">${kettleCalcHtml(net, water, stock, powderForStock, ratioNote, m)}</div>
+    <div class="kt-acid">${acidLine}</div>${citricHelp}
+    <div class="kt-small">Last test: ${esc(r.exhausts || '—')} exhaust · ${esc(r.solid || '—')} solid${r.pot ? ' · ' + esc(r.pot) : ''}${r.others > 0 ? ` · ${r.others} other test batch${r.others === 1 ? '' : 'es'} on file` : ''}${K.found === 'name' ? ' · <i>matched by name — set the Recipe link to make it stick</i>' : ''}</div>
+    ${r.notes ? `<div class="kt-note">${esc(r.notes)}</div>` : ''}
+    <div class="kt-timer" id="ktTimer">${kettleTimerHtml()}</div>`);
+}
+
+function kettleCalcHtml(net, water, stock, powder, ratioNote, m) {
+  if (!net) return `<div class="kt-small">Weigh the thread to get water and dye amounts.</div>`;
+  return `<div class="kt-grid">
+      <div><span>Net thread</span><b>${kettleFmt(net, 1)} g</b></div>
+      <div><span>Water in pot</span><b>${kettleFmt(water, 0)} mL</b></div>
+      <div><span>Dye stock to add</span><b>${kettleFmt(stock, 1)} mL</b></div>
+      <div><span>Powder for that stock</span><b>${m ? kettleFmt(powder, 2) + ' ' + esc(m[2]) : '—'}</b></div>
+    </div>
+    ${ratioNote ? `<div class="kt-small">Stock strength: ${esc(ratioNote)}. All dye made fresh for each pot.</div>` : ''}`;
+}
+
+function kettleRecalc() {
+  const K = currentKettle, r = K && K.row; if (!r) return;
+  const net = Math.max(0, (Number(kettleState.weight) || 0) - K.defaults.ties);
+  const water = net * 7, stock = water * 0.01 * r.dos;
+  const m = String(r.ratio || '').match(/([\d.]+)\s*(tsp|tbsp|g)\b.*?([\d.]+)\s*ml/i);
+  const el = document.getElementById('ktCalc');
+  if (el) el.innerHTML = kettleCalcHtml(net, water, stock, m && stock ? (stock / Number(m[3])) * Number(m[1]) : 0,
+    m ? `${m[1]} ${m[2]} powder in ${m[3]} mL water` : (r.ratio || ''), m);
+}
+
+/* ── Stir timer ── Sounds when a stir is due: constant for the first few
+   minutes (a tone at the start and when constant stirring ends), then every
+   N minutes until the cook time is up. Started by a tap, which is also what
+   lets the browser play sound. */
+function kettleElapsedMs() {
+  const T = kettleTimer; if (!T.running) return 0;
+  return (T.paused ? T.pauseAt : Date.now()) - T.startedAt - T.pausedMs;
+}
+function kettleTimerHtml() {
+  const T = kettleTimer, r = currentKettle && currentKettle.row;
+  const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  if (!T.running) {
+    return `<div class="kt-h2">Stir timer</div>
+      <div class="kt-small">Constant stir ${r ? r.stirConst : 5} min, then a tone every ${r ? r.stirEvery : 10} min, ${r ? r.minutes : 70} min in all.</div>
+      <button class="kt-btn" onclick="kettleStart()">▶ Start — thread is in the pot</button>`;
+  }
+  const el = kettleElapsedMs(), totalMs = T.totalMin * 60000, constMs = T.constMin * 60000;
+  let phase, nextMs;
+  if (T.done || el >= totalMs) { phase = '<b>Done</b> — cook time up'; nextMs = 0; }
+  else if (el < constMs) { phase = '<b>Stir constantly</b>'; nextMs = constMs - el; }
+  else { const k = Math.floor((el - constMs) / (T.everyMin * 60000)) + 1; nextMs = constMs + k * T.everyMin * 60000 - el;
+    if (constMs + k * T.everyMin * 60000 > totalMs) nextMs = totalMs - el;
+    phase = `Next stir in <b>${fmt(nextMs)}</b>`; }
+  const other = r && T.recipeName && T.recipeName !== (currentRecipe && currentRecipe.Recipe_Name) ? ` <span class="kt-small">(${esc(T.recipeName)})</span>` : '';
+  return `<div class="kt-h2">Stir timer${other}</div>
+    <div class="kt-clock">${fmt(el)} <span>/ ${T.totalMin}:00</span></div>
+    <div class="kt-phase">${phase}${T.paused ? ' · paused' : ''}</div>
+    <div class="kt-bar"><i style="width:${Math.min(100, el / totalMs * 100)}%"></i></div>
+    <div class="kt-btns">
+      <button class="kt-btn sm" onclick="kettlePause()">${T.paused ? '▶ Resume' : '❚❚ Pause'}</button>
+      <button class="kt-btn sm" onclick="kettleFinish()">Exhausted — finish early</button>
+      <button class="kt-btn sm ghost" onclick="kettleReset()">Reset</button>
+    </div>`;
+}
+function kettleBeep(times) {
+  try {
+    if (!kettleAudio) kettleAudio = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = kettleAudio; if (ctx.state === 'suspended') ctx.resume();
+    for (let i = 0; i < times; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + i * 0.45;
+      o.type = 'sine'; o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35); o.start(t0); o.stop(t0 + 0.4);
+    }
+  } catch (e) { console.warn('Beep failed', e); }
+  try { if (navigator.vibrate) navigator.vibrate(300); } catch (e) {}
+}
+function kettleTick() {
+  const T = kettleTimer; if (!T.running || T.paused) return;
+  const el = kettleElapsedMs(), constMs = T.constMin * 60000, totalMs = T.totalMin * 60000;
+  let key = '';
+  if (el >= totalMs) key = 'done';
+  else if (el >= constMs) key = 's' + Math.floor((el - constMs) / (T.everyMin * 60000));
+  if (key && key !== T.lastBeepKey) {
+    T.lastBeepKey = key;
+    if (key === 'done') { T.done = true; kettleBeep(4); }
+    else kettleBeep(key === 's0' ? 3 : 2);
+  }
+  const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml();
+}
+function kettleStart() {
+  const r = currentKettle && currentKettle.row;
+  Object.assign(kettleTimer, { running: true, paused: false, startedAt: Date.now(), pausedMs: 0, pauseAt: 0, done: false,
+    constMin: r ? r.stirConst : 5, everyMin: r ? r.stirEvery : 10, totalMin: r ? r.minutes : 70,
+    recipeName: currentRecipe ? currentRecipe.Recipe_Name : '', lastBeepKey: '' });
+  kettleBeep(1);
+  if (!kettleTimer.tick) kettleTimer.tick = setInterval(kettleTick, 1000);
+  kettleTick();
+}
+function kettlePause() {
+  const T = kettleTimer; if (!T.running) return;
+  if (T.paused) { T.pausedMs += Date.now() - T.pauseAt; T.paused = false; } else { T.paused = true; T.pauseAt = Date.now(); }
+  kettleTick(); const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml();
+}
+function kettleFinish() { const T = kettleTimer; if (!T.running) return; T.done = true; T.lastBeepKey = 'done';
+  T.totalMin = Math.max(1, Math.ceil(kettleElapsedMs() / 60000)); const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml(); }
+function kettleReset() {
+  if (kettleTimer.running && !kettleTimer.done && !confirm('Stop the stir timer?')) return;
+  kettleTimer.running = false; kettleTimer.done = false; kettleTimer.lastBeepKey = '';
+  const box = document.getElementById('ktTimer'); if (box) box.innerHTML = kettleTimerHtml();
+}
+
+// Kettle recipes get their panel at the top of the left side; hand-dye recipes
+// are untouched.
+const __renderLeftHandDye = renderLeft;
+renderLeft = function () {
+  __renderLeftHandDye();
+  if (currentRecipe && isKettleRecipe(currentRecipe)) {
+    const lp = document.getElementById('leftPanel');
+    if (lp) lp.insertAdjacentHTML('afterbegin', kettlePanelHtml());
+  }
+};
+
 // ── GRIST INTEGRATION ──
 grist.ready({
   requiredAccess: 'full'
@@ -1941,7 +2184,7 @@ grist.onRecord(async (record) => {
   currentPreviewUrl = previewResult.matchUrl;
   currentPreviewId = previewResult.matchId;
 
-  const eName = eVariantNotice(record, localComponents);
+  const eName = isKettleRecipe(record) ? '' : eVariantNotice(record, localComponents);
   if (eName) {
     if (myGeneration !== loadGeneration) return;
     showEmpty('🧵', esc(eName) + ' — E Nylon',
@@ -1951,6 +2194,14 @@ grist.onRecord(async (record) => {
     document.getElementById('cardView').style.display = 'none';
     return;
   }
+
+  // Kettle recipes: load their kettle row before drawing.
+  if (isKettleRecipe(record)) {
+    const k = await loadKettle(recipeRowId, rowField(record, ['Recipe_Name']));
+    if (myGeneration !== loadGeneration) return;
+    if (!currentKettle || !currentKettle.row || !k.row || currentKettle.row.id !== k.row.id) kettleState.weight = '';
+    currentKettle = k;
+  } else currentKettle = null;
 
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('cardView').style.display = 'grid';
