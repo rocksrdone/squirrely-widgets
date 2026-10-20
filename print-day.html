@@ -70,9 +70,13 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .tag .who i { width: 13px; height: 13px; }
 .tag .flags > * + * { margin-left: .12in; }
 
-/* ---------- bag sheet : 8 x 5.25in, 2 per page ---------- */
+/* ---------- bag sheet : 8 x 3.42in, 3 per page ----------
+   overflow:hidden + break-inside:avoid so one sheet can never spill into the
+   next slot or split across pages (a stray closing tag once let the notes line
+   escape the sheet, which pushed every third sheet onto its own page). */
 .sh { width: 8in; height: 3.42in; padding: .12in .2in; outline: 1px dashed #B9B9B9;
-      outline-offset: -.5px; display: flex; flex-direction: column; }
+      outline-offset: -.5px; display: flex; flex-direction: column;
+      overflow: hidden; break-inside: avoid; page-break-inside: avoid; box-sizing: border-box; }
 .sh .head { display: flex; justify-content: space-between; align-items: flex-start;
             border-bottom: 2.5px solid #000; padding-bottom: 5px; }
 .sh .ttl.cw { font-size: 18px; line-height: 1.1; letter-spacing: 0; text-transform: none;
@@ -844,7 +848,6 @@ function sheetOrder(b, n, o, idx, total) {
      </div>
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
-     </div>
      <div class="nl"></div>
      <div class="ncap">notes</div>`);
 }
