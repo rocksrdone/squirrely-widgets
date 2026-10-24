@@ -71,8 +71,10 @@
    ─────────────────────────────────────────────────────────────────────────── */
 const REGISTRY = [
   // Bins & racks
-  { key: 'Back_Stock_Bin_Capacity', area: 'Bins & racks', def: 60, unit: 'spools', usedBy: ['Batch Assignment', 'Wind & Box', 'Print Day', 'Lot Desk', 'Jobs', 'Inventory Desk', 'Morning Batch Planning'],
-    notes: 'Spools a back-stock bin holds comfortably. A bin with its own Max_Spools in Storage_Locations uses that instead.' },
+  { key: 'Back_Stock_Bin_Capacity', area: 'Bins & racks', def: 150, unit: 'spools', usedBy: ['Batch Assignment', 'Wind & Box', 'Print Day', 'Lot Desk', 'Jobs', 'Inventory Desk', 'Morning Batch Planning', 'Bin Audit'],
+    notes: 'Most spools a back-stock bin holds. All regular bins share this; a bin only differs if its own Max_Spools is filled in Storage_Locations. Customer order boxes have no cap.' },
+  { key: 'Back_Stock_Bin_Target', area: 'Bins & racks', def: 100, unit: 'spools', usedBy: ['Bin Audit'],
+    notes: 'Comfortable fill for a back-stock bin, shown in Bin Audit. A bin only differs if its own Target_Spools is filled in.' },
   { key: 'Dye_Bin_Jar_Capacity', area: 'Bins & racks', def: 12, unit: 'jars', usedBy: ['Batch Assignment', 'Dye Stock'],
     notes: 'Premade dye jars one made-dye bin holds.' },
   { key: 'Dye_Bin_Unrelated_Cap', area: 'Bins & racks', def: 6, unit: 'jars', usedBy: ['Batch Assignment', 'Dye Stock'],
@@ -143,11 +145,11 @@ const HUB = [
       return `${t ? (t.id || []).length : 0} templates · ${c ? (c.id || []).length : 0} calibrations`; } },
   { title: 'Products', what: 'Per product: yards per spool, spool and thread weight, customs details.',
     pages: ['Products'], stat: async () => { const p = await opt('Products'); return `${p ? (p.id || []).length : 0} products`; } },
-  { title: 'Bins (back stock)', what: 'Each bin’s code, fiber, reserved customer and its own Max_Spools (overrides the default capacity).',
+  { title: 'Bins (back stock)', what: 'Each bin’s code and reserved customer. Leave Max_Spools / Target_Spools blank so every bin follows the Settings numbers.',
     pages: ['Storage_Locations'], stat: async () => {
       const l = await opt('Storage_Locations'); if (!l) return 'Table not found.';
       const own = (l.id || []).filter((id, i) => Number(l.Max_Spools && l.Max_Spools[i]) > 0).length;
-      return `${(l.id || []).length} bins · ${own} with their own capacity`; } },
+      return `${(l.id || []).length} bins · ${own ? own + ' with their own capacity' : 'all follow the Settings capacity'}`; } },
 ];
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

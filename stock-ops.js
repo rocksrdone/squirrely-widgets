@@ -25,8 +25,8 @@
 
   const ORDER_STATUS_HANK = 'Unwound - Bagged';
   /* Spools a back-stock bin holds comfortably, unless Storage_Locations.Max_Spools
-     says otherwise. Settings.Back_Stock_Bin_Capacity (settings.js) overrides 60. */
-  const BIN_CAPACITY_DEFAULT = 60;
+     says otherwise. Settings.Back_Stock_Bin_Capacity (settings.js) overrides 150. */
+  const BIN_CAPACITY_DEFAULT = 150;
   const binCap = () => (window.SSSettings ? SSSettings.num('Back_Stock_Bin_Capacity', BIN_CAPACITY_DEFAULT) : BIN_CAPACITY_DEFAULT);
   const ORDER_STATUS_WOUND = 'Wound - Needs Labels';
   const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;

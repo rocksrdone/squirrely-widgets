@@ -684,6 +684,13 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
           target: Number(columnAsArray(locT, LOC.target)[i]) || 0,
           max: Number(columnAsArray(locT, LOC.max)[i]) || 0,
         });
+        // Regular bins follow Settings unless the bin has its own numbers;
+        // customer order boxes (Reserved_For) keep no cap.
+        const L = locations[locations.length - 1];
+        if (!L.reservedFor) {
+          if (!L.target) L.target = SSSettings.num('Back_Stock_Bin_Target', 100);
+          if (!L.max) L.max = SSSettings.num('Back_Stock_Bin_Capacity', 150);
+        }
       });
     }
   }

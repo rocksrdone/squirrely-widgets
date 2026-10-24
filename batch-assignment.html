@@ -359,7 +359,7 @@ let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status str
 /* Bin capacity comes from Storage_Locations.Max_Spools, per bin; 60 only
    when a bin has none set. Every screen that picks a bin reads the same
    numbers, so the kettle, Wind & Box and the Lot Desk agree on what "full" is. */
-let BIN_CAPACITY = 60;   // Settings.Back_Stock_Bin_Capacity
+let BIN_CAPACITY = 150;   // Settings.Back_Stock_Bin_Capacity
 const BIN_CAPS = {};
 function capOf(b) { const id = b && typeof b === 'object' ? b.id : b; return BIN_CAPS[id] || BIN_CAPACITY; }
 
@@ -633,7 +633,7 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   await SSSettings.load();
-  BIN_CAPACITY = SSSettings.num('Back_Stock_Bin_Capacity', 60);
+  BIN_CAPACITY = SSSettings.num('Back_Stock_Bin_Capacity', 150);
   POT_SIZES = SSSettings.list('Pot_Size_Buttons', [5, 6, 7, 8, 9, 10]);
   PUTAWAY_DEFAULT_ML = SSSettings.num('Putaway_Default_mL', 20);
 
