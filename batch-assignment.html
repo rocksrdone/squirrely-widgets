@@ -512,6 +512,9 @@ function todayEpochSeconds() {
 let currentEntry = null;
 let completedActions = {}; // cleanupInfo idx -> {label, undo: asyncFn} for dye cleanup actions
 let paOpen = false;        // the dye put-away pop-out
+/* mL pre-filled in each dye's box (what usually goes back in a bin). Settings
+   key Putaway_Default_mL overrides it; tapping the box selects it for retyping. */
+let PUTAWAY_DEFAULT_ML = 20;
 
 /* ── Put-away memory ───────────────────────────────────────────────────────
    Once a pot is logged, that recipe's dyes are "on the table" until each one
@@ -622,7 +625,7 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
-    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront, mixPartsTable] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront, mixPartsTable, settingsTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
@@ -630,7 +633,13 @@ async function loadForRecipe(record) {
       grist.docApi.fetchTable('Dyes'),
       grist.docApi.fetchTable('Dye_Stock'),
       grist.docApi.fetchTable('Dye_Mix_Parts').catch(() => null),
+      grist.docApi.fetchTable('Settings').catch(() => null),
     ]);
+    if (settingsTable) {
+      const kC = findColumn(settingsTable, ['Key']), vC = findColumn(settingsTable, ['Value']);
+      const i = columnAsArray(settingsTable, kC).indexOf('Putaway_Default_mL');
+      if (i >= 0) { const v = Number(columnAsArray(settingsTable, vC)[i]); PUTAWAY_DEFAULT_ML = v >= 0 ? v : PUTAWAY_DEFAULT_ML; }
+    }
 
     // Coverage is DERIVED, never stored: what orders need, minus what's already
     // been allocated to them, minus unwound spools still sitting in lots. A stored
@@ -1235,7 +1244,7 @@ function render() {
         <div class="dye-block-name">${esc(c.dyeDetail)}</div>
         <div class="dye-block-why">${why}</div>
         <div class="btn-row">
-          <input type="number" class="ml-input" id="qty-${idx}" placeholder="mL" min="0" max="999" maxlength="3">
+          <input type="number" class="ml-input" id="qty-${idx}" placeholder="mL" min="0" max="999" maxlength="3" value="${PUTAWAY_DEFAULT_ML || ''}" onfocus="this.select()">
           ${stageBtn}
           ${binBtn}
           <button class="act-btn dump" onclick="dumpDye(${idx})">Dump</button>
