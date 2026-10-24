@@ -350,6 +350,9 @@ async function loadEverything() {
         if (lo) byLot[lo] = (byLot[lo] || 0) + q;
       });
       const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
+      const lY = findColumn(lotsT, ['Total_Yards_Made']), lF = findColumn(lotsT, ['Fiber']);
+      // Same yards-per-spool rule as stock-ops.js / batch-assignment: E nylon 150, else 100.
+      const ydsPer = f => /^\s*(EN|E\s*Nylon)\s*$/i.test(String(f || '')) ? 150 : 100;
       // Only spools that CANNOT fill an order reduce coverage: committed to a shop
       // (store/vendor) or broken. Back stock is the whole point of back stock — it
       // fills orders, so it counts as coverage, it does not cancel it out.
@@ -361,7 +364,13 @@ async function loadEverything() {
         const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
         if (!rid) return;
         const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
-        let free = (lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0) - (byLot[id] || 0) - back;
+        const hankEst = cHank ? Number(columnAsArray(lotsT, cHank)[i]) || 0 : 0;
+        let made = lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0;
+        // Older lots have yards but no Spools_Made. Without this fallback their
+        // allocations count against today's lots (stock model v2). Never for a
+        // hank lot — its yardage is tracked by Hank_Est_Spools instead.
+        if (!made && !hankEst && lY) made = Math.round((Number(columnAsArray(lotsT, lY)[i]) || 0) / ydsPer(lF ? columnAsArray(lotsT, lF)[i] : ''));
+        let free = made - (byLot[id] || 0) - back;
         spoken.forEach(c => { if (c) free -= Number(columnAsArray(lotsT, c)[i]) || 0; });
         // Hank was never wound, so it is not part of Spools_Made: add it back
         // (stock model v2 — Hank_Est_Spools is inside General/Vendor).
