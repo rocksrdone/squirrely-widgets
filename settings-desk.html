@@ -168,8 +168,17 @@ let rows = [], cols = {}, pageLinks = {}, query = '';
    referrer gives the doc's address; page ids come from _grist_Views by name. */
 async function loadPageLinks() {
   pageLinks = {};
+  /* Grist only shares its origin as the referrer, so the document address
+     comes from the widget's access token: baseUrl is …/api/docs/<docId>. */
   let base = '';
-  try { const r = new URL(document.referrer); const m = r.pathname.match(/^\/[^/]+(?:\/[^/]+)?/); base = r.origin + (m ? m[0] : ''); } catch (e) {}
+  try {
+    const tok = await (grist.getAccessToken ? grist.getAccessToken({ readOnly: true }) : grist.docApi.getAccessToken({ readOnly: true }));
+    const m = String(tok && tok.baseUrl || '').match(/^(https?:\/\/[^/]+)\/(?:o\/[^/]+\/)?api\/docs\/([^/?#]+)/);
+    if (m) base = `${m[1]}/${m[2]}`;
+  } catch (e) { /* older Grist — fall back to the referrer below */ }
+  if (!base) {
+    try { const r = new URL(document.referrer); const m = r.pathname.match(/^\/[^/]+(?:\/[^/]+)?/); if (m && m[0].length > 1) base = r.origin + m[0]; } catch (e) {}
+  }
   if (!base) return;
   try {
     const v = await grist.docApi.fetchTable('_grist_Views');
