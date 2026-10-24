@@ -174,7 +174,13 @@ async function loadPageLinks() {
   try {
     const tok = await (grist.getAccessToken ? grist.getAccessToken({ readOnly: true }) : grist.docApi.getAccessToken({ readOnly: true }));
     const m = String(tok && tok.baseUrl || '').match(/^(https?:\/\/[^/]+)\/(?:o\/[^/]+\/)?api\/docs\/([^/?#]+)/);
-    if (m) base = `${m[1]}/${m[2]}`;
+    if (m) {
+      /* Page links are /<docId>/<name-slug>/p/<page>; without the slug Grist
+         reads "p" as the name and opens the first page instead. */
+      let slug = 'doc';
+      try { const n = await grist.docApi.getDocName(); if (n) slug = String(n).trim().replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'doc'; } catch (e) {}
+      base = `${m[1]}/${m[2]}/${slug}`;
+    }
   } catch (e) { /* older Grist — fall back to the referrer below */ }
   if (!base) {
     try { const r = new URL(document.referrer); const m = r.pathname.match(/^\/[^/]+(?:\/[^/]+)?/); if (m && m[0].length > 1) base = r.origin + m[0]; } catch (e) {}
