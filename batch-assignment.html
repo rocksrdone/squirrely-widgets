@@ -53,6 +53,14 @@ body {
 
 /* Put-away board. Sized to be read from where the bins are, not from the chair —
    that walk-and-squint loop was the whole problem. */
+.mix-add { border-top: 1px dashed #D4C9BC; margin-top: 12px; padding-top: 10px; }
+.mix-add-cap { font-size: 13px; font-weight: 600; color: #6B5E52; margin-bottom: 6px; }
+.mix-add .act-btn { margin: 0 6px 6px 0; }
+.mix-add-note { font-size: 13px; color: #27500A; margin-bottom: 6px; }
+.mix-add-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.mix-sel { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid #D4C9BC; border-radius: 6px; background: #fff; color: #1A1614; max-width: 100%; flex: 1 1 220px; }
+.mix-sel.small { flex: 0 1 140px; }
+.dye-block.extra { border-left-color: #7A5CA8; }
 .putaway {
   border: 2px solid var(--done-border); border-radius: 8px;
   background: var(--done-bg); padding: 6px 9px; margin: 4px 0 7px;
@@ -557,6 +565,49 @@ function paLeftovers(exceptId) {
     left: Object.keys(rec.dyes).filter(d => !rec.decided[d]).map(d => rec.dyes[d]),
   })).filter(x => x.rid !== exceptId && x.left.length);
 }
+/* ── Extra dyes used to make a custom mix ──────────────────────────────────
+   A recipe's components list the custom mix, not the dyes it was made from.
+   When a fresh batch of the mix is made, those ingredient dyes come off the
+   shelf too and need putting away. They are added here per recipe for the
+   day (this browser), and then handled exactly like the recipe's own dyes. */
+const MIX_KEY = () => 'ss-mixextras-' + new Date().toISOString().slice(0, 10);
+function mixLoad() { try { return JSON.parse(localStorage.getItem(MIX_KEY()) || '{}') || {}; } catch (e) { return {}; } }
+function mixSave(st) { try { localStorage.setItem(MIX_KEY(), JSON.stringify(st)); } catch (e) { /* memory only */ } }
+let mixExtras = mixLoad();           // recipeId -> [{dyeId, mix}]
+function extrasFor(rid) { return mixExtras[rid] || []; }
+async function addExtraDyes(list) {
+  const e = currentEntry; if (!e || !list.length) return;
+  paSync();
+  const cur = mixExtras[e.recipeId] = mixExtras[e.recipeId] || [];
+  const have = new Set(e.cleanupInfo.map(c => c.dyeId));
+  let added = 0;
+  list.forEach(x => { if (!have.has(x.dyeId)) { cur.push(x); have.add(x.dyeId); added++; } });
+  mixSave(mixExtras);
+  if (!added) { showToast('Already on the list'); return; }
+  const keepOpen = paOpen;
+  await loadForRecipe({ id: e.recipeId });
+  const rec = paState[e.recipeId];
+  if (rec && currentEntry) { currentEntry.cleanupInfo.forEach(c => { rec.dyes[c.dyeId] = c.dyeDetail; }); paSave(paState); }
+  paOpen = keepOpen; render();
+  showToast(`Added ${added} dye${added > 1 ? 's' : ''} to put away`);
+}
+function addMixParts(mixId) {
+  const e = currentEntry; const m = e && (e.mixes || []).find(x => x.mixId === mixId); if (!m) return;
+  addExtraDyes(m.parts.map(p => ({ dyeId: p.dyeId, mix: m.mixName })));
+}
+function addOtherDye() {
+  const sel = document.getElementById('extraDyeSel'); const id = sel ? Number(sel.value) : 0;
+  if (!id) { showToast('Pick a dye first'); return; }
+  const mixSel = document.getElementById('extraMixSel');
+  addExtraDyes([{ dyeId: id, mix: mixSel && mixSel.value ? mixSel.value : '' }]);
+}
+async function removeExtraDye(dyeId) {
+  const e = currentEntry; if (!e) return;
+  paSync();
+  mixExtras[e.recipeId] = extrasFor(e.recipeId).filter(x => x.dyeId !== dyeId); mixSave(mixExtras);
+  const rec = paState[e.recipeId]; if (rec) { delete rec.dyes[dyeId]; delete rec.decided[dyeId]; paSave(paState); }
+  const keepOpen = paOpen; await loadForRecipe({ id: e.recipeId }); paOpen = keepOpen; render();
+}
 function openRecipe(rid) { sessionPots = []; paOpen = false; loadForRecipe({ id: rid }); }
 function openPutAway() { paOpen = true; render(); }
 function closePutAway() { paOpen = false; render(); }
@@ -571,13 +622,14 @@ async function loadForRecipe(record) {
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
   try {
-    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront, mixPartsTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
       grist.docApi.fetchTable('Recipes'),
       grist.docApi.fetchTable('Dyes'),
       grist.docApi.fetchTable('Dye_Stock'),
+      grist.docApi.fetchTable('Dye_Mix_Parts').catch(() => null),
     ]);
 
     // Coverage is DERIVED, never stored: what orders need, minus what's already
@@ -803,7 +855,19 @@ async function loadForRecipe(record) {
       });
     });
 
-    const dyeIds = dyesByRecipeId[record.id] || [];
+    const recipeDyeIds = dyesByRecipeId[record.id] || [];
+    // Custom mixes in this recipe that have a formula, and their ingredients.
+    const partsByMix = {};
+    if (mixPartsTable) {
+      const mCol = findColumn(mixPartsTable, ['Mix']), iCol = findColumn(mixPartsTable, ['Ingredient']), sCol = findColumn(mixPartsTable, ['Sort']);
+      (mixPartsTable.id || []).forEach((id, i) => {
+        const mix = getRefId(columnAsArray(mixPartsTable, mCol)[i]), ing = getRefId(columnAsArray(mixPartsTable, iCol)[i]);
+        if (mix && ing) (partsByMix[mix] = partsByMix[mix] || []).push({ dyeId: ing, sort: Number(columnAsArray(mixPartsTable, sCol)[i]) || 0 });
+      });
+    }
+    const extras = extrasFor(record.id).filter(x => !recipeDyeIds.includes(x.dyeId));
+    const extraFor = {}; extras.forEach(x => { extraFor[x.dyeId] = x.mix || ''; });
+    const dyeIds = recipeDyeIds.concat(extras.map(x => x.dyeId));
     // Read the selected recipe's SKU from the resolved Recipes table rather than the
     // raw onRecord payload, so a SKU_Base rename doesn't silently break matching.
     const recipeSku = recipeSkuById[record.id] || '';
@@ -995,6 +1059,7 @@ async function loadForRecipe(record) {
       const binSuggestion = suggestBinFor(dyeId);
       return {
         dyeId,
+        extra: dyeId in extraFor, extraFor: extraFor[dyeId] || '',
         dyeName: dyeShortName(dyeId),
         dyeDetail: dyeDisplayLabel(dyeId),
         isOneOff: others.length === 0,
@@ -1023,7 +1088,10 @@ async function loadForRecipe(record) {
       recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
       fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
       method: recipeMethodById[record.id] || record.Dye_Method || '',
-      dyeCount: dyeIds.length, orders, cleanupInfo,
+      dyeCount: recipeDyeIds.length, orders, cleanupInfo,
+      mixes: recipeDyeIds.filter(id => partsByMix[id]).map(id => ({ mixId: id, mixName: dyeShortName(id),
+        parts: partsByMix[id].sort((a, b) => a.sort - b.sort).map(p => ({ dyeId: p.dyeId, label: dyeShortName(p.dyeId) })) })),
+      allDyes: (dyesTable.id || []).map(id => ({ id, label: dyeDisplayLabel(id) })).sort((a, b) => a.label.localeCompare(b.label)),
       outstanding, inBins, inStock,
       stockLots: stockLotsByRecipe[record.id] || [],
       stillToMake: Math.max(0, outstanding - inBins - inStock),
@@ -1128,7 +1196,10 @@ function render() {
 
     // Why-line trimmed to the shortest thing that still changes what you do.
     let cls = 'oneoff', why;
-    if (c.staging) {
+    if (c.extra) {
+      cls = 'extra';
+      why = `used to make ${c.extraFor ? esc(c.extraFor) : 'a custom mix'} <span class="undo-link" onclick="removeExtraDye(${c.dyeId})" title="Take it off this list">remove</span>`;
+    } else if (c.staging) {
       cls = 'stage';
       // Recipe name alongside the number: if the plan shifts under you, the name
       // is what you match against the sheet on the shelf.
@@ -1196,6 +1267,20 @@ function render() {
       <div class="lo-row"><span><b>${esc(o.name)}</b> — ${o.left.map(esc).join(', ')}</span>
         <button onclick="openRecipe(${o.rid})">Put away</button></div>`).join('')}</div>` : '';
 
+  // Made a fresh batch of a custom mix? Add the dyes it was made from.
+  const onList = new Set(e.cleanupInfo.map(c => c.dyeId));
+  const mixAddHtml = `<div class="mix-add">
+      <div class="mix-add-cap">Made a fresh batch of a custom mix? Add the dyes used to make it</div>
+      ${(e.mixes || []).map(m => { const missing = m.parts.filter(p => !onList.has(p.dyeId));
+        return missing.length ? `<button class="act-btn" onclick="addMixParts(${m.mixId})">+ ${esc(m.mixName)} parts: ${missing.map(p => esc(p.label)).join(', ')}</button>`
+          : `<div class="mix-add-note">✓ ${esc(m.mixName)} parts are on the list</div>`; }).join('')}
+      <div class="mix-add-row">
+        <select id="extraDyeSel" class="mix-sel"><option value="">Another dye used…</option>${(e.allDyes || []).filter(d => !onList.has(d.id)).map(d => `<option value="${d.id}">${esc(d.label)}</option>`).join('')}</select>
+        ${(e.mixes || []).length ? `<select id="extraMixSel" class="mix-sel small"><option value="">for…</option>${e.mixes.map(m => `<option value="${esc(m.mixName)}">${esc(m.mixName)}</option>`).join('')}</select>` : ''}
+        <button class="act-btn" onclick="addOtherDye()">Add</button>
+      </div>
+    </div>`;
+
   // The dye decisions live in a pop-out: big, and never scrolled out of sight.
   const total = e.cleanupInfo.length;
   const doneN = e.cleanupInfo.filter((c, idx) => completedActions[idx]).length;
@@ -1205,7 +1290,7 @@ function render() {
   const paOverlay = paOpen && total ? `<div class="pa-ov"><div class="pa-panel">
       <div class="pa-head"><span class="t">Put away dyes — ${esc(e.recipeName)}</span>
         <button class="pa-close" onclick="closePutAway()">Done ✕</button></div>
-      ${putAwayHtml}${cleanupHtml}
+      ${putAwayHtml}${cleanupHtml}${mixAddHtml}
     </div></div>` : '';
 
   document.getElementById('content').innerHTML = paOverlay + `
