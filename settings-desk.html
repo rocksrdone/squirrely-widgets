@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings Desk</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600&display=swap');
+  :root { --ink:#1A1614; --paper:#F7F3EE; --warm:#E8DFD4; --rule:#D4C9BC; --muted:#6B5E52; --faint:#8B7D72;
+          --accent:#8B3A2A; --teal:#3A8B7A; --teal-light:#E5F2EF; --gold:#B07D2A; --gold-light:#F5EDD8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.45; }
+  .wrap { padding: 14px 16px 40px; max-width: 1100px; }
+  h1 { font-family: 'Libre Baskerville', serif; font-size: 19px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .bar input { flex: 1 1 220px; font: inherit; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 7px; background: #fff; }
+  .btn { font: inherit; font-weight: 600; padding: 7px 12px; border-radius: 7px; border: 1.5px solid var(--teal); background: #fff; color: #2C6B5E; cursor: pointer; }
+  .btn.solid { background: var(--teal); color: #fff; }
+  .btn.sm { font-size: 12px; padding: 4px 9px; }
+  .btn.ghost { border-color: var(--rule); color: var(--muted); }
+  .hub { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .card { background: #fff; border: 1px solid var(--warm); border-radius: 9px; padding: 10px 12px; }
+  .card h3 { margin: 0 0 4px; font-size: 13.5px; }
+  .card .what { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .card .stat { font-size: 12.5px; margin-bottom: 6px; }
+  .card a { color: var(--accent); font-weight: 600; font-size: 12.5px; margin-right: 10px; text-decoration: none; }
+  .card a:hover { text-decoration: underline; }
+  .area { margin-bottom: 18px; }
+  .area h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px;
+             border-bottom: 1.5px solid var(--rule); padding-bottom: 4px; display: flex; justify-content: space-between; align-items: baseline; }
+  .row { display: grid; grid-template-columns: minmax(170px, 1.1fr) 150px minmax(200px, 2fr); gap: 10px; align-items: start;
+         padding: 8px 0; border-bottom: 1px solid var(--warm); }
+  .row:last-child { border-bottom: none; }
+  .name b { display: block; font-size: 13px; }
+  .name code { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--faint); }
+  .val { display: flex; gap: 5px; align-items: center; }
+  .val input { width: 100%; font: inherit; font-family: 'DM Mono', monospace; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .val input.changed { border-color: var(--gold); background: var(--gold-light); }
+  .val .unit { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .notes { color: var(--ink); font-size: 12.5px; }
+  .notes .def { color: var(--faint); font-size: 11.5px; }
+  .chips { margin-top: 3px; }
+  .chip { display: inline-block; background: var(--teal-light); color: #2C6B5E; border-radius: 4px; padding: 0 6px; font-size: 11px; margin: 2px 4px 0 0; }
+  .missing { background: #FBF6EC; }
+  .missing .flag { color: var(--gold); font-size: 11.5px; font-weight: 600; }
+  .warn { color: #A3341F; font-size: 11.5px; font-weight: 600; }
+  .toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px;
+           border-radius: 7px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; }
+  .empty { padding: 40px; color: var(--muted); text-align: center; }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">Loading settings…</div></div>
+<div class="toast" id="toast"></div>
+<script>
+/* ── Settings Desk ───────────────────────────────────────────────────────────
+   One place for the numbers that make the widgets work: everything in the
+   Settings table (Key / Value / Text / Unit / Area / Notes / Used_By), grouped
+   by area and editable here, plus a card for each other setup area with a
+   link to its page. Widgets read Settings through settings.js and fall back to
+   the defaults below, so a blank or missing row is never a breakage.
+
+   REGISTRY lists every setting a widget reads. When adding a setting to a
+   widget, add it here too so it shows up (and can be added) on this page.
+   ─────────────────────────────────────────────────────────────────────────── */
+const REGISTRY = [
+  // Bins & racks
+  { key: 'Back_Stock_Bin_Capacity', area: 'Bins & racks', def: 60, unit: 'spools', usedBy: ['Batch Assignment', 'Wind & Box', 'Print Day', 'Lot Desk', 'Jobs', 'Inventory Desk', 'Morning Batch Planning'],
+    notes: 'Spools a back-stock bin holds comfortably. A bin with its own Max_Spools in Storage_Locations uses that instead.' },
+  { key: 'Dye_Bin_Jar_Capacity', area: 'Bins & racks', def: 12, unit: 'jars', usedBy: ['Batch Assignment', 'Dye Stock'],
+    notes: 'Premade dye jars one made-dye bin holds.' },
+  { key: 'Dye_Bin_Unrelated_Cap', area: 'Bins & racks', def: 6, unit: 'jars', usedBy: ['Batch Assignment', 'Dye Stock'],
+    notes: 'Unrelated dyes may only fill a bin up to this many jars, leaving room for related dyes to join later.' },
+  { key: 'Dye_Rack_Columns', area: 'Bins & racks', def: 4, unit: 'columns', usedBy: ['Batch Assignment', 'Batch Planner', 'Bin Audit', 'Day Board', 'Dye Prep Sheet', 'Dye Stock', 'Morning Batch Planning', 'Recipe Card'],
+    notes: 'Columns (letters) on the made-dye rack, M-A… up to M-L. Adding columns adds bins; existing bin codes keep their place.', min: 1, max: 12 },
+  { key: 'Dye_Rack_Rows', area: 'Bins & racks', def: 4, unit: 'rows', usedBy: ['Batch Assignment', 'Batch Planner', 'Bin Audit', 'Day Board', 'Dye Prep Sheet', 'Dye Stock', 'Morning Batch Planning', 'Recipe Card'],
+    notes: 'Rows (numbers) on the made-dye rack. ⚠ Changing this renumbers bins — only change it when the rack itself is rebuilt, then re-check jar bins in Bin Audit.', min: 1, max: 99, warn: true },
+  // Batch Assignment
+  { key: 'Pot_Size_Buttons', area: 'Batch Assignment', def: '5, 6, 7, 8, 9, 10', text: true, unit: 'spools', usedBy: ['Batch Assignment'],
+    notes: 'Quick buttons for spools per pot when logging a pot. Comma-separated.' },
+  { key: 'Putaway_Default_mL', area: 'Batch Assignment', def: 20, unit: 'mL', usedBy: ['Batch Assignment'],
+    notes: 'Pre-filled in each dye’s mL box when putting dyes away.' },
+  // Thread
+  { key: 'Yards_Per_Spool', area: 'Thread', def: 100, unit: 'yd', usedBy: ['Batch Assignment', 'Morning Batch Planning', 'Lot Desk', 'Jobs', 'Inventory Desk'],
+    notes: 'Yards on a spool. Used to count older lots that have yards but no spool count.' },
+  { key: 'Yards_Per_Spool_E_Nylon', area: 'Thread', def: 150, unit: 'yd', usedBy: ['Batch Assignment', 'Morning Batch Planning', 'Lot Desk', 'Jobs', 'Inventory Desk'],
+    notes: 'Yards on an E nylon spool, for the same purpose.' },
+  // Planning
+  { key: 'Planning_Window_Days', area: 'Planning', def: 14, unit: 'days', usedBy: ['Morning Batch Planning'],
+    notes: 'When an order has no due date, it is treated as due this many days after it was placed.' },
+  { key: 'Lot_Old_Days', area: 'Planning', def: 14, unit: 'days', usedBy: ['Lot Desk'],
+    notes: 'A lot waiting longer than this is highlighted as old.' },
+  { key: 'Lot_Recent_Days', area: 'Planning', def: 14, unit: 'days', usedBy: ['Lot Desk'],
+    notes: 'How far back “Recently put away” lists lots.' },
+  // Payroll
+  { key: 'Pay_Period_Split_Day', area: 'Payroll', def: 14, unit: 'day of month', usedBy: ['Payroll Hours'],
+    notes: 'Last day of the first pay period (1st–this day, then the next day–end of month).', min: 1, max: 27 },
+  { key: 'Long_Shift_Warning_Hours', area: 'Payroll', def: 16, unit: 'hours', usedBy: ['Payroll Hours'],
+    notes: 'A single punch longer than this is flagged as a probable missed clock-out.' },
+  // Shipping
+  { key: 'Ship_Weight_Round_Up_oz', area: 'Shipping', def: 1, unit: 'oz', usedBy: ['Shipping Setup'],
+    notes: 'Package weights round up to the next multiple of this (0 = no rounding).' },
+  // Kettle
+  { key: 'Kettle_Pot_Temp_F_Default', area: 'Kettle dye', def: 180, unit: '°F', usedBy: ['Recipe Card'], notes: 'Pot temperature when a kettle recipe has none set.' },
+  { key: 'Stock_Container_mL', area: 'Kettle dye', def: 350, unit: 'mL', usedBy: ['Recipe Card'], notes: 'Largest container used to mix stock solution; bigger amounts are split into equal containers.' },
+  { key: 'Stock_Spare_mL', area: 'Kettle dye', def: 5, unit: 'mL', usedBy: ['Recipe Card'], notes: 'Extra stock mixed so the pot never runs short.' },
+  { key: 'Yarn_Ties_Weight_g', area: 'Kettle dye', def: 2.1, unit: 'g', usedBy: ['Recipe Card'], notes: 'Weight of the ties on a bundle; taken off the weighed thread.' },
+  { key: 'Wet_Thread_Factor', area: 'Kettle dye', def: 2, unit: '× dry', usedBy: ['Recipe Card'], notes: 'Presoaked, squeezed thread weighs about this many times its dry weight (for the burner weight check).' },
+  { key: 'Heat_Efficiency', area: 'Kettle dye', def: 0.7, unit: '×', usedBy: ['Recipe Card'], notes: 'Share of burner power reaching the water. Lower it if real heat-ups are slower than the card says.' },
+  { key: 'Start_Water_Temp_F', area: 'Kettle dye', def: 140, unit: '°F', usedBy: ['Recipe Card'], notes: 'Temperature of the water going into the pot (hottest tap measured 140°F).' },
+  { key: 'Turnover_min', area: 'Kettle dye', def: 15, unit: 'min', usedBy: ['Recipe Card'], notes: 'Changeover between rounds: thread out, pot to cooling, next pot filled and on.' },
+  { key: 'Kettle_Day_Hours', area: 'Kettle dye', def: 5, unit: 'hours', usedBy: ['Recipe Card'], notes: 'Default hours for kettle dyeing in a day (can be changed on the card).' },
+];
+const AREA_ORDER = ['Bins & racks', 'Batch Assignment', 'Thread', 'Planning', 'Payroll', 'Shipping', 'Kettle dye'];
+const AREA_ALIAS = { 'Kettle': 'Kettle dye' };
+
+/* Other setup areas, each a card with a quick summary and links to its pages. */
+const HUB = [
+  { title: 'Kettle equipment', what: 'Burners (watts, weight limits) and pots (empty weight, fill level, which is in use).',
+    pages: ['Kettle_Burners', 'Kettle_Pots'], stat: async () => {
+      const b = await opt('Kettle_Burners'), p = await opt('Kettle_Pots');
+      if (!b && !p) return 'Tables not found.';
+      const act = b ? (b.id || []).filter((id, i) => b.Active && b.Active[i]).length : 0;
+      const use = p ? (p.id || []).map((id, i) => p.In_Use && p.In_Use[i] ? p.Pot_Name[i] : null).filter(Boolean) : [];
+      return `${act} active burner${act === 1 ? '' : 's'} · in use: ${use.map(esc).join(', ') || 'none'}`; } },
+  { title: 'Costs & pricing', what: 'Cost settings (spools per lot, order, month), cost components and supplies.',
+    pages: ['Cost Desk', 'Cost_Settings', 'Supplies'], stat: async () => {
+      const c = await opt('Cost_Settings'), s = await opt('Supplies');
+      return `${c ? (c.id || []).length : 0} cost settings · ${s ? (s.id || []).length : 0} supplies`; } },
+  { title: 'Shipping', what: 'Box and mailer weights and item weights (Shipping Setup on the Setup page).',
+    pages: ['Setup', 'Packaging', 'Item_Weights'], stat: async () => {
+      const p = await opt('Packaging'), w = await opt('Item_Weights');
+      return `${p ? (p.id || []).length : 0} packaging · ${w ? (w.id || []).length : 0} item weights`; } },
+  { title: 'Labels & printer', what: 'Label templates, label stock and printer calibration (Label Setup on the Setup page).',
+    pages: ['Setup'], stat: async () => {
+      const t = await opt('Label_Templates'), c = await opt('Printer_Calibrations');
+      return `${t ? (t.id || []).length : 0} templates · ${c ? (c.id || []).length : 0} calibrations`; } },
+  { title: 'Products', what: 'Per product: yards per spool, spool and thread weight, customs details.',
+    pages: ['Products'], stat: async () => { const p = await opt('Products'); return `${p ? (p.id || []).length : 0} products`; } },
+  { title: 'Bins (back stock)', what: 'Each bin’s code, fiber, reserved customer and its own Max_Spools (overrides the default capacity).',
+    pages: ['Storage_Locations'], stat: async () => {
+      const l = await opt('Storage_Locations'); if (!l) return 'Table not found.';
+      const own = (l.id || []).filter((id, i) => Number(l.Max_Spools && l.Max_Spools[i]) > 0).length;
+      return `${(l.id || []).length} bins · ${own} with their own capacity`; } },
+];
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const tableCache = {};
+async function opt(name) {
+  if (name in tableCache) return tableCache[name];
+  try { tableCache[name] = await grist.docApi.fetchTable(name); } catch (e) { tableCache[name] = null; }
+  return tableCache[name];
+}
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); }
+const pretty = k => k.replace(/_/g, ' ').replace(/\bmL\b/i, 'mL').replace(/\bml\b/, 'mL').replace(/\b(F|oz|g)\b$/, '($1)');
+
+let rows = [], cols = {}, pageLinks = {}, query = '';
+
+/* Grist page links. The widget sits in an iframe on the doc page, so the
+   referrer gives the doc's address; page ids come from _grist_Views by name. */
+async function loadPageLinks() {
+  pageLinks = {};
+  let base = '';
+  try { const r = new URL(document.referrer); const m = r.pathname.match(/^\/[^/]+(?:\/[^/]+)?/); base = r.origin + (m ? m[0] : ''); } catch (e) {}
+  if (!base) return;
+  try {
+    const v = await grist.docApi.fetchTable('_grist_Views');
+    (v.id || []).forEach((id, i) => { pageLinks[v.name[i]] = `${base}/p/${id}`; });
+  } catch (e) { /* no metadata access — cards show without links */ }
+}
+
+async function load() {
+  delete tableCache.Settings;
+  const t = await grist.docApi.fetchTable('Settings');
+  cols = { text: 'Text' in t, unit: 'Unit' in t, area: 'Area' in t, notes: 'Notes' in t, usedBy: 'Used_By' in t };
+  rows = (t.id || []).map((id, i) => ({ id, key: t.Key[i] || '', value: t.Value ? t.Value[i] : null, text: cols.text ? t.Text[i] || '' : '',
+    unit: cols.unit ? t.Unit[i] || '' : '', area: cols.area ? t.Area[i] || '' : '', notes: cols.notes ? t.Notes[i] || '' : '',
+    usedBy: cols.usedBy ? t.Used_By[i] || '' : '' })).filter(r => r.key);
+  render();
+}
+
+function regFor(key) { return REGISTRY.find(r => r.key === key); }
+
+function render() {
+  const q = query.trim().toLowerCase();
+  const match = (key, notes, used) => !q || [key, notes, used].join(' ').toLowerCase().includes(q);
+  const groups = {};
+  const put = (area, item) => { (groups[area] = groups[area] || []).push(item); };
+  const seen = new Set();
+  rows.forEach(r => {
+    const reg = regFor(r.key);
+    const area = AREA_ALIAS[r.area] || r.area || (reg && reg.area) || 'Other';
+    seen.add(r.key);
+    put(area, { r, reg });
+  });
+  REGISTRY.forEach(reg => { if (!seen.has(reg.key)) put(reg.area, { r: null, reg }); });
+  const areas = Object.keys(groups).sort((a, b) => {
+    const ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+  const missingN = REGISTRY.filter(reg => !seen.has(reg.key)).length;
+
+  const rowHtml = ({ r, reg }) => {
+    const key = r ? r.key : reg.key;
+    const used = r && r.usedBy ? r.usedBy.split(/\s*,\s*/).filter(Boolean) : (reg ? reg.usedBy : []);
+    const notes = (r && r.notes) || (reg && reg.notes) || '';
+    if (!match(key, notes, used.join(' '))) return '';
+    const isText = reg ? !!reg.text : (r && (r.value === null || r.value === '') && r.text);
+    const unit = (r && r.unit) || (reg && reg.unit) || '';
+    const def = reg ? `default ${esc(reg.def)}${unit && !reg.text ? ' ' + esc(unit) : ''}` : '';
+    const cur = r ? (isText ? r.text : (r.value == null ? '' : r.value)) : '';
+    const differs = reg && r && String(cur).replace(/\s/g, '') !== String(reg.def).replace(/\s/g, '');
+    const input = r
+      ? `<input data-id="${r.id}" data-key="${esc(key)}" data-text="${isText ? 1 : ''}" value="${esc(cur)}" placeholder="${reg ? esc(reg.def) : ''}"
+           ${isText ? '' : 'inputmode="decimal"'} onchange="save(this)" onkeydown="if(event.key==='Enter')this.blur()" title="${esc(def)}">`
+      : `<button class="btn sm" onclick="addOne('${esc(key)}')">Add (${esc(reg.def)})</button>`;
+    return `<div class="row ${r ? '' : 'missing'}">
+      <div class="name"><b>${esc(pretty(key))}</b><code>${esc(key)}</code>${r ? '' : '<div class="flag">Not in Settings — widgets use the default</div>'}</div>
+      <div class="val">${input}${r && unit ? `<span class="unit">${esc(unit)}</span>` : ''}</div>
+      <div class="notes">${esc(notes)}${reg && reg.warn ? '' : ''}
+        <div class="def">${def}${differs ? ' · <b>changed</b>' : ''}${reg && r && differs ? ` · <a href="#" onclick="event.preventDefault();resetOne(${r.id})">reset</a>` : ''}</div>
+        ${used.length ? `<div class="chips">${used.map(u => `<span class="chip">${esc(u)}</span>`).join('')}</div>` : ''}</div>
+    </div>`;
+  };
+
+  const areaHtml = areas.map(a => {
+    const inner = groups[a].sort((x, y) => {
+      const ix = REGISTRY.indexOf(x.reg), iy = REGISTRY.indexOf(y.reg);
+      return (ix < 0 ? 999 : ix) - (iy < 0 ? 999 : iy);
+    }).map(rowHtml).join('');
+    return inner ? `<div class="area"><h2><span>${esc(a)}</span></h2>${inner}</div>` : '';
+  }).join('');
+
+  const link = name => pageLinks[name] ? `<a href="${esc(pageLinks[name])}" target="_blank" rel="noopener">${esc(name.replace(/_/g, ' '))} ↗</a>` : '';
+  const hubHtml = HUB.map((h, i) => `<div class="card"><h3>${esc(h.title)}</h3><div class="what">${esc(h.what)}</div>
+      <div class="stat" id="hub${i}">…</div><div>${h.pages.map(link).join('')}</div></div>`).join('');
+
+  document.getElementById('app').innerHTML = `
+    <h1>Settings Desk</h1>
+    <div class="sub">The numbers that drive the widgets. Change a value and press Enter — widgets pick it up the next time they load (reload the page).
+      A blank or missing setting just uses its default, so nothing breaks.</div>
+    <div class="hub">${hubHtml}</div>
+    <div class="bar"><input placeholder="Search settings, notes or widget names…" value="${esc(query)}" oninput="query=this.value;render();this.focus();this.setSelectionRange(this.value.length,this.value.length)">
+      ${missingN ? `<button class="btn solid" onclick="addMissing()">Add ${missingN} missing setting${missingN > 1 ? 's' : ''} with defaults</button>` : ''}
+      <button class="btn ghost" onclick="load()">↻ Reload</button></div>
+    ${areaHtml || '<div class="empty">No settings match.</div>'}`;
+  HUB.forEach(async (h, i) => { try { const s = await h.stat(); const el = document.getElementById('hub' + i); if (el) el.innerHTML = s; } catch (e) {} });
+}
+
+function recordFor(reg) {
+  const rec = { Key: reg.key };
+  if (reg.text) { if (cols.text) rec.Text = String(reg.def); } else rec.Value = reg.def;
+  if (cols.unit) rec.Unit = reg.unit || '';
+  if (cols.area) rec.Area = reg.area;
+  if (cols.notes) rec.Notes = reg.notes;
+  if (cols.usedBy) rec.Used_By = reg.usedBy.join(', ');
+  return rec;
+}
+async function addOne(key) {
+  const reg = regFor(key); if (!reg) return;
+  try { await grist.docApi.applyUserActions([['AddRecord', 'Settings', null, recordFor(reg)]]); toast(`Added ${key}`); await load(); }
+  catch (e) { console.error(e); toast('Could not add — check access'); }
+}
+async function addMissing() {
+  const have = new Set(rows.map(r => r.key));
+  const acts = REGISTRY.filter(r => !have.has(r.key)).map(r => ['AddRecord', 'Settings', null, recordFor(r)]);
+  if (!acts.length) return;
+  try { await grist.docApi.applyUserActions(acts); toast(`Added ${acts.length} settings`); await load(); }
+  catch (e) { console.error(e); toast('Could not add — check access'); }
+}
+async function save(el) {
+  const id = Number(el.dataset.id), key = el.dataset.key, reg = regFor(key), isText = !!el.dataset.text;
+  const raw = el.value.trim();
+  let upd;
+  if (isText) upd = { Text: raw };
+  else {
+    if (raw === '') upd = { Value: null };
+    else {
+      const n = Number(raw);
+      if (!isFinite(n)) { toast('Enter a number'); el.focus(); return; }
+      if (reg && reg.min != null && n < reg.min) { toast(`Lowest allowed is ${reg.min}`); el.focus(); return; }
+      if (reg && reg.max != null && n > reg.max) { toast(`Highest allowed is ${reg.max}`); el.focus(); return; }
+      if (reg && reg.warn && !confirm(`${pretty(key)}: ${reg.notes}\n\nChange it to ${n}?`)) { load(); return; }
+      upd = { Value: n };
+    }
+  }
+  try { await grist.docApi.applyUserActions([['UpdateRecord', 'Settings', id, upd]]); el.classList.add('changed'); toast(`Saved ${pretty(key)}`); await load(); }
+  catch (e) { console.error(e); toast('Could not save — check access'); }
+}
+async function resetOne(id) {
+  const r = rows.find(x => x.id === id); const reg = r && regFor(r.key); if (!reg) return;
+  const upd = reg.text ? { Text: String(reg.def) } : { Value: reg.def };
+  try { await grist.docApi.applyUserActions([['UpdateRecord', 'Settings', id, upd]]); toast(`Reset ${pretty(r.key)} to ${reg.def}`); await load(); }
+  catch (e) { toast('Could not reset'); }
+}
+
+grist.ready({ requiredAccess: 'full' });
+(async () => {
+  try { await loadPageLinks(); await load(); }
+  catch (e) {
+    console.error(e);
+    document.getElementById('app').innerHTML = `<div class="empty">Could not read the Settings table. Give this widget full access, and check the table exists.</div>`;
+  }
+})();
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dye Stock</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -168,7 +169,14 @@ table.stock-table td { padding: 7px 10px; border-bottom: 1px solid var(--rule); 
 
    Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
    different rack, are not being renamed, and must NOT be passed to normBin. */
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Columns can grow or
+   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+function applyRackSettings() {
+  if (!window.SSSettings) return;
+  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+}
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
@@ -303,8 +311,8 @@ function toDateInputValue(dateVal) {
 let allDyes = [];    // {id, Dye_Name, Brand, Swatch_Hex, Cleanup_Order, Shelf_Life_days}
 let stockRows = [];  // {id, dyeId, Quantity_mL, Mixed_Date, Bin_Location}
 let coUsedDyes = {};  // dyeId -> Set of dyeIds used together with it in some recipe
-const BIN_CAPACITY = 12; // premade dye containers per bin
-const GENERIC_FILL_CAP = 6; // don't let unrelated fills use more than half a bin — leaves room for a related dye to join later
+let BIN_CAPACITY = 12; // premade dye containers per bin — Settings.Dye_Bin_Jar_Capacity
+let GENERIC_FILL_CAP = 6; // don't let unrelated fills use more than half a bin — leaves room for a related dye to join later
 
 function isTrueOneOff(dyeId) {
   const coUsed = coUsedDyes[dyeId];
@@ -456,6 +464,9 @@ function setStockSort(v) { stockSort = v; captureFocus(); renderStockPanel(); }
 function toggleGroupByBin() { stockGroupByBin = !stockGroupByBin; captureFocus(); renderStockPanel(); }
 
 async function loadAll() {
+  await SSSettings.load();
+  BIN_CAPACITY = SSSettings.num('Dye_Bin_Jar_Capacity', 12);
+  GENERIC_FILL_CAP = SSSettings.num('Dye_Bin_Unrelated_Cap', 6);
   try {
     const dyesTable = await grist.docApi.fetchTable('Dyes');
     const dc = (cands) => findColumn(dyesTable, cands);

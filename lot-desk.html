@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lot Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <script src="stock-ops.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
@@ -107,13 +108,16 @@ select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; fo
    saves in one go — every rule lives in stock-ops.js. */
 const { esc, num } = StockOps;
 const S = { model: null, sel: null, plan: null, search: '', log: [], busy: false, prob: null, fixed: {}, fix: null, fixDone: null, delAsk: false };
-const OLD_DAYS = 14;
+let OLD_DAYS = 14;   // Settings.Lot_Old_Days
 
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
 function age(d) { return d ? Math.floor((Date.now() / 1000 - d) / 86400) : null; }
 function fib(code, name) { return code ? `<span class="fib ${esc(code)}">${esc(code)}</span>` : (name ? `<span class="fib">${esc(name)}</span>` : ''); }
 
 async function load(keepSel) {
+  await SSSettings.load();
+  OLD_DAYS = SSSettings.num('Lot_Old_Days', 14);
+  RECENT_DAYS = SSSettings.num('Lot_Recent_Days', 14);
   try {
     S.model = await StockOps.load(grist.docApi);
   } catch (e) {
@@ -205,7 +209,7 @@ function renderList() {
   }));
 }
 
-const RECENT_DAYS = 14;
+let RECENT_DAYS = 14;   // Settings.Lot_Recent_Days
 const BUILDER_URL = (id) => `https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations/p/28#a1.s89.r${id}`;
 function recentlyPutAway() {
   const since = Date.now() / 1000 - RECENT_DAYS * 86400;

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Morning Batch Planning</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <script src="stock-ops.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
@@ -159,7 +160,14 @@
 
    Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
    different rack, are not being renamed, and must NOT be passed to normBin. */
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Columns can grow or
+   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+function applyRackSettings() {
+  if (!window.SSSettings) return;
+  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+}
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
@@ -256,7 +264,7 @@ function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : In
 // Every order gets an effective due date: the one you set, or Order_Date + this
 // many days when you haven't. Setting Due_Date later than the default pushes the
 // work down the list; setting it earlier pulls it up. One number, no second rule.
-const DEFAULT_WINDOW_DAYS = 14;
+let DEFAULT_WINDOW_DAYS = 14;   // Settings.Planning_Window_Days
 const DAY = 86400;
 function epoch(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : null; }
 function effectiveDue(orderDate, dueDate) {
@@ -316,6 +324,8 @@ function jumpToRecipe(recipeId) {
 }
 
 async function loadEverything() {
+  await SSSettings.load();
+  DEFAULT_WINDOW_DAYS = SSSettings.num('Planning_Window_Days', 14);
   document.getElementById('headerSub').textContent = 'Loading...';
 
   try {
@@ -352,7 +362,7 @@ async function loadEverything() {
       const lR = findColumn(lotsT, ['Recipe']), lS = findColumn(lotsT, ['Spools_Made']);
       const lY = findColumn(lotsT, ['Total_Yards_Made']), lF = findColumn(lotsT, ['Fiber']);
       // Same yards-per-spool rule as stock-ops.js / batch-assignment: E nylon 150, else 100.
-      const ydsPer = f => /^\s*(EN|E\s*Nylon)\s*$/i.test(String(f || '')) ? 150 : 100;
+      const ydsPer = f => /^\s*(EN|E\s*Nylon)\s*$/i.test(String(f || '')) ? SSSettings.num('Yards_Per_Spool_E_Nylon', 150) : SSSettings.num('Yards_Per_Spool', 100);
       // Only spools that CANNOT fill an order reduce coverage: committed to a shop
       // (store/vendor) or broken. Back stock is the whole point of back stock — it
       // fills orders, so it counts as coverage, it does not cancel it out.

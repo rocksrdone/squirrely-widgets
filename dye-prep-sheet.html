@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dye Prep Sheet</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <script src="dye-mix.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700&family=Inter:wght@300;400;500;600;700&display=swap');
@@ -261,7 +262,14 @@
 
    Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
    different rack, are not being renamed, and must NOT be passed to normBin. */
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Columns can grow or
+   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+function applyRackSettings() {
+  if (!window.SSSettings) return;
+  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+}
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
@@ -383,6 +391,7 @@ function powderAddress(info) {
 }
 
 async function loadEverything() {
+  await SSSettings.load();
   loadError = null;
   document.getElementById('content').innerHTML = '<div class="empty-state">Loading…</div>';
   try {

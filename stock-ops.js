@@ -24,7 +24,10 @@
   'use strict';
 
   const ORDER_STATUS_HANK = 'Unwound - Bagged';
-  const BIN_CAPACITY = 60;   // spools a bin holds comfortably — same as the kettle and Wind & Box
+  /* Spools a back-stock bin holds comfortably, unless Storage_Locations.Max_Spools
+     says otherwise. Settings.Back_Stock_Bin_Capacity (settings.js) overrides 60. */
+  const BIN_CAPACITY_DEFAULT = 60;
+  const binCap = () => (window.SSSettings ? SSSettings.num('Back_Stock_Bin_Capacity', BIN_CAPACITY_DEFAULT) : BIN_CAPACITY_DEFAULT);
   const ORDER_STATUS_WOUND = 'Wound - Needs Labels';
   const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;
   const RELEASED_ORDER = 'Active';
@@ -59,7 +62,11 @@
     if (/NYLON/.test(s)) return 'FFN';
     return s;
   }
-  function yardsPerSpool(fiber) { return fiberCode(fiber) === 'EN' ? 150 : 100; }
+  /* Settings.Yards_Per_Spool / Yards_Per_Spool_E_Nylon override 100 / 150. */
+  function yardsPerSpool(fiber) {
+    const S = window.SSSettings;
+    return fiberCode(fiber) === 'EN' ? (S ? S.num('Yards_Per_Spool_E_Nylon', 150) : 150) : (S ? S.num('Yards_Per_Spool', 100) : 100);
+  }
   function orderBinCode(customerCode, orderNumber) {
     const c = String(customerCode || '').trim().toUpperCase();
     const o = String(orderNumber || '').trim().replace(/^#/, '');
@@ -68,6 +75,7 @@
 
   /* Everything a put-away decision needs, read once. */
   async function load(docApi) {
+    if (window.SSSettings) await SSSettings.load();
     const fetch = (n) => docApi.fetchTable(n);
     const optional = (n) => docApi.fetchTable(n).catch(() => null);
     const [lotsT, allocT, wolT, woT, recT, custT, locT, taskT] = await Promise.all([
@@ -127,7 +135,7 @@
         const code = String(arr(locT, bc)[i] || '').trim();
         if (!code) return;
         bins.push({ id, code, fiber: fiberCode(arr(locT, bf)[i]),
-          reserved: !!refId(arr(locT, br)[i]), cap: num(arr(locT, bm)[i]) || BIN_CAPACITY });
+          reserved: !!refId(arr(locT, br)[i]), cap: num(arr(locT, bm)[i]) || binCap() });
         binById[id] = code;
       });
     }
@@ -259,7 +267,7 @@
   function suggestBin(model, lot, qty) {
     const need = qty == null ? lot.waiting : qty;
     const byId = {}; model.bins.forEach(b => { byId[b.id] = b; });
-    const cap = b => (b && b.cap) || BIN_CAPACITY;
+    const cap = b => (b && b.cap) || binCap();
     const key = lot.recipe.name.toLowerCase();
     const tally = {};
     model.lots.forEach(l => {

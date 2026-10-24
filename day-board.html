@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <style>
   :root {
     --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7; --card: #FFFFFF;
@@ -173,7 +174,14 @@
 
    Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
    different rack, are not being renamed, and must NOT be passed to normBin. */
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Columns can grow or
+   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+function applyRackSettings() {
+  if (!window.SSSettings) return;
+  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+}
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
@@ -355,6 +363,7 @@ function setCount(id, text, cls) {
    LOAD
    ============================================================ */
 async function loadAll() {
+  await SSSettings.load();
   // System_Alerts may legitimately not exist yet, and fetchTable throws on a
   // missing table. Fetching it inside the main Promise.all would take the
   // whole dashboard down over an optional panel, so it gets its own attempt.

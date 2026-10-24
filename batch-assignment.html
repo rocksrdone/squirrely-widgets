@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Batch Assignment</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -207,7 +208,14 @@ body {
 
    Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
    different rack, are not being renamed, and must NOT be passed to normBin. */
-const DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Columns can grow or
+   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+function applyRackSettings() {
+  if (!window.SSSettings) return;
+  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+}
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
@@ -313,7 +321,7 @@ function fiberCode(v) {
 // Spools -> yards. E Nylon is 150 yd/spool, the rest 100. Works off the CODE, so
 // it's correct whether the recipe stored "E Nylon" or "EN".
 function yardsPerSpool(fiber) {
-  return fiberCode(fiber) === 'EN' ? 150 : 100;
+  return fiberCode(fiber) === 'EN' ? SSSettings.num('Yards_Per_Spool_E_Nylon', 150) : SSSettings.num('Yards_Per_Spool', 100);
 }
 function dueValue(d) { const n = Number(d); return isFinite(n) && n > 0 ? n : Infinity; }
 
@@ -326,7 +334,7 @@ let potSpoolsVal = '';
 let potCountVal = 1;
 let potBusy = false;
 /* Quick-pick pot sizes — the counts used most. Edit this list to change the buttons. */
-const POT_SIZES = [5, 6, 7, 8, 9, 10];
+let POT_SIZES = [5, 6, 7, 8, 9, 10];   // Settings.Pot_Size_Buttons
 // Back-stock bucket column id + resolved allocation/line ids, stashed for fulfillFromStock.
 let RC_STOCKBUCKET = null, RC_STOCKSOURCE = '', RC_STOCK2 = {};
 let RC_ALLOC = null, RC_WOL = null;
@@ -351,7 +359,7 @@ let S = { woundStatus: 'Wound - Needs Labels' };  // detected "boxed" status str
 /* Bin capacity comes from Storage_Locations.Max_Spools, per bin; 60 only
    when a bin has none set. Every screen that picks a bin reads the same
    numbers, so the kettle, Wind & Box and the Lot Desk agree on what "full" is. */
-const BIN_CAPACITY = 60;
+let BIN_CAPACITY = 60;   // Settings.Back_Stock_Bin_Capacity
 const BIN_CAPS = {};
 function capOf(b) { const id = b && typeof b === 'object' ? b.id : b; return BIN_CAPS[id] || BIN_CAPACITY; }
 
@@ -624,8 +632,13 @@ async function loadForRecipe(record) {
   }
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
 
+  await SSSettings.load();
+  BIN_CAPACITY = SSSettings.num('Back_Stock_Bin_Capacity', 60);
+  POT_SIZES = SSSettings.list('Pot_Size_Buttons', [5, 6, 7, 8, 9, 10]);
+  PUTAWAY_DEFAULT_ML = SSSettings.num('Putaway_Default_mL', 20);
+
   try {
-    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront, mixPartsTable, settingsTable] = await Promise.all([
+    const [woTable, wolTable, compTable, recipesTable, dyesTable, stockTableUpfront, mixPartsTable] = await Promise.all([
       grist.docApi.fetchTable('Work_Orders'),
       grist.docApi.fetchTable('Work_Order_Lines'),
       grist.docApi.fetchTable('Recipe_Dye_Components'),
@@ -633,13 +646,7 @@ async function loadForRecipe(record) {
       grist.docApi.fetchTable('Dyes'),
       grist.docApi.fetchTable('Dye_Stock'),
       grist.docApi.fetchTable('Dye_Mix_Parts').catch(() => null),
-      grist.docApi.fetchTable('Settings').catch(() => null),
     ]);
-    if (settingsTable) {
-      const kC = findColumn(settingsTable, ['Key']), vC = findColumn(settingsTable, ['Value']);
-      const i = columnAsArray(settingsTable, kC).indexOf('Putaway_Default_mL');
-      if (i >= 0) { const v = Number(columnAsArray(settingsTable, vC)[i]); PUTAWAY_DEFAULT_ML = v >= 0 ? v : PUTAWAY_DEFAULT_ML; }
-    }
 
     // Coverage is DERIVED, never stored: what orders need, minus what's already
     // been allocated to them, minus unwound spools still sitting in lots. A stored
@@ -916,8 +923,8 @@ async function loadForRecipe(record) {
 
     // Bin suggestion — prefer a bin that already holds only this dye and has room,
     // computed upfront so it can show right in the row, not just after a click.
-    const BIN_CAPACITY = 12;
-    const GENERIC_FILL_CAP = 6;
+    const BIN_CAPACITY = SSSettings.num('Dye_Bin_Jar_Capacity', 12);      // premade dye jars per bin
+    const GENERIC_FILL_CAP = SSSettings.num('Dye_Bin_Unrelated_Cap', 6); // unrelated dyes may fill only this many
     const stockEntries = [];
     (stockTableUpfront.id || []).forEach((id, i) => {
       stockEntries.push({

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Shipping Setup</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -133,7 +134,7 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function up(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
 
 /* Kept identical to ship-preview.html — see the note at the top. */
-const ROUND_UP_TO_OZ = 1;
+let ROUND_UP_TO_OZ = 1;   // Settings.Ship_Weight_Round_Up_oz (0 = no rounding)
 function roundUpOz(oz) {
   if (!(ROUND_UP_TO_OZ > 0)) return Math.round(oz * 100) / 100;
   return Math.ceil((oz - 1e-9) / ROUND_UP_TO_OZ) * ROUND_UP_TO_OZ;
@@ -161,6 +162,8 @@ function toast(msg) {
 /* ── Load ───────────────────────────────────────────────────────────────── */
 
 async function loadAll() {
+  await SSSettings.load();
+  ROUND_UP_TO_OZ = SSSettings.num('Ship_Weight_Round_Up_oz', 1);
   S.loading = true; S.error = ''; render();
   try {
     await Promise.all([loadBoxes(), loadItems()]);

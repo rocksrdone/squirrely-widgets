@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Payroll Hours</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -144,7 +145,7 @@ table.days td.num { font-family: 'DM Mono', monospace; text-align: right; white-
    This is a view of hours and gross pay. It is not a payroll system: nothing
    here withholds tax, files anything, or knows about deductions. */
 
-const FIRST_HALF_LAST_DAY = 14;          // 1st–14th, then 15th–end of month
+let FIRST_HALF_LAST_DAY = 14;     // Settings.Pay_Period_Split_Day          // 1st–14th, then 15th–end of month
 const PERIOD_ATTRIBUTION = 'clock-in';   // a shift is counted in the period its clock-in falls in
 
 function esc(s) {
@@ -217,7 +218,7 @@ function fmtHours(sec) { return hrs(sec).toFixed(2); }
 function fmtMoney(n) { return '$' + (Math.round(n * 100) / 100).toFixed(2); }
 
 // A punch longer than this almost certainly means someone forgot to clock out.
-const LONG_SHIFT_HOURS = 16;
+let LONG_SHIFT_HOURS = 16;   // Settings.Long_Shift_Warning_Hours
 
 let workers = [];     // {id, name, rate}
 let punches = [];     // {id, workerId, inSec, outSec}
@@ -226,6 +227,9 @@ let period = periodOf(new Date());
 let openCards = new Set();
 
 async function loadEverything() {
+  await SSSettings.load();
+  FIRST_HALF_LAST_DAY = Math.min(27, Math.max(1, Math.round(SSSettings.num('Pay_Period_Split_Day', 14))));
+  LONG_SHIFT_HOURS = SSSettings.num('Long_Shift_Warning_Hours', 16);
   document.getElementById('headSub').textContent = 'Loading…';
   try {
     const [wt, ct] = await Promise.all([
