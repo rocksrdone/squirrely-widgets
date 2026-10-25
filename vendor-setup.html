@@ -194,6 +194,8 @@ async function load() {
         email: String(col(t, 'Email')[i] || '').trim(),
         phone: String(col(t, 'Phone')[i] || '').trim(),
         status: String(col(t, 'Status')[i] || ''),
+        contacts: [col(t, 'Main_Contact')[i], col(t, 'Owner_Name')[i], col(t, 'Ship_To_Name')[i]]
+          .map(x => String(x || '').trim()).filter(Boolean),
         customer_id: String(col(t, 'Shopify_Customer_ID')[i] || ''),
         collection_id: String(col(t, 'Shopify_Collection_ID')[i] || ''),
         lock_id: String(col(t, 'Locksmith_Lock_ID')[i] || ''),
@@ -225,6 +227,31 @@ async function setTemplate(code) {
     toast(code ? `Lock template: ${code}` : 'Lock template cleared');
   } catch (e) { toast('Could not save the template: ' + ((e && e.message) || e)); }
   render();
+}
+
+/* Collections are named after either the business or the contact person.
+   The workflow only compares with the business name, so sort that out here:
+   named after the contact = fine; anything else = say which names it was compared with. */
+const nameKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function explainTitle(r) {
+  const v = S.vendors.find(x => x.id === r.row_id);
+  if (!v) return;
+  r.checks.forEach(c => {
+    if (!/^Title differs/.test(c.label)) return;
+    const m = String(c.detail || '').match(/Store: “(.*?)”/);
+    const title = m ? m[1] : '';
+    const contact = (v.contacts || []).find(n => nameKey(n) === nameKey(title));
+    if (contact) {
+      c.status = 'ok'; c.label = 'Collection is named after the contact';
+      c.detail = `“${title}” (Grist contact: ${contact})`;
+    } else {
+      c.label = 'Collection name matches neither the business nor the contact';
+      c.detail = `Collection: “${title}” · Grist business: “${v.name}”` +
+        ((v.contacts || []).length ? ` · Grist contact: “${v.contacts[0]}”` : ' · no contact name in Grist') +
+        '. Rename the collection in Shopify, or fix the name in the Grist record.';
+    }
+  });
+  r.status = r.checks.some(c => c.status === 'bad') ? 'bad' : r.checks.some(c => c.status === 'warn') ? 'warn' : 'ok';
 }
 
 async function saveResult(r) {
@@ -288,6 +315,7 @@ async function run(action, vendors, fix) {
         results = await callWorkflow('check', batch.map(b => S.vendors.find(x => x.id === b.id) || b));
       }
       for (const r of results) {
+        explainTitle(r);
         if (changes[r.row_id]) Object.assign(r, { did: changes[r.row_id].did, errors: [...changes[r.row_id].errors, ...r.errors], notes: [...changes[r.row_id].notes, ...r.notes] });
         S.results[r.row_id] = r;
         await saveResult(r);
