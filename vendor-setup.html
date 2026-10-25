@@ -148,8 +148,7 @@ const codeOwner = code => S.codes[String(code || '').trim().toUpperCase()];
 /* ── Grist ────────────────────────────────────────────────────────────── */
 
 /* Link to a vendor's Customers row: /<docId>/<slug>/p/<page>#a1.s<section>.r<row>.c<col>.
-   Prefers a Customers table section on a page (one named for customers first);
-   falls back to the raw-data view. Same doc-address trick as the Settings Desk. */
+   Opens the Customers record card for that row. Same doc-address trick as the Settings Desk. */
 async function loadGristLinks() {
   S.gristRowLink = null;
   let base = '';
@@ -164,23 +163,15 @@ async function loadGristLinks() {
   } catch (e) {}
   if (!base) return;
   try {
-    const [T, V, VS, C] = await Promise.all(['_grist_Tables', '_grist_Views', '_grist_Views_section', '_grist_Tables_column'].map(t => grist.docApi.fetchTable(t)));
+    const [T, C] = await Promise.all(['_grist_Tables', '_grist_Tables_column'].map(t => grist.docApi.fetchTable(t)));
     const ti = T.tableId.indexOf('Customers'); if (ti < 0) return;
     const tref = T.id[ti];
     const ci = C.id.findIndex((id, i) => C.parentId[i] === tref && C.colId[i] === 'Customer_Name');
     const colRef = ci >= 0 ? C.id[ci] : null;
-    const viewName = id => { const i = V.id.indexOf(id); return i >= 0 ? String(V.name[i] || '') : ''; };
-    const cands = VS.id.map((id, i) => ({ id, view: VS.parentId[i], kind: VS.parentKey[i], table: VS.tableRef[i] }))
-      .filter(x => x.table === tref && x.view > 0 && (x.kind === 'record' || x.kind === 'single' || x.kind === 'detail'))
-      .sort((a, b) => (/customer/i.test(viewName(b.view)) - /customer/i.test(viewName(a.view))) || ((b.kind === 'record') - (a.kind === 'record')));
     const c = colRef ? '.c' + colRef : '';
-    if (cands.length) {
-      const x = cands[0];
-      S.gristRowLink = row => `${base}/p/${x.view}#a1.s${x.id}.r${row}${c}`;
-    } else if (T.rawViewSectionRef && T.rawViewSectionRef[ti]) {
-      const rs = T.rawViewSectionRef[ti];
-      S.gristRowLink = row => `${base}/p/data#a1.s${rs}.r${row}${c}`;
-    }
+    /* The table's record card (a pop-up of every field for one customer); raw data view if there is none. */
+    const card = (T.recordCardViewSectionRef && T.recordCardViewSectionRef[ti]) || (T.rawViewSectionRef && T.rawViewSectionRef[ti]);
+    if (card) S.gristRowLink = row => `${base}/p/data#a1.s${card}.r${row}${c}`;
   } catch (e) { console.warn('No page links', e); }
 }
 
@@ -461,7 +452,7 @@ function vendorCard(v) {
 
 function vendorLinks(v) {
   const a = [];
-  if (S.gristRowLink) a.push(['Customers row in Grist', S.gristRowLink(v.id)]);
+  if (S.gristRowLink) a.push(['Grist record', S.gristRowLink(v.id)]);
   if (v.customer_id) a.push(['Shopify customer', `${SHOP_ADMIN}/customers/${v.customer_id}`]);
   if (v.collection_id) a.push(['Shopify collection', `${SHOP_ADMIN}/collections/${v.collection_id}`]);
   if (v.lock_id) a.push(['Locksmith lock', `${SHOP_ADMIN}/apps/locksmith/locks/${v.lock_id}`]);
