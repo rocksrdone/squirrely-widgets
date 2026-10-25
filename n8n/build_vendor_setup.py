@@ -34,7 +34,7 @@ return [{ json: {
   templateLockId: tpl,
   templateUrl: tpl ? `${LS}/locks/${tpl}.json` : `${LS}/shop.json`,
   collectionsBody: { query: `{
-    collections(first: 250, query: "collection_type:smart") {
+    collections(first: 250) {
       nodes { id legacyResourceId title handle
         ruleSet { appliedDisjunctively rules { column relation condition } } } }
     publications(first: 20) { nodes { id name } }
@@ -46,7 +46,8 @@ COMMON_JS = r"""
 const LS = 'https://uselocksmith.com/api/unstable';
 const lc = s => String(s == null ? '' : s).trim().toLowerCase();
 const num = s => String(s == null ? '' : s).replace(/\D/g, '');
-const unwrap = r => (r && (r.lock || (r.data && !Array.isArray(r.data) && r.data.id ? r.data : null))) || r;
+const lid = l => l == null ? undefined : (l.id ?? l._id ?? l.lock_id);
+const unwrap = r => (r && (r.lock || (r.data && !Array.isArray(r.data) && lid(r.data) != null ? r.data : null))) || r;
 const errText = e => {
   if (!e) return '';
   if (typeof e === 'string') return e;
@@ -108,9 +109,9 @@ return S.vendors.map((v0, idx) => {
   let lockId = num(v.lock_id), lockHow = lockId ? 'saved ID' : '';
   const onCol = col ? locks.filter(l => new RegExp('(^|\\D)' + col.legacyResourceId + '(\\D|$)').test(JSON.stringify(l))) : [];
   const onTag = locks.filter(l => lc(JSON.stringify(l)).includes('"' + lc(tag) + '"'));
-  if (!lockId && onCol.length) { lockId = String(onCol[0].id); lockHow = 'collection'; }
-  if (!lockId && onTag.length) { lockId = String(onTag[0].id); lockHow = 'tag'; }
-  const extraLocks = [...new Set([...onCol, ...onTag].map(l => String(l.id)))].filter(id => id !== lockId);
+  if (!lockId && onCol.length) { lockId = String(lid(onCol[0])); lockHow = 'collection'; }
+  if (!lockId && onTag.length) { lockId = String(lid(onTag[0])); lockHow = 'tag'; }
+  const extraLocks = [...new Set([...onCol, ...onTag].map(l => String(lid(l))))].filter(id => id !== lockId);
 
   const cid = num(v.customer_id);
   const safeEmail = v.email.replace(/["\\]/g, '');
@@ -250,7 +251,7 @@ return ctxs.map((ctx, i) => {
     add('lock', 'bad', 'No Locksmith lock on the collection', 'Anyone can see the collection and its products. (' + ctx.lockDiag + ')', col ? 'lock' : '');
   }
   if (lock) {
-    ids.lock_id = String(lock.id || ctx.lockId);
+    ids.lock_id = String(lid(lock) || ctx.lockId);
     add('lock', 'ok', 'Lock found', `Lock ${ids.lock_id}${ctx.lockHow !== 'saved ID' ? ' (matched by ' + ctx.lockHow + ')' : ''}`);
     const txt = JSON.stringify(lock);
     if (col && !new RegExp('(^|\\D)' + col.legacyResourceId + '(\\D|$)').test(txt))
@@ -270,7 +271,7 @@ return ctxs.map((ctx, i) => {
       if (got === undefined) continue;
       if (Boolean(got) !== wantV) add('lock', 'bad', `${label} should be ${wantV ? 'on' : 'off'}`, '', 'lock_rebuild');
     }
-    if (ctx.template && String(ctx.template.id) !== String(ids.lock_id)) {
+    if (ctx.template && String(lid(ctx.template)) !== String(ids.lock_id)) {
       const a = lockSettings(ctx.template), b = lockSettings(lock), diffs = [];
       for (const k of Object.keys(a)) if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) diffs.push(`${k}: template ${JSON.stringify(a[k])}, this ${JSON.stringify(b[k])}`);
       if (diffs.length) add('lock', 'warn', 'Settings differ from the template lock', diffs.join(' · '), 'lock_rebuild');
@@ -317,7 +318,7 @@ return ctxs.map((ctx, i) => {
     row_id: v.row_id, name: v.name, code: v.code, tag, v,
     checks, notes, errors, ids, did: [],
     colGid: col ? col.id : '', published, onlinePubId: ctx.onlinePubId,
-    lockId: lock ? String(lock.id || ctx.lockId) : '', plannedLock, template: ctx.template,
+    lockId: lock ? String(lid(lock) || ctx.lockId) : '', plannedLock, template: ctx.template,
     writeBody, wroteSomething: parts.length > 0,
   } };
 });
@@ -418,7 +419,7 @@ const results = plans.map((p, i) => {
     if (r.error) p.errors.push('Create lock: ' + errText(r.error));
     else {
       const l = unwrap(r);
-      const id = l && (l.id || (l.lock && l.lock.id));
+      const id = lid(l) || (l && lid(l.lock));
       if (id) { p.ids.lock_id = String(id); p.did.push('Created the Locksmith lock ' + id); }
       else p.errors.push('Create lock: Locksmith answered without a lock id — ' + JSON.stringify(r).slice(0, 200));
     }
