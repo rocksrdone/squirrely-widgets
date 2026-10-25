@@ -127,7 +127,7 @@ return S.vendors.map((v0, idx) => {
     onlinePubId: online ? online.id : '',
     template, templateErr, listErr, shopErr,
     lockDiag: `Locksmith listed ${locks.length} lock(s); none mention collection ${col ? col.legacyResourceId : '(none)'} or ${tag}.`
-      + (locks.length ? ' First lock looks like: ' + JSON.stringify(locks[0]).slice(0, 500) : ' Raw answer: ' + JSON.stringify(rawLocks).slice(0, 500)),
+      + (locks.length ? '' : ' Raw answer: ' + JSON.stringify(rawLocks).slice(0, 300)),
   } };
 });
 """
@@ -397,7 +397,8 @@ return plans.map((p, i) => {
   };
   p.lsDelete = p.plannedLock.rebuild && doCreate && p.lockId
     ? { method: 'DELETE', url: `${LS}/locks/${p.lockId}` } : { method: 'GET', url: `${LS}/shop.json` };
-  p.lsCreate = doCreate ? { method: 'POST', url: `${LS}/lock`, body } : { method: 'GET', url: `${LS}/shop.json`, body: {} };
+  // Nothing to make: a dry run with an empty body (Locksmith only validates it, nothing is saved).
+  p.lsCreate = doCreate ? { method: 'POST', url: `${LS}/lock`, body } : { method: 'POST', url: `${LS}/lock?dryrun=true`, body: {} };
   p.doCreate = doCreate;
   return { json: p };
 });
@@ -491,10 +492,10 @@ code("After write", AFTER_WRITE_JS, nx())
 shopify_http("Shopify: publish", "$json.pubBody", nx())
 code("Lock plan", LOCK_PLAN_JS, nx())
 ls_http("Locksmith: delete lock", "={{ $json.lsDelete.method }}", "={{ $json.lsDelete.url }}", nx())
-ls_http("Locksmith: create lock", "={{ $('Lock plan').item.json.lsCreate.method }}",
+ls_http("Locksmith: create lock", "POST",
         "={{ $('Lock plan').item.json.lsCreate.url }}", nx(),
         body_expr="={{ JSON.stringify($('Lock plan').item.json.lsCreate.body) }}",
-        send_body_expr="={{ $('Lock plan').item.json.lsCreate.method === 'POST' }}")
+        send_body_expr=True)
 code("Report", REPORT_JS, nx())
 node("Respond", "n8n-nodes-base.respondToWebhook", 1.1, {"respondWith": "firstIncomingItem", "options": {}}, nx())
 
