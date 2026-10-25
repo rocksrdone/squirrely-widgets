@@ -64,6 +64,8 @@ input.code { font-family: 'DM Mono', monospace; text-transform: uppercase; lette
 .badge.none { background: var(--warm); color: #6B5E52; }
 .spacer { margin-left: auto; }
 .when { font-size: 10.5px; color: var(--muted); }
+.fibers { font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.fib { display: inline-flex; gap: 4px; align-items: center; font-size: 11.5px; color: var(--ink); margin: 0 10px 0 0; cursor: pointer; }
 .links { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; }
 .links a { color: var(--teal); text-decoration: none; font-weight: 500; }
 .links a:hover { text-decoration: underline; }
@@ -96,6 +98,16 @@ const TIMEOUT_MS = 120000;
 const BATCH = 4;
 const TEMPLATE_KEY = 'Vendor_Lock_Template_Code';
 const REQUIRED_TAGS_KEY = 'Vendor_Required_Tags';
+const FIBER_TAGS_KEY = 'Vendor_Fiber_Tags';
+/* Fiber name → Shopify customer tag, e.g. "FF Nylon=Fiber-FFN, FF Cotton=Fiber-FFC, E Nylon=Fiber-EN". */
+function fiberMap() {
+  const out = {};
+  SSSettings.text(FIBER_TAGS_KEY, 'FF Nylon=Fiber-FFN, FF Cotton=Fiber-FFC, E Nylon=Fiber-EN').split(/[,;]+/).forEach(p => {
+    const [k, t] = p.split('=').map(x => (x || '').trim()); if (k && t) out[k] = t;
+  });
+  return out;
+}
+const fiberList = v => (Array.isArray(v) ? v.filter(x => x !== 'L') : []).map(String);
 const requiredTags = () => SSSettings.text(REQUIRED_TAGS_KEY, 'Vendor-All, Wholesaler').split(/[,;]+/).map(t => t.trim()).filter(Boolean);
 const VENDOR_TYPE = 'Wholesale Vendor';
 const SHOP_ADMIN = 'https://admin.shopify.com/store/squirrelvender';
@@ -103,7 +115,7 @@ const STOP_WORDS = new Set(['and', '&', 'of', 'the', '+']);
 
 const S = {
   vendors: [], codes: {}, results: {}, busy: false, busyRow: null, error: '', filter: 'all',
-  form: { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false },
+  form: { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false, fibers: null },
   template: '', formMsg: null, banner: null, gristRowLink: null,
 };
 
@@ -196,6 +208,7 @@ async function load() {
         email: String(col(t, 'Email')[i] || '').trim(),
         phone: String(col(t, 'Phone')[i] || '').trim(),
         status: String(col(t, 'Status')[i] || ''),
+        fibers: fiberList(col(t, 'Vendor_Fibers')[i]),
         contacts: [col(t, 'Main_Contact')[i], col(t, 'Owner_Name')[i], col(t, 'Ship_To_Name')[i]]
           .map(x => String(x || '').trim()).filter(Boolean),
         customer_id: String(col(t, 'Shopify_Customer_ID')[i] || ''),
@@ -285,6 +298,8 @@ async function callWorkflow(action, vendors, fix) {
       body: JSON.stringify({ action, fix: fix || [], template_lock_id: templateLockId(), required_tags: requiredTags(),
         vendors: vendors.map(v => ({ row_id: v.id, name: v.name, code: v.code, email: v.email, phone: v.phone,
           first_name: v.first_name, last_name: v.last_name,
+          fiber_tags: (v.fibers || []).map(f => fiberMap()[f]).filter(Boolean),
+          remove_tags: Object.entries(fiberMap()).filter(([f]) => !(v.fibers || []).includes(f)).map(([, t]) => t),
           customer_id: v.customer_id, collection_id: v.collection_id, lock_id: v.lock_id })) }),
     });
     const txt = await res.text();
@@ -377,7 +392,7 @@ function renderFormHints() {
   const pv = document.getElementById('preview');
   if (pv) {
     const tag = 'Vendor-' + (f.code || 'XXX');
-    pv.innerHTML = `Shopify customer: <b>${esc(f.first || '—')}</b> <b>${esc(f.last)}</b> · ${esc(f.email || 'email')}${f.phone ? ' · ' + esc(f.phone) : ''} · tags ${[tag, ...requiredTags()].map(t => `<code>${esc(t)}</code>`).join(', ')}<br>
+    pv.innerHTML = `Shopify customer: <b>${esc(f.first || '—')}</b> <b>${esc(f.last)}</b> · ${esc(f.email || 'email')}${f.phone ? ' · ' + esc(f.phone) : ''} · tags ${[tag, ...requiredTags(), ...formFibers().map(fb => fiberMap()[fb])].map(t => `<code>${esc(t)}</code>`).join(', ')}<br>
       Collection: <b>${esc(f.name || 'Business name')}</b> — products tagged <code>${esc(tag)}</code><br>
       Lock: only customers tagged <code>${esc(tag)}</code>; hidden from menus, lists and sitemaps`;
   }
@@ -394,15 +409,15 @@ async function addVendor() {
   try {
     const res = await grist.docApi.applyUserActions([['AddRecord', 'Customers', null, {
       Customer_Name: f.name.trim(), Code: f.code, Type: VENDOR_TYPE, Status: 'Active',
-      Email: f.email.trim(), Phone: f.phone.trim(),
+      Email: f.email.trim(), Phone: f.phone.trim(), Vendor_Fibers: ['L', ...formFibers()],
     }]]);
     const rowId = res && res.retValues ? res.retValues[0] : null;
     toast(`${f.name} added to Customers`);
     const v = { id: rowId, name: f.name.trim(), code: f.code, email: f.email.trim(), phone: f.phone.trim(),
-      first_name: f.first.trim(), last_name: f.last.trim(), customer_id: '', collection_id: '', lock_id: '', setupStatus: '', checked: '' };
+      first_name: f.first.trim(), last_name: f.last.trim(), fibers: formFibers(), customer_id: '', collection_id: '', lock_id: '', setupStatus: '', checked: '' };
     S.vendors.push(v); S.vendors.sort((a, b) => a.name.localeCompare(b.name));
     S.codes[v.code] = { id: rowId, name: v.name };
-    S.form = { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false };
+    S.form = { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false, fibers: null };
     await run('setup', [v]);
   } catch (e) {
     console.error(e); toast('Could not add: ' + ((e && e.message) || e));
@@ -429,6 +444,13 @@ function fixAll(id) {
 function checkAll() {
   const list = S.vendors.filter(v => v.code && v.status !== 'Inactive');
   run('check', list);
+}
+/* Add/remove missing customer tags (own, shared, fiber) for every vendor whose last check flagged them. */
+function fixAllTags() {
+  const list = S.vendors.filter(v => { const r = S.results[v.id]; return r && r.checks.some(c => c.fix === 'customer' && c.status !== 'ok'); });
+  if (!list.length) { toast('Nothing to fix — run Check all first'); return; }
+  if (!confirm(`Update customer tags for ${list.length} vendor${list.length === 1 ? '' : 's'}?\n\n` + list.map(v => v.name).join(', '))) return;
+  run('fix', list, ['customer']);
 }
 function setFilter(f) { S.filter = f; render(); }
 
@@ -477,7 +499,26 @@ function vendorCard(v) {
       ${fixable ? `<button class="btn tiny" ${S.busy ? 'disabled' : ''} onclick="fixAll(${v.id})">Fix all</button>` : ''}
       ${st === 'none' || st === 'bad' ? `<button class="btn tiny secondary" ${S.busy || noCode ? 'disabled' : ''} onclick="setupOne(${v.id})" title="Creates whatever is missing; never changes what exists">Set up</button>` : ''}
       <button class="btn tiny secondary" ${S.busy || noCode ? 'disabled' : ''} onclick="checkOne(${v.id})">Check</button>
-    </div>${vendorLinks(v)}${body}</div>`;
+    </div>${vendorLinks(v)}${fiberRow(v)}${body}</div>`;
+}
+
+function formFibers() { return S.form.fibers || Object.keys(fiberMap()); }
+function toggleFormFiber(fb, on) {
+  const cur = new Set(formFibers()); on ? cur.add(fb) : cur.delete(fb);
+  S.form.fibers = Object.keys(fiberMap()).filter(x => cur.has(x)); renderFormHints();
+}
+/* Ticking a fiber saves it to Grist straight away; the store changes on Fix / Check → Fix customer. */
+function fiberRow(v) {
+  return `<div class="fibers">Fibers: ${Object.keys(fiberMap()).map(fb => `<label class="fib"><input type="checkbox" ${(v.fibers || []).includes(fb) ? 'checked' : ''} ${S.busy ? 'disabled' : ''} onchange="toggleVendorFiber(${v.id}, '${esc(fb)}', this.checked)"> ${esc(fb)}</label>`).join('')}</div>`;
+}
+async function toggleVendorFiber(id, fb, on) {
+  const v = byId(id); if (!v) return;
+  const cur = new Set(v.fibers || []); on ? cur.add(fb) : cur.delete(fb);
+  v.fibers = Object.keys(fiberMap()).filter(x => cur.has(x));
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Customers', id, { Vendor_Fibers: ['L', ...v.fibers] }]]);
+    toast(`${v.name}: ${v.fibers.join(', ') || 'no fibers'} — click Check, then Fix customer to update the store`);
+  } catch (e) { toast('Could not save: ' + ((e && e.message) || e)); }
 }
 
 function vendorLinks(v) {
@@ -513,6 +554,8 @@ function render() {
       <div><label>Shopify first name</label><input type="text" id="f-first" value="${esc(f.first)}" oninput="formField('first', this.value)"></div>
       <div><label>Shopify last name</label><input type="text" id="f-last" value="${esc(f.last)}" oninput="formField('last', this.value)"></div>
     </div>
+    <div style="margin-top:10px"><label>Fibers they can see</label>
+      ${Object.keys(fiberMap()).map(fb => `<label class="fib"><input type="checkbox" ${formFibers().includes(fb) ? 'checked' : ''} onchange="toggleFormFiber('${esc(fb)}', this.checked)"> ${esc(fb)}</label>`).join('')}</div>
     <div class="preview" id="preview"></div>
     <div class="bar"><span class="hint grow" id="needs"></span>
       <button class="btn" id="addBtn" onclick="addVendor()">Add to Grist & set up in Shopify</button></div>
@@ -523,6 +566,7 @@ function render() {
     ${S.banner ? `<div class="banner ${S.banner.kind}">${esc(S.banner.text)}</div>` : ''}
     <div class="bar" style="margin-top:0">
       <button class="btn" ${S.busy ? 'disabled' : ''} onclick="checkAll()">Check all</button>
+      <button class="btn secondary" ${S.busy ? 'disabled' : ''} onclick="fixAllTags()" title="Adds/removes Vendor-XXX, shared and fiber tags where the last check flagged them">Fix tags for all</button>
       <span class="grow"></span>
       <label style="margin:0">Lock template</label>
       <select style="width:auto" onchange="setTemplate(this.value)" ${S.busy ? 'disabled' : ''}>

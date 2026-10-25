@@ -186,6 +186,10 @@ const hasTag = (c, tag) => (c.tags || []).some(t => lc(t) === lc(tag));
 
 return ctxs.map((ctx, i) => {
   const v = ctx.v, tag = v.tag;
+  // Fiber tags this vendor should have / must not have (sent by the widget from Customers.Vendor_Fibers)
+  const fiberTags = (Array.isArray(v.fiber_tags) ? v.fiber_tags : []).map(t => String(t).trim()).filter(Boolean);
+  const dropTags = (Array.isArray(v.remove_tags) ? v.remove_tags : []).map(t => String(t).trim()).filter(t => t && !fiberTags.includes(t));
+  const reqTags = [...S.requiredTags, ...fiberTags];
   const L = looks[i] || {}, d = L.data || {};
   const checks = [], notes = [], errors = [];
   const add = (part, status, label, detail = '', fix = '') => checks.push({ part, status, label, detail, fix });
@@ -214,6 +218,12 @@ return ctxs.map((ctx, i) => {
     if (missingReq.length) add('customer', 'bad', 'Customer is missing shared tag' + (missingReq.length > 1 ? 's ' : ' ') + missingReq.join(', '),
       'Wholesaler opens the vendor store; Vendor-All opens the shared vendor collections.', 'customer');
     else add('customer', 'ok', 'Shared tags: ' + S.requiredTags.join(', '));
+    if (fiberTags.length || dropTags.length) {
+      const missF = fiberTags.filter(t => !hasTag(cust, t)), extraF = dropTags.filter(t => hasTag(cust, t));
+      if (missF.length) add('customer', 'bad', 'Missing fiber tag' + (missF.length > 1 ? 's ' : ' ') + missF.join(', '), 'They can’t see that fiber’s thread.', 'customer');
+      if (extraF.length) add('customer', 'warn', 'Has fiber tag' + (extraF.length > 1 ? 's ' : ' ') + extraF.join(', ') + ' not ticked in Grist', 'They can see thread they didn’t ask for.', 'customer');
+      if (!missF.length && !extraF.length) add('customer', 'ok', 'Fibers: ' + (fiberTags.join(', ') || 'none'));
+    }
     if (byEmail.length > 1) add('customer', 'warn', 'More than one customer has this email', byEmail.map(c => c.email).join(', '));
   }
   const others = byTag.filter(c => !cust || c.id !== cust.id);
@@ -295,14 +305,20 @@ return ctxs.map((ctx, i) => {
       const words = String(v.name).trim().split(/\s+/);
       const firstName = String(v.first_name || (words.length > 1 ? words.slice(0, -1).join(' ') : words[0])).trim();
       const lastName = String(v.last_name != null && v.first_name ? v.last_name : (words.length > 1 ? words[words.length - 1] : '')).trim();
-      const input = { firstName, lastName, email: v.email, tags: [tag, ...S.requiredTags] };
+      const input = { firstName, lastName, email: v.email, tags: [tag, ...reqTags] };
       const ph = phoneE164(v.phone);
       if (ph) input.phone = ph; else if (String(v.phone || '').trim()) notes.push('Phone left off — add the country code (e.g. +1) and set it in Shopify.');
       decl.push('$cust: CustomerInput!'); vars.cust = input;
       parts.push('c1: customerCreate(input: $cust) { customer { id legacyResourceId } userErrors { field message } }');
-    } else if (cust && [tag, ...S.requiredTags].some(t => !hasTag(cust, t)) && want('customer')) {
-      decl.push('$custId: ID!', '$tags: [String!]!'); vars.custId = cust.id; vars.tags = [tag, ...S.requiredTags].filter(t => !hasTag(cust, t));
-      parts.push('t1: tagsAdd(id: $custId, tags: $tags) { node { id } userErrors { field message } }');
+    } else if (cust && want('customer')) {
+      const add_ = [tag, ...reqTags].filter(t => !hasTag(cust, t));
+      const rem_ = (cust.tags || []).filter(t => dropTags.some(d => lc(d) === lc(t)));
+      if (add_.length || rem_.length) decl.push('$custId: ID!');
+      if (add_.length) { decl.push('$tags: [String!]!'); vars.tags = add_;
+        parts.push('t1: tagsAdd(id: $custId, tags: $tags) { node { id } userErrors { field message } }'); }
+      if (rem_.length) { decl.push('$rtags: [String!]!'); vars.rtags = rem_;
+        parts.push('t2: tagsRemove(id: $custId, tags: $rtags) { node { id } userErrors { field message } }'); }
+      if (add_.length || rem_.length) vars.custId = cust.id;
     }
     const ruleSet = { appliedDisjunctively: false, rules: [{ column: 'TAG', relation: 'EQUALS', condition: tag }] };
     if (!col && !ctx.shopErr && want('collection')) {
@@ -322,7 +338,7 @@ return ctxs.map((ctx, i) => {
 
   return { json: {
     row_id: v.row_id, name: v.name, code: v.code, tag, v,
-    checks, notes, errors, ids, did: [],
+    checks, notes, errors, ids, did: [], reqTags,
     colGid: col ? col.id : '', published, onlinePubId: ctx.onlinePubId,
     lockId: lock ? String(lid(lock) || ctx.lockId) : '', plannedLock, template: ctx.template,
     writeBody, wroteSomething: parts.length > 0,
@@ -343,8 +359,9 @@ return plans.map((p, i) => {
     if (r.error) p.errors.push('Shopify: ' + errText(r.error));
     if (r.errors) p.errors.push('Shopify: ' + gqlErr(r));
   }
-  if (d.c1) { const e = ue(d.c1); if (e) p.errors.push('Create customer: ' + e); else if (d.c1.customer) { p.ids.customer_id = String(d.c1.customer.legacyResourceId); p.did.push('Created the customer with tags ' + [p.tag, ...S.requiredTags].join(', ')); } }
-  if (d.t1) { const e = ue(d.t1); if (e) p.errors.push('Add tag: ' + e); else p.did.push('Added missing tags to the customer'); }
+  if (d.c1) { const e = ue(d.c1); if (e) p.errors.push('Create customer: ' + e); else if (d.c1.customer) { p.ids.customer_id = String(d.c1.customer.legacyResourceId); p.did.push('Created the customer with tags ' + [p.tag, ...(p.reqTags || [])].join(', ')); } }
+  if (d.t1) { const e = ue(d.t1); if (e) p.errors.push('Add tag: ' + e); else p.did.push('Added tags: ' + ((p.writeBody.variables || {}).tags || []).join(', ')); }
+  if (d.t2) { const e = ue(d.t2); if (e) p.errors.push('Remove tag: ' + e); else p.did.push('Removed tags: ' + ((p.writeBody.variables || {}).rtags || []).join(', ')); }
   if (d.k1) { const e = ue(d.k1); if (e) p.errors.push('Create collection: ' + e); else if (d.k1.collection) {
     p.ids.collection_id = String(d.k1.collection.legacyResourceId); p.colGid = d.k1.collection.id; p.published = false;
     p.did.push('Created the collection “' + d.k1.collection.title + '”'); } }
