@@ -124,6 +124,8 @@ return S.vendors.map((v0, idx) => {
     } },
     onlinePubId: online ? online.id : '',
     template, templateErr, listErr, shopErr,
+    lockDiag: `Locksmith listed ${locks.length} lock(s); none mention collection ${col ? col.legacyResourceId : '(none)'} or ${tag}.`
+      + (locks.length ? ' First lock looks like: ' + JSON.stringify(locks[0]).slice(0, 500) : ' Raw answer: ' + JSON.stringify(rawLocks).slice(0, 500)),
   } };
 });
 """
@@ -244,7 +246,7 @@ return ctxs.map((ctx, i) => {
     add('lock', 'bad', `Lock ${ctx.lockId} was not found`, errText(det.error), col ? 'lock' : '');
   } else if (ctx.lockId) lock = unwrap(det);
   if (!S.listErr && !lock && !(ctx.lockId && det.error)) {
-    add('lock', 'bad', 'No Locksmith lock on the collection', 'Anyone can see the collection and its products.', col ? 'lock' : '');
+    add('lock', 'bad', 'No Locksmith lock on the collection', 'Anyone can see the collection and its products. (' + ctx.lockDiag + ')', col ? 'lock' : '');
   }
   if (lock) {
     ids.lock_id = String(lock.id || ctx.lockId);
