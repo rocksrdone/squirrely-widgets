@@ -17,6 +17,7 @@ SETTINGS_JS = r"""
 // ── Change these two if the store or API version changes ──
 const SHOP = 'squirrelvender.myshopify.com';   // vendor store's myshopify domain
 const API_VERSION = '2025-07';
+const LOCKSMITH_SHOP = 'dcdc55-ee.myshopify.com';   // the store's permanent myshopify domain (what Locksmith knows it by)
 
 const first = $input.first().json;
 const body = first.body || first;
@@ -28,7 +29,7 @@ const tpl = String(body.template_lock_id || '').replace(/\D/g, '');
 const LS = 'https://uselocksmith.com/api/unstable';
 
 return [{ json: {
-  shop: SHOP, apiVersion: API_VERSION, action, vendors,
+  shop: SHOP, lsShop: LOCKSMITH_SHOP, apiVersion: API_VERSION, action, vendors,
   fix: Array.isArray(body.fix) ? body.fix.map(String) : [],
   templateLockId: tpl,
   templateUrl: tpl ? `${LS}/locks/${tpl}.json` : `${LS}/shop.json`,
@@ -458,7 +459,7 @@ def ls_http(name, method_expr, url_expr, pos, body_expr=None, send_body_expr=Non
         "method": method_expr, "url": url_expr,
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
         "sendHeaders": True,
-        "headerParameters": {"parameters": [{"name": "x-shopify-shop-domain", "value": "={{ " + SHOP + ".shop }}"}]},
+        "headerParameters": {"parameters": [{"name": "x-shopify-shop-domain", "value": "={{ " + SHOP + ".lsShop }}"}]},
         "options": {},
     }
     if body_expr:
