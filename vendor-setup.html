@@ -64,6 +64,9 @@ input.code { font-family: 'DM Mono', monospace; text-transform: uppercase; lette
 .badge.none { background: var(--warm); color: #6B5E52; }
 .spacer { margin-left: auto; }
 .when { font-size: 10.5px; color: var(--muted); }
+.links { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; }
+.links a { color: var(--teal); text-decoration: none; font-weight: 500; }
+.links a:hover { text-decoration: underline; }
 .saved-status { font-size: 11px; color: #6B5E52; margin-top: 4px; }
 .checks { margin-top: 8px; border-top: 1px solid var(--warm); padding-top: 6px; }
 .part { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 6px 0 2px; }
@@ -93,12 +96,13 @@ const TIMEOUT_MS = 120000;
 const BATCH = 4;
 const TEMPLATE_KEY = 'Vendor_Lock_Template_Code';
 const VENDOR_TYPE = 'Wholesale Vendor';
+const SHOP_ADMIN = 'https://admin.shopify.com/store/squirrelvender';
 const STOP_WORDS = new Set(['and', '&', 'of', 'the', '+']);
 
 const S = {
   vendors: [], codes: {}, results: {}, busy: false, busyRow: null, error: '', filter: 'all',
   form: { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false },
-  template: '', formMsg: null, banner: null,
+  template: '', formMsg: null, banner: null, gristRowLink: null,
 };
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -143,9 +147,47 @@ const codeOwner = code => S.codes[String(code || '').trim().toUpperCase()];
 
 /* ── Grist ────────────────────────────────────────────────────────────── */
 
+/* Link to a vendor's Customers row: /<docId>/<slug>/p/<page>#a1.s<section>.r<row>.c<col>.
+   Prefers a Customers table section on a page (one named for customers first);
+   falls back to the raw-data view. Same doc-address trick as the Settings Desk. */
+async function loadGristLinks() {
+  S.gristRowLink = null;
+  let base = '';
+  try {
+    const tok = await (grist.getAccessToken ? grist.getAccessToken({ readOnly: true }) : grist.docApi.getAccessToken({ readOnly: true }));
+    const m = String(tok && tok.baseUrl || '').match(/^(https?:\/\/[^/]+)\/(?:o\/[^/]+\/)?api\/docs\/([^/?#]+)/);
+    if (m) {
+      let slug = 'doc';
+      try { const n = await grist.docApi.getDocName(); if (n) slug = String(n).trim().replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'doc'; } catch (e) {}
+      base = `${m[1]}/${m[2]}/${slug}`;
+    }
+  } catch (e) {}
+  if (!base) return;
+  try {
+    const [T, V, VS, C] = await Promise.all(['_grist_Tables', '_grist_Views', '_grist_Views_section', '_grist_Tables_column'].map(t => grist.docApi.fetchTable(t)));
+    const ti = T.tableId.indexOf('Customers'); if (ti < 0) return;
+    const tref = T.id[ti];
+    const ci = C.id.findIndex((id, i) => C.parentId[i] === tref && C.colId[i] === 'Customer_Name');
+    const colRef = ci >= 0 ? C.id[ci] : null;
+    const viewName = id => { const i = V.id.indexOf(id); return i >= 0 ? String(V.name[i] || '') : ''; };
+    const cands = VS.id.map((id, i) => ({ id, view: VS.parentId[i], kind: VS.parentKey[i], table: VS.tableRef[i] }))
+      .filter(x => x.table === tref && x.view > 0 && (x.kind === 'record' || x.kind === 'single' || x.kind === 'detail'))
+      .sort((a, b) => (/customer/i.test(viewName(b.view)) - /customer/i.test(viewName(a.view))) || ((b.kind === 'record') - (a.kind === 'record')));
+    const c = colRef ? '.c' + colRef : '';
+    if (cands.length) {
+      const x = cands[0];
+      S.gristRowLink = row => `${base}/p/${x.view}#a1.s${x.id}.r${row}${c}`;
+    } else if (T.rawViewSectionRef && T.rawViewSectionRef[ti]) {
+      const rs = T.rawViewSectionRef[ti];
+      S.gristRowLink = row => `${base}/p/data#a1.s${rs}.r${row}${c}`;
+    }
+  } catch (e) { console.warn('No page links', e); }
+}
+
 async function load() {
   S.error = '';
   try {
+    if (!S.gristRowLink) await loadGristLinks();
     await SSSettings.load(true);
     S.template = SSSettings.text(TEMPLATE_KEY, '').trim().toUpperCase();
     const t = await grist.docApi.fetchTable('Customers');
@@ -414,7 +456,17 @@ function vendorCard(v) {
       ${fixable ? `<button class="btn tiny" ${S.busy ? 'disabled' : ''} onclick="fixAll(${v.id})">Fix all</button>` : ''}
       ${st === 'none' || st === 'bad' ? `<button class="btn tiny secondary" ${S.busy || noCode ? 'disabled' : ''} onclick="setupOne(${v.id})" title="Creates whatever is missing; never changes what exists">Set up</button>` : ''}
       <button class="btn tiny secondary" ${S.busy || noCode ? 'disabled' : ''} onclick="checkOne(${v.id})">Check</button>
-    </div>${body}</div>`;
+    </div>${vendorLinks(v)}${body}</div>`;
+}
+
+function vendorLinks(v) {
+  const a = [];
+  if (S.gristRowLink) a.push(['Customers row in Grist', S.gristRowLink(v.id)]);
+  if (v.customer_id) a.push(['Shopify customer', `${SHOP_ADMIN}/customers/${v.customer_id}`]);
+  if (v.collection_id) a.push(['Shopify collection', `${SHOP_ADMIN}/collections/${v.collection_id}`]);
+  if (v.lock_id) a.push(['Locksmith lock', `${SHOP_ADMIN}/apps/locksmith/locks/${v.lock_id}`]);
+  if (!a.length) return '';
+  return `<div class="links">${a.map(([l, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(l)} ↗</a>`).join('')}</div>`;
 }
 
 function render() {
