@@ -49,7 +49,7 @@ const unwrap = r => (r && (r.lock || (r.data && !Array.isArray(r.data) && r.data
 const errText = e => {
   if (!e) return '';
   if (typeof e === 'string') return e;
-  const m = [e.message, e.description].filter(Boolean).join(' — ');
+  const m = [e.code, e.message, e.description].filter(Boolean).join(' — ');
   return m || JSON.stringify(e).slice(0, 300);
 };
 const gqlErr = r => r && r.errors ? (Array.isArray(r.errors) ? r.errors.map(e => e.message).join('; ') : JSON.stringify(r.errors).slice(0, 300)) : '';
@@ -215,7 +215,7 @@ return ctxs.map((ctx, i) => {
   // ── Collection ──
   let col = d.col || null;
   let published = null;
-  if (S.shopErr) add('collection', 'bad', 'Could not read collections', S.shopErr);
+  if (ctx.shopErr) add('collection', 'bad', 'Could not read collections', ctx.shopErr);
   else if (!col) {
     add('collection', 'bad', 'No collection for this vendor', `Expected a smart collection “${v.name}” with the rule: product tag equals ${tag}.`, 'collection');
   } else {
@@ -241,11 +241,11 @@ return ctxs.map((ctx, i) => {
   // ── Lock ──
   let lock = null;
   const det = dets[i] || {};
-  if (S.listErr) add('lock', 'bad', 'Could not reach Locksmith', S.listErr);
+  if (ctx.listErr) add('lock', 'bad', 'Could not reach Locksmith', ctx.listErr + (/INVALID_HTTP_TOKEN/.test(ctx.listErr) ? ' — the Name in the “Locksmith Vendor Store” credential must be exactly x-locksmith-access-token (token goes in Value).' : ''));
   else if (ctx.lockId && det.error) {
     add('lock', 'bad', `Lock ${ctx.lockId} was not found`, errText(det.error), col ? 'lock' : '');
   } else if (ctx.lockId) lock = unwrap(det);
-  if (!S.listErr && !lock && !(ctx.lockId && det.error)) {
+  if (!ctx.listErr && !lock && !(ctx.lockId && det.error)) {
     add('lock', 'bad', 'No Locksmith lock on the collection', 'Anyone can see the collection and its products. (' + ctx.lockDiag + ')', col ? 'lock' : '');
   }
   if (lock) {
@@ -277,7 +277,7 @@ return ctxs.map((ctx, i) => {
     }
   }
   if ((ctx.extraLocks || []).length) add('lock', 'warn', 'More locks mention this vendor', 'Lock IDs: ' + ctx.extraLocks.join(', ') + '. Check them in Locksmith.');
-  if (S.templateErr) notes.push('Template lock could not be read: ' + S.templateErr);
+  if (ctx.templateErr) notes.push('Template lock could not be read: ' + ctx.templateErr);
 
   // ── Shopify writes (customer + collection) ──
   const parts = [], vars = {}, decl = [];
@@ -297,7 +297,7 @@ return ctxs.map((ctx, i) => {
       parts.push('t1: tagsAdd(id: $custId, tags: $tags) { node { id } userErrors { field message } }');
     }
     const ruleSet = { appliedDisjunctively: false, rules: [{ column: 'TAG', relation: 'EQUALS', condition: tag }] };
-    if (!col && !S.shopErr && want('collection')) {
+    if (!col && !ctx.shopErr && want('collection')) {
       decl.push('$col: CollectionInput!'); vars.col = { title: v.name, ruleSet };
       parts.push('k1: collectionCreate(input: $col) { collection { id legacyResourceId title } userErrors { field message } }');
     } else if (col && col.ruleSet && want('collection_rule') && checks.some(c => c.fix === 'collection_rule')) {
