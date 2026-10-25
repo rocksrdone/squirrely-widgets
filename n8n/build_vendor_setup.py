@@ -31,6 +31,8 @@ const LS = 'https://uselocksmith.com/api/unstable';
 return [{ json: {
   shop: SHOP, lsShop: LOCKSMITH_SHOP, apiVersion: API_VERSION, action, vendors,
   fix: Array.isArray(body.fix) ? body.fix.map(String) : [],
+  // Shared tags every vendor customer needs (Wholesaler = whole-store lock, Vendor-All = shared collections)
+  requiredTags: (Array.isArray(body.required_tags) && body.required_tags.length ? body.required_tags : ['Vendor-All', 'Wholesaler']).map(t => String(t).trim()).filter(Boolean),
   templateLockId: tpl,
   templateUrl: tpl ? `${LS}/locks/${tpl}.json` : `${LS}/shop.json`,
   collectionsBody: { query: `{
@@ -208,6 +210,10 @@ return ctxs.map((ctx, i) => {
       add('customer', 'warn', 'Email differs from Grist', `Store: ${cust.email || '(none)'} · Grist: ${v.email}`);
     if (!hasTag(cust, tag)) add('customer', 'bad', `Customer is missing the ${tag} tag`, 'Without it the lock keeps them out.', 'customer');
     else add('customer', 'ok', `Tagged ${tag}`);
+    const missingReq = S.requiredTags.filter(t => !hasTag(cust, t));
+    if (missingReq.length) add('customer', 'bad', 'Customer is missing shared tag' + (missingReq.length > 1 ? 's ' : ' ') + missingReq.join(', '),
+      'Wholesaler opens the vendor store; Vendor-All opens the shared vendor collections.', 'customer');
+    else add('customer', 'ok', 'Shared tags: ' + S.requiredTags.join(', '));
     if (byEmail.length > 1) add('customer', 'warn', 'More than one customer has this email', byEmail.map(c => c.email).join(', '));
   }
   const others = byTag.filter(c => !cust || c.id !== cust.id);
@@ -289,13 +295,13 @@ return ctxs.map((ctx, i) => {
       const words = String(v.name).trim().split(/\s+/);
       const firstName = String(v.first_name || (words.length > 1 ? words.slice(0, -1).join(' ') : words[0])).trim();
       const lastName = String(v.last_name != null && v.first_name ? v.last_name : (words.length > 1 ? words[words.length - 1] : '')).trim();
-      const input = { firstName, lastName, email: v.email, tags: [tag] };
+      const input = { firstName, lastName, email: v.email, tags: [tag, ...S.requiredTags] };
       const ph = phoneE164(v.phone);
       if (ph) input.phone = ph; else if (String(v.phone || '').trim()) notes.push('Phone left off — add the country code (e.g. +1) and set it in Shopify.');
       decl.push('$cust: CustomerInput!'); vars.cust = input;
       parts.push('c1: customerCreate(input: $cust) { customer { id legacyResourceId } userErrors { field message } }');
-    } else if (cust && !hasTag(cust, tag) && want('customer')) {
-      decl.push('$custId: ID!', '$tags: [String!]!'); vars.custId = cust.id; vars.tags = [tag];
+    } else if (cust && [tag, ...S.requiredTags].some(t => !hasTag(cust, t)) && want('customer')) {
+      decl.push('$custId: ID!', '$tags: [String!]!'); vars.custId = cust.id; vars.tags = [tag, ...S.requiredTags].filter(t => !hasTag(cust, t));
       parts.push('t1: tagsAdd(id: $custId, tags: $tags) { node { id } userErrors { field message } }');
     }
     const ruleSet = { appliedDisjunctively: false, rules: [{ column: 'TAG', relation: 'EQUALS', condition: tag }] };
@@ -337,8 +343,8 @@ return plans.map((p, i) => {
     if (r.error) p.errors.push('Shopify: ' + errText(r.error));
     if (r.errors) p.errors.push('Shopify: ' + gqlErr(r));
   }
-  if (d.c1) { const e = ue(d.c1); if (e) p.errors.push('Create customer: ' + e); else if (d.c1.customer) { p.ids.customer_id = String(d.c1.customer.legacyResourceId); p.did.push('Created the customer with tag ' + p.tag); } }
-  if (d.t1) { const e = ue(d.t1); if (e) p.errors.push('Add tag: ' + e); else p.did.push('Added tag ' + p.tag + ' to the customer'); }
+  if (d.c1) { const e = ue(d.c1); if (e) p.errors.push('Create customer: ' + e); else if (d.c1.customer) { p.ids.customer_id = String(d.c1.customer.legacyResourceId); p.did.push('Created the customer with tags ' + [p.tag, ...S.requiredTags].join(', ')); } }
+  if (d.t1) { const e = ue(d.t1); if (e) p.errors.push('Add tag: ' + e); else p.did.push('Added missing tags to the customer'); }
   if (d.k1) { const e = ue(d.k1); if (e) p.errors.push('Create collection: ' + e); else if (d.k1.collection) {
     p.ids.collection_id = String(d.k1.collection.legacyResourceId); p.colGid = d.k1.collection.id; p.published = false;
     p.did.push('Created the collection “' + d.k1.collection.title + '”'); } }
