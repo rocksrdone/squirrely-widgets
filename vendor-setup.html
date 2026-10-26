@@ -135,6 +135,10 @@ function contactFromRow(t, i) {
       city: city.replace(/,\s*$/, ''), provinceCode: /^[A-Z]{2,3}$/.test(state) ? state : '', zip, countryCode: country };
     out.address.company = company;
     Object.keys(out.address).forEach(k => { if (!out.address[k]) delete out.address[k]; });
+  } else {
+    /* No street address in Grist: still put the business in Company (and the person's name) on the default address. */
+    out.address = { company, firstName: sp.first, lastName: sp.last };
+    Object.keys(out.address).forEach(k => { if (!out.address[k]) delete out.address[k]; });
   }
   return out;
 }
