@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Templates</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+:root {
+  color-scheme: light;
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72;
+  --accent: #8B3A2A; --accent-light: #F2E8E5; --teal: #3A8B7A; --teal-light: #E5F2EF;
+  --gold: #B07D2A; --gold-light: #F5EDD8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; padding: 14px; }
+input, select, button, textarea { font: inherit; color: var(--ink); }
+.title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+.subtitle { font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+.layout { display: grid; grid-template-columns: 230px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+.panel { background: white; border: 1.5px solid var(--rule); border-radius: 8px; padding: 12px 13px; margin-bottom: 12px; }
+.panel h2 { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 8px; }
+.cat { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 10px 0 3px; }
+.tpl { display: block; width: 100%; text-align: left; background: none; border: none; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+.tpl:hover { background: var(--paper); }
+.tpl.on { background: var(--ink); color: white; }
+label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+input[type=text], select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 6px; background: white; }
+textarea { min-height: 220px; resize: vertical; line-height: 1.55; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+@media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+.btn { font-size: 11px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--teal); background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn.secondary { background: white; color: var(--ink); border-color: var(--rule); font-weight: 500; }
+.btn.danger { background: white; color: var(--accent); border-color: var(--accent); }
+.btn.tiny { font-size: 10px; padding: 4px 9px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.grow { flex: 1; }
+.subject { font-weight: 600; font-size: 14px; padding: 8px 10px; background: var(--paper); border-radius: 6px; margin-bottom: 8px; }
+.body { white-space: pre-wrap; padding: 10px 12px; background: var(--paper); border-radius: 6px; font-size: 13px; line-height: 1.6; min-height: 120px; }
+.missing { background: var(--gold-light); color: #6E4C13; border-radius: 3px; padding: 0 3px; font-family: 'DM Mono', monospace; font-size: 11.5px; }
+.warn { font-size: 11.5px; color: #6E4C13; background: var(--gold-light); border: 1px solid #E4CF9E; border-radius: 6px; padding: 6px 10px; margin-top: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chip { font-family: 'DM Mono', monospace; font-size: 10.5px; border: 1px solid var(--rule); background: var(--paper); border-radius: 10px; padding: 2px 8px; cursor: pointer; }
+.chip:hover { border-color: var(--teal); }
+.hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
+.toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--ink); color: white; padding: 9px 16px;
+  border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 5; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="title">Email Templates</div>
+<div class="subtitle">Pick a template and a customer (and order) — the blanks fill in from Grist. Copy, or open it in your mail app.</div>
+<div id="app"><div class="empty">Loading…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const TABLE = 'Email_Templates';
+const CATEGORIES = ['Orders', 'Shipping', 'Vendors', 'Payments', 'General'];
+const PLACEHOLDERS = [
+  ['first_name', 'Contact’s first name (else business)'], ['contact_name', 'Main contact'], ['business', 'Customer name'],
+  ['email', 'Customer email'], ['code', 'Vendor code'], ['order_number', 'Order #'], ['po_number', 'PO number'],
+  ['po_line', '" (PO …)" when there is a PO'], ['order_date', 'Order date'], ['due_date', 'Due date'], ['ship_date', 'Shipped date'],
+  ['carrier', 'Carrier'], ['tracking_number', 'Tracking #'], ['tracking_url', 'Tracking link'], ['store_url', 'Vendor store link'], ['today', 'Today'],
+];
+
+const S = { templates: [], customers: [], orders: [], tplId: null, custId: null, orderId: null, editing: false, draft: null };
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2000); }
+const col = (t, k) => t[k] || [];
+const fmtDate = v => { if (v == null || v === '') return ''; const d = new Date(typeof v === 'number' ? v * 1000 : v); return isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); };
+
+async function load() {
+  await SSSettings.load(true);
+  const [T, C, W] = await Promise.all([TABLE, 'Customers', 'Work_Orders'].map(n => grist.docApi.fetchTable(n).catch(() => ({ id: [] }))));
+  S.templates = (T.id || []).map((id, i) => ({ id, name: col(T, 'Name')[i] || '(untitled)', cat: col(T, 'Category')[i] || 'General',
+    subject: col(T, 'Subject')[i] || '', body: col(T, 'Body')[i] || '', notes: col(T, 'Notes')[i] || '', sort: col(T, 'Sort')[i] || 0 }))
+    .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+  S.customers = (C.id || []).map((id, i) => ({ id, name: String(col(C, 'Customer_Name')[i] || ''), code: col(C, 'Code')[i] || '',
+    email: col(C, 'Email')[i] || '', contact: String(col(C, 'Main_Contact')[i] || col(C, 'Owner_Name')[i] || ''), type: col(C, 'Type')[i] || '' }))
+    .filter(c => c.name).sort((a, b) => a.name.localeCompare(b.name));
+  S.orders = (W.id || []).map((id, i) => ({ id, cust: col(W, 'Customer')[i], num: col(W, 'Order_Number')[i], po: col(W, 'PO_Number')[i],
+    date: col(W, 'Order_Date')[i], due: col(W, 'Due_Date')[i], shipped: col(W, 'Shipped_Date')[i], carrier: col(W, 'Carrier')[i],
+    trackNo: col(W, 'Tracking_Number')[i], trackUrl: col(W, 'Tracking_URL')[i], status: col(W, 'Status')[i] }));
+  if (!S.templates.some(t => t.id === S.tplId)) S.tplId = S.templates[0] ? S.templates[0].id : null;
+  render();
+}
+
+const tpl = () => S.templates.find(t => t.id === S.tplId);
+const cust = () => S.customers.find(c => c.id === S.custId);
+const order = () => S.orders.find(o => o.id === S.orderId);
+
+function values() {
+  const c = cust(), o = order();
+  const contact = c ? c.contact.trim() : '';
+  const po = o && o.po ? String(o.po) : '';
+  return {
+    first_name: contact ? contact.split(/\s+/)[0] : (c ? c.name : ''), contact_name: contact, business: c ? c.name : '',
+    email: c ? c.email : '', code: c ? c.code : '', order_number: o && o.num ? String(o.num) : '', po_number: po,
+    po_line: o ? (po ? ` (PO ${po})` : '') : null, order_date: o ? fmtDate(o.date) : '', due_date: o ? fmtDate(o.due) : '',
+    ship_date: o ? fmtDate(o.shipped) : '', carrier: o ? (o.carrier || '') : '', tracking_number: o ? (o.trackNo || '') : '',
+    tracking_url: o ? (o.trackUrl || '') : '', store_url: SSSettings.text('Vendor_Store_URL', 'https://squirrelvendor.com'),
+    today: new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }),
+  };
+}
+/* Fill {placeholders}. Unknown/empty ones are left as {name} (and listed) so nothing silently goes out blank. */
+function fill(text, html) {
+  const vals = values(), missing = new Set();
+  const out = String(text || '').replace(/\{([a-z_]+)\}/g, (m, k) => {
+    const v = vals[k];
+    if (v === null || v === undefined || (v === '' && k !== 'po_line')) { missing.add(k); return html ? `<span class="missing">{${esc(k)}}</span>` : m; }
+    return html ? esc(v) : v;
+  });
+  return { out: html ? out.replace(/\{(?![a-z_]+\})/g, '{') : out, missing };
+}
+function fillHtml(text) {
+  const vals = values(), missing = new Set();
+  const parts = String(text || '').split(/(\{[a-z_]+\})/g).map(p => {
+    const m = p.match(/^\{([a-z_]+)\}$/); if (!m) return esc(p);
+    const k = m[1], v = vals[k];
+    if (v === null || v === undefined || (v === '' && k !== 'po_line')) { missing.add(k); return `<span class="missing">{${esc(k)}}</span>`; }
+    return esc(v);
+  });
+  return { html: parts.join(''), missing };
+}
+
+async function copyText(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(`${what} copied`); return; } catch (e) {}
+  const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast(`${what} copied`); } catch (e) { toast('Copy failed — select the text and press Ctrl+C'); }
+  ta.remove();
+}
+function copySubject() { const t = tpl(); if (t) copyText(fill(t.subject).out, 'Subject'); }
+function copyBody() { const t = tpl(); if (t) copyText(fill(t.body).out, 'Message'); }
+function copyBoth() { const t = tpl(); if (t) copyText(fill(t.subject).out + '\n\n' + fill(t.body).out, 'Subject and message'); }
+function openMail() {
+  const t = tpl(), c = cust(); if (!t) return;
+  const url = `mailto:${encodeURIComponent(c && c.email || '')}?subject=${encodeURIComponent(fill(t.subject).out)}&body=${encodeURIComponent(fill(t.body).out)}`;
+  window.open(url, '_blank');
+}
+
+function pickTpl(id) { if (S.editing && !confirm('Discard your template edits?')) return; S.tplId = id; S.editing = false; render(); }
+function pickCust(id) { S.custId = Number(id) || null; S.orderId = null; const os = custOrders(); if (os.length) S.orderId = os[0].id; render(); }
+function pickOrder(id) { S.orderId = Number(id) || null; render(); }
+const custOrders = () => S.orders.filter(o => o.cust === S.custId).sort((a, b) => (b.date || 0) - (a.date || 0));
+
+/* ── Editing templates ── */
+function startEdit(isNew) {
+  const t = tpl();
+  S.draft = isNew ? { id: null, name: 'New template', cat: 'General', subject: '', body: 'Hi {first_name},\n\n\n\nThank you,\nSquirrely Stash', notes: '' }
+                  : { ...t };
+  S.editing = true; render();
+}
+function draftField(k, v) { S.draft[k] = v; }
+function insertPh(k) {
+  const ta = document.getElementById('d-body'); if (!ta) return;
+  const s = ta.selectionStart, e = ta.selectionEnd, tok = `{${k}}`;
+  ta.value = ta.value.slice(0, s) + tok + ta.value.slice(e); ta.focus(); ta.selectionStart = ta.selectionEnd = s + tok.length;
+  S.draft.body = ta.value;
+}
+async function saveDraft() {
+  const d = S.draft; if (!d.name.trim()) { toast('Give it a name'); return; }
+  const rec = { Name: d.name.trim(), Category: d.cat, Subject: d.subject, Body: d.body, Notes: d.notes };
+  if (d.id) await grist.docApi.applyUserActions([['UpdateRecord', TABLE, d.id, rec]]);
+  else {
+    rec.Sort = Math.max(0, ...S.templates.map(t => t.sort || 0)) + 1;
+    const r = await grist.docApi.applyUserActions([['AddRecord', TABLE, null, rec]]);
+    S.tplId = r && r.retValues ? r.retValues[0] : S.tplId;
+  }
+  S.editing = false; toast('Template saved'); await load();
+}
+async function deleteTpl() {
+  const t = tpl(); if (!t || !confirm(`Delete the template “${t.name}”?`)) return;
+  await grist.docApi.applyUserActions([['RemoveRecord', TABLE, t.id]]);
+  S.tplId = null; S.editing = false; await load();
+}
+function cancelEdit() { S.editing = false; render(); }
+
+function render() {
+  const app = document.getElementById('app');
+  const cats = [...new Set([...CATEGORIES, ...S.templates.map(t => t.cat)])];
+  const list = cats.filter(c => S.templates.some(t => t.cat === c)).map(c =>
+    `<div class="cat">${esc(c)}</div>` + S.templates.filter(t => t.cat === c).map(t =>
+      `<button class="tpl ${t.id === S.tplId ? 'on' : ''}" onclick="pickTpl(${t.id})">${esc(t.name)}</button>`).join('')).join('');
+  const t = tpl();
+  const orders = custOrders();
+  const pick = `
+    <div class="row">
+      <div><label>Customer</label><select onchange="pickCust(this.value)">
+        <option value="">— choose —</option>
+        ${S.customers.map(c => `<option value="${c.id}" ${c.id === S.custId ? 'selected' : ''}>${esc(c.name)}${c.code ? ' (' + esc(c.code) + ')' : ''}</option>`).join('')}
+      </select></div>
+      <div><label>Order</label><select onchange="pickOrder(this.value)" ${S.custId ? '' : 'disabled'}>
+        <option value="">— none —</option>
+        ${orders.map(o => `<option value="${o.id}" ${o.id === S.orderId ? 'selected' : ''}>#${esc(o.num || o.id)}${o.po ? ' · PO ' + esc(o.po) : ''} · ${esc(fmtDate(o.date))}${o.status ? ' · ' + esc(o.status) : ''}</option>`).join('')}
+      </select></div>
+    </div>`;
+
+  let main;
+  if (S.editing) {
+    const d = S.draft;
+    main = `<div class="panel"><h2>${d.id ? 'Edit template' : 'New template'}</h2>
+      <div class="row">
+        <div><label>Name</label><input type="text" value="${esc(d.name)}" oninput="draftField('name', this.value)"></div>
+        <div><label>Category</label><select onchange="draftField('cat', this.value)">${cats.map(c => `<option ${c === d.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+      </div>
+      <label>Subject</label><input type="text" value="${esc(d.subject)}" oninput="draftField('subject', this.value)" style="margin-bottom:10px">
+      <label>Message</label><textarea id="d-body" oninput="draftField('body', this.value)">${esc(d.body)}</textarea>
+      <div class="hint">Click to insert a blank at the cursor:</div>
+      <div class="chips">${PLACEHOLDERS.map(([k, l]) => `<span class="chip" title="${esc(l)}" onclick="insertPh('${k}')">{${k}}</span>`).join('')}</div>
+      <label style="margin-top:10px">Notes (only you see these)</label><input type="text" value="${esc(d.notes)}" oninput="draftField('notes', this.value)">
+      <div class="bar"><button class="btn" onclick="saveDraft()">Save template</button><button class="btn secondary" onclick="cancelEdit()">Cancel</button>
+        <span class="grow"></span>${d.id ? '<button class="btn danger" onclick="deleteTpl()">Delete</button>' : ''}</div></div>`;
+  } else if (!t) {
+    main = `<div class="panel"><div class="empty">No templates yet.</div><button class="btn" onclick="startEdit(true)">New template</button></div>`;
+  } else {
+    const subj = fillHtml(t.subject), body = fillHtml(t.body);
+    const missing = [...new Set([...subj.missing, ...body.missing])];
+    main = `<div class="panel"><h2>${esc(t.name)}</h2>${pick}
+      <div class="subject">${subj.html || '<i>(no subject)</i>'}</div>
+      <div class="body">${body.html}</div>
+      ${missing.length ? `<div class="warn">Still blank: ${missing.map(k => '{' + esc(k) + '}').join(', ')} — ${S.custId ? 'fill these in Grist, pick an order, or type them after pasting' : 'pick a customer (and order)'}.</div>` : ''}
+      ${t.notes ? `<div class="hint">${esc(t.notes)}</div>` : ''}
+      <div class="bar">
+        <button class="btn" onclick="copyBody()">Copy message</button>
+        <button class="btn secondary" onclick="copySubject()">Copy subject</button>
+        <button class="btn secondary" onclick="copyBoth()">Copy both</button>
+        <button class="btn secondary" onclick="openMail()" ${cust() && cust().email ? '' : 'disabled title="Customer has no email in Grist"'}>Open in mail app</button>
+        <span class="grow"></span>
+        <button class="btn secondary tiny" onclick="startEdit(false)">Edit template</button>
+      </div></div>`;
+  }
+  app.innerHTML = `<div class="layout">
+    <div class="panel"><h2>Templates</h2>${list || '<div class="hint">None yet</div>'}
+      <div class="bar"><button class="btn secondary tiny" onclick="startEdit(true)">+ New template</button></div></div>
+    <div>${main}</div></div>`;
+}
+
+grist.ready({ requiredAccess: 'full' });
+/* If this widget sits next to a Customers or Work_Orders table, follow the selected row. */
+grist.onRecord(rec => {
+  if (!rec) return;
+  if (rec.Order_Number !== undefined && rec.Customer) { S.custId = typeof rec.Customer === 'object' ? rec.Customer.id || rec.Customer : rec.Customer; S.orderId = rec.id; render(); }
+  else if (rec.Customer_Name !== undefined && rec.Code !== undefined) { pickCust(rec.id); }
+});
+load().catch(e => { document.getElementById('app').innerHTML = `<div class="empty">Could not load: ${esc(e.message || e)}</div>`; });
+</script>
+</body>
+</html>
