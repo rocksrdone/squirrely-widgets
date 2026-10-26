@@ -88,9 +88,9 @@ const isTagRule = (c, tag) => c.ruleSet && (c.ruleSet.rules || []).some(r =>
   r.column === 'TAG' && r.relation === 'EQUALS' && lc(r.condition) === lc(tag));
 
 const LOOKUP = `query($q: String!, $tq: String!, $cid: ID!, $hasCid: Boolean!, $colId: ID!, $hasCol: Boolean!) {
-  byEmail: customers(first: 5, query: $q) { nodes { id legacyResourceId firstName lastName email phone tags } }
+  byEmail: customers(first: 5, query: $q) { nodes { id legacyResourceId firstName lastName email phone tags defaultAddress { id firstName lastName company address1 address2 city provinceCode zip countryCodeV2 } } }
   byTag: customers(first: 10, query: $tq) { nodes { id legacyResourceId firstName lastName email tags } }
-  byId: customer(id: $cid) @include(if: $hasCid) { id legacyResourceId firstName lastName email phone tags }
+  byId: customer(id: $cid) @include(if: $hasCid) { id legacyResourceId firstName lastName email phone tags defaultAddress { id firstName lastName company address1 address2 city provinceCode zip countryCodeV2 } }
   col: collection(id: $colId) @include(if: $hasCol) { id legacyResourceId title handle
     ruleSet { appliedDisjunctively rules { column relation condition } }
     resourcePublications(first: 10) { nodes { isPublished publication { id name } } } }
@@ -192,6 +192,7 @@ return ctxs.map((ctx, i) => {
   const reqTags = [...S.requiredTags, ...fiberTags];
   const L = looks[i] || {}, d = L.data || {};
   const checks = [], notes = [], errors = [];
+  let contactPlan = null;
   const add = (part, status, label, detail = '', fix = '') => checks.push({ part, status, label, detail, fix });
   const ids = { customer_id: '', collection_id: '', lock_id: '' };
 
@@ -225,6 +226,27 @@ return ctxs.map((ctx, i) => {
       if (!missF.length && !extraF.length) add('customer', 'ok', 'Fibers: ' + (fiberTags.join(', ') || 'none'));
     }
     if (byEmail.length > 1) add('customer', 'warn', 'More than one customer has this email', byEmail.map(c => c.email).join(', '));
+    // Contact details: compare what Grist says (sent as v.contact) with Shopify. Blank in Grist = leave Shopify alone.
+    if (v.contact) {
+      const g = v.contact, a = cust.defaultAddress || {}, ga = g.address || null;
+      const same = (x, y) => lc(x).replace(/\s+/g, ' ') === lc(y).replace(/\s+/g, ' ');
+      const digits = x => String(x || '').replace(/\D/g, '');
+      const diffs = [];
+      if (g.firstName && !same(g.firstName, cust.firstName)) diffs.push(['First name', cust.firstName, g.firstName]);
+      if (g.lastName && !same(g.lastName, cust.lastName)) diffs.push(['Last name', cust.lastName, g.lastName]);
+      if (g.email && !same(g.email, cust.email)) diffs.push(['Email', cust.email, g.email]);
+      if (g.phone && digits(g.phone) !== digits(cust.phone)) diffs.push(['Phone', cust.phone, g.phone]);
+      const addrDiff = [];
+      if (ga) [['firstName', 'Ship-to first name'], ['lastName', 'Ship-to last name'], ['company', 'Company'], ['address1', 'Address 1'],
+               ['address2', 'Address 2'], ['city', 'City'], ['provinceCode', 'State'], ['zip', 'Zip'], ['countryCode', 'Country']]
+        .forEach(([k, label]) => { const sv = k === 'countryCode' ? a.countryCodeV2 : a[k];
+          if (ga[k] && !same(ga[k], sv)) addrDiff.push([label, sv, ga[k]]); });
+      diffs.push(...addrDiff);
+      contactPlan = { diffs, addr: addrDiff.length > 0 };
+      if (diffs.length) add('contact', 'warn', 'Shopify differs from Grist (' + diffs.map(d => d[0]).join(', ') + ')',
+        diffs.map(([l, sv, gv]) => `${l}: “${sv || '—'}” → “${gv}”`).join(' · '), 'contact');
+      else add('contact', 'ok', 'Contact details match Grist');
+    }
   }
   const others = byTag.filter(c => !cust || c.id !== cust.id);
   if (others.length) add('customer', 'bad', `Other customers also carry ${tag}`,
@@ -299,6 +321,7 @@ return ctxs.map((ctx, i) => {
 
   // ── Shopify writes (customer + collection) ──
   const parts = [], vars = {}, decl = [];
+  const useCust = () => { if (!vars.custId) { decl.push('$custId: ID!'); vars.custId = cust.id; } };
   const plannedLock = { create: false, rebuild: false };
   if (!lookErr && S.action !== 'check') {
     if (!cust && v.email && want('customer')) {
@@ -306,6 +329,7 @@ return ctxs.map((ctx, i) => {
       const firstName = String(v.first_name || (words.length > 1 ? words.slice(0, -1).join(' ') : words[0])).trim();
       const lastName = String(v.last_name != null && v.first_name ? v.last_name : (words.length > 1 ? words[words.length - 1] : '')).trim();
       const input = { firstName, lastName, email: v.email, tags: [tag, ...reqTags] };
+      if (v.contact && v.contact.address) input.addresses = [v.contact.address];
       const ph = phoneE164(v.phone);
       if (ph) input.phone = ph; else if (String(v.phone || '').trim()) notes.push('Phone left off — add the country code (e.g. +1) and set it in Shopify.');
       decl.push('$cust: CustomerInput!'); vars.cust = input;
@@ -313,12 +337,24 @@ return ctxs.map((ctx, i) => {
     } else if (cust && want('customer')) {
       const add_ = [tag, ...reqTags].filter(t => !hasTag(cust, t));
       const rem_ = (cust.tags || []).filter(t => dropTags.some(d => lc(d) === lc(t)));
-      if (add_.length || rem_.length) decl.push('$custId: ID!');
+      if (add_.length || rem_.length) useCust();
       if (add_.length) { decl.push('$tags: [String!]!'); vars.tags = add_;
         parts.push('t1: tagsAdd(id: $custId, tags: $tags) { node { id } userErrors { field message } }'); }
       if (rem_.length) { decl.push('$rtags: [String!]!'); vars.rtags = rem_;
         parts.push('t2: tagsRemove(id: $custId, tags: $rtags) { node { id } userErrors { field message } }'); }
-      if (add_.length || rem_.length) vars.custId = cust.id;
+    }
+    if (cust && contactPlan && contactPlan.diffs.length && want('contact')) {
+      const g = v.contact, upd = { id: cust.id };
+      contactPlan.diffs.forEach(([l]) => { if (l === 'First name') upd.firstName = g.firstName; if (l === 'Last name') upd.lastName = g.lastName;
+        if (l === 'Email') upd.email = g.email; if (l === 'Phone') upd.phone = g.phone; });
+      if (Object.keys(upd).length > 1) { decl.push('$cupd: CustomerInput!'); vars.cupd = upd;
+        parts.push('c3: customerUpdate(input: $cupd) { customer { id } userErrors { field message } }'); }
+      if (contactPlan.addr) {
+        useCust(); decl.push('$addr: MailingAddressInput!'); vars.addr = g.address;
+        if (cust.defaultAddress && cust.defaultAddress.id) { decl.push('$addrId: ID!'); vars.addrId = cust.defaultAddress.id;
+          parts.push('a1: customerAddressUpdate(customerId: $custId, addressId: $addrId, address: $addr, setAsDefault: true) { address { id } userErrors { field message } }'); }
+        else parts.push('a1: customerAddressCreate(customerId: $custId, address: $addr, setAsDefault: true) { address { id } userErrors { field message } }');
+      }
     }
     const ruleSet = { appliedDisjunctively: false, rules: [{ column: 'TAG', relation: 'EQUALS', condition: tag }] };
     if (!col && !ctx.shopErr && want('collection')) {
@@ -361,6 +397,8 @@ return plans.map((p, i) => {
   }
   if (d.c1) { const e = ue(d.c1); if (e) p.errors.push('Create customer: ' + e); else if (d.c1.customer) { p.ids.customer_id = String(d.c1.customer.legacyResourceId); p.did.push('Created the customer with tags ' + [p.tag, ...(p.reqTags || [])].join(', ')); } }
   if (d.t1) { const e = ue(d.t1); if (e) p.errors.push('Add tag: ' + e); else p.did.push('Added tags: ' + ((p.writeBody.variables || {}).tags || []).join(', ')); }
+  if (d.c3) { const e = ue(d.c3); if (e) p.errors.push('Update contact: ' + e); else p.did.push('Updated the Shopify contact (name/email/phone)'); }
+  if (d.a1) { const e = ue(d.a1); if (e) p.errors.push('Update address: ' + e); else p.did.push('Updated the Shopify address'); }
   if (d.t2) { const e = ue(d.t2); if (e) p.errors.push('Remove tag: ' + e); else p.did.push('Removed tags: ' + ((p.writeBody.variables || {}).rtags || []).join(', ')); }
   if (d.k1) { const e = ue(d.k1); if (e) p.errors.push('Create collection: ' + e); else if (d.k1.collection) {
     p.ids.collection_id = String(d.k1.collection.legacyResourceId); p.colGid = d.k1.collection.id; p.published = false;
