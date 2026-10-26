@@ -240,7 +240,10 @@ return ctxs.map((ctx, i) => {
       if (ga) [['firstName', 'Ship-to first name'], ['lastName', 'Ship-to last name'], ['company', 'Company'], ['address1', 'Address 1'],
                ['address2', 'Address 2'], ['city', 'City'], ['provinceCode', 'State'], ['zip', 'Zip'], ['countryCode', 'Country']]
         .forEach(([k, label]) => { const sv = k === 'countryCode' ? a.countryCodeV2 : a[k];
-          if (ga[k] && !same(ga[k], sv)) addrDiff.push([label, sv, ga[k]]); });
+          // A key sent with "" means "Grist has this blank → clear it in Shopify" (only for fields that may be empty).
+          const clearable = ['firstName', 'lastName', 'company', 'address2'].includes(k);
+          const has = ga[k] != null && (ga[k] !== '' || clearable);
+          if (has && !same(ga[k], sv)) addrDiff.push([label, sv, ga[k] === '' ? '(blank)' : ga[k]]); });
       diffs.push(...addrDiff);
       contactPlan = { diffs, addr: addrDiff.length > 0 };
       if (diffs.length) add('contact', 'warn', 'Shopify differs from Grist (' + diffs.map(d => d[0]).join(', ') + ')',

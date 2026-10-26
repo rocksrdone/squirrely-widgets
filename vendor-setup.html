@@ -115,11 +115,9 @@ function e164(p) {
 function contactFromRow(t, i) {
   const g = k => String((t[k] || [])[i] || '').trim();
   const name = g('Customer_Name'); if (!name) return null;
-  /* Person's name on the customer (Main Contact, else Owner Name); the business goes in the address Company.
-     No contact person in Grist → fall back to the business name split. */
+  /* Person's name on the customer (Main Contact, else Owner Name); no contact person → the business name split. */
   const person = g('Main_Contact') || g('Owner_Name');
   const sp = person ? personName(person) : splitName(name);
-  const company = g('Ship_Company') || name;
   const out = { firstName: sp.first, lastName: sp.last, email: g('Email'), phone: e164(g('Phone')) };
   const a1 = g('Ship_Addr1');
   if (a1) {
@@ -129,17 +127,15 @@ function contactFromRow(t, i) {
     if (zip) city = city.replace(new RegExp('\\s*' + zip.replace(/[-]/g, '\\-') + '[-\\d]*\\s*$'), '');
     city = city.replace(/[-\d]{4,}\s*$/, '').trim().replace(/,\s*$/, '');
     if (state) city = city.replace(new RegExp('[,\\s]+(' + state + (US_STATES[state] ? '|' + US_STATES[state] : '') + ')\\s*$', 'i'), '').trim();
-    const shipTo = g('Ship_To_Name');
-    const sn = shipTo && nameKey(shipTo) !== nameKey(name) ? personName(shipTo) : sp;
-    out.address = { firstName: sn.first, lastName: sn.last, address1: a1, address2: [g('Ship_Addr2'), g('Ship_Addr3')].filter(Boolean).join(', '),
+    /* The address mirrors Grist exactly: Ship To Name → name on the address, Ship Company → company.
+       Blank name/company/line 2 in Grist are sent as "" so Shopify gets cleared to match. */
+    const sn = personName(g('Ship_To_Name'));
+    out.address = { firstName: sn.first, lastName: sn.last, company: g('Ship_Company'), address1: a1,
+      address2: [g('Ship_Addr2'), g('Ship_Addr3')].filter(Boolean).join(', '),
       city: city.replace(/,\s*$/, ''), provinceCode: /^[A-Z]{2,3}$/.test(state) ? state : '', zip, countryCode: country };
-    out.address.company = company;
-    Object.keys(out.address).forEach(k => { if (!out.address[k]) delete out.address[k]; });
-  } else {
-    /* No street address in Grist: still put the business in Company (and the person's name) on the default address. */
-    out.address = { company, firstName: sp.first, lastName: sp.last };
-    Object.keys(out.address).forEach(k => { if (!out.address[k]) delete out.address[k]; });
+    ['city', 'provinceCode', 'zip', 'countryCode'].forEach(k => { if (!out.address[k]) delete out.address[k]; });
   }
+  /* No street address in Grist → Shopify's address is left alone. */
   return out;
 }
 
@@ -466,8 +462,7 @@ async function addVendor() {
     toast(`${f.name} added to Customers`);
     const v = { id: rowId, name: f.name.trim(), code: f.code, email: f.email.trim(), phone: f.phone.trim(),
       first_name: f.first.trim(), last_name: f.last.trim(), fibers: formFibers(),
-      contact: { firstName: f.first.trim(), lastName: f.last.trim(), email: f.email.trim(), phone: e164(f.phone),
-        address: { company: f.name.trim(), firstName: f.first.trim(), lastName: f.last.trim() } }, customer_id: '', collection_id: '', lock_id: '', setupStatus: '', checked: '' };
+      contact: { firstName: f.first.trim(), lastName: f.last.trim(), email: f.email.trim(), phone: e164(f.phone) }, customer_id: '', collection_id: '', lock_id: '', setupStatus: '', checked: '' };
     S.vendors.push(v); S.vendors.sort((a, b) => a.name.localeCompare(b.name));
     S.codes[v.code] = { id: rowId, name: v.name };
     S.form = { name: '', email: '', phone: '', code: '', codeEdited: false, first: '', last: '', splitEdited: false, fibers: null };
