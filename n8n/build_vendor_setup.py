@@ -142,7 +142,7 @@ const dets = $input.all().map(i => i.json);
 
 const want = part => S.action === 'setup'
   ? ['customer', 'collection', 'publish', 'lock'].includes(part)
-  : S.action === 'fix' && (S.fix.length === 0 ? part !== 'lock_rebuild' : S.fix.includes(part));
+  : S.action === 'fix' && (S.fix.length === 0 ? !['lock_rebuild', 'address'].includes(part) : S.fix.includes(part));
 
 function deepFind(o, key, depth = 0) {
   if (!o || typeof o !== 'object' || depth > 6) return undefined;
@@ -244,11 +244,17 @@ return ctxs.map((ctx, i) => {
           const clearable = ['firstName', 'lastName', 'company', 'address2'].includes(k);
           const has = ga[k] != null && (ga[k] !== '' || clearable);
           if (has && !same(ga[k], sv)) addrDiff.push([label, sv, ga[k] === '' ? '(blank)' : ga[k]]); });
-      diffs.push(...addrDiff);
       contactPlan = { diffs, addr: addrDiff.length > 0 };
+      // Name/email/phone: Grist is the master → "Update Shopify".
       if (diffs.length) add('contact', 'warn', 'Shopify differs from Grist (' + diffs.map(d => d[0]).join(', ') + ')',
         diffs.map(([l, sv, gv]) => `${l}: “${sv || '—'}” → “${gv}”`).join(' · '), 'contact');
-      else add('contact', 'ok', 'Contact details match Grist');
+      else add('contact', 'ok', 'Name, email and phone match Grist');
+      // Default address: the vendor may change it themselves → usually copy Shopify into Grist; overwriting is opt-in.
+      if (addrDiff.length) add('address', 'warn', 'Shopify default address differs from Grist (' + addrDiff.map(d => d[0]).join(', ') + ')',
+        addrDiff.map(([l, sv, gv]) => `${l}: Shopify “${sv || '—'}” · Grist “${gv}”`).join(' · '), 'address');
+      else if (!ga && cust.defaultAddress && cust.defaultAddress.address1) add('address', 'warn', 'Grist has no address; Shopify has one',
+        [cust.defaultAddress.address1, cust.defaultAddress.city, cust.defaultAddress.provinceCode, cust.defaultAddress.zip].filter(Boolean).join(', '));
+      else if (ga) add('address', 'ok', 'Default address matches Grist');
     }
   }
   const others = byTag.filter(c => !cust || c.id !== cust.id);
@@ -346,13 +352,15 @@ return ctxs.map((ctx, i) => {
       if (rem_.length) { decl.push('$rtags: [String!]!'); vars.rtags = rem_;
         parts.push('t2: tagsRemove(id: $custId, tags: $rtags) { node { id } userErrors { field message } }'); }
     }
-    if (cust && contactPlan && contactPlan.diffs.length && want('contact')) {
+    if (cust && contactPlan && (contactPlan.diffs.length || contactPlan.addr)) {
       const g = v.contact, upd = { id: cust.id };
+      if (want('contact')) {
       contactPlan.diffs.forEach(([l]) => { if (l === 'First name') upd.firstName = g.firstName; if (l === 'Last name') upd.lastName = g.lastName;
         if (l === 'Email') upd.email = g.email; if (l === 'Phone') upd.phone = g.phone; });
       if (Object.keys(upd).length > 1) { decl.push('$cupd: CustomerInput!'); vars.cupd = upd;
         parts.push('c3: customerUpdate(input: $cupd) { customer { id } userErrors { field message } }'); }
-      if (contactPlan.addr) {
+      }
+      if (contactPlan.addr && want('address')) {
         useCust(); decl.push('$addr: MailingAddressInput!'); vars.addr = g.address;
         if (cust.defaultAddress && cust.defaultAddress.id) { decl.push('$addrId: ID!'); vars.addrId = cust.defaultAddress.id;
           parts.push('a1: customerAddressUpdate(customerId: $custId, addressId: $addrId, address: $addr, setAsDefault: true) { address { id } userErrors { field message } }'); }
@@ -377,7 +385,7 @@ return ctxs.map((ctx, i) => {
 
   return { json: {
     row_id: v.row_id, name: v.name, code: v.code, tag, v,
-    checks, notes, errors, ids, did: [], reqTags,
+    checks, notes, errors, ids, did: [], reqTags, shopifyAddress: cust && cust.defaultAddress || null,
     colGid: col ? col.id : '', published, onlinePubId: ctx.onlinePubId,
     lockId: lock ? String(lid(lock) || ctx.lockId) : '', plannedLock, template: ctx.template,
     writeBody, wroteSomething: parts.length > 0,
@@ -491,7 +499,7 @@ const results = plans.map((p, i) => {
   }
   const worst = p.checks.some(c => c.status === 'bad') ? 'bad' : p.checks.some(c => c.status === 'warn') ? 'warn' : 'ok';
   return { row_id: p.row_id, name: p.name, code: p.code, tag: p.tag, status: worst,
-           checks: p.checks, did: p.did, errors: p.errors, notes: p.notes, ids: p.ids };
+           checks: p.checks, did: p.did, errors: p.errors, notes: p.notes, ids: p.ids, shopifyAddress: p.shopifyAddress || null };
 });
 return [{ json: { ok: true, action: S.action, results } }];
 """

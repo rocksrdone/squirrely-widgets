@@ -479,6 +479,10 @@ function checkOne(id) { run('check', [byId(id)]); }
 function setupOne(id) { run('setup', [byId(id)]); }
 function fixPart(id, part) {
   const v = byId(id);
+  if (part === 'address') {
+    const r = S.results[id], c = r && r.checks.find(x => x.fix === 'address');
+    if (!confirm(`Overwrite ${v.name}'s default address in Shopify with the Grist address?\n\nOnly do this when the vendor asked you to change it.\n\n${c ? c.detail.split(' · ').join('\n') : ''}`)) return;
+  }
   if (part === 'contact') {
     const r = S.results[id], c = r && r.checks.find(x => x.fix === 'contact');
     if (!confirm(`Update ${v.name} in Shopify with the Grist details?\n\n${c ? c.detail.split(' · ').join('\n') : ''}`)) return;
@@ -486,9 +490,36 @@ function fixPart(id, part) {
   if (part === 'lock_rebuild' && !confirm(`Rebuild the Locksmith lock for ${v.name}?\n\nThe current lock is deleted and a new one is made from the template, protecting the same collection. The collection is unprotected for a second or two in between.`)) return;
   run('fix', [v], [part]);
 }
+/* Shopify's default address → the Grist ship-to fields (vendors change their own address at checkout/account). */
+async function copyAddressToGrist(id) {
+  const v = byId(id), r = S.results[id], a = r && r.shopifyAddress;
+  if (!v || !a) return;
+  const name = [a.firstName, a.lastName].filter(Boolean).join(' ');
+  const cityLine = [a.city, [a.provinceCode, a.zip].filter(Boolean).join(' ')].filter(Boolean).join(a.provinceCode ? ', ' : ' ');
+  const lines = [`Ship To Name: ${name || '(blank)'}`, `Ship Company: ${a.company || '(blank)'}`, `Ship Addr1: ${a.address1 || ''}`,
+    `Ship Addr2: ${a.address2 || '(blank)'}`, `City/State/Zip: ${cityLine}`, `Country: ${a.countryCodeV2 || ''}`];
+  if (!confirm(`Copy ${v.name}'s Shopify address into Grist?\n\n` + lines.join('\n'))) return;
+  try {
+    let country = a.countryCodeV2 || '';
+    try {
+      const [T, meta] = await Promise.all([grist.docApi.fetchTable('_grist_Tables'), grist.docApi.fetchTable('_grist_Tables_column')]);
+      const tref = T.id[T.tableId.indexOf('Customers')];
+      const i = meta.colId.findIndex((c, k) => c === 'Ship_Country' && meta.parentId[k] === tref);
+      const choices = i >= 0 ? (JSON.parse(meta.widgetOptions[i] || '{}').choices || []) : [];
+      country = choices.find(ch => ch.startsWith(country + ' ')) || country;
+    } catch (e) {}
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Customers', id, {
+      Ship_To_Name: name, Ship_Company: a.company || '', Ship_Addr1: a.address1 || '', Ship_Addr2: a.address2 || '', Ship_Addr3: '',
+      Ship_City_State_Zip: cityLine, Ship_State: a.provinceCode || '', Ship_Zip: a.zip || '', Ship_Country: country }]]);
+    toast(`${v.name}: Grist address updated from Shopify`);
+    await load();
+    checkOne(id);
+  } catch (e) { toast('Could not save: ' + ((e && e.message) || e)); }
+}
+
 function fixAll(id) {
   const r = S.results[id]; const v = byId(id);
-  const parts = [...new Set((r ? r.checks : []).filter(c => c.fix && c.status !== 'ok').map(c => c.fix))];
+  const parts = [...new Set((r ? r.checks : []).filter(c => c.fix && c.fix !== 'address' && c.status !== 'ok').map(c => c.fix))];
   if (!parts.length) return;
   if (parts.includes('lock_rebuild') && !confirm(`This includes rebuilding the Locksmith lock for ${v.name} (delete and re-create). Go ahead?`)) return;
   run('fix', [v], parts);
@@ -508,9 +539,9 @@ function setFilter(f) { S.filter = f; render(); }
 
 /* ── Render ───────────────────────────────────────────────────────────── */
 
-const FIX_LABEL = { contact: 'Update Shopify', customer: 'Fix customer', collection: 'Create collection', collection_rule: 'Fix rule',
+const FIX_LABEL = { contact: 'Update Shopify', address: 'Overwrite Shopify', customer: 'Fix customer', collection: 'Create collection', collection_rule: 'Fix rule',
   publish: 'Publish', lock: 'Create lock', lock_rebuild: 'Rebuild lock' };
-const PART_LABEL = { customer: 'Customer', contact: 'Contact details', collection: 'Collection', lock: 'Lock' };
+const PART_LABEL = { customer: 'Customer', contact: 'Contact details', address: 'Shipping address', collection: 'Collection', lock: 'Lock' };
 
 function vendorState(v) {
   const r = S.results[v.id];
@@ -532,7 +563,8 @@ function vendorCard(v) {
       `<div class="part">${PART_LABEL[p]}</div>` + groups[p].map(c => `
         <div class="chk ${c.status}"><span class="ic">${c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✕'}</span>
           <span>${esc(c.label)}${c.detail ? ` <span class="det">— ${esc(c.detail)}</span>` : ''}</span>
-          ${c.fix && c.status !== 'ok' ? `<button class="btn tiny ${c.fix === 'lock_rebuild' ? 'danger' : 'secondary'}" ${S.busy ? 'disabled' : ''} onclick="fixPart(${v.id}, '${c.fix}')">${FIX_LABEL[c.fix]}</button>` : ''}
+          ${c.part === 'address' && c.status !== 'ok' && r.shopifyAddress ? `<button class="btn tiny" ${S.busy ? 'disabled' : ''} onclick="copyAddressToGrist(${v.id})" title="Shopify's default address becomes the Grist ship-to">Copy to Grist</button>` : ''}
+          ${c.fix && c.status !== 'ok' ? `<button class="btn tiny ${['lock_rebuild', 'address'].includes(c.fix) ? 'danger' : 'secondary'}" ${S.busy ? 'disabled' : ''} onclick="fixPart(${v.id}, '${c.fix}')">${FIX_LABEL[c.fix]}</button>` : ''}
         </div>`).join('')).join('') + '</div>';
     if (r.did && r.did.length) body += `<div class="did">✓ ${r.did.map(esc).join(' · ')}</div>`;
     if (r.errors && r.errors.length) body += `<div class="err">${r.errors.map(esc).join('<br>')}</div>`;
