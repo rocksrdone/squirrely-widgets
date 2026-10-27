@@ -511,8 +511,16 @@
     });
     return prefix + (max + 1);
   }
-  async function logPot(docApi, recipe, spools) {
+  async function logPot(docApi, recipe, spools, opts) {
     const n = Math.round(num(spools));
+    /* opts.onShelf: thread that is already physically in a bin — found stock,
+       a recount, spools bought in. It is born put away: On_Hand_Spools is set
+       with Spools_Made so `waiting` (made − alloc − onHand − broken) is zero,
+       so it never reaches the Lot Desk queue and no put-away job is created
+       for a move nobody has to make. No drying status either: a dry/wet/rack
+       value would have the Bin Audit telling whoever is counting to look for
+       these on the racks instead of in the bin they are actually in. */
+    const onShelf = !!(opts && opts.onShelf);
     if (!recipe || (!recipe.id && !recipe.create)) throw new Error('Pick a colourway');
     if (n <= 0) throw new Error('Enter how many spools');
     /* The E version of an FF colourway, made on the spot: same dye, longer
@@ -530,8 +538,12 @@
       lotNumber: col(lotsT, ['Lot_Number']), recipe: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']),
       fiber: col(lotsT, ['Fiber']), yards: col(lotsT, ['Total_Yards_Made']), made: col(lotsT, ['Spools_Made']),
       drying: col(lotsT, ['Drying_Status']), notes: col(lotsT, ['Notes']),
+      // On_Hand_Spools is the typed column; General_Stock_Spools is a formula
+      // over it (On_Hand + Hank − Vendor − Store) and must never be written.
+      onHand: col(lotsT, ['On_Hand_Spools']), bin: col(lotsT, ['Storage_Bin']),
     };
     if (!L.lotNumber || !L.made) throw new Error('Production_Lots needs Lot_Number and Spools_Made');
+    if (onShelf && !L.onHand) throw new Error('Production_Lots needs On_Hand_Spools to log stock already on the shelf');
     const lotNumber = lotNumberFor(arr(lotsT, L.lotNumber));
     const d = new Date();
     const f = { [L.lotNumber]: lotNumber, [L.made]: n };
@@ -539,10 +551,16 @@
     if (L.yards) f[L.yards] = n * yardsPerSpool(recipe.fiber);
     if (L.fiber && recipe.fiber) f[L.fiber] = recipe.fiber;
     if (L.date) f[L.date] = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000;
-    if (L.drying) f[L.drying] = 'Drying - Dry Rack';
-    if (L.notes) f[L.notes] = 'Logged as a pot with no order';
+    if (onShelf) {
+      f[L.onHand] = n;
+      if (L.bin && opts.binId) f[L.bin] = opts.binId;
+      if (L.notes) f[L.notes] = 'Logged as back stock already on the shelf';
+    } else {
+      if (L.drying) f[L.drying] = 'Drying - Dry Rack';
+      if (L.notes) f[L.notes] = 'Logged as a pot with no order';
+    }
     const res = await docApi.applyUserActions([['AddRecord', 'Production_Lots', null, f]]);
-    return { lotId: res && res.retValues && res.retValues[0], lotNumber, spools: n };
+    return { lotId: res && res.retValues && res.retValues[0], lotNumber, spools: n, onShelf };
   }
 
   /* The pop-up both pages use. Self-contained (it brings its own styles), so
@@ -574,7 +592,14 @@
 .so-have{margin-top:8px;padding:8px 10px;border-radius:6px;background:#F7F3EE;border:1px solid #E8DFD4;font-size:12px;line-height:1.5}
 .so-have b{font-family:'DM Mono',monospace}
 .so-have .so-l{font-family:'DM Mono',monospace;font-size:10.5px;color:#8B7D72}
-.so-have.warn{background:#F5EDD8;border-color:#E2C98F}`;
+.so-have.warn{background:#F5EDD8;border-color:#E2C98F}
+.so-shelf{margin-top:12px;padding:10px;border:1.5px solid #D4C9BC;border-radius:6px;background:#F7F3EE}
+.so-shelf label.so-tick{display:flex;gap:8px;align-items:flex-start;margin:0;font-size:12.5px;
+  text-transform:none;letter-spacing:0;color:#1A1614;font-weight:600;cursor:pointer}
+.so-shelf input[type=checkbox]{width:16px;height:16px;flex:0 0 auto;margin-top:1px;accent-color:#3A8B7A}
+.so-shelf .so-why{font-size:11px;color:#8B7D72;margin:4px 0 0 24px;line-height:1.45;font-weight:400}
+.so-shelf select{width:100%;box-sizing:border-box;margin-top:8px;padding:8px 10px;border:1.5px solid #D4C9BC;
+  border-radius:6px;font:inherit;font-size:13px;background:#fff;color:#1A1614}`;
       document.head.appendChild(st);
     }
     const ov = document.createElement('div'); ov.className = 'so-ov';
@@ -582,6 +607,11 @@
       <div class="so-sub">Thread dyed without an order. It goes to the Lot Desk to be put away.</div>
       <label>Colourway</label><div id="so-pick"><input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div></div>
       <label>Spools dyed</label><input id="so-n" class="so-n" type="number" min="1" placeholder="0">
+      <div class="so-shelf">
+        <label class="so-tick"><input type="checkbox" id="so-shelf"> Already on the shelf</label>
+        <div class="so-why">For thread that is physically in a bin right now — found stock, a recount, spools bought in. It skips the Lot Desk and makes no put-away job, because there is nothing to carry.</div>
+        <select id="so-bin"><option value="">Loading bins…</option></select>
+      </div>
       <div class="so-err" id="so-err"></div>
       <div class="so-row"><button class="so-x" id="so-cancel">Cancel</button><button id="so-go" disabled>Log pot</button></div></div>`;
     document.body.appendChild(ov);
@@ -666,12 +696,38 @@
       drawList(); q.focus();
     };
     wire();
+
+    /* The shelf tick. The bin list is only meaningful once the model is in,
+       so it fills itself in when that resolves rather than blocking the box —
+       the colourway search is the slow part of this dialog and should not
+       wait on bins nobody may need. */
+    const shelfOn = () => $('so-shelf').checked;
+    const paintShelf = () => {
+      const on = shelfOn();
+      $('so-bin').style.display = on ? '' : 'none';
+      $('so-go').textContent = on ? 'Add to back stock' : 'Log pot';
+      ov.querySelector('.so-sub').textContent = on
+        ? 'Thread already in a bin. It goes straight into back stock — no put-away, no job.'
+        : 'Thread dyed without an order. It goes to the Lot Desk to be put away.';
+    };
+    $('so-bin').style.display = 'none';
+    $('so-shelf').onchange = paintShelf;
+    modelP.then(m => {
+      const sel = ov.querySelector('#so-bin');
+      if (!sel) return;
+      if (!m || !m.bins || !m.bins.length) { sel.innerHTML = '<option value="">No bins found — leave unassigned</option>'; return; }
+      const opts = m.bins.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+        .map(b => `<option value="${b.id}">${esc(b.code)} · ${binFillFor(m, b.id, null)}/${b.cap}${b.fiber ? ' ' + esc(b.fiber) : ''}${b.reserved ? ' · reserved' : ''}</option>`).join('');
+      sel.innerHTML = '<option value="">Bin — not sure yet</option>' + opts;
+    });
+
     $('so-n').oninput = ready;
     $('so-n').onkeydown = e => { if (e.key === 'Enter' && !$('so-go').disabled) $('so-go').click(); if (e.key === 'Escape') close(); };
     $('so-go').onclick = async () => {
       $('so-go').disabled = true; $('so-err').textContent = '';
       try {
-        const r = await logPot(docApi, chosen, $('so-n').value);
+        const r = await logPot(docApi, chosen, $('so-n').value,
+          { onShelf: shelfOn(), binId: Number($('so-bin').value) || null });
         close();
         if (onDone) onDone(r, chosen);
       } catch (e) {

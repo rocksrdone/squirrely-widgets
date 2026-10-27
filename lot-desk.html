@@ -610,9 +610,13 @@ function render() { renderList(); renderMain(); }
 
 document.getElementById('logPot').addEventListener('click', () =>
   StockOps.openLogPot(grist.docApi, async (r, recipe) => {
-    toast(`Logged ${r.lotNumber} — ${r.spools} ${recipe.name}`);
+    toast(r.onShelf
+      ? `${r.lotNumber} — ${r.spools} ${recipe.name} straight into back stock`
+      : `Logged ${r.lotNumber} — ${r.spools} ${recipe.name}`);
     await load();
-    if (r.lotId) pick(r.lotId);
+    // An on-shelf lot is already put away, so it is not in the waiting list
+    // and selecting it would silently do nothing.
+    if (r.lotId && !r.onShelf) pick(r.lotId);
   }));
 document.getElementById('extraPots').addEventListener('click', async () => {
   try {

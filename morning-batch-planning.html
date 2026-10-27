@@ -113,7 +113,7 @@
   </div>
   <div style="display:flex;gap:8px">
     <button class="refresh-btn" style="border-color:var(--teal);color:var(--teal);font-weight:600"
-      onclick="StockOps.openLogPot(grist.docApi, (r, recipe) => { showToast('Logged ' + r.lotNumber + ' — ' + r.spools + ' ' + recipe.name + ' · put away on the Lot Desk'); })"
+      onclick="StockOps.openLogPot(grist.docApi, (r, recipe) => { showToast('Logged ' + r.lotNumber + ' — ' + r.spools + ' ' + recipe.name + (r.onShelf ? ' · straight into back stock' : ' · put away on the Lot Desk')); })"
       title="Thread dyed without an order — it goes to the Lot Desk to be put away">+ Log a pot</button>
     <button class="refresh-btn" onclick="loadEverything()">↻ Refresh</button>
   </div>
