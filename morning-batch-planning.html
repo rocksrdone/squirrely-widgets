@@ -342,7 +342,7 @@ async function loadEverything() {
 
     // Coverage is derived, not stored: a "dyed" count written at the kettle goes
     // stale as soon as winding assigns those spools to a different customer.
-    const allocByLine = {}, unwoundByRecipe = {}, backStockByRecipe = {};
+    const allocByLine = {}, unwoundByRecipe = {}, backStockByRecipe = {}, vendorByRecipe = {};
     try {
       const [allocT, lotsT] = await Promise.all([
         grist.docApi.fetchTable('Lot_Allocations'),
@@ -363,17 +363,38 @@ async function loadEverything() {
       const lY = findColumn(lotsT, ['Total_Yards_Made']), lF = findColumn(lotsT, ['Fiber']);
       // Same yards-per-spool rule as stock-ops.js / batch-assignment: E nylon 150, else 100.
       const ydsPer = f => /^\s*(EN|E\s*Nylon)\s*$/i.test(String(f || '')) ? SSSettings.num('Yards_Per_Spool_E_Nylon', 150) : SSSettings.num('Yards_Per_Spool', 100);
-      // Only spools that CANNOT fill an order reduce coverage: committed to a shop
-      // (store/vendor) or broken. Back stock is the whole point of back stock — it
-      // fills orders, so it counts as coverage, it does not cancel it out.
-      const spoken = ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools']
+      /* Only spools that CANNOT fill an order reduce coverage: broken, or held
+         for the retail store. Back stock is the whole point of back stock — it
+         fills orders, so it counts as coverage rather than cancelling it out.
+
+         The VENDOR store counts too. It is not stock committed away: it is the
+         same back stock, on the shelf, offered to vendors — and a vendor
+         ordering an in-stock item is asking for those exact spools. Excluding
+         it had the planner call for a fresh pot of thread already sitting in a
+         bin. The RETAIL store is different: separate stock, in its own bins,
+         out of the way, so it stays excluded.
+
+         Settings key Vendor_Stock_Covers_Orders flips it back if that ever
+         changes. */
+      const vendorCovers = window.SSSettings
+        ? String(SSSettings.text('Vendor_Stock_Covers_Orders', 'yes')).trim().toLowerCase() !== 'no'
+        : true;
+      const spoken = (vendorCovers
+        ? ['Store_Stock_Spools', 'Broken_Spools']
+        : ['Store_Stock_Spools', 'Vendor_Stock_Spools', 'Broken_Spools'])
         .map(c => findColumn(lotsT, [c]));
       const cBack = findColumn(lotsT, ['General_Stock_Spools']);
       const cHank = findColumn(lotsT, ['Hank_Est_Spools']);
+      const cVend = findColumn(lotsT, ['Vendor_Stock_Spools']);
       (lotsT.id || []).forEach((id, i) => {
         const rid = lR ? getRefId(columnAsArray(lotsT, lR)[i]) : null;
         if (!rid) return;
-        const back = cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0;
+        /* General_Stock_Spools is a formula that has already taken the vendor
+           listing off (On_Hand + Hank − Vendor − Store), so counting vendor
+           stock means adding it back here, not just leaving it out of `spoken`
+           — otherwise it stays subtracted once and nothing changes. */
+        const vend = cVend ? Number(columnAsArray(lotsT, cVend)[i]) || 0 : 0;
+        const back = (cBack ? Number(columnAsArray(lotsT, cBack)[i]) || 0 : 0) + (vendorCovers ? vend : 0);
         const hankEst = cHank ? Number(columnAsArray(lotsT, cHank)[i]) || 0 : 0;
         let made = lS ? Number(columnAsArray(lotsT, lS)[i]) || 0 : 0;
         // Older lots have yards but no Spools_Made. Without this fallback their
@@ -390,6 +411,8 @@ async function loadEverything() {
         // positive lots standing alone as thread that does not exist.
         unwoundByRecipe[rid] = (unwoundByRecipe[rid] || 0) + free;
         if (back > 0) backStockByRecipe[rid] = (backStockByRecipe[rid] || 0) + back;
+        // Tracked separately so the row can say the cover is listed for sale.
+        if (vend > 0) vendorByRecipe[rid] = (vendorByRecipe[rid] || 0) + vend;
       });
       Object.keys(unwoundByRecipe).forEach(k => {
         if (unwoundByRecipe[k] < 0) unwoundByRecipe[k] = 0;
@@ -606,13 +629,14 @@ async function loadEverything() {
 
       const inBins = unwoundByRecipe[entry.recipe.id] || 0;      // dyed, not yet wound
       const inStock = backStockByRecipe[entry.recipe.id] || 0;    // wound, sitting in back stock
+      const onVendor = vendorByRecipe[entry.recipe.id] || 0;      // of that, listed on the vendor store
       const covered = inBins + inStock;
       const stillToMake = Math.max(0, totalQty - covered);
       const overdue = daysOverdue(entry.effDue);   // >0 = past its date
       const isLate = overdue > 0;
       // Rows only get reshuffled for dye efficiency against others with the same key.
       const urgencyKey = isLate ? 'L' + overdue : 'D' + entry.effDue;
-      return { ...entry, totalQty, inBins, inStock, covered, stillToMake, stock, peek,
+      return { ...entry, totalQty, inBins, inStock, onVendor, covered, stillToMake, stock, peek,
                overdue, isLate, urgencyKey, plan: planByRecipe[entry.recipe.id] || null };
     }).sort((a, b) => {
       // Committed-to-today first, in the sequence Batch Planner set. Everything
@@ -781,7 +805,8 @@ function renderList() {
           ${planSlots}
         </td>
         <td>${duePill(e)}<div style="font-size:9px;color:#8B7D72">${dueNote(e)}</div></td>
-        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${esc(e.inStock)} back stock` : ''}</div></td>
+        <td>${e.stillToMake > 0 ? `<strong>${e.stillToMake}</strong> to dye` : '<span style="color:#2D6A2D">covered ✓</span>'}<div style="font-size:9px;color:#8B7D72">${e.totalQty} owed${e.inBins ? ` · ${e.inBins} to wind` : ''}${e.inStock ? ` · ${esc(e.inStock)} back stock` : ''}${
+          e.onVendor ? `<div style="color:#B07D2A;font-weight:600">${esc(e.onVendor)} of that is listed on the vendor store — pull the listing before it ships</div>` : ''}</div></td>
         <td>${stockHtml}</td>
         <td>${peekHtml}</td>
       </tr>
