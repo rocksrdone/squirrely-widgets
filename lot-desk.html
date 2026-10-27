@@ -319,13 +319,14 @@ function renderFix(box) {
         <span class="lab">Wound</span><input class="q" type="number" min="0" id="fw" value="${lot.onHand}">
         <span class="lab">Hank</span><input class="q" type="number" min="0" id="fh" value="${lot.hank}">
         <span class="lab">Listed on vendor</span><input class="q" type="number" min="0" id="fv" value="${lot.vendor}">
+        ${lot.waiting > 0 ? `<span class="lab">Still to put away</span><input class="q" type="number" min="0" id="fwait" value="${lot.waiting}">` : ''}
       </div>
       <input class="search" id="fwhy" placeholder="Why? (optional — goes in the lot's notes)" style="margin:8px 0">
       <div class="actions" style="margin-top:0">
         <button class="btn small" id="fsave">Save</button>
         <button class="btn ghost small" id="fzero">None left — zero it</button>
       </div>
-      <div class="lab" style="margin-top:6px">Fewer wound than Grist had are recorded as broken, so the lot doesn't come back as "waiting".</div>`}
+      <div class="lab" style="margin-top:6px">Fewer wound than Grist had are recorded as broken — those existed and are gone.${lot.waiting > 0 ? ` Fewer <b>still to put away</b> means the pot made fewer than Grist thought, so ${esc(lot.lotNumber)} stops showing as waiting.` : ' The lot doesn\'t come back as "waiting".'}</div>`}
     </div>
 
     ${lot.recipe.sku ? `<div class="step"><div class="hd"><span class="k">2</span>Vendor store</div>
@@ -418,7 +419,7 @@ function renderFix(box) {
   const apply = async (want) => {
     if (S.busy) return;
     const built = StockOps.lotSetActions(lot, want, (document.getElementById('fwhy') || {}).value || '');
-    if (!built) { toast('Nothing changed'); return; }
+    if (!built) { toast('Nothing to change — those numbers already match Grist'); return; }
     S.busy = true;
     try {
       await grist.docApi.applyUserActions(built.acts);
@@ -429,8 +430,10 @@ function renderFix(box) {
     } catch (e) { console.error(e); toast('Could not save — nothing was changed'); }
     finally { S.busy = false; }
   };
-  if ($('fsave')) $('fsave').addEventListener('click', () => apply({ wound: $('fw').value, hank: $('fh').value, vendor: $('fv').value }));
-  if ($('fzero')) $('fzero').addEventListener('click', () => apply({ wound: 0, hank: 0, vendor: 0 }));
+  if ($('fsave')) $('fsave').addEventListener('click', () => apply({ wound: $('fw').value, hank: $('fh').value, vendor: $('fv').value,
+    waiting: $('fwait') ? $('fwait').value : null }));
+  // "None left" means none anywhere, so the waiting spools go too.
+  if ($('fzero')) $('fzero').addEventListener('click', () => apply({ wound: 0, hank: 0, vendor: 0, waiting: 0 }));
   if ($('fundo')) $('fundo').addEventListener('click', async (e) => {
     e.preventDefault();
     try { await grist.docApi.applyUserActions(done.undo); S.fixDone = null; toast('Undone'); await load(); }

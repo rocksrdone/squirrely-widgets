@@ -827,22 +827,41 @@
   }
 
   /* ── Fix a lot by hand: set what's really on the shelf ────────────────────
-     want = { wound, hank, vendor }. Wound going down → the difference goes to
-     Broken; going up → Made goes up by the same. Either way the lot's "still
-     waiting" sum doesn't move, so it never pops back onto the waiting list.
+     want = { wound, hank, vendor, waiting }. Two kinds of loss, two different
+     corrections, because they are not the same event:
+       wound down   → Broken_Spools. Those spools were wound and then ruined
+                      or lost, so the production record stands and the loss is
+                      recorded as loss. The waiting sum does not move.
+       waiting down → Spools_Made. Those never reached the shelf or an order
+                      at all, so the pot simply made fewer than Grist thought
+                      — the same correction the put-away flow makes for a
+                      short pot (shortMeans 'final').
+     Wound going up raises Made by the same. `waiting` is optional: leave it
+     out and the waiting sum is untouched, as before.
      Vendor is capped at what's on the shelf less the retail store's share. */
   function lotSetActions(lot, want, why) {
     const w = Math.max(0, Math.round(num(want.wound))), h = Math.max(0, Math.round(num(want.hank)));
     const cap = Math.max(0, w + h - lot.store);
     const v = Math.min(Math.max(0, Math.round(num(want.vendor))), cap);
+    const wantWait = (want.waiting == null || want.waiting === '')
+      ? lot.waiting : Math.max(0, Math.round(num(want.waiting)));
     const upd = {}, old = {}, said = [];
     const put = (c, nv, ov) => { if (nv !== ov) { upd[c] = nv; old[c] = ov; } };
+    /* Made can move for two reasons at once (more wound than Grist knew, and
+       waiting spools written off). Decide it once — two puts would leave only
+       the second. Only written when something actually asked for a change, so
+       a lot whose Made is derived from yardage is not materialised by accident. */
+    let madeDelta = 0;
+    if (w > lot.onHand) madeDelta += w - lot.onHand;
+    madeDelta += wantWait - lot.waiting;
     if (w < lot.onHand) { put('Broken_Spools', lot.broken + (lot.onHand - w), lot.broken); said.push(`wound ${lot.onHand} → ${w}`); }
-    if (w > lot.onHand) { put('Spools_Made', lot.made + (w - lot.onHand), lot.madeStored); said.push(`wound ${lot.onHand} → ${w}`); }
+    if (w > lot.onHand) said.push(`wound ${lot.onHand} → ${w}`);
+    if (madeDelta) put('Spools_Made', Math.max(0, lot.made + madeDelta), lot.madeStored);
+    if (wantWait !== lot.waiting) said.push(`still to put away ${lot.waiting} → ${wantWait}`);
     put('On_Hand_Spools', w, lot.onHand);
     put('Hank_Est_Spools', h, lot.hank); if (h !== lot.hank) said.push(`hank ${lot.hank} → ${h}`);
     put('Vendor_Stock_Spools', v, lot.vendor); if (v !== lot.vendor) said.push(`vendor ${lot.vendor} → ${v}`);
-    if (!w && !h && lot.binId) put('Storage_Bin', 0, lot.binId);
+    if (!w && !h && !wantWait && lot.binId) put('Storage_Bin', 0, lot.binId);
     if (!said.length) return null;
     const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
     const text = said.join(', ') + (why ? ` (${why})` : '');
