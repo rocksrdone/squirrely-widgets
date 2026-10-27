@@ -43,6 +43,15 @@
 
   .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
   .recipe-title { font-family: 'Libre Baskerville', serif; font-size: 20px; font-weight: 700; }
+  /* Seven recipe names belong to more than one recipe (Sunset is both
+     FFN_SUNSET_MMI and FFC_SUNSET), so the name alone cannot say which one is
+     being edited. The SKU can, and sits where the name used to stand alone. */
+  .recipe-sku {
+    font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted, #8B7D72);
+    background: var(--warm, #F7F3EE); border: 1px solid var(--rule, #D4C9BC);
+    border-radius: 4px; padding: 2px 7px; margin-left: 9px; vertical-align: 3px;
+    white-space: nowrap;
+  }
   .btn {
     font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--rule); background: white; color: var(--ink);
@@ -268,6 +277,21 @@
 <div class="toast" id="toast"></div>
 
 <script>
+/* Name plus SKU, because the name on its own is ambiguous for the seven
+   colourways that exist twice — editing the cotton Sunset's ring while the
+   Recipe Builder beside it shows the reserved nylon one looks like the two
+   widgets disagreeing, when it is really two different recipes. */
+function setRecipeTitle(record) {
+  const el = document.getElementById('recipeTitle');
+  if (!el) return;
+  const name = (record && record.Recipe_Name) || 'Unnamed recipe';
+  const sku = (record && (record.SKU_Base || record.SKU)) || '';
+  const fiber = (record && record.Fiber_Type) || '';
+  el.innerHTML = esc(name) +
+    (sku ? `<span class="recipe-sku">${esc(sku)}</span>` : '') +
+    (fiber ? `<span class="recipe-sku">${esc(fiber)}</span>` : '');
+}
+
 function esc(s) {
   return (s == null ? '' : String(s)).replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -632,7 +656,7 @@ async function loadLayout(record) {
   currentRecipeRecord = record;
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('content').style.display = 'block';
-  document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
+  setRecipeTitle(record);
 
   selectedSegmentKey = null;
   selectedOverlayKey = null;
@@ -2004,7 +2028,7 @@ grist.onRecord(async (record) => {
   // just refresh the header and summary.
   if (unsavedChanges && record.id === currentRecipeId) {
     currentRecipeRecord = record;
-    document.getElementById('recipeTitle').textContent = record.Recipe_Name || 'Unnamed recipe';
+    setRecipeTitle(record);
     renderSummary();
     return;
   }

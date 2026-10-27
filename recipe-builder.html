@@ -856,6 +856,9 @@ let currentRecipeId = null;
 // The record as Grist last handed it over. Kept so the review banner can read
 // its own fields back without a refetch.
 let currentRecord = null;
+// Status of the recipe on screen, so the finalize gate can tell a draft from
+// an already-Active recipe without a record in hand.
+let CURRENT_STATUS = 'Active';
 let allVendors = [];   // {name, code}
 let customerNameById = {};   // id -> name, for the Linked Customer select + record load
 let customerIdByName = {};   // name -> id, fallback when a ref arrives as a display name
@@ -2994,6 +2997,10 @@ async function loadRecipe(record) {
   loadProductPhotos();
 
   const status = rowField(record, ['Status']) || 'Active';
+  // Kept for updateFinalizeGate, which runs from a dozen input handlers that
+  // have no record in hand and otherwise told an already-Active recipe it was
+  // "Ready to finalize" beside a button deliberately hidden for that status.
+  CURRENT_STATUS = status;
   const badge = document.getElementById('draftBadge');
   if (status !== 'Active') {
     badge.textContent = status;
@@ -3382,6 +3389,15 @@ function updateFinalizeGate() {
   btn.disabled = missing.length > 0;
   btn.title = missing.length ? `Still needed: ${missing.join(', ')}` : 'Save and mark Active';
   if (note) {
+    /* Finalize is only offered for a draft (Researching / Working). Saying
+       "Ready to finalize" on a recipe that is already Active reads as a
+       missing button, so say what is actually true instead. */
+    const draft = CURRENT_STATUS === 'Researching' || CURRENT_STATUS === 'Working';
+    if (!draft) {
+      note.className = 'linked-state on';
+      note.textContent = `Finalized — ${CURRENT_STATUS}`;
+      return;
+    }
     // Spelled out on screen, not just in a tooltip nobody hovers.
     note.className = 'linked-state' + (missing.length ? ' warn' : ' on');
     note.innerHTML = missing.length
@@ -3406,6 +3422,9 @@ async function finalizeRecipe() {
     ]);
     document.getElementById('draftBadge').style.display = 'none';
     document.getElementById('finalizeTopBtn').style.display = 'none';
+    // Before updateFinalizeGate, or the note goes straight back to saying
+    // "Ready to finalize" under a button that has just been hidden.
+    CURRENT_STATUS = 'Active';
     showToast('Saved and finalized — now Active');
     updateFinalizeGate();
   } catch (e) {
