@@ -632,6 +632,32 @@
 </div>
 
 <script>
+/* Grist hands a Date column over two different ways: a Date OBJECT through
+   onRecord, epoch SECONDS through fetchTable. Number(dateObject) is already
+   milliseconds, so the old `Number(v) * 1000` multiplied an already-correct
+   figure by a thousand and printed "Created November 58505". Same rule as
+   recipe-builder's yearFromAnything, including the sanity window — a date
+   outside it prints nothing rather than a confident wrong year. */
+function dateFromAnything(v) {
+  if (!v) return null;
+  let d;
+  if (v instanceof Date) d = v;
+  else {
+    const n = Number(v);
+    if (!isFinite(n) || n <= 0) return null;
+    d = new Date(n > 1e11 ? n : n * 1000);   // already milliseconds, or seconds
+  }
+  const y = d.getFullYear();
+  return (y > 1990 && y < 2100) ? d : null;
+}
+
+function createdLine(v) {
+  const d = dateFromAnything(v);
+  if (!d) return '';
+  return `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${
+    esc(d.toLocaleString('default', { month: 'long' }))} ${d.getFullYear()}</div>`;
+}
+
 function esc(s) {
   return (s == null ? '' : String(s)).replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1505,7 +1531,7 @@ function renderLeft() {
             ${currentSpoolStats.perOrder.map(o => `<div>${esc(o.customerName)} — ${o.qty} spools</div>`).join('')}
           </div>
         ` : ''}
-        ${r.Created_Date ? `<div style="font-size:10px;color:#8B7D72;margin-top:4px;">Created ${new Date(Number(r.Created_Date)*1000).toLocaleString('default',{month:'long'})} ${new Date(Number(r.Created_Date)*1000).getFullYear()}</div>` : ''}
+        ${createdLine(r.Created_Date)}
         ${currentShopifyUrl ? `<div style="margin-top:4px;"><a href="${currentShopifyUrl}" target="_blank" style="font-size:11px;color:var(--teal);text-decoration:none;font-weight:600;">🛍️ View on Shopify ↗</a></div>` : ''}
       </div>
       ${currentProductPhotos.length ? `
