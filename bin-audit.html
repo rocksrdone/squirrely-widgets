@@ -839,6 +839,43 @@ async function repairTextBins() {
     () => list.map(l => ['UpdateRecord', 'Production_Lots', l.id, { [col]: l.binRaw }]));
 }
 
+/* ── File every orphan lot in its suggested bin ───────────────────────────
+   One at a time is fine for one; it is not fine for a dozen after a batch of
+   "already on the shelf" entries. Assignments accumulate as they are made, so
+   twelve lots do not all get pointed at whichever bin was emptiest when the
+   screen loaded. Lots the suggester cannot place, and any whose only option
+   is an overfull bin, are left alone and reported rather than forced. */
+function fileAllUnbinned() {
+  const list = ((T && T.problems.unbinned) || []).filter(l => l.inBin > 0);
+  if (!list.length) { showToast('Nothing without a bin', false); return; }
+  const extraFill = {}, plan = [], skipped = [];
+  // Biggest first: the lots hardest to place get the room while it is there.
+  list.slice().sort((a, b) => b.inBin - a.inBin).forEach(l => {
+    const s = suggestBinForLot(l, extraFill);
+    if (!s || s.tight) { skipped.push(l); return; }
+    const value = binRefFor(s.code);
+    if (value == null) { skipped.push(l); return; }
+    plan.push({ lot: l, code: s.code, why: s.why, value });
+    const k = normalize(s.code);
+    extraFill[k] = (extraFill[k] || 0) + Math.max(0, l.inBin);
+  });
+  if (!plan.length) {
+    showToast(skipped.length ? 'No room — every suggestion was a full bin' : 'Nothing to file', false);
+    return;
+  }
+  const col = COLS.lot.bin;
+  const lines = plan.slice(0, 12).map(p => `  ${p.lot.lotNumber} ${p.lot.recipe.name} (${p.lot.inBin}) → ${p.code}`).join('\n');
+  const more = plan.length > 12 ? `\n  …and ${plan.length - 12} more` : '';
+  const warn = skipped.length ? `\n\n${skipped.length} left alone — no bin with room.` : '';
+  if (!confirm(`File ${plan.length} lot${plan.length === 1 ? '' : 's'} in the suggested bins?\n\n${lines}${more}${warn}\n\nNothing moves physically — this records where they are. Undo is available after.`)) return;
+  runFix(
+    plan.map(p => ['UpdateRecord', 'Production_Lots', p.lot.id, { [col]: p.value }]),
+    `Filed ${plan.length} lot${plan.length === 1 ? '' : 's'}`,
+    // Restore the ORIGINAL STORED value, not the displayed code — see saveLotBin.
+    () => plan.map(p => ['UpdateRecord', 'Production_Lots', p.lot.id,
+      { [col]: (p.lot.binRaw == null || p.lot.binRaw === '') ? null : p.lot.binRaw }]));
+}
+
 async function runFix(actions, label, buildUndo) {
   if (busy) return;
   busy = true;
@@ -1070,7 +1107,11 @@ function jarBinFix(c) {
    the emptiest unreserved bin of the right fibre — but worked out from the
    audit's own figures, so it costs no second fetch of the whole model.
    Reserved bins are customer order boxes and are never suggested. */
-function suggestBinForLot(l) {
+/* `extraFill` carries spools assigned earlier in the same batch. Without it,
+   filing several orphans at once asks the same question of unchanged figures
+   and sends every one of them to whichever bin was emptiest at the start —
+   the mistake that once bagged a whole print run into A1. */
+function suggestBinForLot(l, extraFill) {
   if (!T || !T.locations || !T.locations.length) return null;
   const fill = {};
   T.lots.forEach(x => {
@@ -1078,6 +1119,7 @@ function suggestBinForLot(l) {
     const k = normalize(x.bin);
     fill[k] = (fill[k] || 0) + Math.max(0, x.inBin);
   });
+  if (extraFill) Object.keys(extraFill).forEach(k => { fill[k] = (fill[k] || 0) + extraFill[k]; });
   const need = Math.max(0, l.inBin);
   const capOf = loc => loc.max || SSSettings.num('Back_Stock_Bin_Capacity', 150);
   const room = loc => capOf(loc) - (fill[normalize(loc.code)] || 0);
@@ -1362,8 +1404,12 @@ function renderThread(stamp) {
     'These lots can\'t be counted against a bin until they\'re sorted.',
     [
       probGroup('Spools with no bin', 'Off the rack but never assigned a bin, so no audit can find them.',
+        (P.unbinned.length > 1 ? [`<div class="prob-item"><div class="fixrow">
+          <button class="fixbtn" onclick="fileAllUnbinned()">File all ${P.unbinned.length} in the suggested bins…</button>
+          <span class="sub" style="margin-left:8px;color:var(--muted,#8B7D72)">shows the full list first · nothing moves physically · undo after</span>
+        </div></div>`] : []).concat(
         P.unbinned.map(l => `<div class="prob-item"><span class="mono">${esc(l.lotNumber)}</span> ${esc(l.recipe.name)} — ${l.inBin} spool${l.inBin === 1 ? '' : 's'}, ${esc(l.fiber)}
-          <div class="fixrow">${lotBinFix(l)}</div></div>`)),
+          <div class="fixrow">${lotBinFix(l)}</div></div>`))),
       /* Carries the same identifying line as its sibling groups. It used to show
          only the lot number and the unrecognised bin, which is unusable: deciding
          where a lot belongs needs to know WHAT it is, and a screen of
