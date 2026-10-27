@@ -1065,11 +1065,59 @@ function jarBinFix(c) {
    at once — a fibre-mismatched lot appears in its problem group AND in its bin
    card, and two inputs sharing id "lb-7" would make getElementById return
    whichever came first, so you would save the value you were not looking at. */
+/* Where a lot with no bin probably belongs. Same rule as stock-ops.js
+   suggestBin — the bin this colourway already lives in if it has room, else
+   the emptiest unreserved bin of the right fibre — but worked out from the
+   audit's own figures, so it costs no second fetch of the whole model.
+   Reserved bins are customer order boxes and are never suggested. */
+function suggestBinForLot(l) {
+  if (!T || !T.locations || !T.locations.length) return null;
+  const fill = {};
+  T.lots.forEach(x => {
+    if (!x.bin) return;
+    const k = normalize(x.bin);
+    fill[k] = (fill[k] || 0) + Math.max(0, x.inBin);
+  });
+  const need = Math.max(0, l.inBin);
+  const capOf = loc => loc.max || SSSettings.num('Back_Stock_Bin_Capacity', 150);
+  const room = loc => capOf(loc) - (fill[normalize(loc.code)] || 0);
+
+  // 1. Keep a colourway together: the bin most of it is already in.
+  const here = {};
+  T.lots.forEach(x => {
+    if (x.id === l.id || !x.bin || x.recipeId !== l.recipeId || x.inBin <= 0) return;
+    const k = normalize(x.bin);
+    here[k] = (here[k] || 0) + x.inBin;
+  });
+  const top = Object.entries(here).sort((a, b) => b[1] - a[1])[0];
+  if (top) {
+    const loc = T.locByCode[top[0]];
+    if (loc && !loc.reservedFor && room(loc) >= need) {
+      return { code: loc.code, why: `where ${l.recipe.name} already is` };
+    }
+  }
+  // 2. Otherwise the emptiest bin, preferring one set up for this fibre.
+  let open = T.locations.filter(loc => !loc.reservedFor);
+  const sameFibre = open.filter(loc => loc.fiber && l.fiber && fiberKey(loc.fiber) === fiberKey(l.fiber));
+  if (sameFibre.length) open = sameFibre;
+  open = open.slice().sort((a, b) => room(b) - room(a)
+    || a.code.localeCompare(b.code, undefined, { numeric: true }));
+  if (!open.length) return null;
+  const roomy = open.find(loc => room(loc) >= need);
+  if (roomy) return { code: roomy.code, why: `emptiest ${l.fiber || ''} bin`.replace(/\s+/g, ' ').trim() };
+  return { code: open[0].code, why: 'every bin is full — this one has most room', tight: true };
+}
+
 function lotBinFix(l, prefix) {
   const p = prefix || 'lb';
+  /* Only suggest for a lot that has no bin. Pre-filling the box means Save
+     bin takes the suggestion with one click, and the reason is spelled out
+     so it is a recommendation rather than something that just appeared. */
+  const s = l.bin ? null : suggestBinForLot(l);
   return `<span class="fix">
-    <input class="fixin" id="${p}-${l.id}" list="threadbins" placeholder="bin" value="${esc(l.bin)}">
+    <input class="fixin" id="${p}-${l.id}" list="threadbins" placeholder="bin" value="${esc(l.bin || (s ? s.code : ''))}">
     <button class="fixbtn" onclick="saveLotBin(${l.id}, '${p}')">Save bin</button>
+    ${s ? `<span class="sub" style="margin-left:6px;${s.tight ? 'color:var(--accent);font-weight:600' : 'color:var(--muted,#8B7D72)'}">suggested — ${esc(s.why)}</span>` : ''}
   </span>`;
 }
 

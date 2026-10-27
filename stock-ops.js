@@ -611,6 +611,7 @@
         <label class="so-tick"><input type="checkbox" id="so-shelf"> Already on the shelf</label>
         <div class="so-why">For thread that is physically in a bin right now — found stock, a recount, spools bought in. It skips the Lot Desk and makes no put-away job, because there is nothing to carry.</div>
         <select id="so-bin"><option value="">Loading bins…</option></select>
+        <div class="so-why" id="so-binwhy" style="margin-left:0"></div>
       </div>
       <div class="so-err" id="so-err"></div>
       <div class="so-row"><button class="so-x" id="so-cancel">Cancel</button><button id="so-go" disabled>Log pot</button></div></div>`;
@@ -683,6 +684,8 @@
       modelP.then(m => { const el = ov.querySelector('#so-have'); if (el && chosen === r) el.innerHTML = haveHtml(m, r); });
       $('so-change').onclick = () => { chosen = null; $('so-pick').innerHTML = `<input id="so-q" placeholder="Type a colourway or SKU…" autocomplete="off"><div class="so-list" id="so-list"></div>`; wire(); ready(); };
       $('so-n').focus(); ready();
+      // The suggestion keys off the colourway, so re-ask once one is picked.
+      if (typeof suggestShelfBin === 'function') suggestShelfBin();
     };
     const wire = () => {
       const q = $('so-q');
@@ -702,26 +705,55 @@
        the colourway search is the slow part of this dialog and should not
        wait on bins nobody may need. */
     const shelfOn = () => $('so-shelf').checked;
+    let soModel = null, binTouched = false;
+    /* Offer the bin rather than making it a blank to fill. "Not sure yet" was
+       the path of least resistance, and a lot saved that way lands with stock
+       and no location — findable only in the Bin Audit's orphan list. Same
+       rule the put-away panel uses: where the colourway already is, else the
+       emptiest bin for its fibre. Left alone once the person picks for
+       themselves. */
+    const suggestShelfBin = () => {
+      const sel = ov.querySelector('#so-bin');
+      const why = ov.querySelector('#so-binwhy');
+      if (!sel || !why) return;
+      if (!shelfOn() || !soModel || !chosen || binTouched) { why.textContent = ''; return; }
+      const n = Math.round(num($('so-n').value));
+      if (!(n > 0)) { why.textContent = ''; return; }
+      const pseudo = { id: 0, recipe: { id: chosen.id || 0, name: chosen.name || '' },
+        fiber: chosen.fiber || '', binId: null, onHand: 0, hank: 0, waiting: n };
+      let s = null;
+      try { s = suggestBin(soModel, pseudo, n); } catch (e) { s = null; }
+      if (!s || !s.binId) { why.textContent = ''; return; }
+      sel.value = String(s.binId);
+      why.textContent = 'Suggested — ' + (s.reason || '');
+      why.style.color = s.tight ? '#8B3A2A' : '#8B7D72';
+    };
     const paintShelf = () => {
       const on = shelfOn();
       $('so-bin').style.display = on ? '' : 'none';
+      const why = ov.querySelector('#so-binwhy');
+      if (why) why.style.display = on ? '' : 'none';
       $('so-go').textContent = on ? 'Add to back stock' : 'Log pot';
       ov.querySelector('.so-sub').textContent = on
         ? 'Thread already in a bin. It goes straight into back stock — no put-away, no job.'
         : 'Thread dyed without an order. It goes to the Lot Desk to be put away.';
+      suggestShelfBin();
     };
     $('so-bin').style.display = 'none';
     $('so-shelf').onchange = paintShelf;
+    $('so-bin').onchange = () => { binTouched = true; const w = ov.querySelector('#so-binwhy'); if (w) w.textContent = 'Chosen by you'; };
     modelP.then(m => {
+      soModel = m;
       const sel = ov.querySelector('#so-bin');
       if (!sel) return;
       if (!m || !m.bins || !m.bins.length) { sel.innerHTML = '<option value="">No bins found — leave unassigned</option>'; return; }
       const opts = m.bins.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
         .map(b => `<option value="${b.id}">${esc(b.code)} · ${binFillFor(m, b.id, null)}/${b.cap}${b.fiber ? ' ' + esc(b.fiber) : ''}${b.reserved ? ' · reserved' : ''}</option>`).join('');
       sel.innerHTML = '<option value="">Bin — not sure yet</option>' + opts;
+      suggestShelfBin();
     });
 
-    $('so-n').oninput = ready;
+    $('so-n').oninput = () => { ready(); suggestShelfBin(); };
     $('so-n').onkeydown = e => { if (e.key === 'Enter' && !$('so-go').disabled) $('so-go').click(); if (e.key === 'Escape') close(); };
     $('so-go').onclick = async () => {
       $('so-go').disabled = true; $('so-err').textContent = '';
