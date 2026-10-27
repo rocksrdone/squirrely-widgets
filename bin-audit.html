@@ -440,6 +440,26 @@ async function loadEverything() {
     // works, it just can't show empty bins or compare against a target.
     let locT = null;
     try { locT = await grist.docApi.fetchTable('Storage_Locations'); } catch (e) { locT = null; }
+    /* ── Order bins ────────────────────────────────────────────────────────
+       Spools allocated to an order are physically carried to that customer's
+       box at put-away, so they are NOT in the lot's back-stock bin. This audit
+       used to count them there, which printed them as missing from back stock
+       and missing again from the box.
+       The bin code is DERIVED — O-<CODE>-<ORDER>, the same rule stock-ops.js
+       uses — rather than read from Lot_Allocations.Order_Bin, because that
+       column is only filled on allocations written since it was added, and
+       the spools already sitting in boxes were put away before that. A stored
+       Order_Bin still wins when it has a value, so a hand correction sticks.
+       All three tables are optional: without them the audit falls back to the
+       old assumption and says so on the sheet. */
+    let wolT = null, woT = null, custT = null;
+    try {
+      [wolT, woT, custT] = await Promise.all([
+        grist.docApi.fetchTable('Work_Order_Lines'),
+        grist.docApi.fetchTable('Work_Orders'),
+        grist.docApi.fetchTable('Customers'),
+      ]);
+    } catch (e) { wolT = woT = custT = null; }
     /* ── Storage_Bin is a REFERENCE to Storage_Locations ───────────────────
        Grist stores a row id in it, so a lot filed correctly comes back as a
        NUMBER and a lot filed by the old string-writing path comes back as the
@@ -480,6 +500,7 @@ async function loadEverything() {
     }, missing);
     const ALLOC = resolveCols(allocT, 'Lot_Allocations', {
       lot: ['Lot'], qty: ['Qty_Spools'], status: opt(['Status']), customer: opt(['Customer']),
+      line: opt(['Work_Order_Line']), orderBin: opt(['Order_Bin']),
     }, missing);
     const REC = resolveCols(recipesT, 'Recipes', {
       name: ['Recipe_Name'], fiber: opt(['Fiber_Type']),
@@ -494,7 +515,7 @@ async function loadEverything() {
 
     COLS = { stock: STOCK, lot: LOT, dye: DYE };
     buildDyeAudit(dyesT, stockT, DYE, STOCK);
-    buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC);
+    buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC, { wolT, woT, custT });
     render();
   } catch (e) {
     console.error('Bin audit failed to load:', e);
@@ -601,7 +622,33 @@ function buildDyeAudit(dyesT, stockT, DYE, STOCK) {
 // ══════════════════════════════════════════════════════════════════
 // THREAD + BACK STOCK
 // ══════════════════════════════════════════════════════════════════
-function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
+/* Line id → customer order bin, O-<CODE>-<ORDER>. Same derivation as
+   stock-ops.js orderBinCode, so both agree about where a box is. Returns null
+   when any of the three tables or the columns behind them are missing, which
+   the sheet reports rather than guessing. */
+function orderBinByLine(wolT, woT, custT) {
+  if (!wolT || !woT || !custT) return null;
+  const wlWo = findColumn(wolT, ['Work_Order']);
+  const woNum = findColumn(woT, ['Order_Number']), woCust = findColumn(woT, ['Customer']);
+  const cuCode = findColumn(custT, ['Code']);
+  if (!wlWo || !woNum || !woCust || !cuCode) return null;
+  const code = {};
+  (custT.id || []).forEach((id, i) => { code[id] = (columnAsArray(custT, cuCode)[i] || '').toString().trim(); });
+  const binByOrder = {};
+  (woT.id || []).forEach((id, i) => {
+    const c = (code[getRefId(columnAsArray(woT, woCust)[i])] || '').toUpperCase();
+    const n = (columnAsArray(woT, woNum)[i] || '').toString().trim().replace(/^#/, '');
+    binByOrder[id] = c && n ? `O-${c}-${n}` : '';
+  });
+  const out = {};
+  (wolT.id || []).forEach((id, i) => {
+    const b = binByOrder[getRefId(columnAsArray(wolT, wlWo)[i])];
+    if (b) out[id] = b;
+  });
+  return out;
+}
+
+function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC, orderT) {
   const recipe = {};
   (recipesT.id || []).forEach((id, i) => {
     recipe[id] = {
@@ -611,22 +658,36 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
     };
   });
 
-  // Allocations split two ways: packed has physically left the bin; anything
-  // else is still sitting there, just already spoken for.
-  const packedByLot = {}, reservedByLot = {}, reservedWho = {};
+  /* Allocations split three ways now:
+       packed      — boxed and gone, in no bin here
+       order bin   — put away into the customer's box, so physically in O-…
+       reserved    — spoken for but still sitting in the lot's own bin
+     The third used to swallow the second, which is what printed order-bin
+     spools as expected in back stock. */
+  const lineBin = orderBinByLine(orderT && orderT.wolT, orderT && orderT.woT, orderT && orderT.custT);
+  const packedByLot = {}, reservedByLot = {}, reservedWho = {}, orderBinsByLot = {};
   (allocT.id || []).forEach((id, i) => {
     const lotId = getRefId(columnAsArray(allocT, ALLOC.lot)[i]);
     if (!lotId) return;
     const qty = Number(columnAsArray(allocT, ALLOC.qty)[i]) || 0;
     const status = (columnAsArray(allocT, ALLOC.status)[i] || '').toString();
     const gone = /packed|shipped|sent|delivered/i.test(status);
-    if (gone) packedByLot[lotId] = (packedByLot[lotId] || 0) + qty;
-    else {
-      reservedByLot[lotId] = (reservedByLot[lotId] || 0) + qty;
-      const who = columnAsArray(allocT, ALLOC.customer)[i];
-      const name = (typeof who === 'string' ? who : '').trim();
-      if (name) (reservedWho[lotId] = reservedWho[lotId] || new Set()).add(name);
+    if (gone) { packedByLot[lotId] = (packedByLot[lotId] || 0) + qty; return; }
+    const who = columnAsArray(allocT, ALLOC.customer)[i];
+    const name = (typeof who === 'string' ? who : '').trim();
+    // A stored Order_Bin wins, so a hand correction sticks; otherwise derive it.
+    const stored = ALLOC.orderBin ? (columnAsArray(allocT, ALLOC.orderBin)[i] || '').toString().trim() : '';
+    const lineId = ALLOC.line ? getRefId(columnAsArray(allocT, ALLOC.line)[i]) : 0;
+    const box = stored || (lineBin && lineId ? lineBin[lineId] || '' : '');
+    if (box && qty > 0) {
+      const list = orderBinsByLot[lotId] = orderBinsByLot[lotId] || {};
+      const e = list[box] = list[box] || { code: box, qty: 0, who: new Set() };
+      e.qty += qty;
+      if (name) e.who.add(name);
+      return;
     }
+    reservedByLot[lotId] = (reservedByLot[lotId] || 0) + qty;
+    if (name) (reservedWho[lotId] = reservedWho[lotId] || new Set()).add(name);
   });
 
   const lots = [];
@@ -642,12 +703,17 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
     const packed = packedByLot[id] || 0;
     const reserved = reservedByLot[id] || 0;
     const backStock = general + store + vendor;
-    // What should physically be in the bin: everything made, less what broke
-    // and less what has already been boxed and sent out.
+    const orderBins = Object.values(orderBinsByLot[id] || {})
+      .map(e => ({ code: e.code, qty: e.qty, who: [...e.who] }))
+      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+    const inOrderBins = orderBins.reduce((s, e) => s + e.qty, 0);
+    // What should physically be in the lot's own bin: everything made, less
+    // what broke, less what has been boxed and sent out, and less what was
+    // carried to a customer's order box — that is counted under that box.
     // A hank sits in the bin too, but was never wound into Spools_Made (stock
     // model v2), so it is added here; it is already inside backStock.
     const hank = Number(columnAsArray(lotsT, findColumn(lotsT, ['Hank_Est_Spools']) || '')[i]) || 0;
-    const inBin = made + hank - broken - packed;
+    const inBin = made + hank - broken - packed - inOrderBins;
     const free = inBin - reserved - backStock;
     const drying = (columnAsArray(lotsT, LOT.dried)[i] || '').toString();
     lots.push({
@@ -658,7 +724,7 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
       binRaw: columnAsArray(lotsT, LOT.bin)[i],
       date: columnAsArray(lotsT, LOT.date)[i],
       drying, onRack: /dry|wet|rack/i.test(drying),
-      made, broken, packed, reserved, backStock, inBin, free,
+      made, broken, packed, reserved, backStock, inBin, free, orderBins, inOrderBins,
       who: reservedWho[id] ? [...reservedWho[id]] : [],
     });
   });
@@ -719,24 +785,29 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC) {
     stillDrying: lots.filter(l => l.onRack && l.inBin > 0),
   };
 
-  T = { lots, locations, locByCode, problems };
+  T = { lots, locations, locByCode, problems, knowsOrderBins: !!lineBin || lots.some(l => l.inOrderBins > 0) };
 }
 
-// ── Grouping a set of lots into bins for display ─────────────────
-function groupLots(lots, amountOf, showEmpty) {
+/* ── Grouping a set of lots into bins for display ─────────────────
+   A lot can now land in more than one bin: its own, plus a customer order box
+   for each allocation that was carried there. The order-box entry is the same
+   lot object with `_orderBin` set, so `binRow` can show that box's quantity
+   instead of the lot's bin quantity without every caller's amountOf knowing
+   about boxes. */
+function groupLots(lots, amountOf, showEmpty, withOrderBins) {
   const byBin = {};
+  const add = (key, entry) => { (byBin[key] = byBin[key] || []).push(entry); };
   lots.forEach(l => {
-    const amt = amountOf(l);
-    if (amt <= 0) return;
-    const key = l.bin || '(no bin)';
-    (byBin[key] = byBin[key] || []).push(l);
+    if (amountOf(l) > 0) add(l.bin || '(no bin)', l);
+    if (withOrderBins) (l.orderBins || []).forEach(ob => add(ob.code, Object.assign({}, l, { _orderBin: ob })));
   });
   if (showEmpty) T.locations.forEach(loc => { if (!byBin[loc.code]) byBin[loc.code] = []; });
+  const amt = e => e._orderBin ? e._orderBin.qty : amountOf(e);
   return Object.keys(byBin).sort(binSort).map(code => ({
     code,
     loc: T.locByCode[normalize(code)] || null,
     lots: byBin[code].sort((a, b) => (a.date || 0) - (b.date || 0)),
-    total: byBin[code].reduce((s, l) => s + amountOf(l), 0),
+    total: byBin[code].reduce((s, l) => s + amt(l), 0),
   }));
 }
 
@@ -1237,7 +1308,7 @@ function renderDyes(stamp) {
 function renderThread(stamp) {
   const showEmpty = document.getElementById('showEmpty').checked;
   const P = T.problems;
-  const groups = groupLots(T.lots, l => l.inBin, showEmpty);
+  const groups = groupLots(T.lots, l => l.inBin, showEmpty, true);
 
   const panel = problemsPanel(
     'These lots can\'t be counted against a bin until they\'re sorted.',
@@ -1290,7 +1361,12 @@ function renderThread(stamp) {
         .concat(P.stillDrying.length > 40 ? [`<div class="prob-item">…and ${P.stillDrying.length - 40} more</div>`] : []))]
   );
 
-  const cards = groups.map(g => binCard(g, l => l.inBin, l => `
+  /* Free / Reserved / Back stock describe the lot's own bin. On an order-box
+     row they would be the lot's numbers, not the box's, so they are blanked —
+     the box holds exactly what the order takes. */
+  const cards = groups.map(g => binCard(g, l => l.inBin, l => l._orderBin
+    ? '<td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+    : `
     <td class="num">${l.free}</td>
     <td class="num">${l.reserved || '—'}${l.who.length ? `<span class="sub">${esc(l.who.join(', '))}</span>` : ''}</td>
     <td class="num">${l.backStock || '—'}</td>`,
@@ -1299,16 +1375,19 @@ function renderThread(stamp) {
 
   const total = T.lots.reduce((s, l) => s + Math.max(0, l.inBin), 0);
   const binned = T.lots.filter(l => l.bin).reduce((s, l) => s + Math.max(0, l.inBin), 0);
+  const inBoxes = T.lots.reduce((s, l) => s + (l.inOrderBins || 0), 0);
   // Drying lots aren't faults, so they don't inflate the count of things to fix.
   const probCount = P.unbinned.length + P.unknownBin.length + P.textBin.length + P.fiberMismatch.length + P.negative.length;
   return `
     <div class="sheet-head">
       <div class="sheet-title">Thread bin audit</div>
       <div class="sheet-sub">${esc(stamp)} · every spool made, less what broke and what shipped</div>
-      <div class="how"><strong>Free</strong> is uncommitted, <strong>Reserved</strong> is wound or waiting for an order but still in the bin, <strong>Back stock</strong> is shop stock. All three are physically in the bin — count the total.</div>
+      <div class="how"><strong>Free</strong> is uncommitted, <strong>Reserved</strong> is wound or waiting for an order but still in the bin, <strong>Back stock</strong> is shop stock. All three are physically in the bin — count the total. Spools already carried to a customer box are counted under that box, with a grey note on the lot's own line saying how many went where.</div>
+      ${T.knowsOrderBins ? '' : `<div class="how" style="color:var(--accent)"><strong>Order boxes not shown.</strong> Work_Order_Lines, Work_Orders or Customers could not be read, so spools already put away into a customer box are still counted in the lot's own bin and those bins will count short.</div>`}
     </div>
     <div class="totals">
       <div class="chip">${binned}<span>spools in bins</span></div>
+      ${inBoxes ? `<div class="chip">${inBoxes}<span>in order boxes</span></div>` : ''}
       <div class="chip">${groups.length}<span>bins in use</span></div>
       <div class="chip">${total - binned}<span>spools unbinned</span></div>
       <div class="chip">${P.stillDrying.length}<span>lots drying</span></div>
@@ -1364,16 +1443,24 @@ function binCard(g, amountOf, extraCells, extraHead) {
       ? `<strong>No bin recorded</strong>these lots aren't assigned anywhere`
       : `<strong>Not in Storage_Locations</strong>bin code isn't set up`;
 
+  /* An order-box row counts that box's spools, not the lot's bin total, and
+     offers no bin fix — the box is where the order is, not a filing mistake.
+     On the lot's own bin, any spools that went to a box are named underneath:
+     a short count there is then answerable on the spot instead of sending
+     whoever is counting back through the sheet to work out where they went. */
   const body = g.lots.length ? `
     <table class="rows">
       <tr><th>Colorway</th><th>Lot</th>${extraHead}<th class="num">In bin</th>${countHead('Counted')}</tr>
       ${g.lots.map(l => `<tr>
-        <td><span class="name">${esc(l.recipe.name)}</span><span class="sub">${esc(l.fiber)}${l.onRack ? ' · still on the rack' : ''}</span></td>
+        <td><span class="name">${esc(l.recipe.name)}</span><span class="sub">${esc(l.fiber)}${l.onRack ? ' · still on the rack' : ''}</span>
+          ${l._orderBin && l._orderBin.who.length ? `<span class="sub">for ${esc(l._orderBin.who.join(', '))}</span>` : ''}
+          ${!l._orderBin && (l.orderBins || []).length ? `<span class="sub" style="color:var(--muted)">${
+            l.orderBins.map(ob => `${ob.qty} → ${esc(ob.code)}`).join(' · ')}</span>` : ''}</td>
         <td><span class="sub" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--ink)">${esc(l.lotNumber)}</span>
           <span class="sub">${esc(shortDate(l.date))}</span>
-          <div class="fixrow">${lotBinFix(l, 'bc')}</div></td>
+          ${l._orderBin ? '' : `<div class="fixrow">${lotBinFix(l, 'bc')}</div>`}</td>
         ${extraCells(l)}
-        <td class="num"><strong>${amountOf(l)}</strong></td>
+        <td class="num"><strong>${l._orderBin ? l._orderBin.qty : amountOf(l)}</strong></td>
         ${countCell()}
       </tr>`).join('')}
     </table>` : '<div class="empty-note">Empty — nothing recorded here.</div>';
