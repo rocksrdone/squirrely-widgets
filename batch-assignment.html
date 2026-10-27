@@ -539,7 +539,20 @@ function paRegisterPot(e) {
   const rec = paState[e.recipeId] = paState[e.recipeId] || { name: e.recipeName, dyes: {}, decided: {} };
   rec.name = e.recipeName;
   e.cleanupInfo.forEach(c => { rec.dyes[c.dyeId] = c.dyeDetail; });
+  paPrunePlaceholders(e);
   paSave(paState);
+}
+/* A placeholder left in today's storage by a pot logged before it was
+   excluded would sit under "Dyes still on the table" for the rest of the day
+   with no cleanup row left to tick it off. Drop it wherever it is found, not
+   only from the recipe on screen. */
+function paPrunePlaceholders(e) {
+  const gone = (e && e.placeholderDyeIds) || [];
+  if (!gone.length) return;
+  Object.values(paState).forEach(rec => {
+    if (!rec || !rec.dyes) return;
+    gone.forEach(id => { delete rec.dyes[id]; if (rec.decided) delete rec.decided[id]; });
+  });
 }
 /* Mirror this recipe's on-screen decisions into memory + storage. */
 function paSync() {
@@ -819,6 +832,22 @@ async function loadForRecipe(record) {
       if (!d) return `Dye #${dyeId}`;
       return [d.name, d.brand, d.serial, d.dyeType].filter(Boolean).join(' · ');
     }
+    /* A layout placeholder rather than a real dye — see cleanupInfo below.
+       Matched on name, folded for case and punctuation. Brand is deliberately
+       not part of the test: "X" holds twenty genuine dyes. */
+    function isPlaceholderDye(dyeId) {
+      const d = dyeInfoById[dyeId];
+      if (!d || !d.name) return false;
+      const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const me = fold(d.name);
+      if (!me) return false;
+      /* text(), not list() — list() coerces to Number for the pot-size
+         buttons, so it would turn every name into NaN and silently hand back
+         the default, leaving the setting a control that does nothing. */
+      const raw = window.SSSettings ? SSSettings.text('Layout_Placeholder_Dyes', 'White') : 'White';
+      return String(raw || 'White').split(/[,;]/).some(n => n.trim() && fold(n) === me);
+    }
 
     const woIds = woTable.id || [];
     const woInfo = {};
@@ -1065,7 +1094,14 @@ async function loadForRecipe(record) {
       };
     }
 
-    const cleanupInfo = dyeIds.map(dyeId => {
+    /* Placeholder "dyes" exist only so a layout can mark a bare spot in the
+       Layout Editor. There is no jar, so nothing to bin, save or tip out, and
+       listing one here is a put-away step that can never be ticked. Dropped
+       from the cleanup list only — the layout still uses it. Names come from
+       Settings (Layout_Placeholder_Dyes), so adding another placeholder later
+       is a row in Grist rather than an edit here. */
+    const placeholderDyeIds = dyeIds.filter(isPlaceholderDye);
+    const cleanupInfo = dyeIds.filter(dyeId => !isPlaceholderDye(dyeId)).map(dyeId => {
       const others = [];
       pendingRecipeIds.forEach(rid => {
         if (rid === record.id) return;
@@ -1104,7 +1140,7 @@ async function loadForRecipe(record) {
       recipeName: recipeNameById[record.id] || record.Recipe_Name || `Recipe #${record.id}`,
       fiberType: recipeFiberById[record.id] || record.Fiber_Type || '',
       method: recipeMethodById[record.id] || record.Dye_Method || '',
-      dyeCount: recipeDyeIds.length, orders, cleanupInfo,
+      dyeCount: recipeDyeIds.length, orders, cleanupInfo, placeholderDyeIds,
       mixes: recipeDyeIds.filter(id => partsByMix[id]).map(id => ({ mixId: id, mixName: dyeShortName(id),
         parts: partsByMix[id].sort((a, b) => a.sort - b.sort).map(p => ({ dyeId: p.dyeId, label: dyeShortName(p.dyeId) })) })),
       allDyes: (dyesTable.id || []).map(id => ({ id, label: dyeDisplayLabel(id) })).sort((a, b) => a.label.localeCompare(b.label)),
