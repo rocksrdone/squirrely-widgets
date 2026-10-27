@@ -777,8 +777,38 @@ const DYE_COLORS = {
   ecru:'#C8B890',cream:'#F0EAD0',caramel:'#C08040',russet:'#904030'
 };
 
+/* Real swatches out of the Dyes table, keyed by folded dye name. The Layout
+   Designer has always drawn from these; this card did not, so the same recipe
+   came out in different colours side by side and the card — the one actually
+   read at the dye station — was the one making them up. Filled wherever Dyes
+   is fetched. */
+const DYE_HEX = {};
+function dyeKey(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+/* Same column candidates, in the same order, as layout-designer's lookup —
+   if the two disagree about which column holds the swatch they go back to
+   disagreeing about colour. */
+function indexDyeColors(dyesTable) {
+  if (!dyesTable) return;
+  const nameCol = findColumn(dyesTable, ['Dye_Name']);
+  const hexCol = findColumn(dyesTable, ['Swatch_Hex', 'Manual_Hex', 'Swatch_Color', 'Hex_Color']);
+  if (!nameCol || !hexCol) return;
+  const names = dyesTable[nameCol] || [], hexes = dyesTable[hexCol] || [];
+  (dyesTable.id || []).forEach((id, i) => {
+    const k = dyeKey(names[i]);
+    const h = String(hexes[i] == null ? '' : hexes[i]).trim();
+    if (k && /^#?[0-9a-fA-F]{6}$/.test(h)) DYE_HEX[k] = h[0] === '#' ? h : '#' + h;
+  });
+}
+
 function guessColor(name) {
   if (!name || typeof name !== 'string') return '#888780';
+  // The dye's own recorded swatch wins over anything inferred from its name.
+  const real = DYE_HEX[dyeKey(name)];
+  if (real) return real;
   const l = name.toLowerCase();
   for (const [k,v] of Object.entries(DYE_COLORS)) {
     if (l.includes(k)) return v;
@@ -1212,6 +1242,7 @@ async function loadStash() {
       grist.docApi.fetchTable('Dye_Stock'),
       grist.docApi.fetchTable('Dyes'),
     ]);
+    indexDyeColors(dyeT);
 
     const S = {
       dye: findColumn(stkT, ['Dye']),
@@ -2596,6 +2627,7 @@ grist.onRecord(async (record) => {
       grist.docApi.fetchTable('Recipe_Dye_Components'),
       grist.docApi.fetchTable('Dyes'),
     ]);
+    indexDyeColors(dyesTable);
     const ids = tableData.id || [];
 
     const getRefIdLocal = (ref) => {
