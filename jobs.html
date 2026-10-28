@@ -76,13 +76,29 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
    records that the physical move happened. A Problem keeps the job in front
    of whoever corrects the counts until it is marked resolved. */
 const { esc, num } = StockOps;
-const S = { jobs: [], T: null, open: null, busy: false, bins: {} };
+const S = { jobs: [], T: null, open: null, busy: false, bins: {}, binsWhy: '' };
 const TYPES = [
   { key: 'Put away', cls: 'put', title: 'Put away' },
   { key: 'Retail store', cls: 'retail', title: 'Retail store' },
   { key: 'Vendor store', cls: 'vendor', title: 'Vendor store — set quantities' },
 ];
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
+
+/* Column ids matched ignoring case and punctuation, the way every other
+   widget resolves them. Reading lotsT.On_Hand_Spools directly meant one
+   renamed or differently-cased column emptied the whole lookup without a
+   word. */
+function findCol(t, names) {
+  if (!t) return null;
+  const keys = Object.keys(t);
+  const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  for (const want of names) {
+    const w = norm(want);
+    const hit = keys.find(k => norm(k) === w && Array.isArray(t[k]));
+    if (hit) return hit;
+  }
+  return null;
+}
 
 function refIdOf(v) {
   if (typeof v === 'number') return v || null;
@@ -102,23 +118,33 @@ function refIdOf(v) {
    both shapes are translated (the same trap Bin Audit documents: reading it
    raw shows "32" as the bin for every correctly-filed lot). */
 async function loadBins() {
+  S.binsWhy = '';
   let lotsT, locT;
   try {
     [lotsT, locT] = await Promise.all([
       grist.docApi.fetchTable('Production_Lots'),
       grist.docApi.fetchTable('Storage_Locations'),
     ]);
-  } catch (e) { return {}; }
+  } catch (e) { S.binsWhy = 'No bins shown — could not read Production_Lots / Storage_Locations.'; return {}; }
   const codeById = {};
-  const cCode = locT && (locT.Bin_Code ? 'Bin_Code' : null);
+  const cCode = findCol(locT, ['Bin_Code']);
   if (cCode) (locT.id || []).forEach((id, i) => {
     const c = String(locT[cCode][i] || '').trim();
     if (c) codeById[id] = c;
   });
-  const col = (n) => (lotsT && Array.isArray(lotsT[n])) ? lotsT[n] : null;
-  const cRec = col('Recipe'), cBin = col('Storage_Bin');
-  const cOn = col('On_Hand_Spools'), cHank = col('Hank_Est_Spools');
-  if (!cRec || !cBin) return {};
+  const cRecN = findCol(lotsT, ['Recipe']), cBinN = findCol(lotsT, ['Storage_Bin']);
+  const cOnN = findCol(lotsT, ['On_Hand_Spools']), cHankN = findCol(lotsT, ['Hank_Est_Spools']);
+  /* Say which column is missing rather than returning an empty map and
+     printing a blank Bin column — a silent absence here reads as "nothing is
+     in a bin", which is never true and is impossible to tell from a bug. */
+  const missing = [];
+  if (!cRecN) missing.push('Production_Lots.Recipe');
+  if (!cBinN) missing.push('Production_Lots.Storage_Bin');
+  if (!cOnN && !cHankN) missing.push('Production_Lots.On_Hand_Spools');
+  if (!cCode) missing.push('Storage_Locations.Bin_Code');
+  if (missing.length) { S.binsWhy = 'No bins shown — could not read ' + missing.join(', ') + '.'; return {}; }
+  const cRec = lotsT[cRecN], cBin = lotsT[cBinN];
+  const cOn = cOnN ? lotsT[cOnN] : null, cHank = cHankN ? lotsT[cHankN] : null;
   const byRecipe = {};
   (lotsT.id || []).forEach((id, i) => {
     const rid = refIdOf(cRec[i]);
@@ -231,6 +257,18 @@ function render() {
   if (!todo.length && !problems.length) html += `<div class="empty">Nothing to do right now. ✓</div>`;
   if (doneToday.length) html += `<h2>Done today <span class="n">${doneToday.length}</span></h2><div class="donelist">${doneToday.map(j =>
     `<div><span>${esc(j.text)}</span><a data-undo="${j.id}">undo</a></div>`).join('')}</div>`;
+  /* A vendor store job with no Recipe reference can never find a bin, and
+     that is a schema fact, not an empty shelf — say so rather than printing
+     blanks. */
+  if (!S.binsWhy) {
+    const vend = S.jobs.filter(j => j.type === 'Vendor store' && (j.status === 'To do' || j.status === 'Problem'));
+    if (vend.length && !vend.some(j => j.recipeId)) {
+      S.binsWhy = 'No bins shown — these jobs carry no Recipe link' +
+        (S.T && !S.T.recipe ? ' (Worker_Tasks has no Recipe column)' : '') +
+        ', so there is nothing to look a bin up from.';
+    }
+  }
+  if (!BULK.running) bulkBanner(S.binsWhy ? esc(S.binsWhy) : '');
   // Only offered when there is a batch worth batching, and never mid-run.
   const fx = document.getElementById('fixneg');
   if (fx && !BULK.running) {
