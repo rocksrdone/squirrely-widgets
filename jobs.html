@@ -206,14 +206,17 @@ function binPills(j) {
   return `<span class="pill bin" title="Where ${esc(j.sku || 'this colourway')} is now">${shown}${more}</span>`;
 }
 
-/* Same thing for the printed Bin column: one bin per line, because the column
-   is 70pt of courier and codes run together side by side on paper. */
+/* Same thing for the printed Bin column, one bin per line and the count
+   spelled out. On screen the number is dimmed and the pill has a tooltip; on
+   paper there is neither, and "D3 21" beside "set to 16" is two bare numbers
+   inviting someone to type the wrong one into the store. "21 in bin" cannot
+   be read as an instruction. */
 function binCellText(j) {
   const b = binsFor(j);
   if (b.own) return b.own;
   if (!b.list.length) return '';
-  const lines = b.list.slice(0, 2).map(x => `${x.code} ${x.qty}`);
-  if (b.list.length > 2) lines[1] += ` +${b.list.length - 2}`;
+  const lines = b.list.slice(0, 2).map(x => `${x.code} - ${x.qty} in bin`);
+  if (b.list.length > 2) lines.push(`+${b.list.length - 2} more`);
   return lines.join('\n');
 }
 
@@ -436,7 +439,10 @@ async function printChecklist() {
       head: [['Job', 'Qty', 'Bin', 'Found', 'Done']], body,
       styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 5, lineColor: [212, 201, 188], lineWidth: 0.5, valign: 'middle', minCellHeight: 22 },
       headStyles: { fillColor: [26, 22, 20], textColor: 255, fontSize: 8.5 },
-      columnStyles: { 1: { cellWidth: 56, halign: 'center' }, 2: { cellWidth: 70, halign: 'center', font: 'courier', fontStyle: 'bold' },
+      /* Bin is wider and left-aligned now that it carries "M-B2 - 21 in bin"
+         (16 chars of courier ~ 91pt). 110 leaves the Job column 286pt, well
+         clear of the longest SKU line. */
+      columnStyles: { 1: { cellWidth: 56, halign: 'center' }, 2: { cellWidth: 110, halign: 'left', font: 'courier', fontStyle: 'bold' },
         3: { cellWidth: 56 }, 4: { cellWidth: 40 } },
       didDrawCell: h => {
         if (h.section !== 'body' || !meta[h.row.index]) return;
