@@ -57,6 +57,7 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
 <div class="top">
   <div class="title">Jobs</div>
   <div class="right">
+    <button class="btn small" id="fixneg" style="display:none">⚡ Fix the ones showing negative</button>
     <button class="btn small" id="print">⬇ Print checklist</button>
     <button class="btn small" id="extra">⬇ Today's extra pots</button>
     <button class="btn small" id="reload">↻</button>
@@ -138,6 +139,13 @@ function render() {
   if (!todo.length && !problems.length) html += `<div class="empty">Nothing to do right now. ✓</div>`;
   if (doneToday.length) html += `<h2>Done today <span class="n">${doneToday.length}</span></h2><div class="donelist">${doneToday.map(j =>
     `<div><span>${esc(j.text)}</span><a data-undo="${j.id}">undo</a></div>`).join('')}</div>`;
+  // Only offered when there is a batch worth batching, and never mid-run.
+  const fx = document.getElementById('fixneg');
+  if (fx && !BULK.running) {
+    const n = bulkEligible().length;
+    fx.style.display = n > 1 ? '' : 'none';
+    fx.textContent = `⚡ Fix the ones showing negative (${n})`;
+  }
   document.getElementById('content').innerHTML = html;
   wire();
 }
@@ -163,6 +171,90 @@ function wire() {
     }
   }));
   document.querySelectorAll('[data-undo]').forEach(a => a.addEventListener('click', () => setStatus(Number(a.dataset.undo), 'To do')));
+}
+
+/* ── Clear the vendor store's negative quantities ──────────────────────────
+   A storefront that has oversold sits below zero, and on old listings that
+   number is just noise — but there are 141 of them and the single Check & set
+   is two taps each.
+
+   Every SKU is re-checked live rather than trusting the "(shows -32)" in the
+   job text: that figure was true when Inventory Desk raised the job and the
+   store has been selling since. The set is still compare-and-set against the
+   number just read, so a sale landing mid-run makes Shopify refuse that one
+   rather than overwrite it — it is reported and skipped, never forced.
+
+   Only SKUs reading below zero are touched. A job whose store figure is
+   merely wrong (say 3 where 7 is wanted) is a judgement call and stays for
+   the person. */
+const BULK = { running: false, stop: false };
+
+function bulkEligible() {
+  return S.jobs.filter(j => (j.status === 'To do' || j.status === 'Problem')
+    && j.type === 'Vendor store' && j.sku && j.storeQty != null);
+}
+
+function bulkBanner(html) {
+  const el = document.getElementById('banner');
+  if (el) el.innerHTML = html ? `<div class="banner">${html}</div>` : '';
+}
+
+async function bulkFixNegatives() {
+  if (BULK.running || S.busy) return;
+  const list = bulkEligible();
+  if (!list.length) { toast('No vendor store jobs to check'); return; }
+  if (!confirm(`Check ${list.length} vendor store SKU${list.length === 1 ? '' : 's'} and fix the ones showing a negative quantity?\n\n`
+    + `Each one is read from the store first. Only those below zero are changed, and each is set to the number its job asks for.\n\n`
+    + `This writes to the live vendor store. You can stop it part way; whatever has already been set stays set.`)) return;
+
+  BULK.running = true; BULK.stop = false;
+  const btn = document.getElementById('fixneg');
+  if (btn) { btn.textContent = '■ Stop'; btn.onclick = () => { BULK.stop = true; }; }
+
+  const fixed = [], skipped = [], failed = [];
+  const doneIds = [];
+  let i = 0;
+  for (const j of list) {
+    if (BULK.stop) break;
+    i++;
+    bulkBanner(`Checking ${i} of ${list.length} — <b>${esc(j.sku)}</b> · ${fixed.length} fixed, ${skipped.length} left alone`
+      + (failed.length ? `, <b>${failed.length} failed</b>` : '') + ' — press Stop to halt.');
+    let chk;
+    try { chk = await StockOps.vendorCheck(j.sku); }
+    catch (e) { failed.push(`${j.sku}: could not reach the store`); continue; }
+    const now = (chk && chk.available != null) ? Number(chk.available) : null;
+    if (!chk || !chk.ok || now == null) { failed.push(`${j.sku}: ${(chk && chk.error) || 'no answer'}`); continue; }
+    if (!(now < 0)) { skipped.push(j.sku); continue; }
+    const want = Number(j.storeQty);
+    let res;
+    try { res = await StockOps.vendorSet(j.sku, want, now); }
+    catch (e) { failed.push(`${j.sku}: set failed`); continue; }
+    if (!res || !res.ok) { failed.push(`${j.sku}: ${(res && res.error) || 'the store refused'}`); continue; }
+    fixed.push(`${j.sku} ${now} → ${res.available}`);
+    // Breathing room: 141 SKUs is ~280 calls, and Shopify rate-limits. A
+    // throttled one is reported and skipped, so this is about avoiding the
+    // report, not about correctness.
+    await new Promise(r => setTimeout(r, 200));
+    // Tick the job off only when the store really landed on what it asked for.
+    if (Number(res.available) === want) doneIds.push(j.id);
+  }
+
+  // One write for every job ticked off, rather than a round trip each.
+  if (doneIds.length && S.T) {
+    const T = S.T;
+    const f = (id) => ['UpdateRecord', 'Worker_Tasks', id,
+      Object.assign({ [T.status]: 'Done' }, T.doneAt ? { [T.doneAt]: Math.floor(Date.now() / 1000) } : {})];
+    try { await grist.docApi.applyUserActions(doneIds.map(f)); }
+    catch (e) { console.error(e); failed.push(`${doneIds.length} were set on the store but their jobs could not be ticked off`); }
+  }
+
+  BULK.running = false; BULK.stop = false;
+  if (btn) { btn.textContent = '⚡ Fix the ones showing negative'; btn.onclick = bulkFixNegatives; }
+  bulkBanner(`Finished — <b>${fixed.length}</b> fixed, ${skipped.length} already at or above zero`
+    + (failed.length ? `, <b>${failed.length} could not be done</b>:<br>${failed.slice(0, 15).map(esc).join('<br>')}`
+       + (failed.length > 15 ? `<br>…and ${failed.length - 15} more` : '') : '')
+    + (fixed.length ? `<br><span style="opacity:.75">${fixed.slice(0, 8).map(esc).join(' · ')}${fixed.length > 8 ? ' · …' : ''}</span>` : ''));
+  await load();
 }
 
 async function setStatus(id, status, extra) {
@@ -225,6 +317,7 @@ async function printChecklist() {
 }
 
 document.getElementById('reload').addEventListener('click', load);
+document.getElementById('fixneg').onclick = bulkFixNegatives;
 document.getElementById('print').addEventListener('click', printChecklist);
 document.getElementById('extra').addEventListener('click', async () => {
   try {
