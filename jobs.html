@@ -220,6 +220,13 @@ function binCellText(j) {
   return lines.join('\n');
 }
 
+/* The note only counts as "already set" when it is one this screen wrote —
+   a problem note must never be mistaken for work already done. */
+function storeSetNote(j) {
+  return (j.type === 'Vendor store' && j.status !== 'Problem'
+    && j.note && j.note.indexOf(SET_NOTE) === 0) ? j.note : '';
+}
+
 function jobHtml(j) {
   const ty = TYPES.find(x => x.key === j.type) || TYPES[0];
   const problem = j.status === 'Problem';
@@ -228,6 +235,7 @@ function jobHtml(j) {
   return `<div class="job ${ty.cls} ${problem ? 'problem' : ''}" data-id="${j.id}">
     <div class="what"><b>${esc(head)}</b>${rest ? `<div class="d">${esc(rest)}</div>` : ''}
       ${problem ? `<div class="d" style="color:var(--accent);font-weight:600">Found ${j.found == null ? '?' : esc(j.found)}${j.qty != null ? ` of ${esc(j.qty)}` : ''}${j.note ? ' — ' + esc(j.note) : ''}</div>` : ''}
+      ${storeSetNote(j) ? `<div class="d" style="color:var(--teal);font-weight:600">${esc(storeSetNote(j))} — Grist not updated, so this is still listed as open</div>` : ''}
       <div class="m">${j.created ? new Date(j.created * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''}</div></div>
     ${j.qty != null && j.type !== 'Vendor store' ? `<span class="pill">${esc(j.qty)} ${esc((j.form || '').toLowerCase())}</span>` : ''}
     ${binPills(j)}
@@ -235,7 +243,7 @@ function jobHtml(j) {
     <div class="acts">
       ${problem
         ? `<button class="btn go" data-act="resolve">Resolved</button>`
-        : `${j.type === 'Vendor store' && j.sku ? `<button class="btn" data-act="vendor" style="border-color:var(--purple);color:var(--purple)">Check &amp; set</button>` : ''}<button class="btn go done" data-act="done" title="Done">✓</button><button class="btn warn" data-act="problem">Problem</button>`}
+        : `${j.type === 'Vendor store' && j.sku ? `<button class="btn" data-act="vendor" style="border-color:var(--purple);color:var(--purple)">Check &amp; set</button>` : ''}<button class="btn go done" data-act="done" title="${storeSetNote(j) ? 'The store was already set - tick this off' : 'Done'}">${storeSetNote(j) ? '✓ Corrected' : '✓'}</button><button class="btn warn" data-act="problem">Problem</button>`}
     </div>
     ${S.open === j.id ? `<div class="prob">
       <span>Found</span><input class="n" type="number" min="0" id="pf" value="${j.qty != null ? esc(j.qty) : ''}">
@@ -293,7 +301,14 @@ function wire() {
       const j = S.jobs.find(x => x.id === id);
       // Setting the store to the job's number IS the job, so it ticks itself off.
       return StockOps.openVendorStock(j.sku, { target: j.storeQty, targetLabel: 'job says', title: j.text.split(':')[0],
-        onSet: (now) => { if (Number(now) === Number(j.storeQty)) setStatus(id, 'Done'); },
+        /* Landing on the number the job asked for finishes it. Landing on a
+           different one does not — but the store HAS been changed, and that
+           has to be visible on the card, or the next pass through the list
+           looks identical to the first and gets done again. */
+        onSet: (now) => {
+          if (Number(now) === Number(j.storeQty)) { setStatus(id, 'Done'); return; }
+          noteStoreSet(id, now);
+        },
         /* Setting the store to some OTHER number leaves the job open, which is
            right — it asked for 16 and got 13. But answering the "Grist expected
            16" question settles it: Grist and the store now agree, and the job's
@@ -395,6 +410,20 @@ async function bulkFixNegatives() {
        + (failed.length > 15 ? `<br>…and ${failed.length - 15} more` : '') : '')
     + (fixed.length ? `<br><span style="opacity:.75">${fixed.slice(0, 8).map(esc).join(' · ')}${fixed.length > 8 ? ' · …' : ''}</span>` : ''));
   await load();
+}
+
+/* Record on the job that its store quantity was already changed, and to what.
+   Written to Worker_Note, which a vendor store job otherwise never uses — it
+   is the problem note, and a job being worked is not a problem. */
+const SET_NOTE = 'Store set to ';
+async function noteStoreSet(id, now) {
+  if (!S.T || !S.T.note) return;
+  const stamp = new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Worker_Tasks', id,
+      { [S.T.note]: `${SET_NOTE}${now} at ${stamp}` }]]);
+    await load();
+  } catch (e) { console.error(e); }
 }
 
 async function setStatus(id, status, extra) {

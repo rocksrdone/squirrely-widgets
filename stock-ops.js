@@ -1143,6 +1143,33 @@
       };
     };
     /* The store now differs from what Grist expected — ask why, then fix Grist to match. */
+    /* Every applied fix leaves a dated line in the lot's Notes. Counting
+       today's says whether this has already been answered once — which is how
+       FFN_GEODE took -3 wound three times over, 9 spools written off for a
+       change of 3. The buttons still work; the warning is there so the second
+       press is a decision rather than a repeat. */
+    const countedToday = async (docApi) => {
+      try {
+        const [lotsT, recT] = await Promise.all([
+          docApi.fetchTable('Production_Lots'), docApi.fetchTable('Recipes')]);
+        const rs = col(recT, ['SKU_Base']);
+        const want = String(sku || '').trim().toUpperCase();
+        const recIds = (recT.id || []).filter((id, i) => String(arr(recT, rs)[i] || '').trim().toUpperCase() === want);
+        if (!recIds.length) return 0;
+        const cRec = col(lotsT, ['Recipe']), cNotes = col(lotsT, ['Notes']);
+        if (!cRec || !cNotes) return 0;
+        const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+        let n = 0;
+        (lotsT.id || []).forEach((id, i) => {
+          if (!recIds.includes(refId(arr(lotsT, cRec)[i]))) return;
+          String(arr(lotsT, cNotes)[i] || '').split('\n').forEach(line => {
+            if (line.indexOf(day + ' vendor store count:') === 0) n++;
+          });
+        });
+        return n;
+      } catch (e) { return 0; }
+    };
+
     const offerGristFix = (delta) => {
       const docApi = opts.docApi || (root.grist && root.grist.docApi);
       if (!docApi) return;
@@ -1155,6 +1182,17 @@
         <div class="vs-fix-b">${choices.map(([k, t]) => `<button class="vs-btn ghost" data-fix="${k}">${esc(t)}</button>`).join('')}
         <button class="vs-btn ghost" data-fix="">Leave Grist as is</button></div><div class="vs-msg" id="vs-fixmsg"></div>`;
       $('vs-body').appendChild(box);
+      // Asked after the box is up, so the question is never held behind a fetch.
+      countedToday(docApi).then(already => {
+        if (!already || !box.isConnected) return;
+        const w = document.createElement('div');
+        w.className = 'vs-msg bad';
+        w.style.cssText = 'font-weight:600;margin:-2px 0 8px';
+        w.textContent = already === 1
+          ? `Careful — ${sku} already had a vendor store count applied today. Answering again takes the same amount off a second time.`
+          : `Careful — ${sku} has had ${already} vendor store counts applied today. Check the lot's Notes before answering again.`;
+        box.insertBefore(w, box.querySelector('.vs-fix-b'));
+      });
       box.querySelectorAll('[data-fix]').forEach(b => b.addEventListener('click', async () => {
         const kind = b.dataset.fix;
         const msg = box.querySelector('#vs-fixmsg');
