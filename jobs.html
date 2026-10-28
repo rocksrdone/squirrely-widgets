@@ -76,13 +76,69 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
    records that the physical move happened. A Problem keeps the job in front
    of whoever corrects the counts until it is marked resolved. */
 const { esc, num } = StockOps;
-const S = { jobs: [], T: null, open: null, busy: false };
+const S = { jobs: [], T: null, open: null, busy: false, bins: {} };
 const TYPES = [
   { key: 'Put away', cls: 'put', title: 'Put away' },
   { key: 'Retail store', cls: 'retail', title: 'Retail store' },
   { key: 'Vendor store', cls: 'vendor', title: 'Vendor store — set quantities' },
 ];
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2400); }
+
+function refIdOf(v) {
+  if (typeof v === 'number') return v || null;
+  if (Array.isArray(v)) return v[1] || null;
+  if (v && typeof v === 'object' && 'rowId' in v) return v.rowId || null;
+  return null;
+}
+
+/* ── Where a colourway actually is ────────────────────────────────────────
+   A put-away job carries its own bin, written when the job was made. A vendor
+   store job does not: Inventory Desk raises it from a SKU and a number, and
+   nothing in it says where to go and count. So the bin is looked up from the
+   colourway's lots — every bin holding stock of it, with how much is in each,
+   newest-stocked first.
+
+   Storage_Bin is a Reference, but older rows hold the bin CODE as text, so
+   both shapes are translated (the same trap Bin Audit documents: reading it
+   raw shows "32" as the bin for every correctly-filed lot). */
+async function loadBins() {
+  let lotsT, locT;
+  try {
+    [lotsT, locT] = await Promise.all([
+      grist.docApi.fetchTable('Production_Lots'),
+      grist.docApi.fetchTable('Storage_Locations'),
+    ]);
+  } catch (e) { return {}; }
+  const codeById = {};
+  const cCode = locT && (locT.Bin_Code ? 'Bin_Code' : null);
+  if (cCode) (locT.id || []).forEach((id, i) => {
+    const c = String(locT[cCode][i] || '').trim();
+    if (c) codeById[id] = c;
+  });
+  const col = (n) => (lotsT && Array.isArray(lotsT[n])) ? lotsT[n] : null;
+  const cRec = col('Recipe'), cBin = col('Storage_Bin');
+  const cOn = col('On_Hand_Spools'), cHank = col('Hank_Est_Spools');
+  if (!cRec || !cBin) return {};
+  const byRecipe = {};
+  (lotsT.id || []).forEach((id, i) => {
+    const rid = refIdOf(cRec[i]);
+    if (!rid) return;
+    const raw = cBin[i];
+    const code = typeof raw === 'string' ? raw.trim() : (codeById[refIdOf(raw)] || '');
+    if (!code) return;
+    const have = (cOn ? Number(cOn[i]) || 0 : 0) + (cHank ? Number(cHank[i]) || 0 : 0);
+    if (have <= 0) return;   // an empty bin is not where to go and count
+    const m = byRecipe[rid] = byRecipe[rid] || {};
+    m[code] = (m[code] || 0) + have;
+  });
+  const out = {};
+  Object.keys(byRecipe).forEach(rid => {
+    out[rid] = Object.entries(byRecipe[rid])
+      .map(([code, qty]) => ({ code, qty }))
+      .sort((a, b) => b.qty - a.qty || a.code.localeCompare(b.code, undefined, { numeric: true }));
+  });
+  return out;
+}
 
 async function load() {
   let t;
@@ -93,10 +149,28 @@ async function load() {
   S.jobs = (t.id || []).map((id, i) => ({
     id, created: num(a(T.created, i)), type: a(T.type, i) || '', text: a(T.instruction, i) || '',
     qty: a(T.qty, i), form: a(T.form, i) || '', bin: a(T.bin, i) || '', sku: a(T.sku, i) || '',
+    recipeId: refIdOf(a(T.recipe, i)),
     storeQty: a(T.storeQty, i), status: a(T.status, i) || 'To do', found: a(T.found, i),
     note: a(T.note, i) || '', doneAt: num(a(T.doneAt, i)),
   }));
+  render();                       // jobs first — the bins are an extra, not a gate
+  S.bins = await loadBins();
   render();
+}
+
+/* The job's own bin when it has one — that is an instruction, "put it here".
+   Otherwise where the colourway is now, which is a direction: "go and count
+   it there". Two bins at most on the pill; a colourway split across more is
+   a counting job in itself, so the rest is a count rather than a wall of
+   codes. Quantities included, so a short count is obvious on the spot. */
+function binPills(j) {
+  if (j.bin) return `<span class="pill bin">${esc(j.bin)}</span>`;
+  const list = (S.bins && j.recipeId) ? S.bins[j.recipeId] : null;
+  if (!list || !list.length) return '';
+  const shown = list.slice(0, 2)
+    .map(b => `${esc(b.code)}<span style="opacity:.65"> ${esc(b.qty)}</span>`).join(' · ');
+  const more = list.length > 2 ? ` <span style="opacity:.65">+${list.length - 2}</span>` : '';
+  return `<span class="pill bin" title="Where ${esc(j.sku || 'this colourway')} is now">${shown}${more}</span>`;
 }
 
 function jobHtml(j) {
@@ -109,7 +183,7 @@ function jobHtml(j) {
       ${problem ? `<div class="d" style="color:var(--accent);font-weight:600">Found ${j.found == null ? '?' : esc(j.found)}${j.qty != null ? ` of ${esc(j.qty)}` : ''}${j.note ? ' — ' + esc(j.note) : ''}</div>` : ''}
       <div class="m">${j.created ? new Date(j.created * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''}</div></div>
     ${j.qty != null && j.type !== 'Vendor store' ? `<span class="pill">${esc(j.qty)} ${esc((j.form || '').toLowerCase())}</span>` : ''}
-    ${j.bin ? `<span class="pill bin">${esc(j.bin)}</span>` : ''}
+    ${binPills(j)}
     ${j.storeQty != null && j.sku ? `<span class="pill set">${esc(j.sku)} → ${esc(j.storeQty)}</span>` : ''}
     <div class="acts">
       ${problem
