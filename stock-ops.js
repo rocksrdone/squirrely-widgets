@@ -799,6 +799,125 @@
   function vendorCheck(sku) { return vendorCall({ mode: 'check', sku }); }
   function vendorSet(sku, quantity, expect) { return vendorCall({ mode: 'set', sku, quantity, expect }); }
 
+  /* ── Put Grist back where the store is, in one move ──────────────────────
+     The three "update Grist" buttons each apply a DELTA, so answering twice
+     takes it twice - FFN_GEODE lost 9 spools to three presses of a 3-spool
+     question. This is the absolute version: reverse today's counts, then list
+     exactly what the store says. Pressing it again changes nothing.
+
+     It reverses only lines this code wrote today, parsed strictly. A line it
+     cannot read aborts the whole thing rather than being skipped - a partial
+     reversal is worse than none, because the numbers would look settled. */
+  const VSC = ' vendor store count: ';
+  function reverseOf(text) {
+    let m;
+    if ((m = /^\u2212(\d+) hank \(not there\)$/.exec(text))) return { hank: +m[1], v: +m[1] };
+    if ((m = /^\u2212(\d+) wound \(not there\)$/.exec(text))) return { oh: +m[1], broken: -m[1], v: +m[1] };
+    if ((m = /^(\d+) taken off the vendor store$/.exec(text))) return { v: +m[1] };
+    if ((m = /^(\d+) more listed on the vendor store$/.exec(text))) return { v: -m[1] };
+    if ((m = /^\+(\d+) wound found$/.exec(text))) return { oh: -m[1], made: -m[1], v: -m[1] };
+    if ((m = /^\+(\d+) hank found$/.exec(text))) return { hank: -m[1], v: -m[1] };
+    return null;
+  }
+
+  async function vendorResetToStore(docApi, sku, storeQty) {
+    const target = Math.max(0, Math.round(num(storeQty)));
+    const [lotsT, recT] = await Promise.all([docApi.fetchTable('Production_Lots'), docApi.fetchTable('Recipes')]);
+    const rs = col(recT, ['SKU_Base']);
+    const want = String(sku || '').trim().toUpperCase();
+    const recIds = (recT.id || []).filter((id, i) => String(arr(recT, rs)[i] || '').trim().toUpperCase() === want);
+    if (!recIds.length) return { ok: false, error: `No recipe in Grist has the SKU ${sku}.` };
+    const C = { recipe: col(lotsT, ['Recipe']), date: col(lotsT, ['Date_Dyed']), v: col(lotsT, ['Vendor_Stock_Spools']),
+      s: col(lotsT, ['Store_Stock_Spools']), oh: col(lotsT, ['On_Hand_Spools']), hank: col(lotsT, ['Hank_Est_Spools']),
+      made: col(lotsT, ['Spools_Made']), broken: col(lotsT, ['Broken_Spools']), notes: col(lotsT, ['Notes']),
+      lot: col(lotsT, ['Lot_Number']) };
+    if (!C.v || !C.oh) return { ok: false, error: 'Production_Lots needs Vendor_Stock_Spools and On_Hand_Spools.' };
+    const g = (c, i) => num(arr(lotsT, c)[i]);
+    const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+
+    const rows = (lotsT.id || []).map((id, i) => ({ id, i, rec: refId(arr(lotsT, C.recipe)[i]) }))
+      .filter(r => recIds.includes(r.rec))
+      .map(r => ({ id: r.id, lot: String(arr(lotsT, C.lot)[r.i] || ''), date: num(arr(lotsT, C.date)[r.i]),
+        v: g(C.v, r.i), s: g(C.s, r.i), oh: g(C.oh, r.i), hank: g(C.hank, r.i), made: g(C.made, r.i),
+        broken: g(C.broken, r.i), notes: String(arr(lotsT, C.notes)[r.i] || '') }))
+      .sort((a, b) => (b.date - a.date) || (b.id - a.id));
+    if (!rows.length) return { ok: false, error: `No lots of ${sku} in Grist.` };
+
+    // 1. Undo today's counts, exactly.
+    const told = [];
+    for (const r of rows) {
+      const keep = [];
+      let undone = 0;
+      for (const line of r.notes.split('\n')) {
+        if (line.indexOf(day + VSC) !== 0) { keep.push(line); continue; }
+        const rev = reverseOf(line.slice((day + VSC).length).trim());
+        if (!rev) return { ok: false, error: `Could not read "${line}" on ${r.lot} — undo it by hand.` };
+        Object.keys(rev).forEach(k => { r[k] = (r[k] || 0) + rev[k]; });
+        undone++;
+      }
+      if (undone) { r.notes = keep.join('\n'); told.push(`${r.lot}: ${undone} of today's count${undone === 1 ? '' : 's'} undone`); }
+      r._keptNotes = keep.join('\n');
+      r._undone = undone;
+    }
+    // A reversal must never leave a count below zero; that would mean the notes
+    // describe more than the lot ever held.
+    for (const r of rows) {
+      if (r.oh < 0 || r.hank < 0 || r.v < 0 || r.broken < 0 || r.made < 0) {
+        return { ok: false, error: `Undoing today's counts would take ${r.lot} below zero — fix that lot by hand.` };
+      }
+    }
+
+    // 2. List exactly what the store says, newest lot first.
+    let left = target;
+    const vendorNow = [];
+    for (const r of rows) {
+      const room = Math.max(0, r.oh + r.hank - r.s);
+      const put = Math.min(left, room);
+      vendorNow.push(put); left -= put;
+    }
+    if (left > 0) {
+      const have = rows.reduce((t, r) => t + Math.max(0, r.oh + r.hank - r.s), 0);
+      return { ok: false, error: `The store says ${target} but Grist only has ${have} to list for ${sku}` +
+        ` — raise the shelf count first (Lot Desk > Fix or delete this lot).` };
+    }
+
+    const actions = [], undo = [], lines = [];
+    rows.forEach((r, idx) => {
+      const upd = {}, old = {};
+      const put = (c, nv, ov) => { if (c && nv !== ov) { upd[c] = nv; old[c] = ov; } };
+      const before = { v: g(C.v, (lotsT.id || []).indexOf(r.id)) };
+      put(C.oh, r.oh, g(C.oh, (lotsT.id || []).indexOf(r.id)));
+      put(C.hank, r.hank, g(C.hank, (lotsT.id || []).indexOf(r.id)));
+      put(C.broken, r.broken, g(C.broken, (lotsT.id || []).indexOf(r.id)));
+      put(C.made, r.made, g(C.made, (lotsT.id || []).indexOf(r.id)));
+      put(C.v, vendorNow[idx], before.v);
+      if (!Object.keys(upd).length) return;
+      if (C.notes) {
+        const base = r._keptNotes || '';
+        /* Deliberately NOT the VSC prefix. A summary written with it would be
+           read as a reversible count on the next run - the operation would
+           try to undo its own note and refuse. */
+        upd[C.notes] = (base ? base + '\n' : '') + `${day} vendor store set to match (${target})`;
+        old[C.notes] = String(arr(lotsT, C.notes)[(lotsT.id || []).indexOf(r.id)] || '');
+      }
+      actions.push(['UpdateRecord', 'Production_Lots', r.id, upd]);
+      undo.push(['UpdateRecord', 'Production_Lots', r.id, old]);
+      /* Spell out the shelf and write-off moves, not just the listing. Those
+         are the consequential ones, and "vendor 7 -> 13" alone would hide
+         nine spools coming back out of Written Off. */
+      const i0 = (lotsT.id || []).indexOf(r.id);
+      const bits = [`vendor ${before.v} -> ${vendorNow[idx]}`];
+      if (C.oh && r.oh !== g(C.oh, i0)) bits.push(`on hand ${g(C.oh, i0)} -> ${r.oh}`);
+      if (C.hank && r.hank !== g(C.hank, i0)) bits.push(`hank ${g(C.hank, i0)} -> ${r.hank}`);
+      if (C.broken && r.broken !== g(C.broken, i0)) bits.push(`written off ${g(C.broken, i0)} -> ${r.broken}`);
+      if (C.made && r.made !== g(C.made, i0)) bits.push(`made ${g(C.made, i0)} -> ${r.made}`);
+      lines.push(`${r.lot}: ${bits.join(', ')}` +
+        (r._undone ? ` (${r._undone} of today's count${r._undone === 1 ? '' : 's'} undone)` : ''));
+    });
+    if (!actions.length) return { ok: true, nothing: true, lines: ['Grist already matches the store.'], actions: [], undo: [] };
+    return { ok: true, lines, actions, undo };
+  }
+
   /* ── Bring Grist in line after the vendor store was set to a different number ──
      delta = new store number − what Grist expected. The kind says WHY, because
      that decides which counts move:
@@ -1170,6 +1289,12 @@
       } catch (e) { return 0; }
     };
 
+    const msgInto = (box, text, bad) => {
+      const m = box.querySelector('#vs-fixmsg');
+      if (!m) return;
+      m.className = 'vs-msg' + (bad ? ' bad' : ' ok');
+      m.textContent = text;
+    };
     const offerGristFix = (delta) => {
       const docApi = opts.docApi || (root.grist && root.grist.docApi);
       if (!docApi) return;
@@ -1192,6 +1317,32 @@
           ? `Careful — ${sku} already had a vendor store count applied today. Answering again takes the same amount off a second time.`
           : `Careful — ${sku} has had ${already} vendor store counts applied today. Check the lot's Notes before answering again.`;
         box.insertBefore(w, box.querySelector('.vs-fix-b'));
+        /* The delta buttons are what compounded. Offer the absolute move too,
+           but only here - where we know it has already been answered once. */
+        const row = box.querySelector('.vs-fix-b');
+        const b2 = document.createElement('button');
+        b2.className = 'vs-btn';
+        b2.style.cssText = 'border-color:#8B3A2A;color:#8B3A2A;font-weight:600';
+        b2.textContent = 'Undo today\u2019s counts and match the store';
+        b2.onclick = async () => {
+          const store = qtyOrNaN((($('vs-body').querySelector('.vs-n b') || {}).textContent));
+          if (!Number.isFinite(store)) { msgInto(box, 'Check the store again first.', true); return; }
+          row.querySelectorAll('button').forEach(x => { x.disabled = true; });
+          b2.disabled = true;
+          let r;
+          try { r = await vendorResetToStore(docApi, sku, store); }
+          catch (e) { r = { ok: false, error: e.message || String(e) }; }
+          if (!r.ok) { msgInto(box, r.error, true); row.querySelectorAll('button').forEach(x => { x.disabled = false; }); b2.disabled = false; return; }
+          if (!confirm(`Put Grist where the store is?\n\n${r.lines.join('\n')}\n\nThis replaces today's counts rather than adding to them, so running it twice changes nothing.`)) {
+            row.querySelectorAll('button').forEach(x => { x.disabled = false; }); b2.disabled = false; return;
+          }
+          if (r.actions.length) await docApi.applyUserActions(r.actions);
+          box.querySelector('.vs-fix-b').remove();
+          box.querySelector('.vs-fix-q').textContent = 'Grist matched to the store \u2713';
+          msgInto(box, r.lines.join(' \u00b7 '), false);
+          if (opts.onGrist) opts.onGrist(true);
+        };
+        row.insertBefore(b2, row.firstChild);
       });
       box.querySelectorAll('[data-fix]').forEach(b => b.addEventListener('click', async () => {
         const kind = b.dataset.fix;
@@ -1320,7 +1471,7 @@
   const STOCK2_NOT_READY =
     'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
-  root.StockOps = { stock2Cols, stock2Row, stock2Held, stockMove, stockSet, STOCK2_NOT_READY, vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, makeLeFromLot, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+  root.StockOps = { stock2Cols, stock2Row, stock2Held, stockMove, stockSet, STOCK2_NOT_READY, vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, vendorResetToStore, makeLeFromLot, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);
