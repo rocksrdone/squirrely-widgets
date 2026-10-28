@@ -158,19 +158,37 @@ async function load() {
   render();
 }
 
-/* The job's own bin when it has one — that is an instruction, "put it here".
-   Otherwise where the colourway is now, which is a direction: "go and count
-   it there". Two bins at most on the pill; a colourway split across more is
-   a counting job in itself, so the rest is a count rather than a wall of
-   codes. Quantities included, so a short count is obvious on the spot. */
+/* Which bins a job points at, as data rather than markup, so the screen pill
+   and the printed checklist read from one place and cannot drift apart.
+   A job's OWN bin wins: that is an instruction, "put it here", not a
+   direction to where the thread already is. */
+function binsFor(j) {
+  if (j.bin) return { own: j.bin, list: [] };
+  return { own: '', list: ((S.bins && j.recipeId) ? S.bins[j.recipeId] : null) || [] };
+}
+
+/* Two bins at most, then a count. A colourway spread across more is a
+   counting job in itself, and a wall of codes helps nobody. Quantities are
+   shown either way, so a short count is obvious standing at the shelf. */
 function binPills(j) {
-  if (j.bin) return `<span class="pill bin">${esc(j.bin)}</span>`;
-  const list = (S.bins && j.recipeId) ? S.bins[j.recipeId] : null;
-  if (!list || !list.length) return '';
-  const shown = list.slice(0, 2)
-    .map(b => `${esc(b.code)}<span style="opacity:.65"> ${esc(b.qty)}</span>`).join(' · ');
-  const more = list.length > 2 ? ` <span style="opacity:.65">+${list.length - 2}</span>` : '';
+  const b = binsFor(j);
+  if (b.own) return `<span class="pill bin">${esc(b.own)}</span>`;
+  if (!b.list.length) return '';
+  const shown = b.list.slice(0, 2)
+    .map(x => `${esc(x.code)}<span style="opacity:.65"> ${esc(x.qty)}</span>`).join(' · ');
+  const more = b.list.length > 2 ? ` <span style="opacity:.65">+${b.list.length - 2}</span>` : '';
   return `<span class="pill bin" title="Where ${esc(j.sku || 'this colourway')} is now">${shown}${more}</span>`;
+}
+
+/* Same thing for the printed Bin column: one bin per line, because the column
+   is 70pt of courier and codes run together side by side on paper. */
+function binCellText(j) {
+  const b = binsFor(j);
+  if (b.own) return b.own;
+  if (!b.list.length) return '';
+  const lines = b.list.slice(0, 2).map(x => `${x.code} ${x.qty}`);
+  if (b.list.length > 2) lines[1] += ` +${b.list.length - 2}`;
+  return lines.join('\n');
 }
 
 function jobHtml(j) {
@@ -350,6 +368,9 @@ async function setStatus(id, status, extra) {
 async function printChecklist() {
   const open = S.jobs.filter(j => j.status === 'To do');
   if (!open.length) { toast('Nothing to print'); return; }
+  // Bins arrive a moment after the jobs. Printing in that gap would hand out
+  // a sheet with an empty Bin column, so wait for them rather than race.
+  if (!S.bins || !Object.keys(S.bins).length) S.bins = await loadBins();
   try {
     const JsPDF = await StockOps.pdfLib();
     const doc = new JsPDF({ unit: 'pt', format: 'letter' });
@@ -368,7 +389,7 @@ async function printChecklist() {
         const what = j.type === 'Vendor store' ? `Set ${j.sku} to ${j.storeQty}` : j.text;
         body.push([StockOps.pdfSafe(what),
           j.type === 'Vendor store' ? '' : `${j.qty != null ? j.qty : ''} ${(j.form || '').toLowerCase()}`.trim(),
-          j.bin || '', '', '']);
+          StockOps.pdfSafe(binCellText(j)), '', '']);
         meta.push(j);
       });
     });
