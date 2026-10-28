@@ -1267,26 +1267,40 @@
        FFN_GEODE took -3 wound three times over, 9 spools written off for a
        change of 3. The buttons still work; the warning is there so the second
        press is a decision rather than a repeat. */
-    const countedToday = async (docApi) => {
+    /* What today's notes say, and how much each answer could actually cover.
+       The capacities mirror vendorGristFix exactly: a "7 hank not there" that
+       Grist cannot satisfy is not a choice, it is an error waiting to be
+       clicked. Offering it and then refusing teaches people to distrust the
+       buttons. */
+    const vendorFixContext = async (docApi) => {
+      const blank = { counts: 0, cap: null };
       try {
         const [lotsT, recT] = await Promise.all([
           docApi.fetchTable('Production_Lots'), docApi.fetchTable('Recipes')]);
         const rs = col(recT, ['SKU_Base']);
         const want = String(sku || '').trim().toUpperCase();
         const recIds = (recT.id || []).filter((id, i) => String(arr(recT, rs)[i] || '').trim().toUpperCase() === want);
-        if (!recIds.length) return 0;
-        const cRec = col(lotsT, ['Recipe']), cNotes = col(lotsT, ['Notes']);
-        if (!cRec || !cNotes) return 0;
+        if (!recIds.length) return blank;
+        const C = { rec: col(lotsT, ['Recipe']), notes: col(lotsT, ['Notes']), v: col(lotsT, ['Vendor_Stock_Spools']),
+          s: col(lotsT, ['Store_Stock_Spools']), oh: col(lotsT, ['On_Hand_Spools']), hank: col(lotsT, ['Hank_Est_Spools']) };
+        if (!C.rec) return blank;
         const day = new Date().toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
-        let n = 0;
+        const g = (c, i) => num(arr(lotsT, c)[i]);
+        const cap = { hank: 0, wound: 0, hold: 0, general: 0 };
+        let counts = 0;
         (lotsT.id || []).forEach((id, i) => {
-          if (!recIds.includes(refId(arr(lotsT, cRec)[i]))) return;
-          String(arr(lotsT, cNotes)[i] || '').split('\n').forEach(line => {
-            if (line.indexOf(day + ' vendor store count:') === 0) n++;
+          if (!recIds.includes(refId(arr(lotsT, C.rec)[i]))) return;
+          if (C.notes) String(arr(lotsT, C.notes)[i] || '').split('\n').forEach(line => {
+            if (line.indexOf(day + VSC) === 0) counts++;
           });
+          const v = g(C.v, i), oh = g(C.oh, i), hank = g(C.hank, i), st = g(C.s, i);
+          cap.hank += Math.min(hank, v);
+          cap.wound += Math.min(oh, v);
+          cap.hold += v;
+          cap.general += Math.max(0, oh + hank - v - st);
         });
-        return n;
-      } catch (e) { return 0; }
+        return { counts, cap };
+      } catch (e) { return blank; }
     };
 
     const msgInto = (box, text, bad) => {
@@ -1308,8 +1322,34 @@
         <button class="vs-btn ghost" data-fix="">Leave Grist as is</button></div><div class="vs-msg" id="vs-fixmsg"></div>`;
       $('vs-body').appendChild(box);
       // Asked after the box is up, so the question is never held behind a fetch.
-      countedToday(docApi).then(already => {
-        if (!already || !box.isConnected) return;
+      vendorFixContext(docApi).then(({ counts: already, cap }) => {
+        if (!box.isConnected) return;
+        /* Drop any answer Grist could not actually carry out. Hidden rather
+           than disabled, because a greyed row still reads as a choice you got
+           wrong; a short line says what went and why. */
+        if (cap) {
+          const limit = delta < 0
+            ? { hank: cap.hank, wound: cap.wound, hold: cap.hold }
+            : { general: cap.general };
+          const why = { hank: 'no hank listed on the vendor store', wound: 'not that many wound listed on the vendor store',
+            hold: 'not that many listed on the vendor store', general: 'no unlisted spools to add' };
+          const gone = [];
+          box.querySelectorAll('[data-fix]').forEach(btn => {
+            const k = btn.dataset.fix;
+            if (!k || !(k in limit)) return;          // "Leave Grist as is" always stays
+            if (limit[k] >= n) return;
+            gone.push(`${btn.textContent} (${why[k]})`);
+            btn.remove();
+          });
+          if (gone.length) {
+            const note = document.createElement('div');
+            note.className = 'vs-msg';
+            note.style.cssText = 'color:#8B7D72;font-size:11.5px;margin-top:6px';
+            note.textContent = 'Not offered: ' + gone.join('; ') + '.';
+            box.appendChild(note);
+          }
+        }
+        if (!already) return;
         const w = document.createElement('div');
         w.className = 'vs-msg bad';
         w.style.cssText = 'font-weight:600;margin:-2px 0 8px';
