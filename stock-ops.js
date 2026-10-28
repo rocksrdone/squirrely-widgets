@@ -1321,8 +1321,11 @@
            but only here - where we know it has already been answered once. */
         const row = box.querySelector('.vs-fix-b');
         const b2 = document.createElement('button');
-        b2.className = 'vs-btn';
-        b2.style.cssText = 'border-color:#8B3A2A;color:#8B3A2A;font-weight:600';
+        /* ghost, not the filled .vs-btn: that one is solid #5B4A8B with white
+           text, so a red foreground on it is red-on-purple. Set the colour,
+           own the background. */
+        b2.className = 'vs-btn ghost';
+        b2.style.cssText = 'background:#FBF2F0;color:#8B3A2A;border:2px solid #8B3A2A;font-weight:700';
         b2.textContent = 'Undo today\u2019s counts and match the store';
         b2.onclick = async () => {
           const store = qtyOrNaN((($('vs-body').querySelector('.vs-n b') || {}).textContent));
