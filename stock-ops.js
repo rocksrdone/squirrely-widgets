@@ -53,6 +53,15 @@
     return null;
   }
   function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+  /* A quantity the store actually reported, or NaN. Number(null) and
+     Number('') are both 0, so "no answer" otherwise reads as a real zero —
+     which is how a 3-spool change came to offer writing off 16. A genuine 0
+     is still a 0. */
+  function qtyOrNaN(v) {
+    if (v === null || v === undefined || v === '') return NaN;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  }
   function fiberCode(f) {
     const s = String(f || '').trim().toUpperCase();
     if (!s) return '';
@@ -1084,6 +1093,7 @@
     $('vs-close').onclick = close;
     ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
 
+    let fixAfterCheck = false;
     const draw = (r) => {
       if (r.title) $('vs-t').textContent = r.title;
       $('vs-s').textContent = `${sku} · vendor store${r.status ? ' · ' + String(r.status).toLowerCase() : ''}`;
@@ -1105,11 +1115,24 @@
         $('vs-go').disabled = true; $('vs-msg').className = 'vs-msg'; $('vs-msg').textContent = `Setting ${sku} to ${q}…`;
         const s = await vendorSet(sku, q, r.available);
         if (s.ok && s.set) {
-          $('vs-body').querySelector('.vs-n b').textContent = s.available;
+          /* Everything below is derived from the quantity the store reports
+             back. When it reports none, Number(null) is 0 and the delta comes
+             out as the WHOLE target — a 3-spool change offering to write off
+             16 — so never guess it. Re-read instead, and carry the Grist
+             question over to that answer. */
+          const after = qtyOrNaN(s.available);
+          if (!Number.isFinite(after)) {
+            $('vs-msg').className = 'vs-msg';
+            $('vs-msg').textContent = `Set to ${q} — the store didn't report a number back. Checking…`;
+            fixAfterCheck = true;
+            setTimeout(check, 600);
+            return;
+          }
+          $('vs-body').querySelector('.vs-n b').textContent = after;
           $('vs-msg').className = 'vs-msg ok';
-          $('vs-msg').textContent = `Vendor store now shows ${s.available} ✓`;
-          if (opts.onSet) opts.onSet(s.available);
-          const delta = Number(s.available) - Number(opts.target);
+          $('vs-msg').textContent = `Vendor store now shows ${after} ✓`;
+          if (opts.onSet) opts.onSet(after);
+          const delta = after - Number(opts.target);
           if (opts.target != null && delta && Number.isFinite(delta)) offerGristFix(delta);
         } else {
           $('vs-msg').className = 'vs-msg bad';
@@ -1158,7 +1181,25 @@
         if (opts.onGrist) opts.onGrist();
       }));
     };
-    const check = async () => { $('vs-body').innerHTML = '<div class="vs-msg">Checking the vendor store…</div>'; draw(await vendorCheck(sku)); };
+    /* A Set whose response carried no quantity leaves the Grist question
+       unanswered. The re-read answers it, so the prompt is raised from the
+       checked figure rather than being lost. */
+    const check = async () => {
+      $('vs-body').innerHTML = '<div class="vs-msg">Checking the vendor store…</div>';
+      const res = await vendorCheck(sku);
+      draw(res);
+      if (!fixAfterCheck) return;
+      fixAfterCheck = false;
+      const now = qtyOrNaN(res && res.available);
+      if (!Number.isFinite(now)) {
+        const m = $('vs-msg');
+        if (m) { m.className = 'vs-msg bad'; m.textContent = 'The store still reports no quantity — check it in Shopify admin.'; }
+        return;
+      }
+      if (opts.onSet) opts.onSet(now);
+      const d = now - Number(opts.target);
+      if (opts.target != null && d && Number.isFinite(d)) offerGristFix(d);
+    };
     check();
   }
 
