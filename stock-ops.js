@@ -1176,9 +1176,12 @@
           e.preventDefault();
           await docApi.applyUserActions(r.undo);
           msg.className = 'vs-msg'; msg.textContent = 'Grist change undone.';
-          if (opts.onGrist) opts.onGrist();
+          if (opts.onGrist) opts.onGrist(false);
         };
-        if (opts.onGrist) opts.onGrist();
+        /* true = Grist was brought in line, false = that was undone. A caller
+           that closes a job off the back of this has to tell them apart, or an
+           undo ticks the job it just reopened. */
+        if (opts.onGrist) opts.onGrist(true);
       }));
     };
     /* A Set whose response carried no quantity leaves the Grist question
