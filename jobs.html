@@ -370,6 +370,13 @@ async function bulkFixNegatives() {
   const fixed = [], skipped = [], failed = [], agreed = [];
   const doneIds = [];
   let i = 0;
+  /* try/finally around the whole walk. Without it one throw inside the loop
+     rejected this function silently: the banner froze mid-count, BULK.running
+     stayed true and the button stayed on Stop for ever, with nothing on
+     screen or in the UI saying anything had gone wrong. A bug in here should
+     cost the run, not the widget. */
+  let crashed = null;
+  try {
   for (const j of list) {
     if (BULK.stop) break;
     /* Paced per ITEM, not per write. A run that only paused after a set still
@@ -386,6 +393,7 @@ async function bulkFixNegatives() {
     if (BULK.stop) break;          // honoured as soon as a call returns
     const now = (chk && chk.available != null) ? Number(chk.available) : null;
     if (!chk || !chk.ok || now == null) { failed.push(`${j.sku}: ${(chk && chk.error) || 'no answer'}`); continue; }
+    const want = Number(j.storeQty);
     if (now === want) {
       /* Already on the number it asks for. The job was raised when that was
          not true and nothing closes one just because the problem went away,
@@ -393,7 +401,6 @@ async function bulkFixNegatives() {
       agreed.push(j.sku); doneIds.push(j.id); continue;
     }
     if (!(now < 0)) { skipped.push(j.sku); continue; }
-    const want = Number(j.storeQty);
     let res;
     try { res = await StockOps.vendorSet(j.sku, want, now); }
     catch (e) { failed.push(`${j.sku}: set failed`); continue; }
@@ -401,6 +408,10 @@ async function bulkFixNegatives() {
     fixed.push(`${j.sku} ${now} → ${res.available}`);
     // Tick the job off only when the store really landed on what it asked for.
     if (Number(res.available) === want) doneIds.push(j.id);
+  }
+  } catch (e) {
+    console.error('Tidy-up stopped:', e);
+    crashed = (e && e.message) || String(e);
   }
 
   // One write for every job ticked off, rather than a round trip each.
@@ -414,7 +425,8 @@ async function bulkFixNegatives() {
 
   BULK.running = false; BULK.stop = false;
   if (btn) { btn.textContent = '⚡ Re-check all and tidy up'; btn.onclick = bulkFixNegatives; }
-  bulkBanner(`Finished — <b>${fixed.length}</b> fixed, <b>${agreed.length}</b> already matched and ticked off, ${skipped.length} left for you`
+  bulkBanner((crashed ? `<b>Stopped early — ${esc(crashed)}</b><br>` : '')
+    + `${crashed ? 'Got through' : 'Finished —'} <b>${fixed.length}</b> fixed, <b>${agreed.length}</b> already matched and ticked off, ${skipped.length} left for you`
     + (failed.length ? `, <b>${failed.length} could not be done</b>:<br>${failed.slice(0, 15).map(esc).join('<br>')}`
        + (failed.length > 15 ? `<br>…and ${failed.length - 15} more` : '') : '')
     + (fixed.length ? `<br><span style="opacity:.75">${fixed.slice(0, 8).map(esc).join(' · ')}${fixed.length > 8 ? ' · …' : ''}</span>` : ''));
