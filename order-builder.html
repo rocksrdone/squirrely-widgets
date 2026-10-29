@@ -683,7 +683,7 @@ const STOCK2_NOT_READY =
   'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
 async function loadStock() {
-  S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null;
+  S.stockByRecipe = {}; S.allocByLine = {}; S.allocCols = null; S.orphanAllocs = [];
   S.stockCols = {}; S.lotStock = {}; S.lotInfo = {}; S.stockNote = ''; S.todoQueue = [];
   S.stock2 = {}; S.lotRow = {};
   S.stockFailed = false;
@@ -738,7 +738,22 @@ async function loadStock() {
     if (S.allocCols) {
       (allocT.id || []).forEach((id, i) => {
         const lineId = getRefId(columnAsArray(allocT, ALLOC.line)[i]);
-        if (!lineId) return;
+        /* ORPHANS. Grist blanks a reference when the row it points at is
+           deleted, so a line removed while it still held a reservation leaves
+           its allocation behind pointing at nothing. The spools came off the
+           lot when they were reserved and the lot is never credited back, so
+           they are held out of every order, for good, by a row this screen
+           used to drop on the floor. Collected instead. */
+        if (!lineId) {
+          const raw0 = ALLOC.source ? String(columnAsArray(allocT, ALLOC.source)[i] || '').trim() : '';
+          S.orphanAllocs.push({
+            id, source: SOURCES.find(x => x.toLowerCase() === raw0.toLowerCase()) || '',
+            lotId: getRefId(columnAsArray(allocT, ALLOC.lot)[i]),
+            qty: num(columnAsArray(allocT, ALLOC.qty)[i]),
+            status: ALLOC.status ? String(columnAsArray(allocT, ALLOC.status)[i] || '') : '',
+          });
+          return;
+        }
         /* Only a value this widget understands counts as a reservation. An
            unrecognised one is treated as production — the cautious reading,
            since it means release leaves it alone rather than crediting a
@@ -1259,7 +1274,11 @@ function stageRemove(orderId, lineId, label) {
   const line = lineById(lineId);
   const st = line ? lineStock(line) : null;
   // Stock is attached: the existing path releases it, with its own prompts.
-  if (line && (line.dyed > 0 || (st && st.reserved > 0))) { removeLine(lineId, label); return; }
+  /* produced too. An allocation whose Stock_Source is blank or unrecognised
+     counts as production, and on a line whose Qty_Dyed is 0 it passed BOTH of
+     the old tests - so the line was deleted and its allocation left behind
+     holding spools against nothing. */
+  if (line && (line.dyed > 0 || (st && (st.reserved > 0 || st.produced > 0)))) { removeLine(lineId, label); return; }
   lineDraftOf(orderId).remove[lineId] = true;
   render();
 }
@@ -1969,6 +1988,70 @@ function nextLotNumber() {
    winding real production can never be turned back into stock — and each one
    is credited to the column it actually left, so a retail pull does not come
    back as back stock. */
+/* ── Reservations pointing at a line that no longer exists ────────────────
+   Deleting a line that still held spools leaves its allocation behind with a
+   blank Work_Order_Line. The lot was decremented when they were reserved and
+   is never credited back, so those spools are held out of every order by a
+   row nothing can see. This gives them back.
+
+   Only rows with a Stock_Source are credited: that is what says which pile
+   they left. A blank source is a production record - nothing was taken from a
+   pile, so there is nothing to give back - and it is reported rather than
+   deleted, because deleting it would throw away the only record that spools
+   were wound. */
+function orphanPlan() {
+  const sourced = S.orphanAllocs.filter(a => a.source && S.stockCols[a.source] && a.lotId);
+  const other = S.orphanAllocs.filter(a => !(a.source && S.stockCols[a.source] && a.lotId));
+  const backTo = {};
+  const acts = [];
+  sourced.forEach(a => {
+    acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+    backTo[a.lotId] = backTo[a.lotId] || {};
+    backTo[a.lotId][a.source] = (backTo[a.lotId][a.source] || 0) + a.qty;
+  });
+  Object.entries(backTo).forEach(([lotId, bySource]) => {
+    const row = Object.assign({}, S.lotRow[lotId] || { onHand: 0, hank: 0, vendor: 0, store: 0, made: 0 });
+    let fields = {};
+    Object.entries(bySource).forEach(([source, qty]) => {
+      Object.assign(fields, stockMove(row, S.stock2, source.toLowerCase(), qty).fields);
+    });
+    if (Object.keys(fields).length) acts.push(['UpdateRecord', 'Production_Lots', Number(lotId), fields]);
+  });
+  return { acts, backTo, total: sourced.reduce((n, a) => n + a.qty, 0), sourced, other };
+}
+
+async function fixOrphans() {
+  if (S.stockBusy) return;
+  const { acts, backTo, total, other } = orphanPlan();
+  if (!total) {
+    alert(other.length
+      ? `${other.length} reservation(s) point at a deleted line but carry no stock source, so `
+        + `nothing can be credited back. Look at Lot_Allocations with an empty Work_Order_Line.`
+      : 'Nothing to clean up.');
+    return;
+  }
+  const lotName = (id) => {
+    for (const list of Object.values(S.stockByRecipe)) {
+      const lot = list.find(l => l.lotId === Number(id));
+      if (lot) return lot.lotNumber;
+    }
+    return 'lot ' + id;
+  };
+  const where = Object.entries(backTo).flatMap(([id, bySource]) =>
+    Object.entries(bySource).map(([s, q]) => `  ${q} back to ${lotName(id)} · ${SOURCE_META[s].label}`)).join('\n');
+  if (!confirm(`Give back ${total} spool(s) held by reservations whose order line was deleted?\n\n${where}` +
+    (other.length ? `\n\n${other.length} other dangling row(s) carry no stock source and are left alone.` : ''))) return;
+  S.stockBusy = true; render();
+  try {
+    await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    toast(`Gave back ${total} spool(s)`);
+  } catch (e) {
+    console.error('Could not clean up:', e);
+    alert('Could not give those back. Nothing was changed.');
+  } finally { S.stockBusy = false; render(); }
+}
+
 /* `want` releases only that many, for handing back the spools an order no
    longer needs without tearing down the whole reservation and rebuilding it.
    Omitted, everything goes back, as before. An allocation bigger than what is
@@ -2336,7 +2419,7 @@ async function removeLine(lineId, label) {
      a reservation would slip past this check entirely — the line would go and
      its allocation rows would stay, holding spools off the shelf and pointing
      at a line that no longer exists. */
-  if (line && (line.dyed > 0 || st.reserved > 0)) {
+  if (line && (line.dyed > 0 || st.reserved > 0 || st.produced > 0)) {
     if (st.reserved > 0 && st.produced === 0) {
       if (!confirm(`${label} has ${st.reserved} spool(s) reserved from back stock.\n\n` +
         `Release them to the shelf and remove the line?`)) return;
@@ -2344,10 +2427,11 @@ async function removeLine(lineId, label) {
       if (!ok) return;
       asked = true;   // that prompt covered the removal too
     } else {
-      alert(`${label} already has ${line.dyed} spool(s) recorded as dyed` +
-        (st.reserved ? `, ${st.reserved} of which is reserved back stock` : '') + `.\n\n` +
-        `Removing the line would leave those unaccounted for. Set the quantity to 0 instead, ` +
-        `or sort out the allocation first.`);
+      alert(`${label} holds ${st.produced + st.reserved} spool(s)` +
+        (st.produced ? ` — ${st.produced} dyed for it` : '') +
+        (st.reserved ? `${st.produced ? ',' : ' —'} ${st.reserved} reserved from stock` : '') + `.\n\n` +
+        `Removing the line would leave those held against nothing, out of reach of every ` +
+        `order. Set the quantity to 0 instead, or sort out the allocation first.`);
       return;
     }
   }
@@ -2615,6 +2699,22 @@ function renderBanners() {
       rates applying. Changing that column's type to <strong>Reference → Customers</strong>
       makes the link permanent.</div>`);
   }
+  /* Spools held by a line that no longer exists. Loud, because nothing else
+     in the app can see them and they are gone from every order until this is
+     run. */
+  if ((S.orphanAllocs || []).length) {
+    const plan = orphanPlan();
+    const n = plan.total;
+    out.push(`<div class="banner bad"><strong>${
+      n ? `${n} spool(s) are held by ${plan.sourced.length} reservation(s) whose order line was deleted.`
+        : `${plan.other.length} reservation(s) point at a deleted order line.`}</strong>
+      ${n ? `They came off their lot when they were reserved and were never put back, so they are
+             missing from every order until they are given back.` : ''}
+      ${plan.other.length && n ? `${plan.other.length} more carry no stock source and are left alone.` : ''}
+      ${n ? `<div style="margin-top:7px"><button class="btn small" ${S.stockBusy ? 'disabled' : ''}
+             onclick="fixOrphans()">Give back ${n} spool(s)</button></div>` : ''}</div>`);
+  }
+
   /* Last, so it sits closest to the work — and it is the one banner that is
      about physical spools rather than about setting something up. */
   out.push(todoPanelHtml());
