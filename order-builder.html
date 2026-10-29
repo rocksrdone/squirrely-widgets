@@ -2685,8 +2685,15 @@ function stockLineHtml(l) {
     if (!live) return;
     const where = SOURCE_META[x].store;
     if (live.pending) bits.push(`<span class="st-live pending">checking ${esc(where)}…</span>`);
-    else if (!live.ok) bits.push(`<span class="st-live bad" title="${esc(live.error || '')}">${
-      esc(SOURCE_META[x].short)} check failed</span>`);
+    else if (!live.ok) {
+      /* The reason is the whole value of a failed check - "no variant matches
+         that SKU" and "the workflow is not running" need different actions.
+         Hiding it in a tooltip on a chip is hiding it. */
+      const why = String(live.error || '').trim();
+      const shortWhy = why.length > 70 ? why.slice(0, 67) + '…' : why;
+      bits.push(`<span class="st-live bad" title="${esc(why)}">${
+        esc(SOURCE_META[x].short)} check failed${shortWhy ? ' — ' + esc(shortWhy) : ''}</span>`);
+    }
     else if (!live.listed) bits.push(`<span class="st-live none">not on ${esc(where)}</span>`);
     else bits.push(`<span class="st-live" title="${esc((live.matched || []).join(', '))}">${
       live.qty} on ${esc(where)} at ${esc(live.at)}${live.oversell ? ' · oversell on' : ''}</span>`);
