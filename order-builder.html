@@ -2167,7 +2167,13 @@ async function checkStore(lineId, source) {
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) throw new Error(`the lookup answered ${res.status} ${res.statusText}`);
-    const data = await res.json();
+    let data = await res.json();
+    // Same unwrap as stock-ops' vendorCall: a Respond node set to "all items"
+    // sends [{...}], which reads as a failure with no usable reason.
+    if (Array.isArray(data)) {
+      if (data.length !== 1) throw new Error(`the lookup answered with ${data.length} results`);
+      data = data[0];
+    }
     if (data && data.ok === false) throw new Error(data.error || 'the lookup failed');
 
     if (vendor) {

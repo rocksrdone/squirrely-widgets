@@ -806,7 +806,19 @@
     } finally { if (timer) clearTimeout(timer); }
     if (r.status === 404) return { ok: false, error: 'The "SS - Vendor Stock (check and set)" workflow is not imported or not active in n8n yet.' };
     if (!r.ok) return { ok: false, error: `n8n answered ${r.status}.` };
-    try { return await r.json(); } catch (e) { return { ok: false, error: 'n8n sent back something unreadable.' }; }
+    /* n8n hands items around as arrays, and a Respond node set to "all
+       items" sends [{...}] rather than {...}. Read straight, that is ok
+       undefined and available undefined - the check fails whatever the
+       workflow actually found, and the reason looks nothing like the cause.
+       One item unwraps; more than one is genuinely ambiguous and says so. */
+    let data;
+    try { data = await r.json(); } catch (e) { return { ok: false, error: 'n8n sent back something unreadable.' }; }
+    if (Array.isArray(data)) {
+      if (data.length === 1) return data[0];
+      if (!data.length) return { ok: false, error: 'n8n answered with nothing.' };
+      return { ok: false, error: `n8n answered with ${data.length} results for one SKU.` };
+    }
+    return data;
   }
   function vendorCheck(sku) { return vendorCall({ mode: 'check', sku }); }
   function vendorSet(sku, quantity, expect) { return vendorCall({ mode: 'set', sku, quantity, expect }); }
