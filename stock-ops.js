@@ -1227,6 +1227,13 @@
         <div class="vs-set"><span style="font-size:12px">Set it to</span><input id="vs-q" type="number" min="0" value="${esc(target)}">
           <button class="vs-btn" id="vs-go">Set</button><button class="vs-btn ghost" id="vs-re">Check again</button></div>
         <div class="vs-msg ${r.ok ? '' : 'bad'}" id="vs-msg">${r.ok ? (r.available === target ? 'Already matches.' : '') : esc(r.error || '')}</div>`;
+      /* A check that finds the store already on the asked-for number has
+         answered the job: there is nothing to set. Told the caller, so a job
+         raised when the figure was wrong, and fixed since by some other route,
+         closes itself instead of sitting on the list for ever. */
+      if (r.ok && opts.target != null && qtyOrNaN(r.available) === Number(opts.target) && opts.onSet) {
+        opts.onSet(Number(opts.target));
+      }
       $('vs-re').onclick = check;
       $('vs-go').onclick = async () => {
         const q = Math.round(Number($('vs-q').value));

@@ -285,7 +285,7 @@ function render() {
   if (fx && !BULK.running) {
     const n = bulkEligible().length;
     fx.style.display = n > 1 ? '' : 'none';
-    fx.textContent = `⚡ Fix the ones showing negative (${n})`;
+    fx.textContent = `⚡ Re-check all ${n} and tidy up`;
   }
   document.getElementById('content').innerHTML = html;
   wire();
@@ -358,27 +358,34 @@ async function bulkFixNegatives() {
   if (BULK.running || S.busy) return;
   const list = bulkEligible();
   if (!list.length) { toast('No vendor store jobs to check'); return; }
-  if (!confirm(`Check ${list.length} vendor store SKU${list.length === 1 ? '' : 's'} and fix the ones showing a negative quantity?\n\n`
-    + `Each one is read from the store first. Only those below zero are changed, and each is set to the number its job asks for.\n\n`
-    + `This writes to the live vendor store. You can stop it part way; whatever has already been set stays set.`)) return;
+  if (!confirm(`Re-check ${list.length} vendor store SKU${list.length === 1 ? '' : 's'}?\n\n`
+    + `Each is read from the store. One already showing the number its job asks for is ticked off — nothing is written. `
+    + `One showing a negative is set to the number its job asks for. Anything else is left for you to judge.\n\n`
+    + `You can stop it part way; whatever has been done stays done.`)) return;
 
   BULK.running = true; BULK.stop = false;
   const btn = document.getElementById('fixneg');
   if (btn) { btn.textContent = '■ Stop'; btn.onclick = () => { BULK.stop = true; }; }
 
-  const fixed = [], skipped = [], failed = [];
+  const fixed = [], skipped = [], failed = [], agreed = [];
   const doneIds = [];
   let i = 0;
   for (const j of list) {
     if (BULK.stop) break;
     i++;
-    bulkBanner(`Checking ${i} of ${list.length} — <b>${esc(j.sku)}</b> · ${fixed.length} fixed, ${skipped.length} left alone`
+    bulkBanner(`Checking ${i} of ${list.length} — <b>${esc(j.sku)}</b> · ${fixed.length} fixed, ${agreed.length} already right, ${skipped.length} left alone`
       + (failed.length ? `, <b>${failed.length} failed</b>` : '') + ' — press Stop to halt.');
     let chk;
     try { chk = await StockOps.vendorCheck(j.sku); }
     catch (e) { failed.push(`${j.sku}: could not reach the store`); continue; }
     const now = (chk && chk.available != null) ? Number(chk.available) : null;
     if (!chk || !chk.ok || now == null) { failed.push(`${j.sku}: ${(chk && chk.error) || 'no answer'}`); continue; }
+    if (now === want) {
+      /* Already on the number it asks for. The job was raised when that was
+         not true and nothing closes one just because the problem went away,
+         so a run of these sits on the list looking like work. */
+      agreed.push(j.sku); doneIds.push(j.id); continue;
+    }
     if (!(now < 0)) { skipped.push(j.sku); continue; }
     const want = Number(j.storeQty);
     let res;
@@ -404,8 +411,8 @@ async function bulkFixNegatives() {
   }
 
   BULK.running = false; BULK.stop = false;
-  if (btn) { btn.textContent = '⚡ Fix the ones showing negative'; btn.onclick = bulkFixNegatives; }
-  bulkBanner(`Finished — <b>${fixed.length}</b> fixed, ${skipped.length} already at or above zero`
+  if (btn) { btn.textContent = '⚡ Re-check all and tidy up'; btn.onclick = bulkFixNegatives; }
+  bulkBanner(`Finished — <b>${fixed.length}</b> fixed, <b>${agreed.length}</b> already matched and ticked off, ${skipped.length} left for you`
     + (failed.length ? `, <b>${failed.length} could not be done</b>:<br>${failed.slice(0, 15).map(esc).join('<br>')}`
        + (failed.length > 15 ? `<br>…and ${failed.length - 15} more` : '') : '')
     + (fixed.length ? `<br><span style="opacity:.75">${fixed.slice(0, 8).map(esc).join(' · ')}${fixed.length > 8 ? ' · …' : ''}</span>` : ''));
