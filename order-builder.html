@@ -2531,6 +2531,23 @@ function pushPanelHtml(o) {
   </div>`;
 }
 
+/* Staged line edits live in S.lineDraft, which is memory and nothing else.
+   Switching orders asks (selectOrder); reloading or leaving the page did not,
+   so a removal watched on screen could simply never reach Grist - and the
+   spools it would have freed stay committed to a line you believe is gone.
+   Checked without touching S, so asking does not create the drafts it asks
+   about. */
+function anyUnsaved() {
+  const d = S.draft || {}, l = S.lineDraft || {};
+  return Object.keys(d).some(k => Object.keys(d[k] || {}).length > 0)
+      || Object.keys(l).some(k => linesDirty(k));
+}
+window.addEventListener('beforeunload', (e) => {
+  if (!anyUnsaved()) return;
+  e.preventDefault();
+  e.returnValue = '';   // the wording is the browser's; only the prompt is ours
+});
+
 /* ── Render ─────────────────────────────────────────────────────────────── */
 
 function selectOrder(id) {
