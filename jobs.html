@@ -378,6 +378,7 @@ async function bulkFixNegatives() {
     let chk;
     try { chk = await StockOps.vendorCheck(j.sku); }
     catch (e) { failed.push(`${j.sku}: could not reach the store`); continue; }
+    if (BULK.stop) break;          // honoured as soon as a call returns
     const now = (chk && chk.available != null) ? Number(chk.available) : null;
     if (!chk || !chk.ok || now == null) { failed.push(`${j.sku}: ${(chk && chk.error) || 'no answer'}`); continue; }
     if (now === want) {

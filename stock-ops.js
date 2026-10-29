@@ -786,12 +786,24 @@
      Shopify refuses if the store moved in between — so a sale made while you
      looked is never overwritten. Nothing is sent without a click. */
   const VENDOR_STOCK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/vendor-stock';
+  /* A fetch with no timeout waits for ever. One unanswered request stalled a
+     thirty-SKU run on its second item with the banner stuck mid-count, and
+     Stop could not take effect either, because the loop was parked on an
+     await that would never settle. A timed-out call is a failure for THAT
+     SKU - reported, skipped, run continues. */
+  const VENDOR_TIMEOUT_MS = 20000;
   async function vendorCall(body) {
     let r;
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), VENDOR_TIMEOUT_MS) : null;
     try {
       r = await fetch(VENDOR_STOCK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), cache: 'no-store' });
-    } catch (e) { return { ok: false, error: 'Could not reach n8n — is the "SS - Vendor Stock" workflow imported and active?' }; }
+        body: JSON.stringify(body), cache: 'no-store', ...(ctrl ? { signal: ctrl.signal } : {}) });
+    } catch (e) {
+      return { ok: false, error: (e && e.name === 'AbortError')
+        ? `the vendor store did not answer within ${Math.round(VENDOR_TIMEOUT_MS / 1000)}s`
+        : 'Could not reach n8n — is the "SS - Vendor Stock" workflow imported and active?' };
+    } finally { if (timer) clearTimeout(timer); }
     if (r.status === 404) return { ok: false, error: 'The "SS - Vendor Stock (check and set)" workflow is not imported or not active in n8n yet.' };
     if (!r.ok) return { ok: false, error: `n8n answered ${r.status}.` };
     try { return await r.json(); } catch (e) { return { ok: false, error: 'n8n sent back something unreadable.' }; }
