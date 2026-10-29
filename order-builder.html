@@ -1969,15 +1969,28 @@ function nextLotNumber() {
    winding real production can never be turned back into stock — and each one
    is credited to the column it actually left, so a retail pull does not come
    back as back stock. */
-function releaseActions(line) {
+/* `want` releases only that many, for handing back the spools an order no
+   longer needs without tearing down the whole reservation and rebuilding it.
+   Omitted, everything goes back, as before. An allocation bigger than what is
+   left to release is reduced rather than removed, so the rest of it keeps its
+   lot and its source. */
+function releaseActions(line, want) {
   const allocs = (S.allocByLine[line.id] || []).filter(releasable);
   const backTo = {};   // lotId -> source -> qty
   const acts = [];
+  const A = S.allocCols;
+  let left = want == null ? Infinity : Math.max(0, Math.round(want));
+  let released = 0;
   allocs.forEach(a => {
-    acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+    if (left <= 0) return;
+    const take = Math.min(left, a.qty);
+    if (take >= a.qty) acts.push(['RemoveRecord', 'Lot_Allocations', a.id]);
+    else if (A && A.qty) acts.push(['UpdateRecord', 'Lot_Allocations', a.id, { [A.qty]: a.qty - take }]);
+    else return;                       // cannot part-release without the column
+    left -= take; released += take;
     if (!a.lotId) return;
     backTo[a.lotId] = backTo[a.lotId] || {};
-    backTo[a.lotId][a.source] = (backTo[a.lotId][a.source] || 0) + a.qty;
+    backTo[a.lotId][a.source] = (backTo[a.lotId][a.source] || 0) + take;
   });
   /* One UpdateRecord per lot even when several sources are credited, so two
      draws on one lot cannot each overwrite the other's column. */
@@ -1990,14 +2003,14 @@ function releaseActions(line) {
     });
     if (Object.keys(fields).length) acts.push(['UpdateRecord', 'Production_Lots', Number(lotId), fields]);
   });
-  return { acts, total: allocs.reduce((n, a) => n + a.qty, 0), backTo };
+  return { acts, total: released, backTo };
 }
 
-async function releaseReservation(lineId, skipConfirm) {
+async function releaseReservation(lineId, skipConfirm, want) {
   if (S.stockBusy) return;
   const line = lineById(lineId);
   if (!line) return;
-  const { acts, total, backTo } = releaseActions(line);
+  const { acts, total, backTo } = releaseActions(line, want);
   if (!total) { alert('Nothing on this line is reserved from stock.'); return; }
 
   const lotName = (id) => {
@@ -2732,6 +2745,12 @@ function stockLineHtml(l) {
 
   const stillShort = st.short - Math.min(st.short, st.avail.General || 0);
   if (stillShort > 0) bits.push(`<span class="st-short">${stillShort} to dye</span>`);
+  /* Lowering a line's quantity does not hand its spools back - the allocation
+     rows are untouched - so a line can quietly hold more than the order wants,
+     and those spools are invisible to every other order. Nothing said so. */
+  const spare = Math.min(st.reserved, (st.reserved + st.produced) - l.qty);
+  if (spare > 0) bits.push(`<span class="st-short" title="Lowering the quantity leaves the reservation as it was">${
+    st.reserved + st.produced} held for an order of ${l.qty} — ${spare} spare</span>`);
 
   /* WHERE THE RESERVED SPOOLS ARE. Until now only shelf stock listed a bin, so
      a retail pull said "2 from retail reserved" and nothing about where to go
@@ -2780,6 +2799,12 @@ function stockLineHtml(l) {
         S.live[liveKey(l.recipeId, x)] ? 're-check' : 'check'} ${esc(SOURCE_META[x].short)}</button>`);
   });
   if (st.reserved > 0) {
+    const spare2 = Math.min(st.reserved, (st.reserved + st.produced) - l.qty);
+    if (spare2 > 0) {
+      actions.push(`<button class="btn small" ${busy}
+        onclick="releaseReservation(${l.id}, false, ${spare2})"
+        title="Hand back only what this order no longer needs">release ${spare2} spare</button>`);
+    }
     actions.push(`<button class="btn secondary small" ${busy}
       onclick="releaseReservation(${l.id})">release ${st.reserved}</button>`);
   }
