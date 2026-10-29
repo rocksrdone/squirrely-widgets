@@ -376,6 +376,9 @@ const RETAIL_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-
    figure back - "the storefront reported 0" about a pile Grist said held 6. */
 const VENDOR_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/vendor-stock';
 const liveKey = (recipeId, source) => recipeId + '|' + source;
+/* Store names read as "the vendor store", which is right mid-sentence and
+   wrong at the start of one. */
+const cap1 = (t) => String(t || '').charAt(0).toUpperCase() + String(t || '').slice(1);
 const RETAIL_TIMEOUT_MS = 30000;
 
 /* How many suggestions to show at once. Enough that the right one is nearly
@@ -1774,14 +1777,25 @@ async function reserveFromStock(lineId, source, qtyOverride) {
     const live = S.live[liveKey(line.recipeId, source)];
     const suggested = Math.min(pre.short,
       (live && live.ok && live.qty > 0) ? live.qty : pre.short);
+    /* "This line still needs 4" on an order for 5 is the answer without the
+       sum, and the missing term is the interesting one - a spool already dyed
+       for this line, or reserved off another pile. Show the arithmetic so the
+       default is checkable rather than mysterious. */
+    const sums = [`  ${line.qty} ordered`];
+    if (pre.produced > 0) sums.push(`  \u2212 ${pre.produced} already dyed for this line`);
+    SOURCES.forEach(x => {
+      if (pre.bySource[x] > 0) sums.push(`  \u2212 ${pre.bySource[x]} already reserved from ${SOURCE_META[x].short}`);
+    });
+    sums.push(`  = ${pre.short} still needed`);
+
     const said = prompt(
-      `How many of ${line.recipeName || line.sku} are you taking from ` +
-      `${SOURCE_META[source].store}?\n\n` +
+      `${line.recipeName || line.sku} \u2014 taking from ${SOURCE_META[source].store}.\n\n` +
+      sums.join('\n') + `\n\n` +
       (live && live.ok
-        ? `${SOURCE_META[source].store} reported ${live.qty} when checked at ${live.at}.`
-        : `${SOURCE_META[source].store} has not been checked — Grist says ${pre.avail[source]}, ` +
-          `but that number is only a guess. Look before you commit.`) +
-      `\n\nThis line still needs ${pre.short}.`,
+        ? `${cap1(SOURCE_META[source].store)} reported ${live.qty} when checked at ${live.at}.`
+        : `${cap1(SOURCE_META[source].store)} has not been checked. Grist says ${pre.avail[source]}, but ` +
+          `nothing updates that number when someone buys \u2014 it is only a guess. Look before you commit.`) +
+      `\n\nHow many are you taking?`,
       String(Math.max(1, suggested)));
     if (said === null) return;
     want = Math.max(0, Math.round(Number(said)));
