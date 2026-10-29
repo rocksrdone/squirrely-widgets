@@ -372,6 +372,11 @@ async function bulkFixNegatives() {
   let i = 0;
   for (const j of list) {
     if (BULK.stop) break;
+    /* Paced per ITEM, not per write. A run that only paused after a set still
+       fired checks back to back, and the eighth-or-so request stopped
+       reaching n8n at all - no execution logged, no response, and before the
+       timeout that was the end of the run. Shopify rate-limits besides. */
+    if (i) await new Promise(r => setTimeout(r, 250));
     i++;
     bulkBanner(`Checking ${i} of ${list.length} — <b>${esc(j.sku)}</b> · ${fixed.length} fixed, ${agreed.length} already right, ${skipped.length} left alone`
       + (failed.length ? `, <b>${failed.length} failed</b>` : '') + ' — press Stop to halt.');
@@ -394,10 +399,6 @@ async function bulkFixNegatives() {
     catch (e) { failed.push(`${j.sku}: set failed`); continue; }
     if (!res || !res.ok) { failed.push(`${j.sku}: ${(res && res.error) || 'the store refused'}`); continue; }
     fixed.push(`${j.sku} ${now} → ${res.available}`);
-    // Breathing room: 141 SKUs is ~280 calls, and Shopify rate-limits. A
-    // throttled one is reported and skipped, so this is about avoiding the
-    // report, not about correctness.
-    await new Promise(r => setTimeout(r, 200));
     // Tick the job off only when the store really landed on what it asked for.
     if (Number(res.available) === want) doneIds.push(j.id);
   }
