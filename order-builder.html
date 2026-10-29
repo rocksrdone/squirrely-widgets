@@ -371,6 +371,11 @@ const RESERVE_STATUS_FALLBACK = 'Wound - Needs Labels';
    against it means reserving spools that may have sold last week. This asks
    the storefront what it actually holds, at the moment of reserving. */
 const RETAIL_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-inventory';
+/* The two storefronts answer on different webhooks and in different shapes.
+   They were never both wired up here, so a vendor pull quoted the RETAIL
+   figure back - "the storefront reported 0" about a pile Grist said held 6. */
+const VENDOR_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/vendor-stock';
+const liveKey = (recipeId, source) => recipeId + '|' + source;
 const RETAIL_TIMEOUT_MS = 30000;
 
 /* How many suggestions to show at once. Enough that the right one is nearly
@@ -482,7 +487,7 @@ const S = {
   reserveStatus: RESERVE_STATUS_FALLBACK,
   stockNote: '',       // why reserving is unavailable, when it is
   stockBusy: false,
-  live: {},            // recipeId -> { at, qty, notes, error, listed } from the storefront
+  live: {},            // 'recipeId|Source' -> { at, qty, error, listed } from THAT storefront
   prefixGroups: [],    // [['FFN','NFF'], ...] — every spelling of one fibre
   todoQueue: [],       // storefront quantities still needing a manual change
 };
@@ -1765,16 +1770,17 @@ async function reserveFromStock(lineId, source, qtyOverride) {
   let want = qtyOverride;
   if (want == null && listed) {
     const pre = lineStock(line);
-    const live = S.live[line.recipeId];
+    /* THIS store's figure, never the other one's. */
+    const live = S.live[liveKey(line.recipeId, source)];
     const suggested = Math.min(pre.short,
       (live && live.ok && live.qty > 0) ? live.qty : pre.short);
     const said = prompt(
       `How many of ${line.recipeName || line.sku} are you taking from ` +
       `${SOURCE_META[source].store}?\n\n` +
       (live && live.ok
-        ? `The storefront reported ${live.qty} when checked at ${live.at}.`
-        : `Nothing has been checked — Grist says ${pre.avail[source]}, but that number ` +
-          `is only a guess. Look before you commit.`) +
+        ? `${SOURCE_META[source].store} reported ${live.qty} when checked at ${live.at}.`
+        : `${SOURCE_META[source].store} has not been checked — Grist says ${pre.avail[source]}, ` +
+          `but that number is only a guess. Look before you commit.`) +
       `\n\nThis line still needs ${pre.short}.`,
       String(Math.max(1, suggested)));
     if (said === null) return;
@@ -2026,44 +2032,62 @@ function skuSpellings(sku) {
   return [...new Set([s, ...out])];
 }
 
-async function checkRetail(lineId) {
+async function checkStore(lineId, source) {
   const line = lineById(lineId);
   if (!line || !line.recipeId) return;
+  if (!SOURCE_META[source] || !SOURCE_META[source].listed) return;
   const skus = skuSpellings(line.sku);
   if (!skus.length) { alert('That line has no SKU to look up.'); return; }
+  const key = liveKey(line.recipeId, source);
+  const store = SOURCE_META[source].store;
 
-  S.live[line.recipeId] = { pending: true, skus };
+  S.live[key] = { pending: true, skus, source };
   render();
 
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), RETAIL_TIMEOUT_MS) : null;
   try {
-    const res = await fetch(RETAIL_WEBHOOK_URL, {
+    /* Retail takes every spelling and answers with variants; the vendor
+       workflow takes one SKU and answers with `available`. Same question,
+       two shapes. */
+    const vendor = source === 'Vendor';
+    const res = await fetch(vendor ? VENDOR_WEBHOOK_URL : RETAIL_WEBHOOK_URL, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ skus }), cache: 'no-store',
+      body: JSON.stringify(vendor ? { mode: 'check', sku: skus[0] } : { skus }), cache: 'no-store',
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) throw new Error(`the lookup answered ${res.status} ${res.statusText}`);
     const data = await res.json();
     if (data && data.ok === false) throw new Error(data.error || 'the lookup failed');
 
-    const variants = (data && data.variants) || [];
-    const qty = variants.reduce((n, v) => n + num(v.onHand), 0);
-    S.live[line.recipeId] = {
-      ok: true, qty, skus,
-      /* Only the spelling the store actually uses comes back, which is worth
-         showing: it confirms the lookup found the right product. */
-      matched: variants.map(v => v.sku).filter(Boolean),
-      listed: variants.length > 0,
-      oversell: variants.some(v => v.oversellAllowed),
-      notes: (data && data.notes) || [],
-      at: new Date().toLocaleTimeString(),
-    };
+    if (vendor) {
+      /* available may be absent even on success - the same gap that had the
+         vendor dialog reporting "null". Treat it as no answer, not as zero. */
+      const raw = data ? data.available : null;
+      const qty = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+      if (!Number.isFinite(qty)) throw new Error('the vendor store did not report a quantity');
+      S.live[key] = { ok: true, qty, skus, source, matched: [skus[0]], listed: true,
+        oversell: !!(data && data.oversellAllowed), notes: (data && data.notes) || [],
+        at: new Date().toLocaleTimeString() };
+    } else {
+      const variants = (data && data.variants) || [];
+      const qty = variants.reduce((n, v) => n + num(v.onHand), 0);
+      S.live[key] = {
+        ok: true, qty, skus, source,
+        /* Only the spelling the store actually uses comes back, which is worth
+           showing: it confirms the lookup found the right product. */
+        matched: variants.map(v => v.sku).filter(Boolean),
+        listed: variants.length > 0,
+        oversell: variants.some(v => v.oversellAllowed),
+        notes: (data && data.notes) || [],
+        at: new Date().toLocaleTimeString(),
+      };
+    }
   } catch (e) {
-    console.error('Retail lookup failed:', e);
-    S.live[line.recipeId] = { ok: false, skus,
+    console.error('Store lookup failed:', e);
+    S.live[key] = { ok: false, skus, source,
       error: (e && e.name === 'AbortError')
-        ? `the retail store didn't answer within ${Math.round(RETAIL_TIMEOUT_MS / 1000)}s`
+        ? `${store} didn't answer within ${Math.round(RETAIL_TIMEOUT_MS / 1000)}s`
         : ((e && e.message) || String(e)),
       at: new Date().toLocaleTimeString() };
   } finally {
@@ -2071,6 +2095,7 @@ async function checkRetail(lineId) {
     render();
   }
 }
+
 
 /* ── Applying customer pricing ────────────────────────────────────────────
    A line's Unit_Price is written when the line is ADDED, from Customer_Pricing.
@@ -2652,15 +2677,20 @@ function stockLineHtml(l) {
     bits.push(`<span class="st-listed" title="Grist's own figure — nothing updates it when a customer buys">${
       st.avail[s]} in ${SOURCE_META[s].short} per Grist</span>`));
 
-  const live = S.live[l.recipeId];
-  if (live) {
-    if (live.pending) bits.push(`<span class="st-live pending">checking the store…</span>`);
+  /* One line per storefront actually asked, each naming which one. A single
+     unlabelled "0 on the store" is how a retail zero came to be read as the
+     vendor's six. */
+  SOURCES.filter(x => SOURCE_META[x].listed).forEach(x => {
+    const live = S.live[liveKey(l.recipeId, x)];
+    if (!live) return;
+    const where = SOURCE_META[x].store;
+    if (live.pending) bits.push(`<span class="st-live pending">checking ${esc(where)}…</span>`);
     else if (!live.ok) bits.push(`<span class="st-live bad" title="${esc(live.error || '')}">${
-      esc('retail check failed')}</span>`);
-    else if (!live.listed) bits.push(`<span class="st-live none">not on the retail store</span>`);
+      esc(SOURCE_META[x].short)} check failed</span>`);
+    else if (!live.listed) bits.push(`<span class="st-live none">not on ${esc(where)}</span>`);
     else bits.push(`<span class="st-live" title="${esc((live.matched || []).join(', '))}">${
-      live.qty} on the retail store at ${esc(live.at)}${live.oversell ? ' · oversell on' : ''}</span>`);
-  }
+      live.qty} on ${esc(where)} at ${esc(live.at)}${live.oversell ? ' · oversell on' : ''}</span>`);
+  });
 
   const stillShort = st.short - Math.min(st.short, st.avail.General || 0);
   if (stillShort > 0) bits.push(`<span class="st-short">${stillShort} to dye</span>`);
@@ -2705,12 +2735,12 @@ function stockLineHtml(l) {
   });
   /* Offered whenever a storefront pull is possible, because the answer is the
      only reliable input to that decision. */
-  if (SOURCES.some(x => SOURCE_META[x].listed && st.canReserve(x))) {
+  SOURCES.filter(x => SOURCE_META[x].listed && st.canReserve(x)).forEach(x => {
     actions.push(`<button class="btn secondary small" ${busy}
-      onclick="checkRetail(${l.id})"
-      title="Ask the retail store what it holds right now">${
-        S.live[l.recipeId] ? 're-check store' : 'check store'}</button>`);
-  }
+      onclick="checkStore(${l.id}, '${x}')"
+      title="Ask ${esc(SOURCE_META[x].store)} what it holds right now">${
+        S.live[liveKey(l.recipeId, x)] ? 're-check' : 'check'} ${esc(SOURCE_META[x].short)}</button>`);
+  });
   if (st.reserved > 0) {
     actions.push(`<button class="btn secondary small" ${busy}
       onclick="releaseReservation(${l.id})">release ${st.reserved}</button>`);
