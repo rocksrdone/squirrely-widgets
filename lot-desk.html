@@ -6,7 +6,7 @@
 <title>Lot Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js"></script>
-<script src="stock-ops.js?v=20261029a"></script>
+<script src="stock-ops.js?v=20261030a"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
 :root {
@@ -228,6 +228,29 @@ function pick(id) {
 
 function lotSel() { return S.sel ? S.model.lots.find(l => l.id === S.sel) : null; }
 
+/* One colourway, one bin — both fibres together, each in its own bag so FF and
+   E never have to be told apart by eye. suggestBin already pulls a colourway
+   toward the bin it is mostly in; this is the other half, the part that says
+   so out loud when the rest of it is somewhere else.
+
+   It names the bins and the amounts rather than just warning, because the
+   person holding the spools is standing at the rack and can carry them over
+   now. A warning that does not say what to do gets ignored on the second day.
+
+   Suppressed when nothing is going to back stock: an order-only put-away is
+   not the moment to reorganise a shelf. */
+function binElsewhereHtml(p, lot) {
+  const toStock = num(p.backWound) + num(p.backHank);
+  const list = (p.binElsewhere || []).filter(e => e.qty > 0);
+  if (toStock <= 0 || !list.length) return '';
+  const here = (S.model.bins.find(b => b.id === p.binId) || {}).code || 'this bin';
+  const what = list.map(e => `${esc(e.code)} (${e.qty})`).join(', ');
+  return `<div class="lab" style="flex-basis:100%;margin-top:4px;padding:5px 7px;
+       background:var(--gold-light);color:var(--gold);border-radius:4px;font-weight:600">
+     ${esc(lot.recipe.name)} is also in ${what} &mdash; bring it to ${esc(here)} so the colourway lives in one bin.
+   </div>`;
+}
+
 function renderMain() {
   const box = document.getElementById('main');
   if (S.prob) return renderProblem(box);
@@ -268,6 +291,7 @@ function renderMain() {
       <span class="lab">Bin</span><select id="bin"><option value="">—</option>${binOpts}</select>
       <label class="lab" style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="lv" ${p.listVendor ? 'checked' : ''}> list on vendor store</label>
       ${p.binWhy ? `<div class="lab" id="binWhy" style="flex-basis:100%;${p.binTight ? 'color:var(--accent);font-weight:600' : ''}">Suggested: ${esc(p.binWhy)}</div>` : ''}
+      ${binElsewhereHtml(p, lot)}
     </div>
 
     <div id="sum"></div>

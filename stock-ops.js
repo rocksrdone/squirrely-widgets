@@ -287,18 +287,35 @@
     });
     const knownId = Number((Object.entries(tally).sort((a, b) => b[1] - a[1])[0] || [])[0]) || null;
     const known = knownId ? byId[knownId] : null;
+
+    /* Everywhere else this colourway is sitting. A colourway belongs in ONE
+       bin — both fibres together, in their own bags — so anything in `tally`
+       other than the bin we are about to use is thread that needs carrying
+       over. The caller shows this; deciding it here keeps the rule in one
+       place, next to the suggestion it qualifies.
+
+       Note `tally` is keyed on recipe name and ignores fibre entirely, which
+       is what makes "one bin per colourway" work: FF and E of one colour pull
+       each other into the same bin rather than each finding their own. */
+    const elsewhereThan = (chosenId) => Object.entries(tally)
+      .filter(([id]) => Number(id) !== Number(chosenId))
+      .map(([id, qty]) => ({ code: (byId[id] || {}).code || '?', qty }))
+      .sort((a, b) => b.qty - a.qty);
+
     if (known && binFillFor(model, known.id, lot) + need <= cap(known)) {
-      return { binId: known.id, reason: `where ${lot.recipe.name} already is`, tight: false };
+      return { binId: known.id, reason: `where ${lot.recipe.name} already is`, tight: false,
+               elsewhere: elsewhereThan(known.id) };
     }
     const open = model.bins.filter(b => !b.reserved);
     let choices = open.filter(b => b.fiber && b.fiber === lot.fiber);
     if (!choices.length) choices = open;
     choices = choices.slice().sort((a, b) => (binFillFor(model, a.id, lot) - binFillFor(model, b.id, lot))
       || a.code.localeCompare(b.code, undefined, { numeric: true }));
-    if (!choices.length) return { binId: lot.binId || null, reason: 'no bins set up', tight: true };
+    if (!choices.length) return { binId: lot.binId || null, reason: 'no bins set up', tight: true, elsewhere: elsewhereThan(null) };
     const roomy = choices.find(b => binFillFor(model, b.id, lot) + need <= cap(b));
-    if (!roomy) return { binId: choices[0].id, reason: 'every bin is full — this one has most room', tight: true };
-    return { binId: roomy.id, tight: false,
+    if (!roomy) return { binId: choices[0].id, reason: 'every bin is full — this one has most room', tight: true,
+                         elsewhere: elsewhereThan(choices[0].id) };
+    return { binId: roomy.id, tight: false, elsewhere: elsewhereThan(roomy.id),
       reason: known ? `${known.code} is full, so ${lot.recipe.name} moves here` : `emptiest ${lot.fiber || ''} bin`.replace('  ', ' ') };
   }
 
@@ -313,7 +330,7 @@
     });
     const sug = suggestBin(model, lot, left);
     return { orders, backWound: 0, backHank: left, binId: sug.binId, binWhy: sug.reason, binTight: sug.tight,
-      listVendor: true, shortMeans: 'later' };
+      binElsewhere: sug.elsewhere || [], listVendor: true, shortMeans: 'later' };
   }
 
   /* Turn a plan into Grist actions plus their inverse, for undo.

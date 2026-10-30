@@ -844,8 +844,20 @@ function bagCardGroups() {
     g.total += qty;
     if (l.bin && g.bins.indexOf(l.bin) === -1) g.bins.push(l.bin);
   });
+  /* The split check spans the whole COLOURWAY, not one card's fibre. One bin
+     per colourway with a bag per fibre means Butterscotch FF in B3 and
+     Butterscotch E in C1 is a problem, even though each on its own looks
+     tidy — and it is the case a per-card check cannot see, because those are
+     two separate cards. Both cards get told, naming every bin involved. */
+  const binsByColorway = {};
+  Object.values(by).forEach(g => {
+    const s = binsByColorway[g.colorway] = binsByColorway[g.colorway] || new Set();
+    g.bins.forEach(b => s.add(b));
+  });
+
   return Object.values(by)
     .map(g => {
+      g.colorwayBins = [...(binsByColorway[g.colorway] || [])].sort(binSort);
       // Oldest first, so the ledger's opening lines read in the order the bag
       // actually filled and the running total ends at today's figure.
       g.lots.sort((a, b) => (a.date || 0) - (b.date || 0));
@@ -895,8 +907,9 @@ function bagCardHtml(g) {
       <div class="bc-bin"><div class="bc-binl">bin</div>
         <div class="bc-binb">${esc(binTxt)}</div></div>
     </div>
-    ${g.bins.length > 1
-      ? `<div class="bc-warn">Grist has this colourway in ${g.bins.length} bins &mdash; one bag, so put it in one.</div>`
+    ${(g.colorwayBins || g.bins).length > 1
+      ? `<div class="bc-warn">${esc(g.colorway)} is spread across ${esc((g.colorwayBins || g.bins).join(', '))}
+         &mdash; one colourway lives in one bin. Bring it together, both fibres, a bag each.</div>`
       : ''}
     <table class="bc-t">
       <tr><th>date</th><th class="lot">lot</th><th class="n">in +</th><th class="n">out &minus;</th><th class="tot">= in bag</th></tr>
