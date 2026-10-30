@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js?v=20261030c"></script>
 <script src="settings.js"></script>
 <style>
   :root {
@@ -1509,38 +1510,6 @@ function updateTally() {
   if (sh) sh.innerHTML = shortHelpHtml(p);
 }
 
-/* Which of these lots have had a stock column moved since the page read them.
-   `before` is the map of pre-change row copies confirmWind built, keyed by lot
-   id, in the shape stock2Row returns — so the comparison is like for like and
-   does not depend on which Grist column each field lives in.
-
-   Returns lot NUMBERS, not ids, because the message goes to a person standing
-   at a rack. An unreadable table is treated as not stale: refusing every
-   commit because a read failed would stop the station dead, and the atomic
-   apply means a genuine clash is still one failed write rather than half. */
-async function staleLots(lotIds, before, names) {
-  if (!lotIds.length) return [];
-  let t;
-  try { t = await grist.docApi.fetchTable('Production_Lots'); }
-  catch (e) { console.warn('Could not re-read Production_Lots before committing:', e); return []; }
-  const pos = {}; (t.id || []).forEach((id, i) => { pos[id] = i; });
-  const out = [];
-  lotIds.forEach(id => {
-    const i = pos[id];
-    if (i == null) return;                       // deleted meanwhile; the apply will say so
-    const now = stock2Row(t, S.stock2, i);       // (table, cols, index)
-    const was = before[id];
-    if (!was || !now) return;
-    if (STOCK2_COMPARE.some(k => Number(now[k] || 0) !== Number(was[k] || 0))) {
-      out.push((names && names[id]) || ('lot ' + id));
-    }
-  });
-  return out;
-}
-/* The fields a concurrent edit would move. `made` is included: a pot logged
-   again between load and commit changes what "beyond what the lot recorded"
-   means, which is what drives the Spools_Made top-up above. */
-const STOCK2_COMPARE = ['onHand', 'hank', 'vendor', 'store', 'made'];
 
 async function confirmWind() {
   const p = currentPlan();
@@ -1656,7 +1625,8 @@ async function confirmWind() {
     const lotNames = {};
     p.draws.forEach(d => { if (d.lot) lotNames[d.lot.lotId] = d.lot.lotNumber; });
     if (anchor) lotNames[anchor.lotId] = anchor.lotNumber;
-    const stale = await staleLots(Object.keys(stockUpdates).map(Number), orig, lotNames);
+    const stale = await StockOps.staleLots(grist.docApi, S.stock2,
+      Object.keys(stockUpdates).map(Number), orig, lotNames);
     if (stale.length) {
       showToast(`${stale.join(', ')} changed while this was open — reloading, draw it again`);
       await loadEverything();

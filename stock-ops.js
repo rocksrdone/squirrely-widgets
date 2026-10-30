@@ -1559,7 +1559,52 @@
     return { onHand: n(C.onHand), hank: n(C.hank), vendor: n(C.vendor), store: n(C.store), made: n(C.made) };
   }
   function stock2Held(row) { return row.onHand + row.hank - row.vendor - row.store; }
+
   const STOCK2_KEYS = ['onHand', 'hank', 'vendor', 'store', 'made'];
+
+  /* ── Concurrent-edit guard ────────────────────────────────────────────
+     Every screen in this stack writes stock as ABSOLUTE values computed from
+     rows read when the page loaded. Two people each drawing 5 from a lot of 20
+     both compute 15 and both write it: ten spools left the shelf, Grist
+     records five. Nothing version-checks, and Grist will not refuse the write.
+
+     So, immediately before applying, re-read the lots about to be written and
+     compare them with the copies the plan was built on. Any that moved are
+     returned by NAME, for a message to someone standing at a rack.
+
+     Refuse, do not rebase. Rebasing the stock columns would still leave the
+     draw itself decided against stale figures, so the merge would be half
+     right and look whole. A conflict a person can see and redo beats a silent
+     one.
+
+     A failed re-read counts as NOT stale: refusing every commit because a read
+     failed would stop a station dead, and callers apply atomically, so a real
+     clash is one failed write rather than half of one.
+
+       docApi  - grist.docApi
+       C       - the stock2Cols map for this doc
+       lotIds  - row ids about to be written
+       before  - { lotId: stock2Row copy } the plan was built from
+       names   - { lotId: lot number } for the message                      */
+  async function staleLots(docApi, C, lotIds, before, names) {
+    if (!docApi || !C || !lotIds || !lotIds.length) return [];
+    let t;
+    try { t = await docApi.fetchTable('Production_Lots'); }
+    catch (e) { console.warn('stock-ops: could not re-read Production_Lots before committing:', e); return []; }
+    const pos = {}; (t.id || []).forEach((id, i) => { pos[id] = i; });
+    const out = [];
+    lotIds.forEach(id => {
+      const i = pos[id];
+      if (i == null) return;             // deleted meanwhile; the apply will say so
+      const was = before && before[id];
+      if (!was) return;
+      const now = stock2Row(t, C, i);
+      if (STOCK2_KEYS.some(k => Number(now[k] || 0) !== Number(was[k] || 0))) {
+        out.push((names && names[id]) || ('lot ' + id));
+      }
+    });
+    return out;
+  }
   function stock2Diff(before, row, C) {
     const fields = {}, inverse = {};
     STOCK2_KEYS.forEach(k => {
@@ -1598,6 +1643,7 @@
     'Stock columns not switched over yet — On_Hand_Spools must be a data column and General a formula.';
 
   root.StockOps = { stock2Cols, stock2Row, stock2Held, stockMove, stockSet, STOCK2_NOT_READY, vendorCheck, vendorSet, vendorGristFix, lotCountFix, lotSetActions, lotDeleteActions, vendorResetToStore, makeLeFromLot, openVendorStock, taskCols, taskFields, loadTaskCols, pdfLib, pdfSafe, downloadPdf, ymd, extraPots, printExtraPots,
+    staleLots,
     load, defaultPlan, suggestBin, binFillFor, putAwayActions, applyPutAway, logPot, openLogPot,
     orderBinCode, fiberCode, esc, num, ORDER_STATUS_HANK, ORDER_STATUS_WOUND };
 })(typeof window !== 'undefined' ? window : globalThis);

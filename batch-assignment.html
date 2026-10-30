@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Batch Assignment</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js?v=20261030c"></script>
 <script src="settings.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
@@ -1382,7 +1383,18 @@ function render() {
 // Pull existing back-stock spools to cover waiting orders, instead of dyeing new.
 // Creates allocations (boxed) from stock lots — oldest bin first — and decrements
 // each lot's back-stock bucket. Prefers filling whole orders, like winding does.
+let pullBusy = false;            // a double-tap must not pull the same spools twice
+
 async function fulfillFromStock() {
+  /* Same reason potBusy exists a few hundred lines below: the stock write is
+     an absolute computed from the row as it was before the click, so a second
+     press writes the allocations again and the stock number once. */
+  if (pullBusy) return;
+  pullBusy = true;
+  try { await fulfillFromStockInner(); } finally { pullBusy = false; }
+}
+
+async function fulfillFromStockInner() {
   const e = currentEntry;
   const bucket = RC_STOCKBUCKET;
   if (!bucket) { showToast(STOCK2_NOT_READY); return; }
@@ -1444,10 +1456,25 @@ async function fulfillFromStock() {
 
   if (!allocActions.length) { showToast('Nothing to pull'); return; }
 
+  /* These lots as Grist has them NOW. stockMove below produces an absolute
+     from l.row as it was read when this recipe loaded, so another station
+     drawing on the same lot meanwhile would be silently reverted. Refused
+     rather than merged — see StockOps.staleLots. */
+  const touched = e.stockLots.filter(l => lotDelta[l.lotId]);
+  if (touched.length && typeof StockOps !== 'undefined' && StockOps.staleLots) {
+    const before = {}, names = {};
+    touched.forEach(l => { before[l.lotId] = l.row; names[l.lotId] = l.lotNumber || ('lot ' + l.lotId); });
+    const stale = await StockOps.staleLots(grist.docApi, C2, touched.map(l => l.lotId), before, names);
+    if (stale.length) {
+      showToast(`${stale.join(', ')} changed while this was open — reloading, try again`);
+      await loadForRecipe({ id: e.recipeId });
+      return;
+    }
+  }
+
   try {
     // Decrement each stock lot's bucket
-    const lotActions = e.stockLots
-      .filter(l => lotDelta[l.lotId])
+    const lotActions = touched
       .map(l => ['UpdateRecord', 'Production_Lots', l.lotId,
         stockMove(Object.assign({}, l.row), C2, 'general', -lotDelta[l.lotId]).fields]);
     await grist.docApi.applyUserActions([...allocActions, ...lotActions]);

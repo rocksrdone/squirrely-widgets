@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quick Log</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="stock-ops.js?v=20261030c"></script>
 <style>
   :root {
     --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7; --warm: #F6F1E9;
@@ -1085,6 +1086,21 @@ async function logSpools(lines, status, label) {
     .filter(j => j.qty > 0);
   if (!jobs.length) { showToast('Nothing to log — set a quantity first'); return; }
 
+  /* One at a time. Nothing stopped a second press: S.picked and S.qty are
+     cleared only after every await, and the stock write below is an absolute
+     computed from the row as it was before the click — so a double-tap wrote
+     the allocations twice and took the spools off the shelf once. */
+  if (S.committing) return;
+  S.committing = true;
+  try {
+    await logSpoolsInner(jobs, toBin, status, label);
+  } finally {
+    S.committing = false;
+  }
+}
+
+async function logSpoolsInner(jobs, toBin, status, label) {
+
   const actions = [], inverse = [], addIdx = [];
   let promoted = 0, fresh = 0, needLot = 0;
 
@@ -1195,6 +1211,25 @@ async function logSpools(lines, status, label) {
     showToast(needLot ? 'No lot exists for that colorway — make the lot first' : 'Nothing to log');
     return;
   }
+  /* The lots this commit will write, as Grist has them NOW. Every stock number
+     above is an absolute derived from lot.row as it was read at page load, so
+     if another station has drawn on one of these lots since, applying silently
+     reverts their draw. Refused rather than merged — see StockOps.staleLots. */
+  const drawnIds = Object.keys(stockDraw).map(Number);
+  if (drawnIds.length && typeof StockOps !== 'undefined' && StockOps.staleLots) {
+    const before = {}, names = {};
+    drawnIds.forEach(id => {
+      const lot = S.lots.find(x => x.id === id);
+      if (lot) { before[id] = lot.row; names[id] = lot.number; }
+    });
+    const stale = await StockOps.staleLots(grist.docApi, S.stock2, drawnIds, before, names);
+    if (stale.length) {
+      showToast(`${stale.join(', ')} changed while this was open — reloading, try again`);
+      await loadAll();
+      return;
+    }
+  }
+
   try {
     const res = await grist.docApi.applyUserActions(actions);
     const vals = retValues(res);
