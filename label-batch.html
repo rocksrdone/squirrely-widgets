@@ -417,6 +417,11 @@ const S = {
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
   fillDefault: 'FFN',   // what to fill spare positions with when you haven't said
   frontCust: null, frontFiber: '', frontStockOverride: '', frontQty: 48, frontStart: 1,
+  /* Until someone types a quantity, it follows the sheet. 48 was a fixed
+     default from when the sheet was fixed too; an E sheet and an FF sheet
+     hold different numbers, so one constant could only be right for one of
+     them and quietly wasted the rest. */
+  frontQtyTouched: false,
   frontFit: '', frontScale: '', frontImg: null,
   labelSettings: [], clsCols: null,
   labelStock: {},       // "recipeId|STOCKCODE" -> {id, recipeId, code, qty}
@@ -1974,8 +1979,12 @@ function bindPane() {
        one must not carry over — and neither may a sheet override picked to
        suit it. Both reset; frontTpl() then falls to what this vendor buys. */
     S.frontFiber = ''; S.frontStockOverride = '';
-    S.frontFit = ''; S.frontScale = ''; render();
+    S.frontFit = ''; S.frontScale = '';
+    S.frontQtyTouched = false;        // new job, new sheet, back to a full one
+    render();
   });
+  const ff = document.getElementById('fFill');
+  if (ff) ff.addEventListener('click', () => { S.frontQtyTouched = false; render(); });
   ['fFiber:frontFiber', 'fStockOverride:frontStockOverride', 'fQty:frontQty',
    'fStart:frontStart', 'fFit:frontFit', 'fScale:frontScale']
     .forEach(pair => {
@@ -1988,6 +1997,12 @@ function bindPane() {
         // session overrides and let them load. Changing the thread changes
         // the sheet, so it counts too.
         if (id === 'fFiber' || id === 'fStockOverride') { S.frontFit = ''; S.frontScale = ''; }
+        /* Typing a quantity takes it off auto — it is now yours, and a later
+           thread change must not silently overwrite it. "Fill the sheet" puts
+           it back. Changing the START slot does not count as touching the
+           quantity: it changes how much is left of the sheet, so an auto
+           quantity should re-fill to match. */
+        if (id === 'fQty') S.frontQtyTouched = true;
         const pos = el.selectionStart; render();
         const again = document.getElementById(id);
         if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
@@ -2613,6 +2628,30 @@ function frontScale(g, tpl) {
 
 const FIBER_LABEL = { FFN: 'FF Nylon', EN: 'E Nylon', FFC: 'FF Cotton', BW: 'Blackwing', CN: 'Cotton' };
 
+/* How many labels finish the sheet you are starting on. Starting at slot 5 of
+   a 63-up sheet leaves 59 — the point of "Start at" is to use the rest of a
+   part-used sheet, so filling it means filling what is LEFT, not another 63. */
+function frontFillQty(g, start) {
+  if (!g || !g.ok) return 0;
+  const perSheet = g.cols * g.rows;
+  const from = Math.max(1, Math.min(perSheet, Number(start) || 1));
+  return perSheet - (from - 1);
+}
+
+/* What the current numbers actually consume, so waste is visible before the
+   PDF rather than after the printer. */
+function frontSheetPlan(g, qty, start) {
+  if (!g || !g.ok) return null;
+  const perSheet = g.cols * g.rows;
+  const from = Math.max(1, Math.min(perSheet, Number(start) || 1));
+  const n = Math.max(0, Number(qty) || 0);
+  if (!n) return { perSheet, sheets: 0, leftover: 0 };
+  const used = (from - 1) + n;              // slots consumed across all sheets
+  const sheets = Math.ceil(used / perSheet);
+  const leftover = sheets * perSheet - used;
+  return { perSheet, sheets, leftover };
+}
+
 function frontPaneHtml() {
   const custs = Object.values(S.customers)
     .filter(c => c.name)
@@ -2632,6 +2671,10 @@ function frontPaneHtml() {
   const scaleShown = S.frontScale !== '' ? S.frontScale : (sv && sv.scale > 0 ? sv.scale : '');
   const sc = g.ok ? frontScale(g, tpl) : 0;
   const over = g.ok ? (sc * g.dia - g.dia) / 2 : 0;
+  /* Resolved here, every render, so switching thread re-fills to the new
+     sheet without anyone pressing anything. */
+  if (g.ok && !S.frontQtyTouched) S.frontQty = frontFillQty(g, S.frontStart);
+  const plan = g.ok ? frontSheetPlan(g, S.frontQty, S.frontStart) : null;
 
   return `<div class="pick-box">
       <div class="pick-row" style="gap:12px;flex-wrap:wrap;align-items:flex-end">
@@ -2651,10 +2694,12 @@ function frontPaneHtml() {
             ${fibs.map(f => `<option value="${esc(f)}" ${f === curFiber ? 'selected' : ''}>${esc(
               FIBER_LABEL[f] || f)}</option>`).join('')}
           </select></label>
-        <label class="f-lab">Labels
+        <label class="f-lab">Labels ${S.frontQtyTouched ? '' : '<span class="f-saved">fills sheet</span>'}
           <input class="qty-input" id="fQty" value="${esc(S.frontQty)}"></label>
         <label class="f-lab">Start at
           <input class="qty-input" id="fStart" value="${esc(S.frontStart)}"></label>
+        ${S.frontQtyTouched && g.ok ? `<button class="btn" id="fFill" style="align-self:flex-end"
+          title="Back to exactly what finishes this sheet">Fill the sheet (${frontFillQty(g, S.frontStart)})</button>` : ''}
         <label class="f-lab">Fit ${sv && sv.fit ? '<span class="f-saved">saved</span>' : ''}
           <select class="f-sel" id="fFit">
             <option value="Cover" ${/cover/i.test(frontFit()) ? 'selected' : ''}>Cover — solid image, bleeds past cut</option>
@@ -2691,7 +2736,11 @@ function frontPaneHtml() {
         artwork lands on the neighbouring label.
       </div>` : `<div class="alert"><strong>${esc(tpl ? tpl.code : 'This sheet')}</strong> is missing geometry: ${esc((g.missing || []).join(', '))}.</div>`}
       <div class="group-foot" style="border:1px solid var(--rule);border-radius:8px;margin-top:12px">
-        <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels</div>
+        <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels${
+          plan && plan.sheets ? ` <span style="font-weight:400;color:var(--mid)">&mdash; ${
+            plan.sheets} sheet${plan.sheets === 1 ? '' : 's'} of ${plan.perSheet}${
+            plan.leftover ? `, ${plan.leftover} slot${plan.leftover === 1 ? '' : 's'} blank on the last`
+                          : ', exactly full'}</span>` : ''}</div>
         <div style="font-size:10.5px;color:var(--mid)">${
           !S.clsCols ? 'Add a <b>Customer_Label_Settings</b> table to remember fit per sheet'
           : sv ? `remembered for ${esc(c.code || c.name)} on ${esc(tpl ? tpl.code : '')}`
