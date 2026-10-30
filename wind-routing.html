@@ -557,10 +557,14 @@ async function loadEverything() {
       const it = b.items[key] = b.items[key] || {
         key, name: (recipeById[meta.recipeId] || {}).name || 'Unknown colorway',
         recipeId: meta.recipeId,
-        qty: 0, allocIds: [], boxedQty: 0, sortedQty: 0,
+        // allocRows keeps each row's own quantity beside its id. borrowFrom
+        // used to count rows as if each were one spool, because the ids alone
+        // do not say how many spools a row carries.
+        qty: 0, allocIds: [], allocRows: [], boxedQty: 0, sortedQty: 0,
       };
       if (waiting) {
-        it.qty += a.qty; it.allocIds.push(a.id); b.total += a.qty;
+        it.qty += a.qty; it.allocIds.push(a.id); it.allocRows.push({ id: a.id, qty: a.qty });
+        b.total += a.qty;
         if (a.orderBin) it.sortedQty += a.qty;
       }
       else { it.boxedQty += a.qty; }
@@ -792,19 +796,35 @@ async function borrowFrom(woId, itemKey, lineId) {
   const src = borrowableFor(line).find(x => x.woId === woId && x.key === itemKey);
   if (!line || !src) return;
   const need = Math.min(src.qty, line.outstanding);
-  if (!window.confirm(`Move ${need} spool${need === 1 ? '' : 's'} of ${line.recipeName}\nfrom ${src.customerName || 'order ' + src.orderNumber}\nto ${line.customerName || 'this order'}?\n\n${src.customerName || 'That order'} will be short by ${need}.`)) return;
+
+  /* Whole allocations only: splitting one would leave two rows for one
+     physical bag, which the labelling station cannot act on. So work out what
+     that rule actually moves BEFORE asking, and ask about that number.
+
+     This loop used to add 1 per row — "qty per allocation is unknown here" —
+     while a row can carry any number of spools. Borrowing 3 from an order
+     holding three rows of 5 moved all three rows: 15 spools reassigned, the
+     lending order emptied, and the borrowing order showing 15 against an
+     outstanding 3. The quantities were always available; they just were not
+     carried through to here. */
+  const rows = (src.allocRows && src.allocRows.length)
+    ? src.allocRows : src.allocIds.map(id => ({ id, qty: 1 }));
+  const move = [];
+  let got = 0;
+  for (const r of rows) {
+    if (got >= need) break;
+    move.push(r.id);
+    got += r.qty;
+  }
+  if (!move.length) { showToast('Nothing to move'); return; }
+
+  const extra = got > need
+    ? `\n\nThe nearest whole bag${move.length === 1 ? '' : 's'} comes to ${got}, not ${need} — bags are not split.`
+    : '';
+  if (!window.confirm(`Move ${got} spool${got === 1 ? '' : 's'} of ${line.recipeName}\nfrom ${src.customerName || 'order ' + src.orderNumber}\nto ${line.customerName || 'this order'}?${extra}\n\n${src.customerName || 'That order'} will be short by ${got}.`)) return;
 
   const { ALLOC } = S.cols;
   try {
-    // Reassign whole allocations up to the need. Splitting one would leave two
-    // rows for one physical bag, which the labelling station cannot act on.
-    const move = [];
-    let got = 0;
-    for (const id of src.allocIds) {
-      if (got >= need) break;
-      move.push(id);
-      got += 1;   // qty per allocation is unknown here; reassign then let control reconcile
-    }
     const fields = { [ALLOC.line]: move.map(() => line.lineId) };
     if (ALLOC.customer) fields[ALLOC.customer] = move.map(() => line.customerId);
     await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', move, fields]]);
