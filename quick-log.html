@@ -321,6 +321,12 @@ const STOCK2_NOT_READY =
    the word "Wound", so the needs-labels test must run before the catch-all. */
 const BIN_STATUS = 'Wound - Needs Labels';
 const PACKED_CANDIDATES = ['Packed', 'Packaged - Shipped', 'Wound'];
+/* The Stock_Source value for spools drawn off the held-back shelf. Spelled
+   exactly as claude/stock-reservations.md defines the Choice — a value the
+   widgets don't recognise is read as production, so a typo here silently
+   strands the spools rather than failing loudly. Matches
+   batch-assignment.html's RC_STOCKSOURCE. */
+const ALLOC_SOURCE_GENERAL = 'General';
 function allocBucket(status) {
   const s = (status == null ? '' : status).toString();
   if (/unwound|in bin|to wind/i.test(s)) return 'pending';
@@ -384,6 +390,12 @@ async function loadAll() {
     lot: ['Lot'], qty: ['Qty_Spools'], status: ['Status'],
     customer: opt(['Customer']), line: ['Work_Order_Line'],
     labelsApplied: opt(['Labels_Applied', 'Label_Applied', 'Labels_Used']),
+    /* Provenance. Stock_Source was missing from this spec entirely, so every
+       row this widget wrote said "wound fresh from a pot" — including the ones
+       whose spools it had just taken off the shelf. Blank is never releasable
+       by design, so those spools could not be given back and their order line
+       could not be deleted, for good. */
+    source: opt(['Stock_Source']), orderBin: opt(['Order_Bin']),
   }, missing);
   const WOL = resolveCols(wolT, 'Work_Order_Lines', {
     workOrder: ['Work_Order'], qtyNeeded: ['Qty_Needed'],
@@ -941,7 +953,21 @@ function renderLog() {
    Each action builds its own inverse before applying, so undo replays exact
    opposites rather than guessing at prior state.                             */
 
-function newAllocAction(line, lotId, qty, status) {
+/* The provenance columns of an existing row, for a split. A split makes a
+   second row for spools that were always part of one physical draw, so it has
+   to carry where they came from — otherwise half a General reservation turns
+   into unreleasable production, and half a bag in O-CUST-1234 reads as
+   unsorted. Only these two columns, not the whole raw row, so Labels_Applied
+   keeps the meaning newAllocAction gives it. */
+function provenanceOf(allocId) {
+  const { ALLOC } = S.cols;
+  const raw = S.allocRaw[allocId] || {};
+  const out = {};
+  [ALLOC.source, ALLOC.orderBin].forEach(c => { if (c && raw[c] != null && raw[c] !== '') out[c] = raw[c]; });
+  return out;
+}
+
+function newAllocAction(line, lotId, qty, status, extra) {
   const { ALLOC } = S.cols;
   const f = {};
   f[ALLOC.lot] = lotId || 0;
@@ -954,6 +980,7 @@ function newAllocAction(line, lotId, qty, status) {
   // and sets the flag itself, exactly once. Setting it here would make those
   // labels vanish from the count without ever being deducted.
   if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = false;
+  if (extra) Object.assign(f, extra);
   return ['AddRecord', 'Lot_Allocations', null, f];
 }
 
@@ -1098,21 +1125,24 @@ async function logSpools(lines, status, label) {
           actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty - take }]);
           inverse.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty }]);
           addIdx.push(actions.length);
-          actions.push(newAllocAction(j.line, a.lotId, take, S.packedStatus));
+          actions.push(newAllocAction(j.line, a.lotId, take, S.packedStatus, provenanceOf(a.id)));
         }
       }
     }
     if (need > 0) {
       if (!j.lot) { needLot++; return; }
       fresh += need;
-      addIdx.push(actions.length);
-      actions.push(newAllocAction(j.line, j.lot.id, need, status));
 
       // Whatever this lot could not cover from free spools came out of stock.
       // Two separate running totals: how much of the lot has been claimed at
       // all (which is what exhausts `free`), and how much has been taken off
       // the stock column. Using one for both understates the draw when an
       // earlier line already ate the free spools.
+      //
+      // Worked out BEFORE the rows are written, because the split decides how
+      // many rows there are. It used to run after a single sourceless row had
+      // already been pushed.
+      let take = 0;
       if (S.stockCol) {
         const claimedBefore = lotClaim[j.lot.id] || 0;
         const freeLeft = Math.max(0, j.lot.free - claimedBefore);
@@ -1120,12 +1150,32 @@ async function logSpools(lines, status, label) {
         if (fromStock > 0) {
           const drawnBefore = stockDraw[j.lot.id] || 0;
           const stockLeft = Math.max(0, j.lot.stockVal - drawnBefore);
-          const take = Math.min(fromStock, stockLeft);
+          take = Math.min(fromStock, stockLeft);
           if (take > 0) stockDraw[j.lot.id] = drawnBefore + take;
           // Beyond what the column holds is a real over-allocation. Never write
           // the column negative — say so and let Bin Audit show the rest.
           shortStock += fromStock - take;
         }
+      }
+
+      /* One row per origin. A draw that spans both freshly wound spools and
+         the shelf is two different kinds of spool wearing one row, and the
+         row can only carry one Stock_Source — so it becomes two rows.
+
+         Marking the whole thing General would be worse than leaving it blank:
+         releasing it would credit the shelf for production that was never on
+         it, inventing spools. Blank only strands them. The over-allocated
+         remainder (fromStock beyond what the column held) stays blank for the
+         same reason — nothing on a shelf backed it. */
+      const fromProduction = need - take;
+      if (fromProduction > 0) {
+        addIdx.push(actions.length);
+        actions.push(newAllocAction(j.line, j.lot.id, fromProduction, status));
+      }
+      if (take > 0) {
+        addIdx.push(actions.length);
+        actions.push(newAllocAction(j.line, j.lot.id, take, status,
+          ALLOC_SOURCE_GENERAL && S.cols.ALLOC.source ? { [S.cols.ALLOC.source]: ALLOC_SOURCE_GENERAL } : null));
       }
       lotClaim[j.lot.id] = (lotClaim[j.lot.id] || 0) + need;
     }
