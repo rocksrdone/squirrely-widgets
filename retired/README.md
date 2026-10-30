@@ -24,3 +24,4 @@ Grist page still pointing at an old URL can be found and switched, then deleted.
 | order-overview.html | order-picker.html | 2026-10-19 |
 | daily-work-list.html | order-picker.html | 2026-10-19 |
 | work-overview.html | order-picker.html | 2026-10-19 |
+| print-tool.html | print-day.html (Blank tags + Outer labels; ruler bar) — **its forms were the old size**: 3.5in kettle tag and 5.25in bag sheet, against 2.55in and 3.42in in print-day, so blanks from it never matched the filled-in paper | 2026-10-29 |

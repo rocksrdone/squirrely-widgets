@@ -21,6 +21,9 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .ctl button { font-size: 15px; font-weight: bold; padding: 9px 20px; border: none; border-radius: 3px;
               background: #B85042; color: #fff; cursor: pointer; }
 .ctl button.sec { background: #4F423C; font-weight: normal; }
+.ruler { padding: 10px 26px; font-size: 11px; background: #F4EFE9; color: #5A4A42; }
+.ruler-bar { display: inline-block; width: 1in; height: 13px; border: 1px solid #000;
+             border-right-width: 3px; vertical-align: -2px; margin-right: 8px; }
 .banner { background: #F5D8DC; color: #7A1024; padding: 10px 22px; font-size: 12.5px; line-height: 1.5; }
 .banner.info { background: #FBECC9; color: #6B5100; }
 .summary { background: #F4EFE9; padding: 12px 22px; font-size: 12.5px; }
@@ -34,7 +37,11 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .page { page-break-after: always; display: flex; flex-wrap: wrap; align-content: flex-start; }
 .page:last-child { page-break-after: auto; }
 
-/* ---------- kettle tag : 4 x 3.5in, 6 per page ---------- */
+/* ---------- kettle tag : 4 x 2.55in, 8 per page ----------
+   2 across x 4 down = 10.2in of the 10.5in a Letter page gives at 0.25in
+   margins. If this height changes, change TAGS_PER_PAGE with it — the old
+   comment here said 3.5in/6-up long after the box had been shortened, and
+   the widget went on imposing 6 and leaving a blank row on every page. */
 .tag { width: 4in; height: 2.55in; padding: .12in .15in; outline: 1px dashed #B9B9B9;
        outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden; }
 .tag > * { flex: none; }
@@ -251,16 +258,28 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
 .pl-map .c b { display: block; font-size: 12px; letter-spacing: .5px; }
 .pl-map .c span { display: block; font-size: 8.5px; color: #666; }
 
+/* ---------- outer bag label : 4 x 2.625in, 8 per page ----------
+   Ported from print-tool.html (retired 2026-10-29). Deliberately blank: one
+   goes on each finished bag, and how many bags a batch becomes is decided at
+   winding, not in the plan — so this is a hand-filled count, not a derived one. */
+.out { width: 4in; height: 2.625in; padding: .2in .22in; outline: 1px dashed #B9B9B9;
+       outline-offset: -.5px; display: flex; flex-direction: column; justify-content: center; }
+.out .n { border-bottom: 2px solid #000; height: .6in; }
+.out .s { border-bottom: 2px solid #000; height: .44in; margin-top: .26in; width: 2.6in; }
+.out .c { font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px; color: #333; margin-top: 3px; }
+
 </style></head><body>
 
 <div class="ctl noprint">
   <h1>Print today's tags &amp; sheets</h1>
   <p>Pulls today's Day&nbsp;Plan and prefills a kettle tag and a bag sheet for each batch, in plan order.
      Bin and lot number stay blank &mdash; neither exists yet at the pot.<br>
-     The dye pull sheet prints <b>last</b>, on its own pages &mdash; take it off the stack before you cut.</p>
+     The dye pull sheet prints <b>last</b>, on its own pages &mdash; take it off the stack before you cut.<br>
+     With no plan loaded it still prints blanks: set <b>Blank tags</b> and <b>Outer labels</b> and leave the rest off.</p>
   <div class="row">
     <div><label>First bag code</label><input type="number" id="start" value="1001" min="1"></div>
-    <div><label>Blank tags</label><input type="number" id="blanks" value="2" min="0" max="24"></div>
+    <div><label>Blank tags</label><input type="number" id="blanks" value="2" min="0" max="400"></div>
+    <div><label>Outer labels</label><input type="number" id="outer" value="0" min="0" max="200"></div>
     <div class="checks">
       <span><input type="checkbox" id="wTags" checked> kettle tags</span>
       <span><input type="checkbox" id="wSheets" checked> bag sheets</span>
@@ -272,6 +291,9 @@ body { margin: 0; font-family: Helvetica, Arial, sans-serif; color: #000; backgr
     <div><button class="sec" onclick="load()">Reload plan</button></div>
   </div>
 </div>
+<div class="ruler noprint"><span class="ruler-bar"></span>This bar must measure exactly 1 inch on the printout
+  &mdash; print at 100%, turn off &ldquo;fit to page&rdquo;. Tags come 8 to a page, bag sheets 3, outer labels 8;
+  everything tiles edge to edge so the stack cuts in straight passes.</div>
 <div id="banner"></div>
 <div id="summary" class="summary noprint">Loading today's plan&hellip;</div>
 <div id="out"></div>
@@ -333,6 +355,21 @@ function banner(msg, kind) {
   document.getElementById('banner').innerHTML =
     msg ? `<div class="banner noprint ${kind || ''}">${esc(msg)}</div>` : '';
 }
+
+/* How many of each form a Letter page holds at 0.25in margins (8 x 10.5in of
+   usable paper). These are the page capacities the CSS box sizes imply — they
+   are not free choices, and changing a .tag or .sh height means changing the
+   number here in the same edit. Printing fewer than the capacity is not a
+   harmless default: it leaves a blank strip on every page and costs a cut. */
+const TAGS_PER_PAGE   = 8;    // .tag  4    x 2.55in  -> 2 across, 4 down
+const SHEETS_PER_PAGE = 3;    // .sh   8    x 3.42in  -> 1 across, 3 down
+const OUTER_PER_PAGE  = 8;    // .out  4    x 2.625in -> 2 across, 4 down
+
+/* The outer bag label, blank. See the .out comment in the stylesheet. */
+const OUTER = `<div class="out">
+  <div class="n"></div><div class="c">colorway</div>
+  <div class="s"></div><div class="c">SKU</div>
+</div>`;
 
 /* ── cut-and-stack imposition ─────────────────────────────────────────── */
 function impose(total, perPage) {
@@ -1528,16 +1565,26 @@ function render() {
   const n = printable.length;
   let html = '';
   if (tagList.length && document.getElementById('wTags').checked)
-    impose(tagList.length, 6).forEach(p => {
+    impose(tagList.length, TAGS_PER_PAGE).forEach(p => {
       html += '<div class="page">' + p.map(i => i === null ? tag(null, null)
         : (tagList[i].blank ? tag('blank', tagList[i].code) : tag(tagList[i], tagList[i].code))).join('') + '</div>';
     });
   const nSpareSheets = Math.max(0, Number((document.getElementById('spareSheets') || {}).value) || 0);
   const SHEETS = sheetList(printable, nSpareSheets);
   if (SHEETS.length && document.getElementById('wSheets').checked)
-    impose(SHEETS.length, 3).forEach(p => {
+    impose(SHEETS.length, SHEETS_PER_PAGE).forEach(p => {
       html += '<div class="page">' + p.map(i => sheetFor(i === null ? null : SHEETS[i])).join('') + '</div>';
     });
+  /* Outer labels carry no code and no plan data, so they are not imposed for
+     cut-and-stack — there is no sequence to preserve. Straight fill, which also
+     means the short last page is at the end of the run rather than inside it. */
+  const nOuter = Math.max(0, Number((document.getElementById('outer') || {}).value) || 0);
+  for (let i = 0; i < Math.ceil(nOuter / OUTER_PER_PAGE); i++) {
+    let cells = '';
+    for (let j = 0; j < OUTER_PER_PAGE; j++)
+      cells += (i * OUTER_PER_PAGE + j < nOuter) ? OUTER : '<div class="out"></div>';
+    html += '<div class="page">' + cells + '</div>';
+  }
   // Pull pages go last so the tag and sheet pages stay one contiguous stack to
   // guillotine. Same printable array, so staging bin N is always bag code N.
   let pullWarn = [];
@@ -1578,7 +1625,7 @@ function render() {
         ${pullWarn.join(' ')}</div>` : ''}` : '';
 }
 
-['start', 'blanks', 'wTags', 'wSheets', 'wSkip', 'wPull'].forEach(id =>
+['start', 'blanks', 'outer', 'wTags', 'wSheets', 'wSkip', 'wPull'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 
 /* Static shell is already rendered above. Only now talk to Grist. */
@@ -1587,8 +1634,13 @@ try {
   grist.onRecords(() => {});
   load();
 } catch (e) {
-  banner('Grist plugin API unavailable: ' + (e && e.message ? e.message : e));
+  banner('Grist plugin API unavailable: ' + (e && e.message ? e.message : e)
+    + ' — no plan, but blank tags and outer labels still print.');
   document.getElementById('summary').innerHTML = '';
+  /* This is the case print-tool.html used to cover: no doc, no plan, still
+     wanting paper. BATCHES is [] and PULL is null, so render() is safe here and
+     puts the blanks on screen without waiting for someone to nudge an input. */
+  render();
 }
 </script>
 </body></html>
