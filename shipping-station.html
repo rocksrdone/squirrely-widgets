@@ -1,0 +1,796 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Shipping Station</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
+<style>
+/* ══ Shipping Station ══════════════════════════════════════════════════════
+   One order at a time: check every detail, print the invoice, ship it.
+
+   Order Picker is the triage list — which orders exist, what state they are
+   in, close them when they are gone. This is the bench screen for the one
+   order in front of you, so it shows every line and every note rather than a
+   rollup. The two are deliberately different shapes.
+
+   THE INVOICE HERE IS THE VENDOR A/R INVOICE — the document a customer pays
+   from. It is NOT the commercial invoice: that is split-shipment-invoice.html,
+   it goes in the customs pouch, and it deliberately carries no amount-due
+   block because customs assesses on declared value and does not collect
+   payment status. Do not merge them; they are different documents for
+   different readers, and conflating them is how a customs delay or an unpaid
+   invoice happens. See claude/invoicing.md.
+
+   Printing is window.print() with @page, the house pattern. The commercial
+   invoice uses html2canvas, which makes a bitmap — unselectable text, no real
+   pagination — and only does so because that sheet is a form of live inputs.
+   An A/R invoice is static text and has no such excuse.                     */
+
+:root {
+  --ink: #1A1614; --rule: #E8DFD4; --paper: #FDFBF7; --panel: #fff;
+  --muted: #8B7D72; --accent: #8B3A2A; --accent-light: #F2E8E5;
+  --teal: #2A6B6B; --teal-light: #E4F0EF; --gold: #B07D2A; --gold-light: #F5EDD8;
+  --purple: #5B4A8B; --purple-light: #EEE8F7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 12px; background: var(--paper); color: var(--ink);
+       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; font-size: 13px; }
+
+.hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 2px; }
+.hd h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+.hd .sub { font-size: 11.5px; color: var(--muted); }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.search { flex: 1; min-width: 180px; padding: 8px 10px; border: 1.5px solid var(--rule);
+          border-radius: 6px; font-size: 13px; background: #fff; color: var(--ink); }
+.btn { font: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 13px; border-radius: 6px;
+       cursor: pointer; border: 1.5px solid var(--rule); background: #fff; color: var(--ink); }
+.btn.go { background: var(--teal); border-color: var(--teal); color: #fff; }
+.btn.warn { background: #fff; border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+
+.layout { display: flex; gap: 12px; align-items: flex-start; }
+.list { flex: 0 0 240px; max-height: 78vh; overflow: auto; }
+.detail { flex: 1; min-width: 0; }
+
+.ocard { background: var(--panel); border: 1.5px solid var(--rule); border-radius: 7px;
+         padding: 8px 10px; margin-bottom: 6px; cursor: pointer; }
+.ocard:hover { border-color: var(--teal); }
+.ocard.on { border-color: var(--teal); background: var(--teal-light); }
+.ocard .num { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+.ocard .who { font-weight: 700; font-size: 13px; }
+.ocard .meta { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+
+.panel { background: var(--panel); border: 1.5px solid var(--rule); border-radius: 8px;
+         padding: 12px 14px; margin-bottom: 10px; }
+.panel h2 { font-size: 13px; margin: 0 0 8px; letter-spacing: .3px; text-transform: uppercase;
+            color: var(--muted); font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
+.f .k { font-size: 10px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); }
+.f .v { font-size: 13px; margin-top: 1px; overflow-wrap: anywhere; }
+.f .v.big { font-size: 15px; font-weight: 700; }
+.muted { color: var(--muted); }
+.note { background: var(--gold-light); border-left: 3px solid var(--gold); padding: 7px 9px;
+        border-radius: 0 5px 5px 0; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.badge { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+         letter-spacing: .5px; padding: 2px 7px; border-radius: 10px; margin-right: 4px; }
+.badge.rush { background: var(--accent-light); color: var(--accent); }
+.badge.hold { background: var(--accent); color: #fff; }
+.badge.intl { background: var(--purple-light); color: var(--purple); }
+.badge.ok   { background: var(--teal-light); color: var(--teal); }
+.badge.warn { background: var(--gold-light); color: var(--gold); }
+
+table.lines { width: 100%; border-collapse: collapse; }
+table.lines th { font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+                 text-align: left; border-bottom: 1.5px solid var(--rule); padding: 0 6px 4px 0; }
+table.lines td { padding: 6px 6px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.lines td.n, table.lines th.n { text-align: right; white-space: nowrap; }
+table.lines .sku { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+table.lines .lnote { font-size: 11.5px; color: var(--gold); margin-top: 2px; }
+table.lines tr.bad td { background: var(--accent-light); }
+
+.prob { background: var(--accent-light); border: 1.5px solid var(--accent); color: var(--accent);
+        border-radius: 7px; padding: 9px 11px; margin-bottom: 10px; font-size: 12.5px; line-height: 1.5; }
+.prob b { display: block; margin-bottom: 3px; }
+.info { background: var(--gold-light); border: 1.5px solid var(--gold); color: #6B4A10;
+        border-radius: 7px; padding: 9px 11px; margin-bottom: 10px; font-size: 12.5px; line-height: 1.5; }
+.empty { text-align: center; color: var(--muted); padding: 30px 14px; line-height: 1.6; }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(90px);
+         background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 7px; font-size: 13px;
+         transition: transform .18s; z-index: 50; }
+.toast.show { transform: translateX(-50%) translateY(0); }
+
+/* ══ The printed invoice ═══════════════════════════════════════════════════
+   Hidden on screen, and the ONLY thing that prints. Plain Letter with half
+   inch margins: everything the sheet needs is drawn here, because the paper
+   carries nothing.                                                          */
+#sheet { display: none; }
+@media print {
+  @page { size: letter; margin: .5in; }
+  body { padding: 0; background: #fff; }
+  body > *:not(#sheet) { display: none !important; }
+  #sheet { display: block !important; }
+}
+#sheet { font-family: Helvetica, Arial, sans-serif; color: #000; font-size: 11px; line-height: 1.45; }
+#sheet .ihead { display: flex; justify-content: space-between; align-items: flex-start;
+                border-bottom: 2.5px solid #000; padding-bottom: 10px; }
+#sheet .biz-name { font-size: 20px; font-weight: bold; letter-spacing: .2px; }
+#sheet .biz-rest { font-size: 10.5px; white-space: pre-line; margin-top: 3px; }
+#sheet .ititle { text-align: right; flex: none; margin-left: .4in; }
+#sheet .ititle .w { font-size: 25px; font-weight: bold; letter-spacing: 3px; }
+#sheet .ititle table { border-collapse: collapse; margin-top: 7px; font-size: 10.5px; }
+#sheet .ititle td { padding: 1px 0 1px 10px; text-align: right; }
+#sheet .ititle td.k { text-align: left; padding-left: 0; color: #555;
+                      text-transform: uppercase; font-size: 9px; letter-spacing: .6px; }
+#sheet .parties { display: flex; gap: .5in; margin-top: 14px; }
+#sheet .party { flex: 1; min-width: 0; }
+#sheet .party .cap { font-size: 9px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
+                     border-bottom: 1px solid #000; padding-bottom: 2px; margin-bottom: 4px; }
+#sheet .party .body { white-space: pre-line; }
+#sheet .terms { display: flex; gap: .4in; margin-top: 14px; border: 1.5px solid #000; padding: 7px 9px; }
+#sheet .terms .f { flex: 1; }
+#sheet .terms .k { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: #555; }
+#sheet .terms .v { font-weight: bold; }
+#sheet table.items { width: 100%; border-collapse: collapse; margin-top: 14px; }
+#sheet table.items th { font-size: 9px; text-transform: uppercase; letter-spacing: .7px;
+                        border-bottom: 2px solid #000; padding: 0 6px 3px 0; text-align: left; }
+#sheet table.items td { padding: 5px 6px 5px 0; border-bottom: .75px solid #BBB; vertical-align: top; }
+#sheet table.items .n { text-align: right; white-space: nowrap; }
+#sheet table.items .sku { font-size: 9.5px; color: #555; }
+#sheet .tot { margin-top: 10px; display: flex; justify-content: flex-end; }
+#sheet .tot table { border-collapse: collapse; min-width: 2.6in; }
+#sheet .tot td { padding: 3px 0 3px 14px; text-align: right; }
+#sheet .tot td.k { text-align: left; padding-left: 0; }
+#sheet .tot tr.grand td { border-top: 2px solid #000; font-size: 14px; font-weight: bold; padding-top: 6px; }
+#sheet .pay { margin-top: 16px; border: 1.5px solid #000; padding: 9px 11px; }
+#sheet .pay .cap { font-size: 9px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
+                   margin-bottom: 4px; }
+#sheet .pay .body { white-space: pre-line; }
+#sheet .ifoot { margin-top: 18px; padding-top: 7px; border-top: .75px solid #999;
+                font-size: 9.5px; color: #444; white-space: pre-line; }
+#sheet .hold { margin-top: 12px; border: 2px solid #000; padding: 6px 9px; font-weight: bold;
+               text-align: center; letter-spacing: .5px; }
+</style></head><body>
+
+<div class="hd"><h1>Shipping Station</h1>
+  <span class="sub">one order at a time — check it, invoice it, ship it</span></div>
+
+<div class="bar">
+  <input class="search" id="q" placeholder="Search customer, order number, SKU…" oninput="onSearch(this.value)">
+  <button class="btn" onclick="loadAll()">↻ Refresh</button>
+</div>
+
+<div class="layout">
+  <div class="list" id="list"><div class="empty">Loading…</div></div>
+  <div class="detail" id="detail"></div>
+</div>
+
+<div id="sheet"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+/* ── House helpers, same contracts as the other widgets ─────────────────── */
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+/* Strict: a Grist reference is ['R', rowId]. order-picker.html's copy returns
+   ref[1] for ANY array, which would read a 2-element list as a row id. */
+function getRefId(ref) {
+  if (Array.isArray(ref)) return ref[0] === 'R' ? ref[1] : null;
+  const n = Number(ref);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function columnAsArray(t, c) { return Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, cands) {
+  for (const c of cands) if (Object.prototype.hasOwnProperty.call(t, c)) return c;
+  const loose = {};
+  Object.keys(t).forEach(k => { loose[k.toLowerCase().replace(/[^a-z0-9]/g, '')] = k; });
+  for (const c of cands) {
+    const hit = loose[c.toLowerCase().replace(/[^a-z0-9]/g, '')];
+    if (hit) return hit;
+  }
+  return null;
+}
+function resolveCols(table, name, spec, missing) {
+  const out = {};
+  for (const [key, def] of Object.entries(spec)) {
+    const cands = Array.isArray(def) ? def : def.names;
+    const optional = !Array.isArray(def) && def.optional;
+    const col = findColumn(table, cands);
+    if (!col && !optional) missing.push(`${name}.${cands[0]}`);
+    out[key] = col;
+  }
+  return out;
+}
+const opt = cands => ({ names: cands, optional: true });
+function normalize(s) { return (s || '').toString().trim().toUpperCase(); }
+function showToast(m) {
+  const t = document.getElementById('toast');
+  t.textContent = m; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+/* Grist Date columns arrive as epoch SECONDS at UTC MIDNIGHT. Formatting one
+   with toLocaleDateString in any negative-offset zone — Eastern among them —
+   lands at 8pm the evening BEFORE and prints the wrong day. An order dated
+   the 14th was showing as the 13th on the invoice.
+   So a Date is read in UTC. A DateTime is a real instant and would want local
+   formatting, but nothing here prints one. */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dmy(v) {
+  if (!v) return '';
+  const d = new Date(Number(v) * 1000);
+  if (isNaN(d)) return '';
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+/* Today, for an invoice that has not been stamped yet. Local, because this one
+   is "what day is it where the person printing is standing". */
+function todayLabel() {
+  const d = new Date();
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function localToday() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+/* Money. An invoice is arithmetic someone pays against, so every figure is
+   fixed to two places and nothing is rounded twice: line totals round once,
+   and the subtotal sums the ROUNDED line totals so the column adds up on
+   paper. A subtotal that disagrees with its own column is the first thing a
+   bookkeeper queries. */
+function money(n, cur) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  const sym = { USD: '$', CAD: 'CA$', AUD: 'AU$', EUR: '€', GBP: '£', JPY: '¥' }[cur] || '';
+  const body = v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return sym ? sym + body : body + ' ' + (cur || '');
+}
+
+let S = { orders: [], sel: null, search: '', cols: null, settings: {}, busy: false };
+
+/* ── Load ───────────────────────────────────────────────────────────────── */
+async function loadAll() {
+  document.getElementById('list').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    await SSSettings.load();
+    const [woT, wolT, custT, recT] = await Promise.all([
+      grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'),
+      grist.docApi.fetchTable('Customers'),
+      grist.docApi.fetchTable('Recipes'),
+    ]);
+    const missing = [];
+    const WO = resolveCols(woT, 'Work_Orders', {
+      number: ['Order_Number'], status: ['Status'],
+      custName: ['Customer_Name'], customer: opt(['Customer']),
+      orderDate: opt(['Order_Date']), dueDate: opt(['Due_Date']),
+      notes: opt(['Notes']), po: opt(['PO_Number', 'PO', 'Purchase_Order', 'PO_No']),
+      channel: opt(['Channel']), orderType: opt(['Order_Type']),
+      payStatus: opt(['Payment_Status']),
+      terms: opt(['Payment_Terms', 'Terms']), method: opt(['Payment_Method', 'Pay_By']),
+      shopifyId: opt(['Shopify_Order_ID']),
+      tracking: opt(['Tracking_Number', 'Tracking']), carrier: opt(['Carrier']),
+      shipped: opt(['Shipped_Date']), fulfil: opt(['Fulfillment_Status']),
+      shipCost: opt(['Shipping_Cost']), invoiceDate: opt(['Invoice_Date']),
+    }, missing);
+    const WOL = resolveCols(wolT, 'Work_Order_Lines', {
+      order: ['Work_Order'], qty: ['Qty_Needed'],
+      dyed: opt(['Qty_Dyed']), recipe: opt(['Recipe']), sku: opt(['SKU']),
+      name: opt(['Display_Name', 'Label_Name', 'Custom_Name']),
+      price: opt(['Unit_Price', 'Price']),
+      priority: opt(['Production_Priority', 'Priority']),
+      makeFresh: opt(['Make_Fresh', 'Dye_Fresh', 'No_Stock']),
+      notes: opt(['Notes']),
+    }, missing);
+    const CUST = resolveCols(custT, 'Customers', {
+      name: ['Customer_Name', 'Name'],
+      code: opt(['Code', 'Vendor_Code', 'Customer_Code']),
+      email: opt(['Email', 'Email_Primary']),
+      emailBill: opt(['Email_Billing', 'Billing_Email']),
+      phone: opt(['Phone', 'Phone_Primary']),
+      currency: opt(['Currency']),
+      taxId: opt(['Tax_ID', 'VAT_Number', 'Resale_Number']),
+      payTerms: opt(['Default_Payment_Terms']), payMethod: opt(['Default_Payment_Method']),
+      shipName: opt(['Ship_To_Name', 'Ship_Name']), shipCompany: opt(['Ship_Company', 'Company']),
+      a1: opt(['Ship_Addr1', 'Ship_Address_1']), a2: opt(['Ship_Addr2', 'Ship_Address_2']),
+      a3: opt(['Ship_Addr3', 'Ship_Address_3']),
+      city: opt(['Ship_City']), state: opt(['Ship_State', 'Ship_Province']),
+      zip: opt(['Ship_Zip', 'Ship_Postal_Code']), country: opt(['Ship_Country', 'Country']),
+      csz: opt(['Ship_City_State_Zip', 'Ship_CSZ']),
+      reqs: opt(['Special_Requirements', 'Requirements']),
+      notes: opt(['Notes', 'Internal_Notes']),
+    }, missing);
+    const REC = resolveCols(recT, 'Recipes', {
+      name: ['Recipe_Name'], fiber: opt(['Fiber_Type']), sku: opt(['SKU_Base']),
+    }, missing);
+    if (missing.length) {
+      document.getElementById('list').innerHTML =
+        `<div class="prob"><b>Missing columns</b>${esc(missing.join(', '))}</div>`;
+      return;
+    }
+    S.cols = { WO, WOL, CUST, REC };
+
+    const recipes = {};
+    (recT.id || []).forEach((id, i) => {
+      recipes[id] = { id, name: (columnAsArray(recT, REC.name)[i] || '').toString(),
+        fiber: REC.fiber ? (columnAsArray(recT, REC.fiber)[i] || '').toString() : '',
+        sku: REC.sku ? (columnAsArray(recT, REC.sku)[i] || '').toString() : '' };
+    });
+    const customers = {};
+    (custT.id || []).forEach((id, i) => {
+      const g = (c) => c ? (columnAsArray(custT, c)[i] || '').toString().trim() : '';
+      customers[id] = { id, name: g(CUST.name), code: g(CUST.code),
+        email: g(CUST.email), emailBill: g(CUST.emailBill), phone: g(CUST.phone),
+        currency: g(CUST.currency) || 'USD', taxId: g(CUST.taxId),
+        payTerms: g(CUST.payTerms), payMethod: g(CUST.payMethod),
+        shipName: g(CUST.shipName), shipCompany: g(CUST.shipCompany),
+        a1: g(CUST.a1), a2: g(CUST.a2), a3: g(CUST.a3),
+        city: g(CUST.city), state: g(CUST.state), zip: g(CUST.zip), country: g(CUST.country),
+        csz: g(CUST.csz), reqs: g(CUST.reqs), notes: g(CUST.notes) };
+    });
+
+    const linesByOrder = {};
+    (wolT.id || []).forEach((id, i) => {
+      const oid = getRefId(columnAsArray(wolT, WOL.order)[i]);
+      if (!oid) return;
+      const g = (c) => c ? columnAsArray(wolT, c)[i] : null;
+      const rid = WOL.recipe ? getRefId(g(WOL.recipe)) : null;
+      const rec = recipes[rid] || null;
+      /* Price is read but never defaulted. 0 and blank are both "no rate" —
+         order-builder treats them the same — and an invoice must tell those
+         apart from a genuine zero-cost line, which it cannot, so both block
+         printing until a human says otherwise. */
+      const rawPrice = WOL.price ? g(WOL.price) : null;
+      const price = (rawPrice === null || rawPrice === undefined || rawPrice === '')
+        ? null : Number(rawPrice);
+      (linesByOrder[oid] = linesByOrder[oid] || []).push({
+        id, qty: Number(g(WOL.qty)) || 0, dyed: Number(g(WOL.dyed)) || 0,
+        recipeId: rid, recipe: rec,
+        name: (g(WOL.name) || '').toString().trim() || (rec ? rec.name : ''),
+        sku: (g(WOL.sku) || '').toString().trim() || (rec ? rec.sku : ''),
+        fiber: rec ? rec.fiber : '',
+        price: (price === null || !Number.isFinite(price)) ? null : price,
+        rush: /rush/i.test((g(WOL.priority) || '').toString()),
+        makeFresh: !!g(WOL.makeFresh),
+        notes: (g(WOL.notes) || '').toString().trim(),
+      });
+    });
+
+    S.orders = [];
+    (woT.id || []).forEach((id, i) => {
+      const g = (c) => c ? columnAsArray(woT, c)[i] : null;
+      const status = (g(WO.status) || '').toString();
+      if (/closed/i.test(status)) return;      // triage lives in Order Picker
+      const cid = WO.customer ? getRefId(g(WO.customer)) : null;
+      S.orders.push({
+        id, number: (g(WO.number) || '').toString(),
+        status, custName: (g(WO.custName) || '').toString(),
+        customerId: cid, customer: customers[cid] || null,
+        orderDate: g(WO.orderDate), dueDate: g(WO.dueDate),
+        notes: (g(WO.notes) || '').toString(),
+        po: (g(WO.po) || '').toString(), channel: (g(WO.channel) || '').toString(),
+        orderType: (g(WO.orderType) || '').toString(),
+        payStatus: (g(WO.payStatus) || '').toString(),
+        terms: (g(WO.terms) || '').toString(), method: (g(WO.method) || '').toString(),
+        shopifyId: (g(WO.shopifyId) || '').toString(),
+        tracking: (g(WO.tracking) || '').toString(), carrier: (g(WO.carrier) || '').toString(),
+        shipped: g(WO.shipped), fulfil: (g(WO.fulfil) || '').toString(),
+        shipCost: WO.shipCost ? (Number(g(WO.shipCost)) || 0) : 0,
+        invoiceDate: g(WO.invoiceDate),
+        lines: linesByOrder[id] || [],
+      });
+    });
+    S.orders.sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0)
+      || String(a.number).localeCompare(String(b.number), undefined, { numeric: true }));
+
+    render();
+  } catch (e) {
+    console.error('Shipping Station: load failed', e);
+    document.getElementById('list').innerHTML =
+      `<div class="prob"><b>Could not load</b>${esc(e && e.message ? e.message : String(e))}</div>`;
+  }
+}
+
+/* ── Terms, inherited ────────────────────────────────────────────────────
+   Blank on the order means "whatever this customer normally does" — it is
+   NOT resolved to a stored copy when the order is made, because that would
+   freeze today's terms onto every future order and let them drift from the
+   customer record. So the inheritance is resolved here, at read time, and
+   the screen says where the answer came from. See claude/invoicing.md. */
+function termsFor(o) {
+  const c = o.customer;
+  if (o.terms) return { value: o.terms, from: 'this order' };
+  if (c && c.payTerms) return { value: c.payTerms, from: `${c.name || 'the customer'}'s usual` };
+  return { value: '', from: '' };
+}
+function methodFor(o) {
+  const c = o.customer;
+  if (o.method) return { value: o.method, from: 'this order' };
+  if (c && c.payMethod) return { value: c.payMethod, from: `${c.name || 'the customer'}'s usual` };
+  return { value: '', from: '' };
+}
+function isPrepaid(o) { return /prepaid/i.test(termsFor(o).value); }
+function isForeign(o) {
+  const c = o.customer; if (!c) return false;
+  const k = normalize(c.country);
+  return !!k && !/^(US|USA|UNITED STATES.*)$/.test(k);
+}
+function addressLines(c) {
+  if (!c) return [];
+  const out = [c.shipName || c.name, c.shipCompany, c.a1, c.a2, c.a3];
+  out.push(c.csz || [c.city, c.state].filter(Boolean).join(', ') + (c.zip ? ' ' + c.zip : ''));
+  out.push(c.country);
+  return out.map(x => (x || '').toString().trim()).filter(Boolean);
+}
+
+/* ── What stops an invoice going out ─────────────────────────────────────
+   Checked before anything is printed, because an invoice that under-bills is
+   worse than one that had to be fixed first: it goes out, it gets paid, and
+   the shortfall is found months later by someone reconciling a statement.
+
+   Unpriced is NOT the same as free. A line gets its price only when it is
+   added, from Customer_Pricing — so lines added before a customer had rates
+   keep 0 for ever unless somebody presses the apply-pricing button in Order
+   Builder. Nothing distinguishes that from a genuinely free line, which is
+   exactly why this refuses rather than guessing. */
+function invoiceBlockers(o) {
+  const out = [];
+  if (!o.lines.length) out.push({ k: 'No lines', t: 'This order has nothing on it to invoice.' });
+  if (!o.customerId) {
+    out.push({ k: 'Customer not linked',
+      t: 'The order names a customer but is not linked to the Customers row, so there is no address, '
+       + 'no currency and no rates. Link it in Order Builder.' });
+  }
+  const unpriced = o.lines.filter(l => l.price === null || l.price === 0);
+  if (unpriced.length) {
+    out.push({ k: `${unpriced.length} line${unpriced.length === 1 ? '' : 's'} with no price`,
+      t: unpriced.map(l => l.name || l.sku || ('line ' + l.id)).join(', ')
+       + ' — a price of zero and a missing price look identical here, so neither is printed. '
+       + 'Set the rates in Order Builder (Apply pricing) and refresh.' });
+  }
+  if (!S.cols || !S.cols.WOL.price) {
+    out.push({ k: 'No price column',
+      t: 'Work_Order_Lines has no Unit_Price column, so there is nowhere for a rate to live.' });
+  }
+  const biz = SSSettings.text('Business_Name', '');
+  if (!biz) {
+    out.push({ k: 'No business name',
+      t: 'Add a Business_Name row to the Settings table — the invoice has no letterhead to fall back on.' });
+  }
+  return out;
+}
+
+/* Totals are DERIVED, never stored — the house rule, and the same arithmetic
+   Order Builder already does. Line totals round once; the subtotal sums the
+   rounded line totals so the printed column actually adds up. */
+function invoiceTotals(o) {
+  const lines = o.lines.map(l => {
+    const each = Number(l.price) || 0;
+    return { ...l, each, total: Math.round(l.qty * each * 100) / 100 };
+  });
+  const sub = Math.round(lines.reduce((n, l) => n + l.total, 0) * 100) / 100;
+  const ship = Math.round((Number(o.shipCost) || 0) * 100) / 100;
+  return { lines, sub, ship, grand: Math.round((sub + ship) * 100) / 100,
+           currency: (o.customer && o.customer.currency) || 'USD' };
+}
+
+/* ── Render ─────────────────────────────────────────────────────────────── */
+function onSearch(v) { S.search = v; renderList(); }
+
+function matches(o, q) {
+  if (!q) return true;
+  const hay = normalize([o.custName, o.number, o.po, o.shopifyId, o.tracking,
+    o.lines.map(l => l.sku + ' ' + l.name).join(' ')].join(' '));
+  return hay.includes(normalize(q));
+}
+
+function render() { renderList(); renderDetail(); }
+
+function renderList() {
+  const el = document.getElementById('list');
+  const list = S.orders.filter(o => matches(o, S.search));
+  if (!list.length) {
+    el.innerHTML = `<div class="empty">${S.orders.length
+      ? 'Nothing matches that.' : 'No open orders.<br>Closed ones live in Order Picker.'}</div>`;
+    return;
+  }
+  el.innerHTML = list.map(o => {
+    const n = o.lines.reduce((s, l) => s + l.qty, 0);
+    return `<div class="ocard ${o.id === S.sel ? 'on' : ''}" onclick="pick(${o.id})">
+      <div class="num">${esc(o.number)}</div>
+      <div class="who">${esc(o.custName || 'no customer')}</div>
+      <div class="meta">${n} spool${n === 1 ? '' : 's'} &middot; ${o.lines.length} line${o.lines.length === 1 ? '' : 's'}${
+        o.dueDate ? ' &middot; due ' + esc(dmy(o.dueDate)) : ''}</div>
+      <div style="margin-top:3px">${o.lines.some(l => l.rush) ? '<span class="badge rush">rush</span>' : ''}${
+        isPrepaid(o) ? '<span class="badge hold">hold until paid</span>' : ''}${
+        isForeign(o) ? '<span class="badge intl">international</span>' : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+function pick(id) {
+  S.sel = id;
+  render();
+  // Let a sibling Grist widget follow the selection, as Order Picker does.
+  try { grist.setCursorPos({ rowId: id }); } catch (e) { /* no linked widget */ }
+}
+
+function selected() { return S.orders.find(o => o.id === S.sel) || null; }
+
+function renderDetail() {
+  const el = document.getElementById('detail');
+  const o = selected();
+  if (!o) { el.innerHTML = '<div class="empty">Pick an order on the left.</div>'; return; }
+  const c = o.customer;
+  const t = termsFor(o), m = methodFor(o);
+  const blockers = invoiceBlockers(o);
+  const T = invoiceTotals(o);
+  const discounted = c && c.discountPct;   // populated by checkDiscounts()
+
+  const f = (k, v, cls) => `<div class="f"><div class="k">${esc(k)}</div>
+    <div class="v ${cls || ''}">${v === '' || v == null ? '<span class="muted">—</span>' : esc(v)}</div></div>`;
+
+  el.innerHTML = `
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div class="f"><div class="k">order</div>
+            <div class="v big">${esc(o.number)} &middot; ${esc(o.custName || 'no customer')}</div></div>
+          <div style="margin-top:5px">
+            ${o.lines.some(l => l.rush) ? '<span class="badge rush">rush</span>' : ''}
+            ${isPrepaid(o) ? '<span class="badge hold">hold until paid</span>' : ''}
+            ${isForeign(o) ? '<span class="badge intl">international</span>' : ''}
+            ${o.status ? `<span class="badge ok">${esc(o.status)}</span>` : ''}
+            ${o.payStatus ? `<span class="badge warn">${esc(o.payStatus)}</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn go" ${blockers.length ? 'disabled' : ''} onclick="printInvoice()"
+            title="${blockers.length ? 'Fix what is listed below first' : 'Print the vendor invoice'}">
+            &#128438; Print invoice</button>
+        </div>
+      </div>
+    </div>
+
+    ${isPrepaid(o) ? `<div class="prob"><b>Hold until paid</b>
+      Terms are prepaid${t.from ? ' (' + esc(t.from) + ')' : ''}. This parcel does not go until the money is in.</div>` : ''}
+
+    ${isForeign(o) ? `<div class="info"><b>International &mdash; customs paperwork is a separate document</b>
+      The commercial invoice for the customs pouch comes from <strong>Split Shipment Invoice</strong>, not from here.
+      The invoice this screen prints is the one the customer pays from, and carries no declared value.</div>` : ''}
+
+    ${blockers.length ? `<div class="prob"><b>Not ready to invoice</b>
+      ${blockers.map(b => `<div style="margin-top:4px"><strong>${esc(b.k)}.</strong> ${esc(b.t)}</div>`).join('')}
+    </div>` : ''}
+
+    ${discounted ? `<div class="info"><b>${esc(c.name)} has a discount set (${esc(String(c.discountPct))}%)</b>
+      Nothing in the stack applies it &mdash; not Order Builder, not Cost Desk &mdash; so this invoice does not
+      either, and the total below matches what Order Builder shows. Say if it should.</div>` : ''}
+
+    <div class="panel"><h2>Order</h2><div class="grid">
+      ${f('Ordered', dmy(o.orderDate))}
+      ${f('Due', dmy(o.dueDate))}
+      ${f('PO number', o.po)}
+      ${f('Channel', o.channel)}
+      ${f('Type', o.orderType)}
+      ${f('Terms', t.value ? t.value + (t.from ? ' — ' + t.from : '') : '')}
+      ${f('Pay by', m.value ? m.value + (m.from ? ' — ' + m.from : '') : '')}
+      ${f('Shopify order', o.shopifyId)}
+    </div>
+    ${o.notes ? `<div class="note" style="margin-top:9px"><strong>Order note:</strong>\n${esc(o.notes)}</div>` : ''}
+    </div>
+
+    <div class="panel"><h2>Ship to</h2>
+      ${c ? `<div style="white-space:pre-line">${esc(addressLines(c).join('\n'))}</div>
+      <div class="grid" style="margin-top:9px">
+        ${f('Email', c.emailBill || c.email)}
+        ${f('Phone', c.phone)}
+        ${f('Currency', c.currency)}
+        ${f('Tax ID', c.taxId)}
+      </div>
+      ${c.reqs ? `<div class="note" style="margin-top:9px"><strong>Special requirements:</strong>\n${esc(c.reqs)}</div>` : ''}
+      ${c.notes ? `<div class="note" style="margin-top:9px"><strong>Customer note:</strong>\n${esc(c.notes)}</div>` : ''}`
+      : '<div class="muted">This order is not linked to a Customers row, so there is no address.</div>'}
+    </div>
+
+    <div class="panel"><h2>Lines</h2>
+      <table class="lines">
+        <tr><th>Colourway</th><th>SKU</th><th class="n">Ordered</th><th class="n">Dyed</th>
+            <th class="n">Each</th><th class="n">Total</th></tr>
+        ${T.lines.map(l => `<tr class="${l.price === null || l.price === 0 ? 'bad' : ''}">
+          <td>${esc(l.name || 'unnamed')}${l.fiber ? ` <span class="muted">${esc(l.fiber)}</span>` : ''}
+            ${l.rush ? '<span class="badge rush">rush</span>' : ''}
+            ${l.makeFresh ? '<span class="badge warn">make fresh</span>' : ''}
+            ${l.notes ? `<div class="lnote">${esc(l.notes)}</div>` : ''}</td>
+          <td class="sku">${esc(l.sku)}</td>
+          <td class="n">${l.qty}</td>
+          <td class="n ${l.dyed < l.qty ? 'muted' : ''}">${l.dyed}</td>
+          <td class="n">${l.price === null || l.price === 0
+            ? '<span style="color:var(--accent);font-weight:700">no rate</span>'
+            : esc(money(l.each, T.currency))}</td>
+          <td class="n">${l.price === null || l.price === 0 ? '—' : esc(money(l.total, T.currency))}</td>
+        </tr>`).join('')}
+      </table>
+      <div style="margin-top:9px;text-align:right">
+        <div>Goods <strong>${esc(money(T.sub, T.currency))}</strong></div>
+        ${T.ship ? `<div>Shipping <strong>${esc(money(T.ship, T.currency))}</strong></div>` : ''}
+        <div style="font-size:15px;margin-top:3px">Total <strong>${esc(money(T.grand, T.currency))}</strong></div>
+      </div>
+    </div>`;
+}
+
+/* ── The printed invoice ─────────────────────────────────────────────────
+   Built into a hidden node and printed by the browser. Everything is drawn,
+   because the paper is plain.
+
+   What goes on it is decided by claude/invoicing.md: this is the A/R invoice,
+   so it HAS an amount-due block and pay instructions, and it never states a
+   value below the real transaction price nor marks an unpaid invoice paid.
+   The commercial invoice is the other document and is produced elsewhere.
+
+   The order number is the invoice number. It is unique, it is stable across
+   reprints — a locally generated counter would hand the same order two
+   different numbers on two prints, which is exactly the thing a customer's
+   accounts department cannot reconcile — and it is already the key every
+   other part of the stack matches on, including the Nextcloud filename the
+   emailed version will use. */
+function invoiceHtml(o) {
+  const T = invoiceTotals(o);
+  const c = o.customer;
+  const t = termsFor(o), m = methodFor(o);
+  const cur = T.currency;
+  const S_ = (k, d) => SSSettings.text(k, d === undefined ? '' : d);
+
+  const bizRest = [S_('Business_Address'), S_('Business_Phone'),
+    S_('Business_Email'), S_('Business_Website')].filter(Boolean).join('\n');
+
+  /* The pay block follows the METHOD, because each route needs different
+     information and printing all three invites payment down the wrong one. */
+  const method = (m.value || '').toLowerCase();
+  let payCap = 'How to pay', payBody = '';
+  if (/wise/.test(method)) {
+    payCap = 'Pay by Wise';
+    payBody = S_('Pay_Wise_Details', 'Wise details are not set up yet — ask before paying.');
+  } else if (/check|cheque/.test(method)) {
+    payCap = 'Pay by check';
+    payBody = 'Make the check payable to ' + (S_('Business_Name') || 'us') + ' and mail it to:\n'
+      + (S_('Pay_Check_Remit_To') || S_('Business_Address') || '');
+  } else if (/shopify/.test(method)) {
+    payCap = 'Pay by Shopify invoice';
+    payBody = o.shopifyId
+      ? 'Use the payment link on Shopify order ' + o.shopifyId + '. If you no longer have it, ask and we will resend it.'
+      : 'A payment link will be sent separately.';
+  } else {
+    payBody = S_('Pay_Wise_Details') || S_('Pay_Check_Remit_To') || '';
+  }
+
+  const row = (k, v) => `<tr><td class="k">${esc(k)}</td><td>${esc(v)}</td></tr>`;
+
+  return `
+  <div class="ihead">
+    <div>
+      <div class="biz-name">${esc(S_('Business_Name', 'Business name not set'))}</div>
+      ${bizRest ? `<div class="biz-rest">${esc(bizRest)}</div>` : ''}
+    </div>
+    <div class="ititle">
+      <div class="w">INVOICE</div>
+      <table>
+        ${row('Invoice no.', o.number)}
+        ${row('Date', dmy(o.invoiceDate) || todayLabel())}
+        ${o.po ? row('Your PO', o.po) : ''}
+        ${c && c.code ? row('Account', c.code) : ''}
+      </table>
+    </div>
+  </div>
+
+  ${/* Customers holds ONE address, the ship-to. Printing it twice under two
+        different captions would imply a separate billing address exists and
+        was checked, which it was not — so when there is only one, it is
+        labelled as the one thing it is. The split stays available for the day
+        a billing address is added. */ ''}
+  <div class="parties">
+    <div class="party">
+      <div class="cap">Bill to &amp; ship to</div>
+      <div class="body">${esc(addressLines(c).join('\n'))}${
+        c && (c.emailBill || c.email) ? '\n' + esc(c.emailBill || c.email) : ''}${
+        c && c.taxId ? '\nTax ID: ' + esc(c.taxId) : ''}</div>
+    </div>
+    <div class="party"></div>
+  </div>
+
+  <div class="terms">
+    <div class="f"><div class="k">Terms</div><div class="v">${esc(t.value || 'Due on receipt')}</div></div>
+    <div class="f"><div class="k">Pay by</div><div class="v">${esc(m.value || '—')}</div></div>
+    <div class="f"><div class="k">Currency</div><div class="v">${esc(cur)}</div></div>
+    <div class="f"><div class="k">Ordered</div><div class="v">${esc(dmy(o.orderDate) || '—')}</div></div>
+  </div>
+
+  <table class="items">
+    <tr><th>Description</th><th>SKU</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr>
+    ${T.lines.map(l => `<tr>
+      <td>${esc(l.name || 'Hand-dyed thread')}${l.fiber ? `<div class="sku">${esc(l.fiber)}</div>` : ''}</td>
+      <td class="sku">${esc(l.sku)}</td>
+      <td class="n">${l.qty}</td>
+      <td class="n">${esc(money(l.each, cur))}</td>
+      <td class="n">${esc(money(l.total, cur))}</td>
+    </tr>`).join('')}
+  </table>
+
+  <div class="tot"><table>
+    <tr><td class="k">Goods</td><td>${esc(money(T.sub, cur))}</td></tr>
+    ${T.ship ? `<tr><td class="k">Shipping</td><td>${esc(money(T.ship, cur))}</td></tr>` : ''}
+    <tr class="grand"><td class="k">Amount due</td><td>${esc(money(T.grand, cur))}</td></tr>
+  </table></div>
+
+  ${isPrepaid(o) ? '<div class="hold">PREPAID &mdash; this order ships once payment has cleared</div>' : ''}
+
+  ${payBody ? `<div class="pay"><div class="cap">${esc(payCap)}</div>
+    <div class="body">${esc(payBody)}</div></div>` : ''}
+
+  ${/* Work_Orders.Notes deliberately does NOT go on the invoice. It is the
+        internal note Order Picker lets anyone edit inline — "ship complete,
+        do not split", "chase them about the last one", "Rachel to check the
+        dye lot". That is a shop note, and the customer is the one reader it
+        was never written for. It is on the screen instead, where the packer
+        reads it. Invoice_Footer is the customer-facing standing line. */ ''}
+  ${S_('Invoice_Footer') ? `<div class="ifoot">${esc(S_('Invoice_Footer'))}</div>` : ''}`;
+}
+
+async function printInvoice() {
+  const o = selected();
+  if (!o) return;
+  const blockers = invoiceBlockers(o);
+  if (blockers.length) { showToast('Not ready — ' + blockers[0].k.toLowerCase()); return; }
+
+  document.getElementById('sheet').innerHTML = invoiceHtml(o);
+
+  /* Stamp the invoice date once, on the first print, so a reprint shows the
+     date the customer was actually billed rather than today. Terms run from
+     that date, so letting it move would quietly move the due date too.
+     Best-effort: a failure here must not stop the paper coming out. */
+  if (!o.invoiceDate && S.cols && S.cols.WO.invoiceDate) {
+    try {
+      const secs = Math.floor(Date.now() / 1000);
+      await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', o.id,
+        { [S.cols.WO.invoiceDate]: secs }]]);
+      o.invoiceDate = secs;
+      document.getElementById('sheet').innerHTML = invoiceHtml(o);
+    } catch (e) { console.warn('Could not stamp Invoice_Date:', e); }
+  }
+  window.print();
+}
+
+/* ── Discounts ───────────────────────────────────────────────────────────
+   Customer_Pricing.Discount_Pct is stored, editable in Customer Card, and
+   applied by NOTHING — not Order Builder's totals, not Cost Desk. So this
+   invoice does not apply it either, and agrees with what Order Builder
+   showed. But silence would be the wrong answer if a discount really is set,
+   so the ones that exist are found and said out loud. Optional table:
+   a doc without it simply has no discounts. */
+async function checkDiscounts() {
+  let t;
+  try { t = await grist.docApi.fetchTable('Customer_Pricing'); } catch (e) { return; }
+  const cust = findColumn(t, ['Customer', 'Customer_ID', 'Client']);
+  const disc = findColumn(t, ['Discount_Pct', 'Discount', 'Discount_Percent']);
+  if (!cust || !disc) return;
+  const by = {};
+  (t.id || []).forEach((id, i) => {
+    const cid = getRefId(columnAsArray(t, cust)[i]);
+    const d = Number(columnAsArray(t, disc)[i]) || 0;
+    if (cid && d > 0) by[cid] = Math.max(by[cid] || 0, d);
+  });
+  let any = false;
+  S.orders.forEach(o => {
+    if (o.customer && by[o.customer.id]) { o.customer.discountPct = by[o.customer.id]; any = true; }
+  });
+  if (any) renderDetail();
+}
+
+/* Static shell is up; only now talk to Grist. */
+try {
+  grist.ready({ requiredAccess: 'full' });
+  grist.onRecords(() => {});
+  loadAll().then(checkDiscounts);
+} catch (e) {
+  document.getElementById('list').innerHTML =
+    `<div class="prob"><b>Grist plugin API unavailable</b>${esc(e && e.message ? e.message : String(e))}</div>`;
+}
+</script>
+</body></html>
