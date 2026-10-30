@@ -615,10 +615,16 @@ function retailSku(sku) {
   return other ? other + tail : s;
 }
 
-function handleFor(name, sku) {
-  const base = `${name || ''} ${sku || ''}`.toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return base || 'listing';
+/* From the TITLE, the way Shopify makes a handle itself: "FF Nylon -
+   Butterscotch" becomes ff-nylon-butterscotch. Each fibre is its own retail
+   product with the fibre leading the title, so the title is already unique per
+   fibre and the handle matches what the existing listings have. The SKU is
+   only a fallback for a title that slugs to nothing. */
+function handleFor(title, sku) {
+  const slug = (s) => String(s || '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug(title) || slug(sku) || 'listing';
 }
 
 /* RFC 4180: double the quotes, wrap anything containing a comma, quote or
@@ -720,7 +726,7 @@ function listingRow(g) {
   const v = {};
   SHOPIFY_COLS.forEach(c => { v[c] = ''; });
   v['Title'] = title;
-  v['URL handle'] = handleFor(g.recipe.name, sku);
+  v['URL handle'] = handleFor(title, sku);
   v['Vendor'] = SSSettings.text('Business_Name', '');
   v['Description'] = T('Description');
   v['Product category'] = T('Product_Category');
@@ -735,9 +741,13 @@ function listingRow(g) {
   if (tpl.Dimension_Unit) v['Packed product dimension unit'] = tpl.Dimension_Unit;
   /* Draft, never Active. A listing imported straight to Active goes on sale
      the moment the file lands — with no description and whatever photo did or
-     did not come across. Publishing is the one step that should stay a
-     decision. */
-  v['Published on online store'] = 'FALSE';
+     did not come across. Setting it Active is the one step that should stay a
+     decision.
+     Published on the online store, though: on a draft that changes nothing
+     until it is activated, and then it shows up without a second trip to
+     the channel settings. The CSV can only speak for the online store — other
+     sales channels (Shopify Catalog and the like) are ticked in the admin. */
+  v['Published on online store'] = 'TRUE';
   v['Status'] = 'draft';
   v['SKU'] = sku;
   v['Option1 name'] = 'Title';
