@@ -367,6 +367,18 @@ function binSort(a, b) {
 }
 // Lots write 'FFN'; Storage_Locations writes 'FF Nylon'. Same fibre, so a
 // mismatch check has to compare the meaning, not the spelling.
+/* Kept byte-identical with quick-log.html, wind-routing.html, label-batch.html
+   (there named allocBucketLB) and order-picker.html. Order matters: "Wound -
+   Needs Labels" contains "Wound", so the needs-labels test has to run before
+   the catch-all. Copy it verbatim rather than rewriting; the point is that the
+   copies agree. */
+function allocBucket(status) {
+  const s = (status == null ? '' : status).toString();
+  if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+  if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+  return 'boxed';
+}
+
 function fiberKey(s) {
   const v = normalize(s).replace(/[^A-Z]/g, '');
   if (!v) return '';
@@ -675,6 +687,25 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC, orderT
     const status = (columnAsArray(allocT, ALLOC.status)[i] || '').toString();
     const gone = /packed|shipped|sent|delivered/i.test(status);
     if (gone) { packedByLot[lotId] = (packedByLot[lotId] || 0) + qty; return; }
+    /* Spools that have not been wound yet have not been carried anywhere, so
+       they cannot be in a customer's box. This screen had no pending test at
+       all: anything not matching `gone` fell through to the order-box branch,
+       and orderBinByLine() hands back a code for EVERY line of every order
+       with a customer code and an order number, regardless of status. So a
+       "To Wind" allocation was reported as sitting in O-SMITH-1042 and
+       subtracted from its lot's own bin by
+       inBin = made + hank - broken - packed - inOrderBins.
+
+       The auditor walked to the box, found nothing, and the lot's bin read
+       over count — often landing it in problems.negative as well. Exactly
+       backwards for a screen whose job is to be believed. */
+    if (allocBucket(status) === 'pending') {
+      reservedByLot[lotId] = (reservedByLot[lotId] || 0) + qty;
+      const w0 = columnAsArray(allocT, ALLOC.customer)[i];
+      const n0 = (typeof w0 === 'string' ? w0 : '').trim();
+      if (n0) (reservedWho[lotId] = reservedWho[lotId] || new Set()).add(n0);
+      return;
+    }
     const who = columnAsArray(allocT, ALLOC.customer)[i];
     const name = (typeof who === 'string' ? who : '').trim();
     // A stored Order_Bin wins, so a hand correction sticks; otherwise derive it.
