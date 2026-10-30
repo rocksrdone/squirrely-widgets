@@ -283,6 +283,12 @@ function todayEpochSeconds() {
    the day this ships no allocation carries it yet — sniffing would find only
    the old values and keep collapsing the two steps back into one. */
 const BIN_STATUS = 'Wound - Needs Labels';
+/* The Worker_Tasks.Type a flagged count is raised under. Must match the key
+   in jobs.html's TYPES list exactly — an unrecognised type falls into the
+   first group there, so a typo would file these under "Put away" and they
+   would be read as work to do rather than something to look into. */
+const COUNT_CHECK_TYPE = 'Check count';
+
 const PACKED_CANDIDATES = ['Packed', 'Packaged - Shipped', 'Wound'];
 /* Kept byte-identical with order-overview.html, quick-log.html and
    label-batch.html. Order matters: "Wound - Needs Labels" contains "Wound",
@@ -303,6 +309,9 @@ let S = { view: 'wind', lines: [], bins: [], selected: null, draw: {}, woundStat
 async function loadEverything() {
   await SSSettings.load();
   BIN_CAPACITY = SSSettings.num('Back_Stock_Bin_Capacity', 150);
+  // Resolved once per load. Null means the doc has no Worker_Tasks table, in
+  // which case a flagged count says so rather than failing silently.
+  S.taskCols = await StockOps.loadTaskCols(grist.docApi);
   document.getElementById('content').innerHTML = `<div class="empty-state">Loading...</div>`;
   try {
     const [lotsT, recipesT, allocT, wolT, woT, custT] = await Promise.all([
@@ -1284,11 +1293,33 @@ function render() {
   // Two different events, so two different looks. Both used to be a grey strip
   // with a tick, which made "wound into the bin" and "boxed and gone" read the
   // same at a glance.
+  /* The count check. Surplus going to back stock is the one number nobody
+     verifies before it becomes stock, and a wrong figure here is the drift
+     every audit afterwards has to chase. So it is checked where it is cheapest
+     — by the person holding the spools, the moment they bag them.
+
+     Two taps, no typing, and the wind is already saved either way: this is a
+     check on the count, not a gate on the work. "Not right" asks for a note
+     and raises a job for command, because the winder does not fix it. */
+  const checkHtml = (d, i) => {
+    const c = d.stockCheck;
+    if (!c || c.answered) return '';
+    return `<div class="done-line check">
+      <span>&#9878;&#65039; Back stock bag of <strong>${esc(c.recipeName)}</strong> should hold
+        <strong>${c.expected}</strong> — count it.</span>
+      <span>
+        <button class="glove sort" onclick="countRight(${i})">&#10003; that's right</button>
+        <button class="glove" onclick="countWrong(${i})"
+          style="background:#FBF2F0;color:#8B3A2A;border:2px solid #8B3A2A">&#9888; not right</button>
+      </span>
+    </div>`;
+  };
+
   const doneHtml = S.done.map((d, i) => `
     <div class="done-line wound">
       <span>&#129525; <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} wound into the bin</span>
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
-    </div>`).join('');
+    </div>${checkHtml(d, i)}`).join('');
 
   const boxedHtml = S.boxed.map((d, i) => `
     <div class="done-line boxed">
@@ -1737,6 +1768,17 @@ async function confirmWind() {
       customerName: p.line.customerName, allocIds: newIds,
       stockUndo, stockAdded: p.stock,
       brokenRows,
+      /* Only when something is actually going to back stock. A wind that
+         exactly covers an order leaves no bag to count, and asking anyway
+         teaches people to tap past the question. */
+      stockCheck: p.stock > 0 ? {
+        expected: p.stock, answered: false,
+        recipeName: p.line.recipeName || '',
+        lotId: anchor ? anchor.lotId : null,
+        recipeId: p.line.recipeId || null,
+        fiber: (anchor && anchor.fiberName) || p.line.fiberName || '',
+        bin: (S.stockBinPick && S.stockBinPick.code) || '',
+      } : null,
       summary: `${p.toOrder} spool${p.toOrder === 1 ? '' : 's'} ${esc(p.line.recipeName)}`
         + (p.draws.length > 1 ? ` (${p.draws.length} lots)` : '')
         + (fromStock ? ` · ${fromStock} from stock` : '')
@@ -1755,6 +1797,58 @@ async function confirmWind() {
     S.committing = false;
     const b = document.getElementById('confirmBtn');
     if (b) { b.disabled = false; b.textContent = '✓ Wind & bag'; }
+  }
+}
+
+/* ── The back stock count check ───────────────────────────────────────────
+   "That's right" records nothing. Agreement is the expected case and writing
+   a row for every one would bury the disagreements, which are the only ones
+   anybody needs to read. */
+function countRight(i) {
+  const d = S.done[i];
+  if (!d || !d.stockCheck) return;
+  d.stockCheck.answered = true;
+  render();
+  showToast('Counted ✓');
+}
+
+/* "Not right" raises a job and stops there. The winder is not asked for the
+   real number and not asked to correct anything: they have spools in their
+   hands and no way to see what Grist thinks. They say what they see, in their
+   own words, and command sorts it out with the whole picture in front of
+   them. The note is free text on purpose — it is almost always a count, but
+   the one time it is something else, nobody has to make it fit a dropdown. */
+async function countWrong(i) {
+  const d = S.done[i];
+  if (!d || !d.stockCheck || d.stockCheck.answered) return;
+  const c = d.stockCheck;
+  const note = window.prompt(
+    `Back stock bag of ${c.recipeName} — what's wrong?\n\n`
+    + `Grist expects ${c.expected} spool${c.expected === 1 ? '' : 's'}.\n`
+    + `Say what you actually found. A number on its own is fine.`, '');
+  if (note === null) return;                       // cancelled, still unanswered
+
+  const T = S.taskCols;
+  if (!T) { showToast('No Worker_Tasks table — tell control directly'); return; }
+  const f = {};
+  f[T.type] = COUNT_CHECK_TYPE;
+  f[T.instruction] = `Back stock count disputed: ${c.recipeName}${c.fiber ? ' (' + c.fiber + ')' : ''}`
+    + ` — Grist expects ${c.expected}`;
+  f[T.status] = 'Problem';                         // never silently "to do"
+  if (T.created) f[T.created] = Math.floor(Date.now() / 1000);
+  if (T.qty) f[T.qty] = c.expected;                // what it should have been
+  if (T.note) f[T.note] = note.trim() || 'No note given';
+  if (T.lot && c.lotId) f[T.lot] = c.lotId;
+  if (T.recipe && c.recipeId) f[T.recipe] = c.recipeId;
+  if (T.bin && c.bin) f[T.bin] = c.bin;
+  try {
+    await grist.docApi.applyUserActions([['AddRecord', 'Worker_Tasks', null, f]]);
+    c.answered = true;
+    render();
+    showToast('Flagged for control ✓');
+  } catch (e) {
+    console.error('Could not raise the count check:', e);
+    showToast('Could not flag it — tell control directly');
   }
 }
 

@@ -31,6 +31,9 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
 .job.put { border-left-color: var(--teal); }
 .job.retail { border-left-color: var(--gold); }
 .job.vendor { border-left-color: var(--purple); }
+/* Accent, not teal: a disputed count is something to look into, not a job to
+   work through. It should not read like the put-away list. */
+.job.check { border-left-color: var(--accent); }
 .job.problem { border-color: var(--accent); background: var(--accent-light); }
 .job .what { flex: 1 1 260px; min-width: 0; }
 .job .what b { font-size: 15px; }
@@ -77,8 +80,13 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
    of whoever corrects the counts until it is marked resolved. */
 const { esc, num } = StockOps;
 const S = { jobs: [], T: null, open: null, busy: false, bins: {}, binsWhy: '' };
+/* An unrecognised Type falls into TYPES[0], so anything raised under a key
+   that is not listed here is quietly filed as "Put away" and read as work to
+   do. Keep these keys in step with whatever raises them — 'Check count' is
+   written by wind-routing.html's COUNT_CHECK_TYPE. */
 const TYPES = [
   { key: 'Put away', cls: 'put', title: 'Put away' },
+  { key: 'Check count', cls: 'check', title: 'Counts to look into' },
   { key: 'Retail store', cls: 'retail', title: 'Retail store' },
   { key: 'Vendor store', cls: 'vendor', title: 'Vendor store — set quantities' },
 ];
