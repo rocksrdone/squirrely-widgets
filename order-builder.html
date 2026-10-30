@@ -2000,8 +2000,21 @@ function nextLotNumber() {
    deleted, because deleting it would throw away the only record that spools
    were wound. */
 function orphanPlan() {
-  const sourced = S.orphanAllocs.filter(a => a.source && S.stockCols[a.source] && a.lotId);
-  const other = S.orphanAllocs.filter(a => !(a.source && S.stockCols[a.source] && a.lotId));
+  /* releasable() is the one place that decides whether an allocation's spools
+     can be credited back, and it is the ONLY thing here that tests Status.
+     This used to re-check source and lot by hand and skip the status test
+     entirely — so a Packed or shipped allocation whose order line had been
+     deleted was offered as recoverable stock. Clicking "Give back" then
+     destroyed the only record those spools ever shipped AND credited the lot
+     for thread that left the building months ago. Most allocations in this doc
+     are Packed and carry a source, so that was the common case, reached from
+     the loudest one-click button in the app.
+
+     Anything excluded is not lost: it falls into `other` and the banner says
+     so. A shipped orphan is a records problem for command, not stock. */
+  const canCredit = a => releasable(a) && a.lotId;
+  const sourced = S.orphanAllocs.filter(canCredit);
+  const other = S.orphanAllocs.filter(a => !canCredit(a));
   const backTo = {};
   const acts = [];
   sourced.forEach(a => {
@@ -2716,7 +2729,9 @@ function renderBanners() {
         : `${plan.other.length} reservation(s) point at a deleted order line.`}</strong>
       ${n ? `They came off their lot when they were reserved and were never put back, so they are
              missing from every order until they are given back.` : ''}
-      ${plan.other.length && n ? `${plan.other.length} more carry no stock source and are left alone.` : ''}
+      ${plan.other.length ? `${plan.other.length}${n ? ' more' : ''} ${plan.other.length === 1 ? 'is' : 'are'}
+            already shipped, or carry no stock source &mdash; left alone, because crediting those would
+            invent spools. Those are a records problem for command, not stock.` : ''}
       ${n ? `<div style="margin-top:7px"><button class="btn small" ${S.stockBusy ? 'disabled' : ''}
              onclick="fixOrphans()">Give back ${n} spool(s)</button></div>` : ''}</div>`);
   }
