@@ -731,7 +731,12 @@ async function loadStock() {
         const v = columnAsArray(allocT, ALLOC.status)[i];
         if (v) seen.add(String(v));
       });
-      S.reserveStatus = ['Wound - Needs Labels', 'Wound', 'Packed', 'Packaged - Shipped']
+      /* Spellings of the WOUND stage only. A reserve is wound spools in a bin
+         that nobody has labelled or boxed, so a boxed status is never the right
+         answer — and leaving 'Packed' in the list meant a document where it is
+         the only status present would pick it, born unreleasable. Same list as
+         batch-assignment.html's woundStatus; keep them together. */
+      S.reserveStatus = ['Wound - Needs Labels', 'Wound']
         .find(v => seen.has(v)) || RESERVE_STATUS_FALLBACK;
     }
 

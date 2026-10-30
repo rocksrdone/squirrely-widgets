@@ -692,10 +692,27 @@ async function loadForRecipe(record) {
       const aSource = findColumn(allocT, ['Stock_Source', 'Stock_Bucket', 'Reserved_From']);
       S_COLS = { ALLOC: { lot: aLot, qty: aQty, status: aStatus, customer: aCustomer,
                           line: aLine, source: aSource } };
-      // Pick the "boxed" status the doc already uses, else the live default.
+      /* The status a pull FROM STOCK is born with. These spools are wound and
+         sitting in a bin; nobody has labelled or boxed them, so the only
+         correct answer is "Wound - Needs Labels". The list exists solely so a
+         document that spells it differently still works — it is a spelling
+         preference, not a choice of stage.
+
+         This used to lead with 'Packed' under a comment calling it "the boxed
+         status", and since .find() picks the first spelling already present
+         and nearly every allocation in this doc is Packed, every stock pull
+         was born boxed: Order Picker counted it shippable, releasable()
+         matched /pack/i so Order Builder would neither release it nor allow
+         the line to be deleted, and no screen could reach it. Kept in the same
+         order as order-builder.html's reserveStatus, which never had the bug.
+
+         The boxed spellings are not in the list at all. Merely reordering them
+         left the hole open for a document where 'Packed' is the only status
+         present — it would still be the first match. A status that means boxed
+         can never be the right answer here, so it is not a candidate. */
       const seen = new Set();
       if (aStatus) (allocT.id || []).forEach((id, i) => { const v = columnAsArray(allocT, aStatus)[i]; if (v) seen.add(v.toString()); });
-      S.woundStatus = ['Packed', 'Wound - Needs Labels', 'Wound', 'Packaged - Shipped'].find(v => seen.has(v)) || 'Wound - Needs Labels';
+      S.woundStatus = ['Wound - Needs Labels', 'Wound'].find(v => seen.has(v)) || 'Wound - Needs Labels';
       const allocByLot = {};
       (allocT.id || []).forEach((id, i) => {
         const q = Number(columnAsArray(allocT, aQty)[i]) || 0;
