@@ -1264,9 +1264,16 @@ async function logSpoolsInner(jobs, toBin, status, label) {
 /* Take `qty` spools off a line's existing allocations, largest first so the
    fewest rows get touched. Returns the actions plus what was consumed, so the
    caller can put them somewhere else. */
+/* Spools that have left the building are not available to move or return.
+   The pool only excluded `pending`, so a Packaged - Shipped allocation could
+   be consumed: its row deleted and its spools credited back to a shelf they
+   are no longer on, months after the customer received them. Packed stays
+   eligible — that is a box on the bench, not a parcel that has gone. */
+function hasShipped(status) { return /ship|sent|deliver/i.test(String(status || '')); }
+
 function consumeFromLine(line, qty) {
   const pool = line.allocs
-    .filter(a => a.qty > 0 && allocBucket(a.status) !== 'pending')
+    .filter(a => a.qty > 0 && allocBucket(a.status) !== 'pending' && !hasShipped(a.status))
     .sort((a, b) => b.qty - a.qty);
   const actions = [], inverse = [], taken = [];
   let need = qty;
@@ -1274,13 +1281,21 @@ function consumeFromLine(line, qty) {
     if (need <= 0) break;
     const take = Math.min(a.qty, need);
     need -= take;
-    taken.push({ lotId: a.lotId, qty: take, status: a.status, applied: a.applied });
+    // `source` rides along so a caller can credit the column these spools
+    // actually left, rather than assuming the held-back shelf.
+    const prov = provenanceOf(a.id);
+    taken.push({ lotId: a.lotId, qty: take, status: a.status, applied: a.applied,
+                 source: (prov[S.cols.ALLOC.source] || ''), prov });
     if (take === a.qty) {
       actions.push(['RemoveRecord', 'Lot_Allocations', a.id]);
       const { ALLOC } = S.cols;
       const f = {};
       f[ALLOC.lot] = a.lotId || 0; f[ALLOC.qty] = a.qty; f[ALLOC.status] = a.status; f[ALLOC.line] = line.id;
       if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = a.applied;
+      // Undo must restore the row as it was, provenance included. Without this
+      // a releasable Store reservation came back blank-sourced — unreleasable
+      // for good — and a bag sitting in O-CUST-1234 came back reading unsorted.
+      Object.assign(f, prov);
       inverse.push(['AddRecord', 'Lot_Allocations', a.id, f]);
     } else {
       actions.push(['UpdateRecord', 'Lot_Allocations', a.id, { [S.cols.ALLOC.qty]: a.qty - take }]);
@@ -1309,6 +1324,11 @@ async function doTransfer(lineId) {
     // Carry the flag across. A transfer moves spools, it doesn't un-stick
     // labels — clearing it here would deduct the same labels a second time.
     if (ALLOC.labelsApplied) f[ALLOC.labelsApplied] = t.applied;
+    /* The comment above says lot provenance survives the move; only the lot
+       did. Stock_Source and Order_Bin were dropped, so transferring a General
+       reservation made it unreleasable on the receiving order, and a bag
+       physically in O-CUST-1234 read as unsorted. */
+    Object.assign(f, t.prov || {});
     return ['AddRecord', 'Lot_Allocations', null, f];
   });
   try {
@@ -1337,17 +1357,44 @@ async function doToStock(lineId) {
   const withLot = c.taken.filter(t => t.lotId);
   if (!withLot.length) { showToast('Those allocations have no lot, so there is nowhere to return them'); return; }
 
-  // Roll up per lot so two allocations on one lot make a single update.
+  /* Put each spool back where it came from. This always credited 'general',
+     which adds to On_Hand and touches neither listing column — so returning a
+     Store reservation of 10 raised General by 10 and silently moved ten
+     retail-listed spools into held-back stock, losing the storefront count.
+     order-builder.html's releaseActions has always credited the column the
+     spools left; this is the same rule.
+
+     A blank source is wound production, which does belong on the held-back
+     shelf, so it maps to 'general'. An unrecognised value is read the same
+     way — the cautious reading, since it adds to On_Hand without claiming a
+     listing that may not exist.
+
+     Rolled up per lot AND source, so one lot returning spools from two
+     different piles still makes one update per pile rather than two that
+     overwrite each other. */
+  const SOURCE_COL = { general: 'general', store: 'store', vendor: 'vendor' };
   const byLot = {};
-  withLot.forEach(t => { byLot[t.lotId] = (byLot[t.lotId] || 0) + t.qty; });
+  withLot.forEach(t => {
+    const where = SOURCE_COL[String(t.source || '').toLowerCase()] || 'general';
+    const k = t.lotId + '\u0000' + where;
+    byLot[k] = byLot[k] || { lotId: t.lotId, where, qty: 0 };
+    byLot[k].qty += t.qty;
+  });
   const updates = [], invUpdates = [];
-  Object.entries(byLot).forEach(([lotId, add]) => {
+  // One mutable row copy per lot, so two credits to one lot accumulate rather
+  // than each computing an absolute from the same starting values.
+  const rows = {};
+  Object.values(byLot).forEach(({ lotId, where, qty: add }) => {
     const lot = S.lots.find(x => x.id === Number(lotId));
     if (!lot) return;
-    // Returned spools are wound and go back on the shelf, held back.
-    const m = stockMove(Object.assign({}, lot.row), S.stock2, 'general', add);
-    updates.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.fields]);
-    invUpdates.push(['UpdateRecord', 'Production_Lots', Number(lotId), m.inverse]);
+    if (!rows[lotId]) rows[lotId] = { before: Object.assign({}, lot.row), row: Object.assign({}, lot.row) };
+    stockMove(rows[lotId].row, S.stock2, where, add);
+  });
+  Object.entries(rows).forEach(([lotId, r]) => {
+    const d = stock2Diff(r.before, r.row, S.stock2);
+    if (!Object.keys(d.fields).length) return;
+    updates.push(['UpdateRecord', 'Production_Lots', Number(lotId), d.fields]);
+    invUpdates.push(['UpdateRecord', 'Production_Lots', Number(lotId), d.inverse]);
   });
   try {
     await grist.docApi.applyUserActions(c.actions.concat(updates));
