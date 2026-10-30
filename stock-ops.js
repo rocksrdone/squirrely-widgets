@@ -1365,11 +1365,27 @@
         ? [['hank', `${n} hank not there`], ['wound', `${n} wound not there`], ['hold', `They're there — just don't list them`]]
         : [['general', `List ${n} more of what's on the shelf`], ['hank', `Found ${n} more hank`], ['wound', `Found ${n} more wound`]];
       const box = document.createElement('div'); box.className = 'vs-fix';
+      /* The delta answers start DISABLED. They apply immediately and
+         non-idempotently, and everything that makes them safe to press —
+         the "already counted today" warning, the capacity filter that hides
+         answers Grist cannot carry out, and the idempotent "match the store"
+         escape — arrives from vendorFixContext() a moment later.
+
+         They used to be live from the instant the box appeared, under a
+         comment reading "Asked after the box is up, so the question is never
+         held behind a fetch". A click inside that window applied the delta
+         with no warning and no cap check, and vendorGristFix has no count
+         check of its own. That is the FFN_GEODE note with three identical
+         "-3 wound (not there)" lines on one day: not three decisions, three
+         clicks that each beat the check.
+
+         "Leave Grist as is" stays live throughout — it writes nothing. */
       box.innerHTML = `<div class="vs-fix-q">Grist expected ${esc(opts.target)}. Update Grist for the ${n} ${delta < 0 ? 'fewer' : 'more'}?</div>
-        <div class="vs-fix-b">${choices.map(([k, t]) => `<button class="vs-btn ghost" data-fix="${k}">${esc(t)}</button>`).join('')}
-        <button class="vs-btn ghost" data-fix="">Leave Grist as is</button></div><div class="vs-msg" id="vs-fixmsg"></div>`;
+        <div class="vs-fix-b">${choices.map(([k, t]) => `<button class="vs-btn ghost" data-fix="${k}" disabled>${esc(t)}</button>`).join('')}
+        <button class="vs-btn ghost" data-fix="">Leave Grist as is</button></div>
+        <div class="vs-msg" id="vs-fixchk" style="color:#8B7D72;font-size:11.5px;margin-top:6px">Checking today's counts…</div>
+        <div class="vs-msg" id="vs-fixmsg"></div>`;
       $('vs-body').appendChild(box);
-      // Asked after the box is up, so the question is never held behind a fetch.
       vendorFixContext(docApi).then(({ counts: already, cap }) => {
         if (!box.isConnected) return;
         /* Drop any answer Grist could not actually carry out. Hidden rather
@@ -1434,6 +1450,25 @@
           if (opts.onGrist) opts.onGrist(true);
         };
         row.insertBefore(b2, row.firstChild);
+      }).catch(e => {
+        /* Fail open, loudly. A dead box would leave no way to correct a
+           negative store count at all, which is worse than asking a person to
+           check. vendorFixContext reads the local Grist tables, so this is
+           rare — but silently enabling the buttons as if they had been checked
+           would put the compounding bug straight back. */
+        if (!box.isConnected) return;
+        console.error('vendorFixContext failed:', e);
+        const w = document.createElement('div');
+        w.className = 'vs-msg bad';
+        w.style.cssText = 'font-weight:600;margin:-2px 0 8px';
+        w.textContent = `Could not check whether ${sku} was already counted today — read the lot's Notes before answering, or this takes the same amount off twice.`;
+        box.insertBefore(w, box.querySelector('.vs-fix-b'));
+      }).finally(() => {
+        /* Runs whichever way the .then went, including its early returns. */
+        if (!box.isConnected) return;
+        const chk = box.querySelector('#vs-fixchk');
+        if (chk) chk.remove();
+        box.querySelectorAll('[data-fix]').forEach(b => { if (b.dataset.fix) b.disabled = false; });
       });
       box.querySelectorAll('[data-fix]').forEach(b => b.addEventListener('click', async () => {
         const kind = b.dataset.fix;
