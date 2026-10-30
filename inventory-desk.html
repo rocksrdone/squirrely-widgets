@@ -558,6 +558,37 @@ async function loadListingSources() {
     });
   } catch (e) { console.warn('Inventory Desk: Item_Weights unavailable', e); }
 
+  /* ── Product_Templates ────────────────────────────────────────────────
+     The boilerplate a listing needs that Grist has no other reason to know:
+     description, category, SEO, packed dimensions. Keyed by FIBRE, not by
+     colourway — one row covers every Butterscotch, Mermaid and Geode in that
+     fibre, and the colourway's own name arrives through a placeholder. A row
+     per product would be a row per product, which is just typing it in
+     Shopify with extra steps.
+
+     A row with a blank Fiber_Code is the fallback for anything unmatched, so
+     one row is a working setup and you specialise only where a fibre really
+     differs. */
+  S.tplByFiber = {}; S.tplDefault = null; S.hasProductTemplates = false;
+  try {
+    const t = await grist.docApi.fetchTable('Product_Templates');
+    const c = {};
+    ['Fiber_Code', 'Title_Pattern', 'Description', 'Product_Category', 'Type', 'Tags',
+     'SEO_Title', 'SEO_Description', 'Google_Category', 'Continue_Selling', 'Fulfillment_Service',
+     'Packed_Length', 'Packed_Width', 'Packed_Height', 'Dimension_Unit', 'Active']
+      .forEach(n => { c[n] = findColumn(t, [n]); });
+    if (c.Description || c.Product_Category || c.Tags) {
+      S.hasProductTemplates = true;
+      (t.id || []).forEach((id, i) => {
+        if (c.Active && !columnAsArray(t, c.Active)[i]) return;
+        const row = {};
+        Object.keys(c).forEach(n => { row[n] = c[n] ? columnAsArray(t, c[n])[i] : null; });
+        const f = fiberCode(row.Fiber_Code || '');
+        if (f) S.tplByFiber[f] = row; else if (!S.tplDefault) S.tplDefault = row;
+      });
+    }
+  } catch (e) { console.warn('Inventory Desk: Product_Templates unavailable', e); }
+
   try {
     const t = await grist.docApi.fetchTable('Cost_Settings');
     const k = findColumn(t, ['Key', 'Setting', 'Name']);
@@ -607,6 +638,11 @@ function listingGaps(g) {
   if (!(S.weightByFiber[f] > 0)) gaps.push(`no weight for ${f || 'this fibre'} in Item_Weights`);
   if (!S.photoByRecipe[g.recipeId]) gaps.push('no photo in Product_Photos');
   if (!S.prefixGroups.length) gaps.push('no SKU_Prefixes in Item_Weights, so the retail spelling is a guess');
+  if (!S.hasProductTemplates) {
+    gaps.push('no Product_Templates table — description, category and SEO will be blank');
+  } else if (!templateFor(g.recipe.fiber)) {
+    gaps.push(`no Product_Templates row for ${f || 'this fibre'} and no blank-fibre fallback row`);
+  }
   return gaps;
 }
 
@@ -634,20 +670,69 @@ function listingNoteHtml(g) {
   return `<div class="hint" style="border-left:3px solid var(--gold);padding-left:8px;margin-top:6px">${bits.join('')}</div>`;
 }
 
+/* Placeholders, so one template row serves every colourway. Unknown tokens
+   are left verbatim rather than blanked: {Colourway} with a capital is then
+   visible in the draft as a typo to fix, instead of silently becoming an
+   empty description nobody notices until a customer reads it. */
+function fillTemplate(text, vars) {
+  if (text == null) return '';
+  return String(text).replace(/\{(\w+)\}/g, (m, k) =>
+    Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m);
+}
+
+/* Field by field, not row by row. The blank-fibre row holds everything common
+   — category, dimensions, SEO shape — and a fibre row overrides only what
+   genuinely differs for that fibre. Whole-row precedence would have made a
+   fibre row that says nothing about category silently publish with none,
+   which is the sort of blank nobody notices until the listing is live. A
+   field counts as "said" only when it is non-empty, so clearing a cell falls
+   back rather than blanking. */
+function templateFor(fiber) {
+  // Null-safe: these are populated by loadListingSources, and anything that
+  // renders before it must degrade to "no template", not throw.
+  const own = (S.tplByFiber || {})[fiberCode(fiber)] || null;
+  const def = S.tplDefault || null;
+  if (!own) return def;
+  if (!def) return own;
+  const out = Object.assign({}, def);
+  Object.keys(own).forEach(k => {
+    const v = own[k];
+    if (v !== null && v !== undefined && String(v).trim() !== '') out[k] = v;
+  });
+  return out;
+}
+
 function listingRow(g) {
   const f = fiberCode(g.recipe.fiber);
   const photo = S.photoByRecipe[g.recipeId] || null;
   const price = S.retailPriceByFiber[f] || '';
   const oz = S.weightByFiber[f] || 0;
   const sku = retailSku(g.recipe.sku);
-  const title = `${g.recipe.name}${g.recipe.fiber ? ' — ' + g.recipe.fiber : ''}`;
+  const tpl = templateFor(g.recipe.fiber) || {};
+  const vars = {
+    colorway: g.recipe.name || '', colourway: g.recipe.name || '',
+    fiber: g.recipe.fiber || '', fibre: g.recipe.fiber || '',
+    fiber_code: f, sku, qty: g.retail,
+    vendor: SSSettings.text('Business_Name', ''),
+  };
+  const T = (k) => fillTemplate(tpl[k], vars).trim();
+  const title = T('Title_Pattern') || `${g.recipe.name}${g.recipe.fiber ? ' — ' + g.recipe.fiber : ''}`;
   const v = {};
   SHOPIFY_COLS.forEach(c => { v[c] = ''; });
   v['Title'] = title;
   v['URL handle'] = handleFor(g.recipe.name, sku);
   v['Vendor'] = SSSettings.text('Business_Name', '');
-  v['Type'] = g.recipe.fiber || 'Thread';
-  v['Tags'] = [g.recipe.fiber, 'Hand-dyed'].filter(Boolean).join(', ');
+  v['Description'] = T('Description');
+  v['Product category'] = T('Product_Category');
+  v['Type'] = T('Type') || g.recipe.fiber || 'Thread';
+  v['Tags'] = T('Tags') || [g.recipe.fiber, 'Hand-dyed'].filter(Boolean).join(', ');
+  v['SEO title'] = T('SEO_Title');
+  v['SEO description'] = T('SEO_Description');
+  v['Google Shopping / Google product category'] = T('Google_Category');
+  if (tpl.Packed_Length) v['Packed product length'] = tpl.Packed_Length;
+  if (tpl.Packed_Width) v['Packed product width'] = tpl.Packed_Width;
+  if (tpl.Packed_Height) v['Packed product height'] = tpl.Packed_Height;
+  if (tpl.Dimension_Unit) v['Packed product dimension unit'] = tpl.Dimension_Unit;
   /* Draft, never Active. A listing imported straight to Active goes on sale
      the moment the file lands — with no description and whatever photo did or
      did not come across. Publishing is the one step that should stay a
@@ -661,11 +746,14 @@ function listingRow(g) {
   v['Charge tax'] = 'TRUE';
   v['Inventory tracker'] = 'shopify';
   v['Inventory quantity'] = g.retail;
-  v['Continue selling when out of stock'] = 'DENY';
+  /* DENY unless a template says otherwise. Hand-dyed thread is made in lots;
+     overselling it means dyeing a new pot to match an old one, which is the
+     thing the whole stack exists to avoid. */
+  v['Continue selling when out of stock'] = T('Continue_Selling') || 'DENY';
   if (oz > 0) v['Weight value (grams)'] = Math.round(oz * OZ_TO_G);
   v['Weight unit for display'] = 'g';
   v['Requires shipping'] = 'TRUE';
-  v['Fulfillment service'] = 'manual';
+  v['Fulfillment service'] = T('Fulfillment_Service') || 'manual';
   if (photo) {
     v['Product image URL'] = photo.url;
     v['Image position'] = 1;
