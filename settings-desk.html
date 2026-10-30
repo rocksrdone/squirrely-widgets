@@ -122,6 +122,20 @@ const REGISTRY = [
   { key: 'Start_Water_Temp_F', area: 'Kettle dye', def: 140, unit: '°F', usedBy: ['Recipe Card'], notes: 'Temperature of the water going into the pot (hottest tap measured 140°F).' },
   { key: 'Turnover_min', area: 'Kettle dye', def: 15, unit: 'min', usedBy: ['Recipe Card'], notes: 'Changeover between rounds: thread out, pot to cooling, next pot filled and on.' },
   { key: 'Kettle_Day_Hours', area: 'Kettle dye', def: 5, unit: 'hours', usedBy: ['Recipe Card'], notes: 'Default hours for kettle dyeing in a day (can be changed on the card).' },
+  // Business — defaults stay blank: the repo is public, so the real values live only in Grist
+  { key: 'Business_Name', area: 'Business', def: '', text: true, unit: 'name', usedBy: ['Inventory Desk', 'Shipping Station'],
+    notes: 'Vendor on retail Shopify listings (Listing CSV) and the letterhead on the vendor invoice. The invoice will not print without it.' },
+  { key: 'Business_Address', area: 'Business', def: '', text: true, unit: 'address', usedBy: ['Shipping Station'],
+    notes: 'Letterhead address on the vendor invoice; also the check address when Pay_Check_Remit_To is blank.' },
+  { key: 'Business_Phone', area: 'Business', def: '', text: true, unit: 'phone', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
+  { key: 'Business_Email', area: 'Business', def: '', text: true, unit: 'email', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
+  { key: 'Business_Website', area: 'Business', def: '', text: true, unit: 'link', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
+  { key: 'Pay_Wise_Details', area: 'Business', def: '', text: true, unit: 'bank details', usedBy: ['Shipping Station'],
+    notes: 'Receiving details printed on invoices whose payment method is Wise.' },
+  { key: 'Pay_Check_Remit_To', area: 'Business', def: '', text: true, unit: 'address', usedBy: ['Shipping Station'],
+    notes: 'Where checks are mailed, if different from Business_Address.' },
+  { key: 'Invoice_Footer', area: 'Business', def: '', text: true, unit: 'text', usedBy: ['Shipping Station'],
+    notes: 'Line at the foot of every vendor invoice.' },
   // Vendor store
   { key: 'Vendor_Required_Tags', area: 'Vendor store', def: 'Vendor-All, Wholesaler', text: true, unit: 'tags', usedBy: ['Vendor Setup'],
     notes: 'Tags every vendor customer must have besides their own Vendor-XXX. Wholesaler = Locksmith lock on the whole vendor store; Vendor-All = the shared vendor collections (FF Cotton/Nylon Thread, In-Stock Thread, New Products). Comma-separated.' },
@@ -132,7 +146,7 @@ const REGISTRY = [
   { key: 'Vendor_Lock_Template_Code', area: 'Vendor store', def: '', text: true, unit: 'code', usedBy: ['Vendor Setup'],
     notes: 'Code of the vendor whose Locksmith lock is set up exactly right. New vendor locks copy its settings, and Check compares every lock to it. Easiest to pick in Vendor Setup.' },
 ];
-const AREA_ORDER = ['Bins & racks', 'Batch Assignment', 'Thread', 'Planning', 'Payroll', 'Shipping', 'Kettle dye', 'Vendor store'];
+const AREA_ORDER = ['Bins & racks', 'Batch Assignment', 'Thread', 'Planning', 'Payroll', 'Shipping', 'Kettle dye', 'Business', 'Vendor store'];
 const AREA_ALIAS = { 'Kettle': 'Kettle dye' };
 
 /* Other setup areas, each a card with a quick summary and links to its pages. */
