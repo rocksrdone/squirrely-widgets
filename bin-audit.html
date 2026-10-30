@@ -229,6 +229,8 @@
            type="number" id="binCols" value="4" min="1" max="12" onchange="render()"></label>
   <div class="ctl-spacer"></div>
   <button class="btn secondary" onclick="loadEverything()">↻ Refresh</button>
+  <button class="btn secondary" onclick="printBagCards()" id="bagCardBtn"
+          title="One ledger card per colorway and fibre, to live in the bag">🏷 Bag cards</button>
   <button class="btn" onclick="window.print()">🖨 Print this audit</button>
 </div>
 
@@ -794,6 +796,159 @@ function buildThreadAudit(lotsT, allocT, recipesT, locT, LOT, ALLOC, REC, orderT
    lot object with `_orderBin` set, so `binRow` can show that box's quantity
    instead of the lot's bin quantity without every caller's amountOf knowing
    about boxes. */
+/* ══ Bag cards ═══════════════════════════════════════════════════════════
+   A back stock bag holds ONE colourway in ONE fibre, and fills up over months
+   from however many dye lots. So the bag — not the lot — is the thing that has
+   a count, and the card that lives in it is a ledger: every put-away or pull
+   writes a line, and the right-hand column is always the answer. An audit then
+   reads a bag without opening it and without summing anything.
+
+   This is deliberately NOT a per-lot slip. Three lots of Butterscotch would put
+   three slips in one bag, and "how many are in here" would become arithmetic
+   done standing at the shelf, which is the job this is supposed to remove.
+
+   Cards are printed from here rather than at the kettle because a bag needs a
+   card when it is STARTED or when one fills up — not every time the colourway
+   is dyed. Printing per pot would throw most of them away.
+
+   Grouping is by recipe + fibre, not by bin: a colourway that has drifted
+   across two bins is still one bag, and printing it twice would start a second
+   ledger for thread that is going back into the first bag. Both bins are named
+   on the card so the discrepancy is visible rather than silently merged. */
+/* Local, not toISOString(). Printing after 8pm Eastern would otherwise date the
+   card tomorrow, which is a confusing thing to read off a card you watched come
+   out of the printer. */
+function localToday() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function fiberLabelOf(l) {
+  return (l.fiber || (l.recipe && l.recipe.fiber) || '').toString().trim();
+}
+
+function bagCardGroups() {
+  if (!T || !T.lots) return [];
+  const by = {};
+  T.lots.forEach(l => {
+    const qty = Math.max(0, Number(l.backStock) || 0);
+    if (qty <= 0) return;                 // nothing in a bag means no bag to label
+    const fib = fiberLabelOf(l);
+    const key = (l.recipeId || l.recipe.name) + '\u0000' + fiberKey(fib);
+    const g = by[key] = by[key] || {
+      colorway: (l.recipe && l.recipe.name) || 'Recipe #' + l.recipeId,
+      fiber: fib, bins: [], lots: [], total: 0,
+    };
+    g.lots.push({ lot: l.lotNumber, qty, date: l.date, bin: l.bin });
+    g.total += qty;
+    if (l.bin && g.bins.indexOf(l.bin) === -1) g.bins.push(l.bin);
+  });
+  return Object.values(by)
+    .map(g => {
+      // Oldest first, so the ledger's opening lines read in the order the bag
+      // actually filled and the running total ends at today's figure.
+      g.lots.sort((a, b) => (a.date || 0) - (b.date || 0));
+      g.bins.sort(binSort);
+      return g;
+    })
+    .sort((a, b) => a.colorway.localeCompare(b.colorway) || a.fiber.localeCompare(b.fiber));
+}
+
+/* ROWS is what fits the printed card, not what fits the data. A colourway with
+   more lots than this gets its oldest lines folded into one opening balance,
+   because a card that prints past its own cut line is worse than one that
+   summarises — and the detail is in Grist either way. */
+const BAG_CARD_ROWS = 14;
+
+function bagCardHtml(g) {
+  const lots = g.lots.slice();
+  let opening = null;
+  const room = BAG_CARD_ROWS - 4;        // always leave blank lines to write on
+  if (lots.length > room) {
+    const folded = lots.splice(0, lots.length - room + 1);
+    opening = { qty: folded.reduce((s, x) => s + x.qty, 0), n: folded.length };
+  }
+  let running = opening ? opening.qty : 0;
+  let rows = '';
+  if (opening) {
+    rows += `<tr><td></td><td class="lot">${opening.n} older lots</td>` +
+            `<td class="n">${opening.qty}</td><td class="n"></td><td class="tot">${running}</td></tr>`;
+  }
+  lots.forEach(l => {
+    running += l.qty;
+    rows += `<tr><td>${esc(shortDate(l.date) || '')}</td><td class="lot">${esc(l.lot)}</td>` +
+            `<td class="n">${l.qty}</td><td class="n"></td><td class="tot">${running}</td></tr>`;
+  });
+  const used = (opening ? 1 : 0) + lots.length;
+  for (let k = used; k < BAG_CARD_ROWS; k++)
+    rows += '<tr><td></td><td class="lot"></td><td class="n"></td><td class="n"></td><td class="tot"></td></tr>';
+
+  const binTxt = g.bins.length ? g.bins.join(' / ') : '';
+  return `<div class="bc">
+    <div class="bc-hd">BACK STOCK BAG</div>
+    <div class="bc-top">
+      <div class="bc-id">
+        <div class="bc-name">${esc(g.colorway)}</div>
+        <div class="bc-meta">${esc(g.fiber || 'fibre not set')}</div>
+      </div>
+      <div class="bc-bin"><div class="bc-binl">bin</div>
+        <div class="bc-binb">${esc(binTxt)}</div></div>
+    </div>
+    ${g.bins.length > 1
+      ? `<div class="bc-warn">Grist has this colourway in ${g.bins.length} bins &mdash; one bag, so put it in one.</div>`
+      : ''}
+    <table class="bc-t">
+      <tr><th>date</th><th class="lot">lot</th><th class="n">in +</th><th class="n">out &minus;</th><th class="tot">= in bag</th></tr>
+      ${rows}
+    </table>
+    <div class="bc-foot">Opening lines are what Grist held on ${esc(localToday())}.
+      Count the bag. If it disagrees, write a correction line &mdash; the bag is right, not the screen.</div>
+  </div>`;
+}
+
+function printBagCards() {
+  const groups = bagCardGroups();
+  if (!groups.length) { showToast('No back stock to make bag cards for', false); return; }
+  const w = window.open('', '_blank', 'width=900,height=1000');
+  if (!w) { showToast('Allow pop-ups to print bag cards', false); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Back stock bag cards</title>
+    <style>
+      @page { size: Letter; margin: .25in; }
+      * { box-sizing: border-box; }
+      body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0;
+             display: flex; flex-wrap: wrap; align-content: flex-start; }
+      /* 2 across x 2 down = 8in x 10.3in of the 8 x 10.5in a Letter page gives. */
+      .bc { width: 4in; height: 5.15in; padding: .16in .18in; outline: 1px dashed #B9B9B9;
+            outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden; }
+      .bc-hd { font-size: 8px; font-weight: bold; letter-spacing: 1.4px; }
+      .bc-top { display: flex; align-items: flex-start; gap: .12in; margin-top: 2px; }
+      .bc-id { flex: 1; min-width: 0; }
+      .bc-name { font-size: 20px; font-weight: bold; line-height: 1.08; overflow-wrap: anywhere; }
+      .bc-meta { font-size: 10px; color: #333; margin-top: 2px; }
+      .bc-bin { flex: none; width: 1.05in; border: 2.5px solid #000; text-align: center; }
+      .bc-binl { font-size: 8px; font-weight: bold; letter-spacing: 1px; background: #000; color: #fff;
+                 text-transform: uppercase; padding: 1px 0; }
+      .bc-binb { font-size: 20px; font-weight: bold; height: .36in; line-height: .36in; overflow: hidden; }
+      .bc-warn { font-size: 8.5px; margin-top: 4px; padding: 2px 4px; border: 1px solid #000; }
+      .bc-t { width: 100%; border-collapse: collapse; margin-top: 6px; table-layout: fixed; }
+      .bc-t th { font-size: 7.5px; text-transform: uppercase; letter-spacing: .6px; color: #444;
+                 text-align: left; border-bottom: 2px solid #000; padding-bottom: 1px; font-weight: bold; }
+      .bc-t td { height: .255in; border-bottom: 1px solid #999; font-size: 11px;
+                 overflow: hidden; white-space: nowrap; }
+      .bc-t th:first-child, .bc-t td:first-child { width: .62in; }
+      .bc-t .lot { width: .95in; }
+      .bc-t .n { width: .52in; text-align: center; }
+      .bc-t .tot { width: .8in; text-align: center; border-left: 2px solid #000;
+                   font-weight: bold; padding-left: 3px; }
+      .bc-t th.tot { font-weight: bold; }
+      .bc-foot { font-size: 7.5px; color: #555; line-height: 1.35; margin-top: auto; padding-top: 4px; }
+    </style></head><body>${groups.map(bagCardHtml).join('')}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { w.print(); }, 250);
+}
+
 function groupLots(lots, amountOf, showEmpty, withOrderBins) {
   const byBin = {};
   const add = (key, entry) => { (byBin[key] = byBin[key] || []).push(entry); };
