@@ -1509,10 +1509,54 @@ function updateTally() {
   if (sh) sh.innerHTML = shortHelpHtml(p);
 }
 
+/* Which of these lots have had a stock column moved since the page read them.
+   `before` is the map of pre-change row copies confirmWind built, keyed by lot
+   id, in the shape stock2Row returns — so the comparison is like for like and
+   does not depend on which Grist column each field lives in.
+
+   Returns lot NUMBERS, not ids, because the message goes to a person standing
+   at a rack. An unreadable table is treated as not stale: refusing every
+   commit because a read failed would stop the station dead, and the atomic
+   apply means a genuine clash is still one failed write rather than half. */
+async function staleLots(lotIds, before, names) {
+  if (!lotIds.length) return [];
+  let t;
+  try { t = await grist.docApi.fetchTable('Production_Lots'); }
+  catch (e) { console.warn('Could not re-read Production_Lots before committing:', e); return []; }
+  const pos = {}; (t.id || []).forEach((id, i) => { pos[id] = i; });
+  const out = [];
+  lotIds.forEach(id => {
+    const i = pos[id];
+    if (i == null) return;                       // deleted meanwhile; the apply will say so
+    const now = stock2Row(t, S.stock2, i);       // (table, cols, index)
+    const was = before[id];
+    if (!was || !now) return;
+    if (STOCK2_COMPARE.some(k => Number(now[k] || 0) !== Number(was[k] || 0))) {
+      out.push((names && names[id]) || ('lot ' + id));
+    }
+  });
+  return out;
+}
+/* The fields a concurrent edit would move. `made` is included: a pot logged
+   again between load and commit changes what "beyond what the lot recorded"
+   means, which is what drives the Spools_Made top-up above. */
+const STOCK2_COMPARE = ['onHand', 'hank', 'vendor', 'store', 'made'];
+
 async function confirmWind() {
   const p = currentPlan();
   if (!p || p.good === 0) { showToast('Draw some spools first'); return; }
   if (!p.line.customerId) { showToast(`No customer row for ${p.line.customerName || 'this order'} — allocation needs one`); return; }
+
+  /* One commit at a time. Nothing stopped a second press: the selection is
+     only cleared after every await, and the stock writes are ABSOLUTE values
+     computed from the row as it was before the click — so a double-tap on a
+     shop-floor tablet wrote the allocations twice and the stock number once.
+     Grist then said half as many spools had left the shelf as really had.
+     Same gate lot-desk.html has used on every write. */
+  if (S.committing) return;
+  S.committing = true;
+  const btn = document.getElementById('confirmBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   const { ALLOC } = S.cols;
   try {
@@ -1583,14 +1627,10 @@ async function confirmWind() {
       brokenLotId = anchor.lotId; brokenBefore = anchor.broken || 0;
     }
 
-    const res = await grist.docApi.applyUserActions(actions);
-    const newIds = res.retValues || [];
-
     // Stock changes on lots other than the anchor go in their own updates.
     const otherUpdates = Object.entries(stockUpdates)
       .filter(([id]) => !anchor || Number(id) !== anchor.lotId)
       .map(([id, f]) => ['UpdateRecord', 'Production_Lots', Number(id), f]);
-    if (otherUpdates.length) await grist.docApi.applyUserActions(otherUpdates);
 
     const lotUpdate = {};
     if (anchor && stockUpdates[anchor.lotId]) Object.assign(lotUpdate, stockUpdates[anchor.lotId]);
@@ -1600,9 +1640,43 @@ async function confirmWind() {
       lotUpdate[S.cols.LOT.bin] = S.stockBinPick.id;
     }
     if (brokenLotId != null && S.brokenCol) lotUpdate[S.brokenCol] = (brokenBefore || 0) + p.broken;
-    if (Object.keys(lotUpdate).length) {
-      await grist.docApi.applyUserActions([['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]]);
+
+    /* Everything this commit writes, re-checked against Grist as it is NOW.
+       Every number above is an absolute computed from rows read when the page
+       loaded, so if someone else has touched one of these lots since, applying
+       them silently reverts their change — two people each drawing 5 from a
+       lot of 20 both write 15, and five spools leave the shelf unrecorded.
+
+       Refused rather than rebased. Rebasing the stock columns would still
+       leave the draw itself decided against stale freshDry/stock figures, so
+       the merge would be half-right and look whole. A conflict the winder can
+       see and redo beats a silent one. */
+    // Lot numbers for the message, from the plan rather than a global index —
+    // these are the only lots this commit touches.
+    const lotNames = {};
+    p.draws.forEach(d => { if (d.lot) lotNames[d.lot.lotId] = d.lot.lotNumber; });
+    if (anchor) lotNames[anchor.lotId] = anchor.lotNumber;
+    const stale = await staleLots(Object.keys(stockUpdates).map(Number), orig, lotNames);
+    if (stale.length) {
+      showToast(`${stale.join(', ')} changed while this was open — reloading, draw it again`);
+      await loadEverything();
+      return;
     }
+
+    /* ONE apply. This was three — allocations, then the other lots, then the
+       anchor — and a failure between them left the spools allocated to the
+       order AND still on the shelf count, with a message that only mentioned
+       Lot_Allocations. The winder would redraw and do it twice. applyPutAway
+       in stock-ops.js already builds a single array; this now matches. */
+    const nAdds = actions.length;
+    actions.push(...otherUpdates);
+    if (Object.keys(lotUpdate).length) {
+      actions.push(['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]);
+    }
+    const res = await grist.docApi.applyUserActions(actions);
+    // retValues is positional, and the AddRecords are first, so the allocation
+    // ids the undo needs are the leading nAdds entries.
+    const newIds = (res.retValues || []).slice(0, nAdds).filter(x => x != null);
 
     if (p.stock > 0) {
       // Queued rather than printed now: the winder is mid-flow with spools in
@@ -1633,7 +1707,13 @@ async function confirmWind() {
     await loadEverything();
   } catch (e) {
     console.error('Failed to wind:', e);
-    showToast('Failed — check Lot_Allocations');
+    // One apply now, so a failure wrote nothing — say so, rather than sending
+    // the winder to check a table that was never touched.
+    showToast('Failed — nothing was saved, try again');
+  } finally {
+    S.committing = false;
+    const b = document.getElementById('confirmBtn');
+    if (b) { b.disabled = false; b.textContent = '✓ Wind & bag'; }
   }
 }
 
