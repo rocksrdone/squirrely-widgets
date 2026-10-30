@@ -476,6 +476,217 @@ function binChipsHtml(keys) {
       ? 'Spools with no Storage_Bin recorded' : 'Bin ' + esc(k)}">${esc(binText(k))}</span>`).join('');
 }
 
+/* ══ Shopify listing CSV ═══════════════════════════════════════════════════
+   Moving spools to the retail store is a listing act, and if no listing
+   exists the move silently claims they are for sale when they are not.
+   Nothing here can create a Shopify product — that needs the Admin API, and
+   a retail listing's photo must match what is actually in stock, which is a
+   judgement nobody should automate. What this does instead is hand over a
+   filled-in import file so the manual job is a paste rather than a hunt.
+
+   Shopify's own product CSV, column for column. The order is not ours to
+   choose: the importer matches on these exact headers, so this array is
+   copied from Shopify's template and must not be tidied. */
+const SHOPIFY_COLS = ['Title', 'URL handle', 'Description', 'Vendor', 'Product category', 'Type', 'Tags',
+  'Published on online store', 'Status', 'SKU', 'Variant Barcodes',
+  'Option1 name', 'Option1 value', 'Option1 Linked To', 'Option2 name', 'Option2 value', 'Option2 Linked To',
+  'Option3 name', 'Option3 value', 'Option3 Linked To',
+  'Price', 'Compare-at price', 'Cost per item', 'Charge tax', 'Tax code',
+  'Unit price total measure', 'Unit price total measure unit', 'Unit price base measure', 'Unit price base measure unit',
+  'Inventory tracker', 'Inventory quantity', 'Continue selling when out of stock',
+  'Weight value (grams)', 'Weight unit for display', 'Requires shipping', 'Fulfillment service',
+  'Product image URL', 'Image position', 'Image alt text', 'Variant image URL', 'Gift card',
+  'SEO title', 'SEO description', 'Color (product.metafields.shopify.color-pattern)',
+  'Google Shopping / Google product category', 'Google Shopping / Gender', 'Google Shopping / Age group',
+  'Google Shopping / Manufacturer part number (MPN)', 'Google Shopping / Ad group name',
+  'Google Shopping / Ads labels', 'Google Shopping / Condition', 'Google Shopping / Custom product',
+  'Google Shopping / Custom label 0', 'Google Shopping / Custom label 1', 'Google Shopping / Custom label 2',
+  'Google Shopping / Custom label 3', 'Google Shopping / Custom label 4',
+  'Packed product length', 'Packed product width', 'Packed product height', 'Packed product dimension unit'];
+
+const OZ_TO_G = 28.349523125;
+
+/* Photos, weights and retail prices, each independently optional. */
+async function loadListingSources() {
+  S.photoByRecipe = {}; S.weightByFiber = {}; S.prefixGroups = []; S.retailPriceByFiber = {};
+  /* settings.js was loaded here but never read. SSSettings.text() returns the
+     default until load() has run, so the Vendor column would have come out
+     blank on every listing without a word about why. */
+  try { await SSSettings.load(); } catch (e) { console.warn('Settings unavailable', e); }
+
+  try {
+    const t = await grist.docApi.fetchTable('Product_Photos');
+    const c = {
+      recipe: findColumn(t, ['Recipe']), url: findColumn(t, ['Nextcloud_URL']),
+      fav: findColumn(t, ['Is_Favorite']), name: findColumn(t, ['Colorway_Name']),
+    };
+    if (c.recipe && c.url) {
+      /* Same pick as photo-workbench: the favourite, else the first. One
+         photo per listing — the CSV carries a single Product image URL. */
+      (t.id || []).forEach((id, i) => {
+        const rid = getRefId(columnAsArray(t, c.recipe)[i]);
+        const url = String(columnAsArray(t, c.url)[i] || '').trim();
+        if (!rid || !url) return;
+        const fav = c.fav ? !!columnAsArray(t, c.fav)[i] : false;
+        const cur = S.photoByRecipe[rid];
+        if (!cur || (fav && !cur.fav)) {
+          S.photoByRecipe[rid] = { url, fav, alt: c.name ? String(columnAsArray(t, c.name)[i] || '') : '' };
+        }
+      });
+    }
+  } catch (e) { console.warn('Inventory Desk: Product_Photos unavailable', e); }
+
+  try {
+    const t = await grist.docApi.fetchTable('Item_Weights');
+    const c = {
+      fiber: findColumn(t, ['Fiber']), w: findColumn(t, ['Weight_Oz']),
+      pre: findColumn(t, ['SKU_Prefixes']), per: findColumn(t, ['Per_Order']),
+      active: findColumn(t, ['Active']),
+    };
+    (t.id || []).forEach((i_, i) => {
+      if (c.active && !columnAsArray(t, c.active)[i]) return;
+      if (c.per && columnAsArray(t, c.per)[i]) return;           // per-parcel, not per spool
+      const f = fiberCode(c.fiber ? columnAsArray(t, c.fiber)[i] : '');
+      const w = c.w ? num(columnAsArray(t, c.w)[i]) : 0;
+      if (f && w > 0) S.weightByFiber[f] = w;
+      /* The prefix groups are what transpose FFN_ to the retail NFF_. Held as
+         DATA, exactly as claude/stock-reservations.md says, so a new fibre
+         needs a row rather than a code change. */
+      const pre = c.pre ? String(columnAsArray(t, c.pre)[i] || '') : '';
+      const parts = pre.split(/[,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+      if (parts.length > 1) S.prefixGroups.push(parts);
+    });
+  } catch (e) { console.warn('Inventory Desk: Item_Weights unavailable', e); }
+
+  try {
+    const t = await grist.docApi.fetchTable('Cost_Settings');
+    const k = findColumn(t, ['Key', 'Setting', 'Name']);
+    const v = findColumn(t, ['Value', 'Number', 'Amount']);
+    if (k && v) (t.id || []).forEach((id, i) => {
+      const key = String(columnAsArray(t, k)[i] || '').trim();
+      const m = /^Retail_Price:(.+)$/i.exec(key);
+      if (m) S.retailPriceByFiber[fiberCode(m[1])] = num(columnAsArray(t, v)[i]);
+    });
+  } catch (e) { console.warn('Inventory Desk: Cost_Settings unavailable', e); }
+}
+
+/* The retail store's spelling of a Grist SKU. Grist and the vendor store say
+   FFN_; the retail store says NFF_. Returns the OTHER spelling when the
+   prefix is in a group, else the SKU unchanged. */
+function retailSku(sku) {
+  const s = String(sku || '').trim();
+  const i = s.indexOf('_');
+  if (i < 0) return s;
+  const head = s.slice(0, i).toUpperCase(), tail = s.slice(i);
+  const row = S.prefixGroups.find(gp => gp.includes(head));
+  if (!row) return s;
+  const other = row.find(p => p !== head);
+  return other ? other + tail : s;
+}
+
+function handleFor(name, sku) {
+  const base = `${name || ''} ${sku || ''}`.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return base || 'listing';
+}
+
+/* RFC 4180: double the quotes, wrap anything containing a comma, quote or
+   newline. A colourway called 5/0 "Gold" would otherwise shift every column
+   after it and Shopify would import nonsense without complaining. */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* What is missing for this listing, in words, checked BEFORE the download. */
+function listingGaps(g) {
+  const f = fiberCode(g.recipe.fiber);
+  const gaps = [];
+  if (!g.recipe.sku) gaps.push('no SKU_Base on the recipe');
+  if (!(S.retailPriceByFiber[f] > 0)) gaps.push(`no retail price for ${f || 'this fibre'} — add Retail_Price:${f || 'FFN'} to Cost_Settings`);
+  if (!(S.weightByFiber[f] > 0)) gaps.push(`no weight for ${f || 'this fibre'} in Item_Weights`);
+  if (!S.photoByRecipe[g.recipeId]) gaps.push('no photo in Product_Photos');
+  if (!S.prefixGroups.length) gaps.push('no SKU_Prefixes in Item_Weights, so the retail spelling is a guess');
+  return gaps;
+}
+
+/* Said on the card, before the download, because every one of these makes the
+   import fail or the listing wrong — and Shopify reports a rejected import in
+   its own vocabulary, long after you have left this screen. */
+function listingNoteHtml(g) {
+  const gaps = listingGaps(g);
+  const photo = S.photoByRecipe[g.recipeId];
+  const rs = retailSku(g.recipe.sku);
+  const bits = [];
+  if (rs && rs !== g.recipe.sku) {
+    bits.push(`<div>Retail spelling is <strong>${esc(rs)}</strong> — the retail store does not use
+      <code>${esc(g.recipe.sku)}</code>. Search Shopify for the first one before creating anything.</div>`);
+  }
+  if (gaps.length) {
+    bits.push(`<div style="margin-top:3px">The CSV will be short of: ${esc(gaps.join('; '))}.</div>`);
+  }
+  if (photo) {
+    bits.push(`<div style="margin-top:3px">Photo: <a href="${esc(photo.url)}" target="_blank" rel="noopener">open it</a>
+      to save alongside the CSV. Shopify will pull it during the import only if that link is public;
+      if it is not, add the photo by hand after.</div>`);
+  }
+  if (!bits.length) return '';
+  return `<div class="hint" style="border-left:3px solid var(--gold);padding-left:8px;margin-top:6px">${bits.join('')}</div>`;
+}
+
+function listingRow(g) {
+  const f = fiberCode(g.recipe.fiber);
+  const photo = S.photoByRecipe[g.recipeId] || null;
+  const price = S.retailPriceByFiber[f] || '';
+  const oz = S.weightByFiber[f] || 0;
+  const sku = retailSku(g.recipe.sku);
+  const title = `${g.recipe.name}${g.recipe.fiber ? ' — ' + g.recipe.fiber : ''}`;
+  const v = {};
+  SHOPIFY_COLS.forEach(c => { v[c] = ''; });
+  v['Title'] = title;
+  v['URL handle'] = handleFor(g.recipe.name, sku);
+  v['Vendor'] = SSSettings.text('Business_Name', '');
+  v['Type'] = g.recipe.fiber || 'Thread';
+  v['Tags'] = [g.recipe.fiber, 'Hand-dyed'].filter(Boolean).join(', ');
+  /* Draft, never Active. A listing imported straight to Active goes on sale
+     the moment the file lands — with no description and whatever photo did or
+     did not come across. Publishing is the one step that should stay a
+     decision. */
+  v['Published on online store'] = 'FALSE';
+  v['Status'] = 'draft';
+  v['SKU'] = sku;
+  v['Option1 name'] = 'Title';
+  v['Option1 value'] = 'Default Title';
+  v['Price'] = price === '' ? '' : Number(price).toFixed(2);
+  v['Charge tax'] = 'TRUE';
+  v['Inventory tracker'] = 'shopify';
+  v['Inventory quantity'] = g.retail;
+  v['Continue selling when out of stock'] = 'DENY';
+  if (oz > 0) v['Weight value (grams)'] = Math.round(oz * OZ_TO_G);
+  v['Weight unit for display'] = 'g';
+  v['Requires shipping'] = 'TRUE';
+  v['Fulfillment service'] = 'manual';
+  if (photo) {
+    v['Product image URL'] = photo.url;
+    v['Image position'] = 1;
+    v['Image alt text'] = photo.alt || title;
+  }
+  return SHOPIFY_COLS.map(c => csvCell(v[c])).join(',');
+}
+
+function listingCsv(groups) {
+  return [SHOPIFY_COLS.map(csvCell).join(','), ...groups.map(listingRow)].join('\r\n') + '\r\n';
+}
+
+function downloadText(name, text, mime) {
+  const blob = new Blob([text], { type: (mime || 'text/csv') + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 async function loadAll() {
   try {
     const [lotsT, recT] = await Promise.all([
@@ -497,6 +708,13 @@ async function loadAll() {
     } catch (e) {
       console.warn('Inventory Desk: Storage_Locations unavailable — bins shown as stored', e);
     }
+
+    /* ── What a new retail listing needs ──────────────────────────────────
+       All three are optional. A listing CSV can still be built without any of
+       them — it just comes out with blanks that Shopify will reject or that
+       you fill in by hand, and the screen says which before you download it
+       rather than after Shopify refuses the import. */
+    await loadListingSources();
 
     /* Orders and what they hold. All optional: without them the screen works
        as before, it just can't show reservations or correct the comparison. */
@@ -963,7 +1181,13 @@ function fibreBlockHtml(g) {
         </select>
         <button class="btn tiny solid" data-move="${g.recipeId}" ${canMove ? '' : 'disabled'}>Move</button>
         ${g[from] > 0 ? `<button class="btn tiny" data-all="${g.recipeId}">All ${g[from]}</button>` : ''}
+        ${/* Offered whenever retail is involved, not only when a listing is
+             known to be missing — nothing here reads the retail store, so
+             "missing" is not something this screen can know. */ ''}
+        ${(from === 'retail' || to === 'retail') ? `<button class="btn tiny" data-listing="${g.recipeId}"
+          title="Build the Shopify import file for this SKU">Listing CSV</button>` : ''}
       </div>
+      ${(from === 'retail' || to === 'retail') ? listingNoteHtml(g) : ''}
       <div class="hint">${
         from === to ? 'Pick two different places.'
         : n > avail ? (to === 'retail' && avail < (g[from] || 0)
@@ -1105,6 +1329,17 @@ function wire() {
   }));
   document.querySelectorAll('[data-move]').forEach(el =>
     el.addEventListener('click', () => doMove(Number(el.dataset.move))));
+  document.querySelectorAll('[data-listing]').forEach(el =>
+    el.addEventListener('click', () => {
+      const g = S.byRecipe.find(x => x.recipeId === Number(el.dataset.listing));
+      if (!g) return;
+      const sku = retailSku(g.recipe.sku) || 'listing';
+      downloadText(`${sku}.csv`, listingCsv([g]));
+      const gaps = listingGaps(g);
+      showToast(gaps.length
+        ? `${sku}.csv saved — ${gaps.length} field${gaps.length === 1 ? '' : 's'} still blank, see the card`
+        : `${sku}.csv saved — imports as a DRAFT, publish it yourself`);
+    }));
 }
 
 function renderLog() {
