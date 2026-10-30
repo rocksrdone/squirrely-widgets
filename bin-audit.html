@@ -902,12 +902,19 @@ function bagCardGroups() {
    more lots than this gets its oldest lines folded into one opening balance,
    because a card that prints past its own cut line is worse than one that
    summarises — and the detail is in Grist either way. */
-const BAG_CARD_ROWS = 14;
+const BAG_CARD_ROWS = 12;
+/* The split-bins warning is an extra block above the table, so it costs rows.
+   Without this the ledger ran past the bottom of the card and overflow:hidden
+   swallowed the last line and the footer — on exactly the cards that matter
+   most, the ones telling you a colourway is in two places. */
+const BAG_CARD_WARN_ROWS = 2;
 
 function bagCardHtml(g) {
+  const split = (g.colorwayBins || g.bins).length > 1;
+  const rowCount = BAG_CARD_ROWS - (split ? BAG_CARD_WARN_ROWS : 0);
   const lots = g.lots.slice();
   let opening = null;
-  const room = BAG_CARD_ROWS - 4;        // always leave blank lines to write on
+  const room = rowCount - 4;        // always leave blank lines to write on
   if (lots.length > room) {
     const folded = lots.splice(0, lots.length - room + 1);
     opening = { qty: folded.reduce((s, x) => s + x.qty, 0), n: folded.length };
@@ -924,7 +931,7 @@ function bagCardHtml(g) {
             `<td class="n">${l.qty}</td><td class="n"></td><td class="tot">${running}</td></tr>`;
   });
   const used = (opening ? 1 : 0) + lots.length;
-  for (let k = used; k < BAG_CARD_ROWS; k++)
+  for (let k = used; k < rowCount; k++)
     rows += '<tr><td></td><td class="lot"></td><td class="n"></td><td class="n"></td><td class="tot"></td></tr>';
 
   const binTxt = g.bins.length ? g.bins.join(' / ') : '';
