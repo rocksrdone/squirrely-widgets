@@ -951,6 +951,23 @@ function bagCardHtml(g) {
   </div>`;
 }
 
+/* Four to a sheet, in page order. NOT cut-and-stack: these are not a numbered
+   sequence, so there is nothing to preserve by interleaving them, and reading
+   order is what helps when you are carrying a handful to the rack. A short
+   last page is left short rather than padded — a blank card invites someone to
+   write a bag on it that nothing in Grist knows about. */
+const BAG_CARDS_PER_PAGE = 4;
+
+function bagCardPages(groups) {
+  const pages = [];
+  for (let i = 0; i < groups.length; i += BAG_CARDS_PER_PAGE) {
+    pages.push('<div class="page">'
+      + groups.slice(i, i + BAG_CARDS_PER_PAGE).map(bagCardHtml).join('')
+      + '</div>');
+  }
+  return pages.join('');
+}
+
 function printBagCards() {
   const groups = bagCardGroups();
   if (!groups.length) { showToast('No back stock to make bag cards for', false); return; }
@@ -960,11 +977,24 @@ function printBagCards() {
     <style>
       @page { size: Letter; margin: .25in; }
       * { box-sizing: border-box; }
-      body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0;
-             display: flex; flex-wrap: wrap; align-content: flex-start; }
-      /* 2 across x 2 down = 8in x 10.3in of the 8 x 10.5in a Letter page gives. */
-      .bc { width: 4in; height: 5.15in; padding: .16in .18in; outline: 1px dashed #B9B9B9;
-            outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden; }
+      body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0; }
+      /* Cards are grouped into explicit pages, as print-day.html and the Wind
+         & Box stock tags both do. Laying them out as one long flex body let
+         the browser break wherever a card happened to land, so a card
+         straddled the page boundary and the guillotine took half of it along
+         with the sheet below. A sheet of printed cards is cut in straight
+         passes through the whole stack, so every page must hold the same grid
+         in the same place. */
+      .page { display: flex; flex-wrap: wrap; align-content: flex-start;
+              page-break-after: always; break-after: page; }
+      .page:last-child { page-break-after: auto; break-after: auto; }
+      /* 2 across x 2 down = 8in x 10in, inside the 8 x 10.5in a Letter page
+         gives at .25in margins. It was 5.15in, which fitted on paper but left
+         only .2in — less than most printers' own unprintable edge, so the
+         fourth card could still be pushed onto a page of its own. */
+      .bc { width: 4in; height: 5in; padding: .16in .18in; outline: 1px dashed #B9B9B9;
+            outline-offset: -.5px; display: flex; flex-direction: column; overflow: hidden;
+            page-break-inside: avoid; break-inside: avoid; }
       .bc-hd { font-size: 8px; font-weight: bold; letter-spacing: 1.4px; }
       .bc-top { display: flex; align-items: flex-start; gap: .12in; margin-top: 2px; }
       .bc-id { flex: 1; min-width: 0; }
@@ -987,7 +1017,7 @@ function printBagCards() {
                    font-weight: bold; padding-left: 3px; }
       .bc-t th.tot { font-weight: bold; }
       .bc-foot { font-size: 7.5px; color: #555; line-height: 1.35; margin-top: auto; padding-top: 4px; }
-    </style></head><body>${groups.map(bagCardHtml).join('')}</body></html>`);
+    </style></head><body>${bagCardPages(groups)}</body></html>`);
   w.document.close();
   w.focus();
   setTimeout(() => { w.print(); }, 250);
