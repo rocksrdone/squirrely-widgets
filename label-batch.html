@@ -2628,6 +2628,41 @@ function frontScale(g, tpl) {
 
 const FIBER_LABEL = { FFN: 'FF Nylon', EN: 'E Nylon', FFC: 'FF Cotton', BW: 'Blackwing', CN: 'Cotton' };
 
+/* ── Does this sheet describe a sheet that exists? ────────────────────────
+   pdfGeometry() only asks whether the numbers are PRESENT and positive. A row
+   can pass that and still be nonsense: a grid that runs off the paper, labels
+   that overlap each other, or a stated Labels_Per_Sheet that disagrees with
+   Columns x Rows — and that last one matters because this file reads BOTH.
+   The group footer sizes sheets from cols x rows while the sheets-needed line
+   uses Labels_Per_Sheet, so a row where they disagree reports two different
+   answers on one screen and neither is flagged.
+
+   Letter only, because every @page in this file is letter. */
+const SHEET_W = 8.5, SHEET_H = 11;
+function templateWarnings(tpl, g) {
+  const out = [];
+  if (!tpl || !g || !g.ok) return out;
+  const right = g.left + (g.cols - 1) * g.pitchX + g.dia;
+  const bottom = g.top + (g.rows - 1) * g.pitchY + g.dia;
+  const r2 = n => Math.round(n * 1000) / 1000;
+  if (right > SHEET_W + 0.001) {
+    out.push(`the grid is ${r2(right)}" wide — ${r2(right - SHEET_W)}" past the right edge of a ${SHEET_W}" sheet`
+      + ` (left ${g.left}" + ${g.cols - 1} x pitch ${g.pitchX}" + ${g.dia}" label)`);
+  }
+  if (bottom > SHEET_H + 0.001) {
+    out.push(`the grid is ${r2(bottom)}" tall — ${r2(bottom - SHEET_H)}" past the bottom of an ${SHEET_H}" sheet`
+      + ` (top ${g.top}" + ${g.rows - 1} x pitch ${g.pitchY}" + ${g.dia}" label)`);
+  }
+  if (g.pitchX < g.dia - 0.001) out.push(`pitch across (${g.pitchX}") is less than the label (${g.dia}") — columns overlap`);
+  if (g.pitchY < g.dia - 0.001) out.push(`pitch down (${g.pitchY}") is less than the label (${g.dia}") — rows overlap`);
+  const grid = g.cols * g.rows;
+  if (tpl.perSheet && tpl.perSheet !== grid) {
+    out.push(`Labels_Per_Sheet says ${tpl.perSheet} but Columns x Rows is ${g.cols} x ${g.rows} = ${grid}`
+      + ' — this file reads both, so one screen will say one and one the other');
+  }
+  return out;
+}
+
 /* How many labels finish the sheet you are starting on. Starting at slot 5 of
    a 63-up sheet leaves 59 — the point of "Start at" is to use the rest of a
    part-used sheet, so filling it means filling what is LEFT, not another 63. */
@@ -2675,6 +2710,7 @@ function frontPaneHtml() {
      sheet without anyone pressing anything. */
   if (g.ok && !S.frontQtyTouched) S.frontQty = frontFillQty(g, S.frontStart);
   const plan = g.ok ? frontSheetPlan(g, S.frontQty, S.frontStart) : null;
+  const warn = templateWarnings(tpl, g);
 
   return `<div class="pick-box">
       <div class="pick-row" style="gap:12px;flex-wrap:wrap;align-items:flex-end">
@@ -2729,6 +2765,16 @@ function frontPaneHtml() {
             (c.fibers || []).length ? esc(c.fibers.join(', '))
               : 'Vendor_Fibers not set — offering every thread'}</div></div>
       </div>
+      ${g.ok && warn.length ? `<div class="alert"><strong>${esc(tpl ? tpl.code : 'This sheet')} does not add up.</strong>
+        ${warn.map(w => `<div style="margin-top:3px">&bull; ${esc(w)}</div>`).join('')}
+        <div style="margin-top:5px">Fix it in <strong>Label Template Setup</strong>. The PDF will still build,
+        because the numbers are all present — it just will not land on the sheet.</div>
+      </div>` : ''}
+      ${g.ok && !warn.length ? `<div class="alert" style="background:#E9F2F0;border-color:#B9D8D2;color:#245F55;padding:6px 9px">
+        <strong>${esc(tpl.code)}</strong> checks out: ${g.cols} &times; ${g.rows} = <strong>${g.cols * g.rows}</strong> per sheet,
+        grid ends ${((g.left + (g.cols - 1) * g.pitchX + g.dia)).toFixed(2)}" across and
+        ${((g.top + (g.rows - 1) * g.pitchY + g.dia)).toFixed(2)}" down, inside 8.5 &times; 11.
+      </div>` : ''}
       ${g.ok ? `<div class="alert" style="background:#E9F2F0;border-color:#B9D8D2;color:#245F55">
         Artwork drawn at <strong>${(sc * g.dia).toFixed(3)}"</strong> across a <strong>${g.dia}"</strong> label —
         ${over > 0.0005 ? `overrunning the cut by <strong>${over.toFixed(4)}"</strong> per side` : 'sitting inside the cut'}.
