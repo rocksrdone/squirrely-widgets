@@ -267,6 +267,22 @@ function fmtDate(dateVal) {
 const CLOSED_STATUS = 'Closed';
 function isClosedValue(s) { return (s || '').toString().trim().toLowerCase() === 'closed'; }
 
+/* Kept byte-identical with quick-log.html, wind-routing.html and
+   label-batch.html (there named allocBucketLB). Order matters: "Wound - Needs
+   Labels" contains "Wound", so the needs-labels test has to run before the
+   catch-all.
+
+   This screen had its own drifted inline version — missing "to wind", and with
+   no wound bucket at all — which is how unwound allocations came to read as
+   ready to ship. Copy this one verbatim rather than rewriting it; the point is
+   that all four agree. */
+function allocBucket(status) {
+  const s = (status == null ? '' : status).toString();
+  if (/unwound|in bin|to wind/i.test(s)) return 'pending';
+  if (/needs? labels?|awaiting labels?|unlabel/i.test(s)) return 'wound';
+  return 'boxed';
+}
+
 let allOrders = [];
 let orderLineData = {}; // workOrderId -> {needed, dyed, wound, packed, hasRush, skus: []}
 let statusFilter = 'ALL';
@@ -406,7 +422,18 @@ async function loadOrders() {
           const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
           if (!lineId) return;
           const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
-          if (/unwound|in bin/i.test(status.toString())) return;
+          /* Only genuinely boxed spools count toward "Ready to ship". This
+             used to test /unwound|in bin/i and count everything else as
+             boxed — two drifts from the canonical function: "to wind" was
+             missing, and there was no wound bucket at all, so an allocation
+             reading "Wound - Needs Labels" counted as packed.
+
+             An order allocated "To Wind" therefore read 100% packed, showed
+             Ready to ship, and Close wrote Status = Closed on it — after
+             which it left this screen, left Quick Log (which skips closed
+             orders) and left Order Overview, with nothing wound and no screen
+             able to reach the allocations again. */
+          if (allocBucket(status) !== 'boxed') return;
           allocBoxedByLine[lineId] = (allocBoxedByLine[lineId] || 0) + (Number(columnAsArray(allocTable, aQtyCol)[i]) || 0);
         });
       }
