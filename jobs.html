@@ -404,10 +404,37 @@ async function bulkFixNegatives() {
     let res;
     try { res = await StockOps.vendorSet(j.sku, want, now); }
     catch (e) { failed.push(`${j.sku}: set failed`); continue; }
-    if (!res || !res.ok) { failed.push(`${j.sku}: ${(res && res.error) || 'the store refused'}`); continue; }
-    fixed.push(`${j.sku} ${now} → ${res.available}`);
+    /* `ok` alone means the call came back, not that the store was written.
+       The single dialog has always required `ok && set` (stock-ops.js, in
+       vendorSet's caller); this path checked only `ok` and then trusted
+       `res.available`, which is whatever the workflow echoed rather than a
+       re-read. A Respond node returning {ok:true, available:<requested>} on a
+       path that did not write would march every SKU through as fixed, tick
+       every job Done, and empty the Jobs list — leaving nothing pointing back
+       at stores that are all still negative. */
+    if (!res || !res.ok || !res.set) {
+      failed.push(`${j.sku}: ${(res && res.error) || (res && res.ok ? 'the store did not report the change as made' : 'the store refused')}`);
+      continue;
+    }
+    /* Confirm against a fresh read rather than the echo. A set that reports
+       success and lands on the wrong number is exactly the case this run
+       exists to catch, so it must not be the one thing taken on trust. */
+    let after = null;
+    try {
+      const c = await StockOps.vendorCheck(j.sku);
+      // Same null-safe read this loop already uses above for `now`: a missing
+      // available must not become 0, because Number(null) is 0 and finite.
+      after = (c && c.ok && c.available != null) ? Number(c.available) : null;
+    } catch (e) { after = null; }
+    if (after == null || !Number.isFinite(after)) {
+      // The set reported success; only the confirmation is missing. Say so
+      // rather than calling it a failure, and leave the job open to re-run.
+      fixed.push(`${j.sku} ${now} → ${want} (unconfirmed)`);
+      continue;
+    }
+    fixed.push(`${j.sku} ${now} → ${after}`);
     // Tick the job off only when the store really landed on what it asked for.
-    if (Number(res.available) === want) doneIds.push(j.id);
+    if (after === want) doneIds.push(j.id);
   }
   } catch (e) {
     console.error('Tidy-up stopped:', e);
