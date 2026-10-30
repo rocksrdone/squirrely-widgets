@@ -601,18 +601,13 @@ async function loadListingSources() {
   } catch (e) { console.warn('Inventory Desk: Cost_Settings unavailable', e); }
 }
 
-/* The retail store's spelling of a Grist SKU. Grist and the vendor store say
-   FFN_; the retail store says NFF_. Returns the OTHER spelling when the
-   prefix is in a group, else the SKU unchanged. */
+/* The SKU a retail listing is created under: the Grist SKU, unchanged.
+   Decided 2026-10-30 — one spelling everywhere (FFN_, FFC_, EN_). The retail
+   store used to say NFF_/CFF_ and is being brought into line; the prefix
+   groups in Item_Weights stay so that OLD retail orders and lookups under the
+   transposed spelling still resolve, but nothing new is ever written with it. */
 function retailSku(sku) {
-  const s = String(sku || '').trim();
-  const i = s.indexOf('_');
-  if (i < 0) return s;
-  const head = s.slice(0, i).toUpperCase(), tail = s.slice(i);
-  const row = S.prefixGroups.find(gp => gp.includes(head));
-  if (!row) return s;
-  const other = row.find(p => p !== head);
-  return other ? other + tail : s;
+  return String(sku || '').trim();
 }
 
 /* From the TITLE, the way Shopify makes a handle itself: "FF Nylon -
@@ -658,11 +653,17 @@ function listingGaps(g) {
 function listingNoteHtml(g) {
   const gaps = listingGaps(g);
   const photo = S.photoByRecipe[g.recipeId];
-  const rs = retailSku(g.recipe.sku);
   const bits = [];
-  if (rs && rs !== g.recipe.sku) {
-    bits.push(`<div>Retail spelling is <strong>${esc(rs)}</strong> — the retail store does not use
-      <code>${esc(g.recipe.sku)}</code>. Search Shopify for the first one before creating anything.</div>`);
+  /* Until every retail SKU has been respelled, an existing listing may still
+     carry the old transposed prefix. Name it, so a search finds the product
+     before a duplicate gets imported beside it. */
+  const s = String(g.recipe.sku || '').trim(), i = s.indexOf('_');
+  const grp = i > 0 ? S.prefixGroups.find(gp => gp.includes(s.slice(0, i).toUpperCase())) : null;
+  const olds = grp ? grp.filter(p => p !== s.slice(0, i).toUpperCase()).map(p => p + s.slice(i)) : [];
+  if (olds.length) {
+    bits.push(`<div>Search the retail store for <strong>${esc(s)}</strong> and the old spelling
+      <code>${olds.map(esc).join('</code>, <code>')}</code> before importing — if either exists, the listing
+      is already there and only needs its SKU corrected.</div>`);
   }
   if (gaps.length) {
     bits.push(`<div style="margin-top:3px">The CSV will be short of: ${esc(gaps.join('; '))}.</div>`);
