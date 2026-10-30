@@ -360,6 +360,24 @@ function showToast(msg, isErr) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => t.classList.remove('show'), 3200);
 }
+/* Byte-identical with vendor-setup.html, which writes the column. A Grist
+   Choice List arrives as ['L', 'FF Nylon', …]; 'L' is the list marker. */
+const fiberList = v => (Array.isArray(v) ? v.filter(x => x !== 'L') : []).map(String);
+
+/* The fibres we can actually print a front label for, for one customer:
+   what they buy, narrowed to what a sheet exists for. A vendor who buys only
+   FF gets one answer and no decision; one who buys both gets two buttons.
+
+   Falls back to every mapped fibre when Vendor_Fibers is empty or missing —
+   an unfilled column must not leave someone unable to print a label. */
+function frontFibersFor(c) {
+  const mapped = Object.keys(S.tplByFiber).filter(Boolean);
+  if (!c) return mapped;
+  const theirs = (c.fibers || []).map(fiberCode).filter(f => f && S.tplByFiber[f]);
+  const uniq = [...new Set(theirs)];
+  return uniq.length ? uniq : mapped;
+}
+
 function fiberCode(f) {
   const s = normalize(f);
   if (!s) return '';
@@ -398,7 +416,7 @@ const S = {
   startAt: {},          // group key -> first label position on the sheet
   fillBlanks: {},       // group key -> fiber code for blank ring fill, or ''
   fillDefault: 'FFN',   // what to fill spare positions with when you haven't said
-  frontCust: null, frontStock: '', frontQty: 48, frontStart: 1,
+  frontCust: null, frontFiber: '', frontStockOverride: '', frontQty: 48, frontStart: 1,
   frontFit: '', frontScale: '', frontImg: null,
   labelSettings: [], clsCols: null,
   labelStock: {},       // "recipeId|STOCKCODE" -> {id, recipeId, code, qty}
@@ -481,6 +499,7 @@ async function loadAll() {
     logoUrl: findColumn(custT, ['Front_Logo_URL', 'Logo_URL']),
     logoFit: findColumn(custT, ['Front_Logo_Fit', 'Logo_Fit']),
     logoScale: findColumn(custT, ['Front_Logo_Scale', 'Logo_Scale']),
+    fibers: findColumn(custT, ['Vendor_Fibers']),
   };
   if (!cc.front || !cc.back) problems.push({ title: 'Label preferences not set up on Customers',
     body: 'Add <strong>Label_Front_Logo</strong> and <strong>Label_Back_Style</strong> to Customers so this batch knows which front logo to pull and whether the back is a custom design.' });
@@ -498,6 +517,11 @@ async function loadAll() {
       logoUrl: cc.logoUrl ? String(columnAsArray(custT, cc.logoUrl)[i] || '').trim() : '',
       logoFit: cc.logoFit ? String(columnAsArray(custT, cc.logoFit)[i] || '').trim() : '',
       logoScale: cc.logoScale ? Number(columnAsArray(custT, cc.logoScale)[i]) || null : null,
+      /* Which fibres this vendor actually buys. Vendor Setup writes this as a
+         Grist Choice List, which arrives as ['L', 'FF Nylon', 'E Nylon'] — the
+         leading 'L' is the list marker, not a value, and reading it as one
+         would offer a sheet for a fibre called "L". */
+      fibers: cc.fibers ? fiberList(columnAsArray(custT, cc.fibers)[i]) : [],
     };
     S.customers[id] = o;
     if (o.name) S.custByName[normalize(o.name)] = o;
@@ -543,8 +567,9 @@ async function loadAll() {
   await loadLabelSettings();
   await loadLabelStock(problems);
   await reconcileLabelUsage(problems);
-  // Match the dropdown's own fallback so the two never disagree.
-  if (!S.frontStock && S.templates.length) S.frontStock = S.templates[0].code;
+  /* No sheet is pinned here any more. The sheet follows the chosen thread
+     through Fiber_Codes, and seeding a stock code would have quietly pinned
+     every front batch to whichever template happened to sort first. */
 
   try {
     const lotsT = await grist.docApi.fetchTable('Production_Lots');
@@ -891,8 +916,17 @@ async function loadLabelSettings() {
 /* The sheet dropdown falls back to the first template for display, so state
    and display must resolve identically — otherwise a saved setting is only
    found once the dropdown has been touched. */
+/* The sheet, derived from the chosen thread via the same Fiber_Codes map the
+   order tab uses. An explicit override still wins, so the odd job that needs
+   a different stock is one click away rather than impossible. */
 function frontTpl() {
-  return S.templates.find(t => t.code === S.frontStock) || S.templates[0] || null;
+  if (S.frontStockOverride) {
+    const t = S.templates.find(x => x.code === S.frontStockOverride);
+    if (t) return t;
+  }
+  const fibs = frontFibersFor(S.frontCust);
+  const f = S.frontFiber && fibs.includes(S.frontFiber) ? S.frontFiber : fibs[0];
+  return (f && S.tplByFiber[f]) || S.templates[0] || null;
 }
 function savedSetting() {
   const t = frontTpl();
@@ -1936,9 +1970,14 @@ function bindPane() {
   const fc = document.getElementById('fCust');
   if (fc) fc.addEventListener('change', () => {
     S.frontCust = S.customers[Number(fc.value)] || null;
+    /* A new customer buys different threads, so a thread chosen for the last
+       one must not carry over — and neither may a sheet override picked to
+       suit it. Both reset; frontTpl() then falls to what this vendor buys. */
+    S.frontFiber = ''; S.frontStockOverride = '';
     S.frontFit = ''; S.frontScale = ''; render();
   });
-  ['fStock:frontStock', 'fQty:frontQty', 'fStart:frontStart', 'fFit:frontFit', 'fScale:frontScale']
+  ['fFiber:frontFiber', 'fStockOverride:frontStockOverride', 'fQty:frontQty',
+   'fStart:frontStart', 'fFit:frontFit', 'fScale:frontScale']
     .forEach(pair => {
       const [id, key] = pair.split(':');
       const el = document.getElementById(id);
@@ -1946,8 +1985,9 @@ function bindPane() {
       el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
         S[key] = el.value;
         // A different sheet has its own remembered settings, so drop the
-        // session overrides and let them load.
-        if (id === 'fStock') { S.frontFit = ''; S.frontScale = ''; }
+        // session overrides and let them load. Changing the thread changes
+        // the sheet, so it counts too.
+        if (id === 'fFiber' || id === 'fStockOverride') { S.frontFit = ''; S.frontScale = ''; }
         const pos = el.selectionStart; render();
         const again = document.getElementById(id);
         if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
@@ -2571,12 +2611,16 @@ function frontScale(g, tpl) {
   return /contain/i.test(frontFit()) ? 0.85 : (g.dia + 2 * safeBleed(tpl, g)) / g.dia;
 }
 
+const FIBER_LABEL = { FFN: 'FF Nylon', EN: 'E Nylon', FFC: 'FF Cotton', BW: 'Blackwing', CN: 'Cotton' };
+
 function frontPaneHtml() {
   const custs = Object.values(S.customers)
     .filter(c => c.name)
     .sort((a, b) => (b.front && /customer/i.test(b.front) ? 1 : 0) - (a.front && /customer/i.test(a.front) ? 1 : 0)
       || String(a.name).localeCompare(String(b.name)));
   const tpls = S.templates;
+  const fibs = frontFibersFor(S.frontCust);
+  const curFiber = S.frontFiber && fibs.includes(S.frontFiber) ? S.frontFiber : (fibs[0] || '');
   const tpl = frontTpl();
   const g = tpl ? pdfGeometry(tpl) : { ok: false, missing: ['a Label_Templates row'] };
   const c = S.frontCust;
@@ -2596,9 +2640,16 @@ function frontPaneHtml() {
             <option value="">— pick —</option>
             ${custs.map(x => `<option value="${x.id}" ${c && c.id === x.id ? 'selected' : ''}>${esc(x.name)}${x.code ? ' (' + esc(x.code) + ')' : ''}${/customer/i.test(x.front || '') ? ' \u2022' : ''}</option>`).join('')}
           </select></label>
-        <label class="f-lab">Sheet
-          <select class="f-sel" id="fStock">
-            ${tpls.map(t => `<option value="${esc(t.code)}" ${tpl && t.code === tpl.code ? 'selected' : ''}>${esc(t.code)}</option>`).join('')}
+        ${/* Pick the FIBRE, not the sheet. Fiber_Codes on Label_Templates
+             already decides which stock a fibre prints on — that mapping is
+             what makes the order tab put E and FF on the right sheets without
+             being asked. The front tab was making someone recall a stock code
+             to get the same answer. The sheet is shown below as a derived
+             fact, with an override for the rare day it is wrong. */ ''}
+        <label class="f-lab">Thread
+          <select class="f-sel" id="fFiber" style="min-width:120px">
+            ${fibs.map(f => `<option value="${esc(f)}" ${f === curFiber ? 'selected' : ''}>${esc(
+              FIBER_LABEL[f] || f)}</option>`).join('')}
           </select></label>
         <label class="f-lab">Labels
           <input class="qty-input" id="fQty" value="${esc(S.frontQty)}"></label>
@@ -2620,6 +2671,18 @@ function frontPaneHtml() {
           <div class="pf-value ${src ? '' : 'dim'}" style="font-family:'DM Mono',monospace;font-size:11px">${esc(src || 'none — drop a file into Front_Logo on this customer')}</div></div>
         <div class="pf"><div class="pf-label">Front setting</div>
           <div class="pf-value ${c.front ? '' : 'dim'}">${esc(c.front || 'not set')}</div></div>
+        <div class="pf"><div class="pf-label">Sheet</div>
+          <div class="pf-value">${tpl ? esc(tpl.code) : '<span class="dim">no sheet for this thread</span>'}
+            ${S.frontStockOverride ? ' <span class="f-saved">overridden</span>' : ''}
+            <select class="f-sel" id="fStockOverride" style="margin-left:6px;font-size:10.5px">
+              <option value="">from thread</option>
+              ${tpls.map(t => `<option value="${esc(t.code)}" ${
+                S.frontStockOverride === t.code ? 'selected' : ''}>${esc(t.code)}</option>`).join('')}
+            </select></div></div>
+        <div class="pf"><div class="pf-label">Buys</div>
+          <div class="pf-value ${(c.fibers || []).length ? '' : 'dim'}">${
+            (c.fibers || []).length ? esc(c.fibers.join(', '))
+              : 'Vendor_Fibers not set — offering every thread'}</div></div>
       </div>
       ${g.ok ? `<div class="alert" style="background:#E9F2F0;border-color:#B9D8D2;color:#245F55">
         Artwork drawn at <strong>${(sc * g.dia).toFixed(3)}"</strong> across a <strong>${g.dia}"</strong> label —
@@ -2631,7 +2694,7 @@ function frontPaneHtml() {
         <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels</div>
         <div style="font-size:10.5px;color:var(--mid)">${
           !S.clsCols ? 'Add a <b>Customer_Label_Settings</b> table to remember fit per sheet'
-          : sv ? `remembered for ${esc(c.code || c.name)} on ${esc(S.frontStock)}`
+          : sv ? `remembered for ${esc(c.code || c.name)} on ${esc(tpl ? tpl.code : '')}`
                : 'not yet remembered for this sheet'}</div>
         <div class="group-foot-actions">
           ${S.clsCols ? `<button class="btn" id="fSave">${sv ? 'Update' : 'Remember'} for this sheet</button>` : ''}
