@@ -1555,8 +1555,14 @@ async function confirmWind() {
        Broken spools are recorded as written off, and surplus as stock. */
     let toAlloc = p.toOrder;
     const actions = [];
+    /* What each draw was allocated, so the leftovers can be shared out below
+       instead of all landing on one lot. Every spool drawn is one of three
+       things, and the lot it came off has to be told which:
+           drawn from a lot = allocated + broken + surplus to stock             */
+    const allocFrom = {};
     p.draws.forEach(d => {
       const q = Math.min(d.qty, toAlloc);
+      allocFrom[d.lot.lotId] = (allocFrom[d.lot.lotId] || 0) + Math.max(0, q);
       if (q <= 0) return;
       toAlloc -= q;
       const f = {};
@@ -1602,7 +1608,43 @@ async function confirmWind() {
       const extra = d.qty - (d.lot.freshDry + d.lot.stock);
       if (extra > 0 && d.lot.row && S.stock2.made) rowOf(d.lot).made += extra;
     });
-    if (p.stock > 0 && anchor && anchor.row) stockMove(rowOf(anchor), S.stock2, 'vendor', p.stock);
+    /* Share the broken spools and the surplus across the lots they actually
+       came off, in draw order, each limited to what that lot had left after
+       its allocation.
+
+       Both used to be charged to the anchor — the first lot drawn — whoever
+       supplied them. Draw 10 from A and 2 from B for an order of 10, break 2:
+       B's shelf count fell by 2 with no allocation against it, so B read as
+       2 spools still waiting to be put away, while A was charged a write-off
+       for spools that never came off A. The totals netted out, so nothing
+       flagged it, and Bin Audit sent someone hunting for B's missing hank.
+
+       Draw order is arbitrary — nobody records which bag broke — but it is
+       deterministic and it balances, which the anchor rule never did. */
+    const share = (total, take) => {
+      const out = {};
+      let left = total;
+      p.draws.forEach(d => {
+        if (left <= 0) return;
+        const avail = take(d.lot.lotId);
+        const n = Math.min(left, Math.max(0, avail - (out[d.lot.lotId] || 0)));
+        if (n > 0) { out[d.lot.lotId] = (out[d.lot.lotId] || 0) + n; left -= n; }
+      });
+      return out;
+    };
+    const drawnBy = {};
+    p.draws.forEach(d => { drawnBy[d.lot.lotId] = (drawnBy[d.lot.lotId] || 0) + d.qty; });
+    const spare = (id) => Math.max(0, (drawnBy[id] || 0) - (allocFrom[id] || 0));
+    const brokenBy = share(p.broken, spare);
+    // Surplus takes what broken did not, so the two can never claim the same spool.
+    const stockBy = share(p.stock, (id) => spare(id) - (brokenBy[id] || 0));
+
+    const lotById = {};
+    p.draws.forEach(d => { lotById[d.lot.lotId] = d.lot; });
+    Object.entries(stockBy).forEach(([id, n]) => {
+      const lot = lotById[id];
+      if (n > 0 && lot && lot.row) stockMove(rowOf(lot), S.stock2, 'vendor', n);
+    });
     const stockUndo = [];   // [lotId, inverse fields]
     const stockUpdates = {};
     Object.keys(work).forEach(id => {
@@ -1611,24 +1653,36 @@ async function confirmWind() {
       stockUpdates[id] = d.fields;
       stockUndo.push([Number(id), d.inverse]);
     });
-    let brokenBefore = null, brokenLotId = null;
-    if (p.broken > 0 && S.brokenCol && anchor) {
-      brokenLotId = anchor.lotId; brokenBefore = anchor.broken || 0;
+    /* [lotId, before, after] per lot, so the undo can put each one back. It
+       used to be a single lot id; a wind spanning two lots could only ever
+       restore one of them. */
+    const brokenRows = [];
+    if (p.broken > 0 && S.brokenCol) {
+      Object.entries(brokenBy).forEach(([id, n]) => {
+        const lot = lotById[id];
+        if (!lot || n <= 0) return;
+        brokenRows.push([Number(id), lot.broken || 0, (lot.broken || 0) + n]);
+      });
     }
 
-    // Stock changes on lots other than the anchor go in their own updates.
-    const otherUpdates = Object.entries(stockUpdates)
-      .filter(([id]) => !anchor || Number(id) !== anchor.lotId)
-      .map(([id, f]) => ['UpdateRecord', 'Production_Lots', Number(id), f]);
-
-    const lotUpdate = {};
-    if (anchor && stockUpdates[anchor.lotId]) Object.assign(lotUpdate, stockUpdates[anchor.lotId]);
+    /* One field map per lot, so a lot that takes both a stock change and a
+       write-off gets ONE UpdateRecord rather than two that could disagree.
+       This used to be split into "the anchor" and "everything else", which is
+       what made it natural to put the write-off on the anchor in the first
+       place. */
+    const perLot = {};
+    const fieldsFor = (id) => (perLot[id] = perLot[id] || {});
+    Object.entries(stockUpdates).forEach(([id, f]) => Object.assign(fieldsFor(Number(id)), f));
+    brokenRows.forEach(([id, , after]) => { fieldsFor(id)[S.brokenCol] = after; });
     // Remember the bin on the lot, so the next surplus of this colourway is told
-    // where to go rather than asked again.
-    if (p.stock > 0 && S.stockBinPick && S.cols.LOT.bin) {
-      lotUpdate[S.cols.LOT.bin] = S.stockBinPick.id;
+    // where to go rather than asked again. Still the anchor: it is one bin for
+    // one colourway, not a per-lot fact.
+    if (p.stock > 0 && S.stockBinPick && S.cols.LOT.bin && anchor) {
+      fieldsFor(anchor.lotId)[S.cols.LOT.bin] = S.stockBinPick.id;
     }
-    if (brokenLotId != null && S.brokenCol) lotUpdate[S.brokenCol] = (brokenBefore || 0) + p.broken;
+    const lotActions = Object.entries(perLot)
+      .filter(([, f]) => Object.keys(f).length)
+      .map(([id, f]) => ['UpdateRecord', 'Production_Lots', Number(id), f]);
 
     /* Everything this commit writes, re-checked against Grist as it is NOW.
        Every number above is an absolute computed from rows read when the page
@@ -1659,10 +1713,7 @@ async function confirmWind() {
        Lot_Allocations. The winder would redraw and do it twice. applyPutAway
        in stock-ops.js already builds a single array; this now matches. */
     const nAdds = actions.length;
-    actions.push(...otherUpdates);
-    if (Object.keys(lotUpdate).length) {
-      actions.push(['UpdateRecord', 'Production_Lots', anchor.lotId, lotUpdate]);
-    }
+    actions.push(...lotActions);
     const res = await grist.docApi.applyUserActions(actions);
     // retValues is positional, and the AddRecords are first, so the allocation
     // ids the undo needs are the leading nAdds entries.
@@ -1685,7 +1736,7 @@ async function confirmWind() {
     S.done.unshift({
       customerName: p.line.customerName, allocIds: newIds,
       stockUndo, stockAdded: p.stock,
-      brokenLotId, brokenBefore, brokenAdded: p.broken,
+      brokenRows,
       summary: `${p.toOrder} spool${p.toOrder === 1 ? '' : 's'} ${esc(p.line.recipeName)}`
         + (p.draws.length > 1 ? ` (${p.draws.length} lots)` : '')
         + (fromStock ? ` · ${fromStock} from stock` : '')
@@ -1715,8 +1766,14 @@ async function undoWind(i) {
     (d.stockUndo || []).forEach(([lotId, inv]) => {
       actions.push(['UpdateRecord', 'Production_Lots', lotId, inv]);
     });
-    if (d.brokenAdded > 0 && S.brokenCol && d.brokenLotId != null && d.brokenBefore != null) {
-      actions.push(['UpdateRecord', 'Production_Lots', d.brokenLotId, { [S.brokenCol]: d.brokenBefore }]);
+    /* One restore per lot that was charged. The old shape held a single lot
+       id, so undoing a wind that spanned two lots put only one of them back
+       and quietly left the other carrying a write-off for spools that had
+       just been un-broken. */
+    if (S.brokenCol) {
+      (d.brokenRows || []).forEach(([lotId, before]) => {
+        actions.push(['UpdateRecord', 'Production_Lots', lotId, { [S.brokenCol]: before }]);
+      });
     }
     await grist.docApi.applyUserActions(actions);
     S.done.splice(i, 1);
