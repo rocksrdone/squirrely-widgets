@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Listing Desk</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
+<style>
+/* ══ Listing Desk ═══════════════════════════════════════════════════════════
+   Retail store listings, built from Grist. One row per colourway, one cell per
+   fibre: listed on retail, ready to list, or no recipe yet. Tick the ones to
+   list and they are created on the retail store as DRAFTS by
+   "SS - Retail Listings" in n8n — never active, never published, stock 0.
+   Going on sale stays a decision made in Shopify.
+
+   The listing content comes from the same places as Inventory Desk's Listing
+   CSV: Product_Templates (title, description, tags, category, SEO), Cost_Settings
+   Retail_Price:<fibre>, Item_Weights for the weight, Product_Photos for the
+   picture, Settings.Business_Name for the vendor. The SKU is the Grist
+   SKU_Base, unchanged — one spelling everywhere.
+
+   Only recipes that exist are listed. An E version with no EN_ recipe shows as
+   "no recipe" — make the recipe first. A listing with no photo of its OWN
+   recipe goes up without one: E and FF photos are not interchangeable.
+
+   Retail scope only by default: Customer Reserved, College/University and
+   One-off recipes belong to a customer or the vendor store, not retail.     */
+:root {
+  --ink: #1A1614; --rule: #E8DFD4; --paper: #FDFBF7; --panel: #fff;
+  --muted: #8B7D72; --accent: #8B3A2A; --accent-light: #F2E8E5;
+  --teal: #2A6B6B; --teal-light: #E4F0EF; --gold: #B07D2A; --gold-light: #F5EDD8;
+  --purple: #5B4A8B; --purple-light: #EEE8F7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 12px 12px 70px; background: var(--paper); color: var(--ink);
+       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; font-size: 13px; }
+.hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hd h1 { font-size: 17px; margin: 0; }
+.hd .sub { font-size: 11.5px; color: var(--muted); }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.search { flex: 1; min-width: 160px; padding: 8px 10px; border: 1.5px solid var(--rule); border-radius: 6px;
+          font: inherit; background: #fff; color: var(--ink); }
+select { font: inherit; padding: 7px 8px; border: 1.5px solid var(--rule); border-radius: 6px; background: #fff; color: var(--ink); }
+.btn { font: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 13px; border-radius: 6px; cursor: pointer;
+       border: 1.5px solid var(--rule); background: #fff; color: var(--ink); }
+.btn.go { background: var(--teal); border-color: var(--teal); color: #fff; }
+.btn:disabled { opacity: .45; cursor: default; }
+.status { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.status.bad { color: var(--accent); }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1.5px solid var(--rule); border-radius: 7px; overflow: hidden; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted);
+     padding: 7px 9px; border-bottom: 1.5px solid var(--rule); background: #FAF6F0; }
+td { padding: 6px 9px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+.cw { font-weight: 600; }
+.scope { font-size: 10.5px; color: var(--muted); }
+.cell { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.chip { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.chip.listed { background: var(--teal-light); color: var(--teal); text-decoration: none; }
+.chip.draft { background: var(--gold-light); color: var(--gold); text-decoration: none; }
+.chip.arch { background: #EEE; color: #777; text-decoration: none; }
+.chip.none { color: #B9AEA4; font-weight: 400; padding-left: 0; }
+.chip.made { background: var(--purple-light); color: var(--purple); text-decoration: none; }
+label.pick { display: flex; gap: 5px; align-items: center; cursor: pointer; font-weight: 600; color: var(--ink); }
+.gap { font-size: 10.5px; color: var(--gold); }
+.gap.block { color: var(--accent); }
+.sku { font-family: 'DM Mono', ui-monospace, monospace; font-size: 10.5px; color: var(--muted); }
+.foot { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1.5px solid var(--rule);
+        padding: 9px 12px; display: flex; gap: 10px; align-items: center; }
+.foot .n { flex: 1; font-size: 12.5px; }
+.modal { position: fixed; inset: 0; background: rgba(26,22,20,.45); display: none; align-items: flex-start; justify-content: center; padding: 30px 12px; overflow: auto; z-index: 5; }
+.modal.on { display: flex; }
+.sheet { background: var(--paper); border-radius: 9px; max-width: 760px; width: 100%; padding: 14px 16px; }
+.sheet h2 { font-size: 15px; margin: 0 0 4px; }
+.prev { display: flex; gap: 10px; border: 1.5px solid var(--rule); background: #fff; border-radius: 7px; padding: 8px; margin: 8px 0; }
+.prev img { width: 64px; height: 64px; object-fit: cover; border-radius: 5px; flex: none; background: #F3EEE7; }
+.prev .noimg { width: 64px; height: 64px; border-radius: 5px; flex: none; background: #F3EEE7; color: var(--muted);
+               font-size: 10px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.prev .t { font-weight: 600; }
+.prev .meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.prev details { font-size: 11.5px; margin-top: 4px; }
+.res { font-size: 12px; margin: 3px 0; }
+.res.ok { color: var(--teal); } .res.bad { color: var(--accent); } .res.skip { color: var(--gold); }
+.note { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
+a { color: var(--teal); }
+</style>
+</head>
+<body>
+<div class="hd">
+  <h1>Listing Desk</h1>
+  <span class="sub">Create retail store drafts from Grist recipes</span>
+</div>
+<div class="bar">
+  <input id="q" class="search" placeholder="Search colourway or SKU…">
+  <select id="show">
+    <option value="missing">Not on retail yet</option>
+    <option value="all">Everything</option>
+  </select>
+  <select id="scope">
+    <option value="retail">Retail scope</option>
+    <option value="all">All scopes</option>
+  </select>
+  <button class="btn" id="recheck">Re-check retail</button>
+</div>
+<div id="status" class="status">Loading…</div>
+<div id="list"></div>
+<div class="foot">
+  <span class="n" id="count">Nothing selected</span>
+  <button class="btn" id="clear">Clear</button>
+  <button class="btn go" id="preview" disabled>Preview drafts</button>
+</div>
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+
+<script>
+/* The n8n webhook. Holds the retail credential; the widget never sees a token. */
+const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-listings';
+const FIBRES = [
+  { code: 'FFN', name: 'FF Nylon' },
+  { code: 'EN', name: 'E Nylon' },
+  { code: 'FFC', name: 'FF Cotton' },
+];
+/* Recipe_Scope values that never get a retail listing of their own. */
+const NOT_RETAIL = ['customer reserved', 'college/university', 'one-off'];
+const BATCH = 5;   // listings per webhook call; each takes a few Shopify calls
+
+const S = {
+  recipes: [], cols: [], tplByFiber: {}, tplDefault: null, priceByFiber: {}, weightByFiber: {},
+  photoByRecipe: {}, retail: null, retailError: '', loading: true, picked: new Set(), made: {},
+};
+
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function col(t, c) { return c && Array.isArray(t[c]) ? t[c] : []; }
+function findColumn(t, cands) {
+  const keys = Object.keys(t);
+  for (const cand of cands) {
+    const n = cand.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === n);
+    if (hit) return hit;
+  }
+  return null;
+}
+function getRefId(ref) {
+  if (typeof ref === 'number') return ref || null;
+  if (Array.isArray(ref)) return ref[1];
+  return null;
+}
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function fiberCode(f) {
+  const s = (f || '').toString().trim().toUpperCase();
+  if (!s) return '';
+  if (/^(FFN|FFC|EN|BW|CN)$/.test(s)) return s;
+  if (/E\s*NYLON/.test(s)) return 'EN';
+  if (/COTTON/.test(s)) return 'FFC';
+  if (/NYLON/.test(s)) return 'FFN';
+  return s;
+}
+/* Same as Inventory Desk: unknown tokens are left in place so a typo shows. */
+function fillTemplate(text, vars) {
+  if (text == null) return '';
+  return String(text).replace(/\{(\w+)\}/g, (m, k) =>
+    Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m);
+}
+/* Field by field: a fibre row overrides only what it fills; the blank-fibre
+   row supplies the rest. */
+function templateFor(code) {
+  const own = S.tplByFiber[code] || null, def = S.tplDefault;
+  if (!own) return def;
+  if (!def) return own;
+  const out = Object.assign({}, def);
+  Object.keys(own).forEach(k => {
+    const v = own[k];
+    if (v !== null && v !== undefined && String(v).trim() !== '') out[k] = v;
+  });
+  return out;
+}
+function handleFor(title, sku) {
+  const slug = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug(title) || slug(sku) || 'listing';
+}
+
+async function loadGrist() {
+  try { await SSSettings.load(); } catch (e) { console.warn('Settings unavailable', e); }
+  const recT = await grist.docApi.fetchTable('Recipes');
+  const c = {
+    name: findColumn(recT, ['Recipe_Name']), sku: findColumn(recT, ['SKU_Base']),
+    fiber: findColumn(recT, ['Fiber_Type']), scope: findColumn(recT, ['Recipe_Scope']),
+    status: findColumn(recT, ['Status']), cw: findColumn(recT, ['Colorway']),
+  };
+  S.recipes = (recT.id || []).map((id, i) => ({
+    id,
+    name: String(col(recT, c.name)[i] || '').trim(),
+    sku: String(col(recT, c.sku)[i] || '').trim(),
+    fiber: fiberCode(col(recT, c.fiber)[i]),
+    scope: String(col(recT, c.scope)[i] || '').trim(),
+    status: String(col(recT, c.status)[i] || '').trim(),
+    cw: getRefId(col(recT, c.cw)[i]),
+  })).filter(r => r.name && r.sku && FIBRES.some(f => f.code === r.fiber));
+
+  /* Templates */
+  S.tplByFiber = {}; S.tplDefault = null; S.hasTemplates = false;
+  try {
+    const t = await grist.docApi.fetchTable('Product_Templates');
+    const names = ['Fiber_Code', 'Title_Pattern', 'Description', 'Product_Category', 'Type', 'Tags',
+      'SEO_Title', 'SEO_Description', 'Active'];
+    const tc = {}; names.forEach(n => { tc[n] = findColumn(t, [n]); });
+    S.hasTemplates = !!(tc.Description || tc.Title_Pattern);
+    (t.id || []).forEach((id, i) => {
+      if (tc.Active && !col(t, tc.Active)[i]) return;
+      const row = {}; names.forEach(n => { row[n] = tc[n] ? col(t, tc[n])[i] : null; });
+      const f = fiberCode(row.Fiber_Code || '');
+      if (f) S.tplByFiber[f] = row; else if (!S.tplDefault) S.tplDefault = row;
+    });
+  } catch (e) { console.warn('Listing Desk: Product_Templates unavailable', e); }
+
+  /* Prices */
+  S.priceByFiber = {};
+  try {
+    const t = await grist.docApi.fetchTable('Cost_Settings');
+    const k = findColumn(t, ['Key']), v = findColumn(t, ['Value']);
+    (t.id || []).forEach((id, i) => {
+      const m = /^Retail_Price:(.+)$/i.exec(String(col(t, k)[i] || '').trim());
+      if (m) S.priceByFiber[fiberCode(m[1])] = num(col(t, v)[i]);
+    });
+  } catch (e) { console.warn('Listing Desk: Cost_Settings unavailable', e); }
+
+  /* Weights (per spool, oz) */
+  S.weightByFiber = {};
+  try {
+    const t = await grist.docApi.fetchTable('Item_Weights');
+    const fc = findColumn(t, ['Fiber']), wc = findColumn(t, ['Weight_Oz']),
+      pc = findColumn(t, ['Per_Order']), ac = findColumn(t, ['Active']);
+    (t.id || []).forEach((id, i) => {
+      if (ac && !col(t, ac)[i]) return;
+      if (pc && col(t, pc)[i]) return;
+      const f = fiberCode(col(t, fc)[i]), w = num(col(t, wc)[i]);
+      if (f && w > 0) S.weightByFiber[f] = w;
+    });
+  } catch (e) { console.warn('Listing Desk: Item_Weights unavailable', e); }
+
+  /* Photos: this recipe's own favourite, else its first. Never another fibre's. */
+  S.photoByRecipe = {};
+  try {
+    const t = await grist.docApi.fetchTable('Product_Photos');
+    const rc = findColumn(t, ['Recipe']), uc = findColumn(t, ['Nextcloud_URL']), fc = findColumn(t, ['Is_Favorite']);
+    (t.id || []).forEach((id, i) => {
+      const rid = getRefId(col(t, rc)[i]), url = String(col(t, uc)[i] || '').trim();
+      if (!rid || !url) return;
+      const fav = !!col(t, fc)[i], cur = S.photoByRecipe[rid];
+      if (!cur || (fav && !cur.fav)) S.photoByRecipe[rid] = { url, fav };
+    });
+  } catch (e) { console.warn('Listing Desk: Product_Photos unavailable', e); }
+
+  /* Group by colourway NAME, not the Colorway reference: the E recipes don't
+     reliably point at the same Colorway row as their FF twin, and grouping on
+     the reference put Andromeda FF and Andromeda E on separate lines. A
+     customer-reserved recipe sharing a retail name (FFN_FOXY_CU_R beside
+     FFN_FOXY) is kept on its own line so it can never be listed as the retail
+     one. */
+  const groups = {};
+  S.recipes.forEach(r => {
+    const retail = !NOT_RETAIL.includes(r.scope.toLowerCase());
+    const key = r.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
+      + (retail ? '' : '|' + r.scope.toLowerCase());
+    const g = groups[key] || (groups[key] = { name: r.name, byFiber: {}, scopes: new Set() });
+    if (!g.byFiber[r.fiber]) g.byFiber[r.fiber] = r;
+    if (r.scope) g.scopes.add(r.scope);
+  });
+  S.cols = Object.values(groups).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function checkRetail() {
+  S.retail = null; S.retailError = ''; render();
+  try {
+    const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check', from: 'listing-desk' }) });
+    if (!res.ok) throw new Error('webhook returned ' + res.status);
+    const d = await res.json();
+    if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
+    const bySku = {};
+    (d.variants || []).forEach(v => { if (v.sku) bySku[v.sku.toUpperCase()] = v; });
+    S.retail = { bySku, at: d.fetched_at, count: (d.variants || []).length };
+  } catch (e) {
+    S.retailError = (e && e.message) || String(e);
+  }
+  render();
+}
+
+/* What a listing would be, and what is wrong with it. block = cannot send. */
+function buildListing(r) {
+  const f = FIBRES.find(x => x.code === r.fiber);
+  const tpl = templateFor(r.fiber) || {};
+  const vendor = SSSettings.text('Business_Name', '');
+  const vars = { colorway: r.name, colourway: r.name, fiber: f.name, fibre: f.name, fiber_code: r.fiber, sku: r.sku, vendor };
+  const T = (k) => fillTemplate(tpl[k], vars).trim();
+  const title = T('Title_Pattern') || `${f.name} - ${r.name}`;
+  const price = S.priceByFiber[r.fiber] || 0;
+  const weightOz = S.weightByFiber[r.fiber] || 0;
+  const photo = S.photoByRecipe[r.id] || null;
+  const tags = (T('Tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const L = {
+    recipeId: r.id, sku: r.sku, title, handle: handleFor(title, r.sku),
+    descriptionHtml: T('Description'), vendor, productType: T('Type') || 'Thread', tags,
+    category: T('Product_Category'), seoTitle: T('SEO_Title'), seoDescription: T('SEO_Description'),
+    price, weightOz, imageUrl: photo ? photo.url : '', imageAlt: title,
+  };
+  const gaps = [];
+  if (!(price > 0)) gaps.push({ t: `no retail price — add Retail_Price:${r.fiber} to Cost_Settings`, block: true });
+  if (!vendor) gaps.push({ t: 'no Business_Name in Settings', block: true });
+  if (!S.hasTemplates || !L.descriptionHtml) gaps.push({ t: 'no description in Product_Templates', block: true });
+  if (/\{\w+\}/.test(title + L.descriptionHtml + tags.join(','))) gaps.push({ t: 'template has an unknown {placeholder}', block: true });
+  if (!(weightOz > 0)) gaps.push({ t: `no ${r.fiber} weight in Item_Weights`, block: false });
+  if (!photo) gaps.push({ t: 'no photo of this recipe', block: false });
+  L.gaps = gaps; L.blocked = gaps.some(g => g.block);
+  return L;
+}
+
+function retailFor(r) {
+  if (S.made[r.id]) return { made: true, ...S.made[r.id] };
+  return S.retail ? S.retail.bySku[r.sku.toUpperCase()] || null : null;
+}
+
+function isRetailScope(g) {
+  if (!g.scopes.size) return true;
+  return [...g.scopes].some(s => !NOT_RETAIL.includes(s.toLowerCase()));
+}
+
+function cellHtml(g, f) {
+  const r = g.byFiber[f.code];
+  if (!r) return '<span class="chip none">no recipe</span>';
+  const live = retailFor(r);
+  if (live) {
+    if (live.made) return `<a class="chip made" href="${esc(live.admin_url)}" target="_blank" rel="noopener">draft created</a>`;
+    const cls = live.status === 'ACTIVE' ? 'listed' : live.status === 'DRAFT' ? 'draft' : 'arch';
+    return `<a class="chip ${cls}" href="${esc(live.admin_url)}" target="_blank" rel="noopener">${esc(live.status.toLowerCase())}</a>`;
+  }
+  if (!S.retail) return `<span class="sku">${esc(r.sku)}</span>`;
+  const L = buildListing(r);
+  return `<div class="cell">
+    <label class="pick"><input type="checkbox" data-pick="${r.id}" ${S.picked.has(r.id) ? 'checked' : ''} ${L.blocked ? 'disabled' : ''}> list it</label>
+    <span class="sku">${esc(r.sku)}</span>
+    ${L.gaps.map(x => `<span class="gap ${x.block ? 'block' : ''}">${esc(x.t)}</span>`).join('')}
+  </div>`;
+}
+
+function visibleCols() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const show = document.getElementById('show').value, scope = document.getElementById('scope').value;
+  return S.cols.filter(g => {
+    if (scope === 'retail' && !isRetailScope(g)) return false;
+    if (q && !(g.name.toLowerCase().includes(q) || Object.values(g.byFiber).some(r => r.sku.toLowerCase().includes(q)))) return false;
+    if (show === 'missing' && S.retail) return Object.values(g.byFiber).some(r => !retailFor(r));
+    return true;
+  });
+}
+
+function render() {
+  const st = document.getElementById('status');
+  if (S.loading) { st.textContent = 'Loading Grist…'; return; }
+  if (S.retailError) {
+    st.className = 'status bad';
+    st.textContent = `Couldn't read the retail store: ${S.retailError}. Check that "SS - Retail Listings" is imported and active in n8n.`;
+  } else if (!S.retail) {
+    st.className = 'status'; st.textContent = 'Checking what is already on the retail store…';
+  } else {
+    st.className = 'status';
+    const t = new Date(S.retail.at);
+    st.textContent = `Retail store has ${S.retail.count} variants (checked ${t.toLocaleTimeString()}). Matched on SKU.`;
+  }
+  const rows = visibleCols();
+  document.getElementById('list').innerHTML = rows.length ? `<table>
+    <tr><th>Colourway</th>${FIBRES.map(f => `<th>${f.name}</th>`).join('')}</tr>
+    ${rows.map(g => `<tr><td><div class="cw">${esc(g.name)}</div><div class="scope">${esc([...g.scopes].join(', '))}</div></td>
+      ${FIBRES.map(f => `<td>${cellHtml(g, f)}</td>`).join('')}</tr>`).join('')}
+  </table>` : '<div class="status">Nothing to show with these filters.</div>';
+  const n = S.picked.size;
+  document.getElementById('count').textContent = n ? `${n} listing${n > 1 ? 's' : ''} selected` : 'Nothing selected';
+  document.getElementById('preview').disabled = !n;
+}
+
+function pickedListings() {
+  return S.recipes.filter(r => S.picked.has(r.id)).map(buildListing).filter(L => !L.blocked);
+}
+
+function openPreview() {
+  const list = pickedListings();
+  const sheet = document.getElementById('sheet');
+  sheet.innerHTML = `<h2>Create ${list.length} draft${list.length > 1 ? 's' : ''} on the retail store</h2>
+    <div class="note">Each is created as a <strong>draft</strong> with stock 0. Nothing goes on sale.
+      Afterwards, in Shopify: add any missing photos, set sales channels, then activate when stock is moved to retail.</div>
+    ${list.map(L => `<div class="prev">
+      ${L.imageUrl ? `<img src="${esc(L.imageUrl)}" alt="">` : '<div class="noimg">no photo</div>'}
+      <div style="min-width:0;flex:1">
+        <div class="t">${esc(L.title)}</div>
+        <div class="meta">${esc(L.sku)} · $${L.price.toFixed(2)} · ${L.weightOz ? L.weightOz + ' oz' : 'no weight'} · ${esc(L.productType)} · tags: ${esc(L.tags.join(', ') || '—')}</div>
+        <div class="meta">handle: ${esc(L.handle)}</div>
+        <details><summary>Description</summary><div>${L.descriptionHtml}</div></details>
+      </div></div>`).join('')}
+    <div id="results"></div>
+    <div class="bar" style="justify-content:flex-end">
+      <button class="btn" id="cancel">Cancel</button>
+      <button class="btn go" id="create">Create drafts</button>
+    </div>`;
+  document.getElementById('modal').classList.add('on');
+  document.getElementById('cancel').onclick = closePreview;
+  document.getElementById('create').onclick = () => createDrafts(list);
+}
+function closePreview() { document.getElementById('modal').classList.remove('on'); render(); }
+
+async function createDrafts(list) {
+  const btn = document.getElementById('create'), cancel = document.getElementById('cancel');
+  const box = document.getElementById('results');
+  btn.disabled = true; cancel.disabled = true; btn.textContent = 'Creating…';
+  box.innerHTML = '';
+  for (let i = 0; i < list.length; i += BATCH) {
+    const chunk = list.slice(i, i + BATCH);
+    try {
+      const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', from: 'listing-desk',
+          listings: chunk.map(({ gaps, blocked, recipeId, ...L }) => L) }) });
+      if (!res.ok) throw new Error('webhook returned ' + res.status);
+      const d = await res.json();
+      if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
+      (d.results || []).forEach(r => {
+        const L = chunk.find(x => x.sku === r.sku);
+        const link = r.admin_url ? ` — <a href="${esc(r.admin_url)}" target="_blank" rel="noopener">open in Shopify</a>` : '';
+        if (r.ok) {
+          if (L) { S.made[L.recipeId] = { admin_url: r.admin_url }; S.picked.delete(L.recipeId); }
+          const extra = [!r.image && 'no photo', r.category_set === false && 'category not set'].filter(Boolean).join(', ');
+          box.innerHTML += `<div class="res ok">✓ ${esc(r.title)}${extra ? ` (${esc(extra)})` : ''}${link}</div>`;
+        } else if (r.skipped) {
+          if (L) S.picked.delete(L.recipeId);
+          box.innerHTML += `<div class="res skip">– ${esc(r.title)}: ${esc(r.error)}${link}</div>`;
+        } else {
+          box.innerHTML += `<div class="res bad">✗ ${esc(r.title)}: ${esc(r.error)}${link}</div>`;
+        }
+      });
+    } catch (e) {
+      chunk.forEach(L => { box.innerHTML += `<div class="res bad">✗ ${esc(L.title)}: ${esc(e.message || e)}</div>`; });
+    }
+  }
+  btn.textContent = 'Done'; cancel.disabled = false; cancel.textContent = 'Close';
+}
+
+function wire() {
+  ['q', 'show', 'scope'].forEach(id => document.getElementById(id).addEventListener('input', render));
+  document.getElementById('recheck').onclick = checkRetail;
+  document.getElementById('clear').onclick = () => { S.picked.clear(); render(); };
+  document.getElementById('preview').onclick = openPreview;
+  document.getElementById('list').addEventListener('change', (e) => {
+    const id = Number(e.target.dataset.pick);
+    if (!id) return;
+    if (e.target.checked) S.picked.add(id); else S.picked.delete(id);
+    render();
+  });
+}
+
+grist.ready({ requiredAccess: 'read table' });
+wire();
+(async () => {
+  try { await loadGrist(); } catch (e) {
+    document.getElementById('status').className = 'status bad';
+    document.getElementById('status').textContent = 'Could not read Recipes: ' + (e.message || e);
+    return;
+  }
+  S.loading = false;
+  render();
+  checkRetail();
+})();
+</script>
+</body>
+</html>
