@@ -124,6 +124,24 @@ const FIBRES = [
 const NOT_RETAIL = ['customer reserved', 'college/university', 'one-off'];
 const BATCH = 5;   // listings per webhook call; each takes a few Shopify calls
 
+/* The webhook's password. It lives in the Grist Settings table (Webhook_Key),
+   never in this file — the repo and this page are public, the Grist doc is
+   not. n8n's Header Auth credential holds the same value and refuses any call
+   without it, so knowing the webhook address alone gets nobody anywhere. */
+async function callWebhook(payload) {
+  const key = SSSettings.text('Webhook_Key', '');
+  if (!key) throw new Error('no Webhook_Key in Settings — add it on Settings Desk');
+  const res = await fetch(WEBHOOK_URL, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-SS-Key': key },
+    body: JSON.stringify(payload) });
+  if (res.status === 401 || res.status === 403)
+    throw new Error('n8n refused the Webhook_Key — check it matches the "SS Webhook Key" credential');
+  if (!res.ok) throw new Error('webhook returned ' + res.status);
+  const d = await res.json();
+  if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
+  return d;
+}
+
 const S = {
   recipes: [], cols: [], tplByFiber: {}, tplDefault: null, priceByFiber: {}, weightByFiber: {},
   photoByRecipe: {}, retail: null, retailError: '', loading: true, picked: new Set(), made: {},
@@ -276,11 +294,7 @@ async function loadGrist() {
 async function checkRetail() {
   S.retail = null; S.retailError = ''; render();
   try {
-    const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'check', from: 'listing-desk' }) });
-    if (!res.ok) throw new Error('webhook returned ' + res.status);
-    const d = await res.json();
-    if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
+    const d = await callWebhook({ action: 'check', from: 'listing-desk' });
     const bySku = {};
     (d.variants || []).forEach(v => { if (v.sku) bySku[v.sku.toUpperCase()] = v; });
     S.retail = { bySku, at: d.fetched_at, count: (d.variants || []).length };
@@ -363,7 +377,7 @@ function render() {
   if (S.loading) { st.textContent = 'Loading Grist…'; return; }
   if (S.retailError) {
     st.className = 'status bad';
-    st.textContent = `Couldn't read the retail store: ${S.retailError}. Check that "SS - Retail Listings" is imported and active in n8n.`;
+    st.textContent = `Couldn't read the retail store: ${S.retailError}`;
   } else if (!S.retail) {
     st.className = 'status'; st.textContent = 'Checking what is already on the retail store…';
   } else {
@@ -419,12 +433,8 @@ async function createDrafts(list) {
   for (let i = 0; i < list.length; i += BATCH) {
     const chunk = list.slice(i, i + BATCH);
     try {
-      const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', from: 'listing-desk',
-          listings: chunk.map(({ gaps, blocked, recipeId, ...L }) => L) }) });
-      if (!res.ok) throw new Error('webhook returned ' + res.status);
-      const d = await res.json();
-      if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
+      const d = await callWebhook({ action: 'create', from: 'listing-desk',
+        listings: chunk.map(({ gaps, blocked, recipeId, ...L }) => L) });
       (d.results || []).forEach(r => {
         const L = chunk.find(x => x.sku === r.sku);
         const link = r.admin_url ? ` — <a href="${esc(r.admin_url)}" target="_blank" rel="noopener">open in Shopify</a>` : '';
