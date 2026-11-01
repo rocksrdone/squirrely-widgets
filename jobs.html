@@ -7,6 +7,7 @@
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js"></script>
 <script src="stock-ops.js?v=20261030c"></script>
+<script src="bag-cards.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
 :root {
@@ -62,6 +63,7 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
   <div class="right">
     <button class="btn small" id="fixneg" style="display:none">⚡ Fix the ones showing negative</button>
     <button class="btn small" id="print">⬇ Print checklist</button>
+    <button class="btn small" id="bags" title="Back stock bag cards for every open job that names a colourway">🏷 Bag cards for open jobs</button>
     <button class="btn small" id="extra">⬇ Today's extra pots</button>
     <button class="btn small" id="reload">↻</button>
   </div>
@@ -251,7 +253,7 @@ function jobHtml(j) {
     <div class="acts">
       ${problem
         ? `<button class="btn go" data-act="resolve">Resolved</button>`
-        : `${j.type === 'Vendor store' && j.sku ? `<button class="btn" data-act="vendor" style="border-color:var(--purple);color:var(--purple)">Check &amp; set</button>` : ''}<button class="btn go done" data-act="done" title="${storeSetNote(j) ? 'The store was already set - tick this off' : 'Done'}">${storeSetNote(j) ? '✓ Corrected' : '✓'}</button><button class="btn warn" data-act="problem">Problem</button>`}
+        : `${j.recipeId ? `<button class="btn small" data-act="bag" title="Print this colourway's back stock bag card">🏷</button>` : ''}${j.type === 'Vendor store' && j.sku ? `<button class="btn" data-act="vendor" style="border-color:var(--purple);color:var(--purple)">Check &amp; set</button>` : ''}<button class="btn go done" data-act="done" title="${storeSetNote(j) ? 'The store was already set - tick this off' : 'Done'}">${storeSetNote(j) ? '✓ Corrected' : '✓'}</button><button class="btn warn" data-act="problem">Problem</button>`}
     </div>
     ${S.open === j.id ? `<div class="prob">
       <span>Found</span><input class="n" type="number" min="0" id="pf" value="${j.qty != null ? esc(j.qty) : ''}">
@@ -304,6 +306,7 @@ function wire() {
     const id = Number(b.closest('.job').dataset.id);
     const act = b.dataset.act;
     if (act === 'done') return setStatus(id, 'Done');
+    if (act === 'bag') return printBagCardsFor(S.jobs.filter(x => x.id === id));
     if (act === 'resolve') return setStatus(id, 'Resolved');
     if (act === 'vendor') {
       const j = S.jobs.find(x => x.id === id);
@@ -550,6 +553,27 @@ async function printChecklist() {
 document.getElementById('reload').addEventListener('click', load);
 document.getElementById('fixneg').onclick = bulkFixNegatives;
 document.getElementById('print').addEventListener('click', printChecklist);
+document.getElementById('bags').addEventListener('click', () =>
+  printBagCardsFor(S.jobs.filter(j => (j.status === 'To do' || j.status === 'Problem') && j.recipeId)));
+
+/* ── Bag cards ───────────────────────────────────────────────────────────
+   The back stock bag card (bag-cards.js, the same card Bin Audit prints) for
+   the colourways these jobs are about — so a put-away arrives at the bin with
+   its card, and a torn or out-of-date card can be replaced from the job that
+   found it. A colourway with nothing in back stock yet gets a blank ledger,
+   carrying the job's bin. One card per bag even when several jobs name it. */
+async function printBagCardsFor(jobs) {
+  const ids = jobs.map(j => j.recipeId).filter(Boolean);
+  if (!ids.length) { toast('None of these jobs names a colourway'); return; }
+  const bins = {};
+  jobs.forEach(j => { if (j.recipeId && j.bin && !bins[j.recipeId]) bins[j.recipeId] = j.bin; });
+  const w = BagCards.openWindow(toast);
+  if (!w) return;
+  try {
+    const cards = await BagCards.forRecipes(ids, bins);
+    BagCards.print(cards, toast, w);
+  } catch (e) { w.close(); toast('Could not make bag cards: ' + ((e && e.message) || e)); }
+}
 document.getElementById('extra').addEventListener('click', async () => {
   try {
     const n = await StockOps.printExtraPots(grist.docApi, new Date());

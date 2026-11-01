@@ -7,6 +7,7 @@
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js"></script>
 <script src="stock-ops.js?v=20261030c"></script>
+<script src="bag-cards.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@300;400;500;600;700&display=swap');
 :root {
@@ -173,6 +174,12 @@ select.pick, select.pick option {
 .bin-chip.none { color: var(--accent); border-color: #D9A89C; background: var(--accent-light); font-family: 'Inter', sans-serif; }
 .bin-chip.hit { background: var(--ink); color: white; border-color: var(--ink); }
 .bins-line { margin-top: 3px; }
+/* Bag card picks: on the card head so a bag can be picked without opening it. */
+.bagline { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+.bagpick { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: #6B5E52;
+           border: 1px solid #E8DFD4; border-radius: 10px; padding: 1px 8px 1px 5px; background: #fff; cursor: pointer; }
+.bagpick.on { border-color: #2A6B6B; color: #2A6B6B; background: #E4F0EF; }
+.bagpick input { margin: 0; }
 .lot-bin { font-family: 'DM Mono', monospace; font-size: 11px; min-width: 52px; }
 .lot-bin.none { color: var(--accent); font-family: 'Inter', sans-serif; font-size: 10px; }
 .resv-chip {
@@ -213,6 +220,8 @@ select.pick, select.pick option {
   <button class="btn" id="offOnly" title="Only colourways with something that looks wrong — on screen and in the PDF">Only what looks off</button>
   <button class="btn" id="checkStores">Check stores</button>
   <button class="btn" id="binPdf" title="Printable count sheet, one section per bin">⬇ Bin check PDF</button>
+  <button class="btn" id="bagPick" title="Pick a bag card for every colourway and fibre showing below — set a bin first to pick one bin's bags">🏷 Pick all shown</button>
+  <button class="btn" id="bagPrint" disabled title="Print the back stock bag cards you picked">🏷 Bag cards</button>
   <button class="btn" id="reload">↻ Reload</button>
 </div>
 <div id="totals"></div>
@@ -309,6 +318,7 @@ const BUCKETS = [
 ];
 
 let S = {
+  bagPick: new Set(),
   cols: null, recipes: {}, lots: [], byRecipe: [],
   search: '', showEmpty: false, open: {},
   moveQty: {}, moveFrom: {}, moveTo: {},
@@ -1309,6 +1319,38 @@ function fibreBlockHtml(g) {
 
 /* The card is the colourway. With one fibre it reads as it always did; with
    more, each fibre is its own labelled row carrying its own SKU. */
+/* ── Bag cards ───────────────────────────────────────────────────────────
+   Reprint the back stock bag card (bag-cards.js — the same card Bin Audit
+   prints) for the bags you pick: a torn, damaged or out-of-date card, or a
+   bag that never had one. Picks are per recipe, i.e. per colourway AND fibre,
+   because that is what one bag holds. "Pick all shown" respects the search,
+   bin filter and "only what looks off", so set a bin to redo that bin's cards.
+   The cards are built fresh from Grist when printed, not from this screen's
+   copy, so they always match what Bin Audit would print. */
+function bagPickHtml(g, multi) {
+  const on = S.bagPick.has(g.recipeId);
+  return `<label class="bagpick${on ? ' on' : ''}" data-bagwrap title="Back stock bag card for ${esc(g.recipe.name)} ${esc(g.recipe.fiberName || g.recipe.fiber || '')}">
+    <input type="checkbox" data-bag="${g.recipeId}" ${on ? 'checked' : ''}>🏷 ${multi ? esc(g.recipe.fiberName || g.recipe.fiber || 'bag') : 'bag card'}</label>`;
+}
+function renderBagButtons() {
+  const n = S.bagPick.size, pr = document.getElementById('bagPrint');
+  pr.disabled = !n;
+  pr.textContent = n ? `🏷 Print ${n} bag card${n === 1 ? '' : 's'}` : '🏷 Bag cards';
+  const shown = visible().flatMap(c => c.members.map(g => g.recipeId));
+  const all = shown.length && shown.every(id => S.bagPick.has(id));
+  document.getElementById('bagPick').textContent = all ? '🏷 Clear picks' : '🏷 Pick all shown';
+}
+async function printPickedBagCards() {
+  const ids = [...S.bagPick];
+  if (!ids.length) return;
+  const w = BagCards.openWindow(showToast);   // before the await, or the pop-up is blocked
+  if (!w) return;
+  try {
+    const cards = await BagCards.forRecipes(ids);
+    if (BagCards.print(cards, showToast, w)) showToast(`${cards.length} bag card${cards.length === 1 ? '' : 's'} sent to print`);
+  } catch (e) { w.close(); showToast('Could not make bag cards: ' + ((e && e.message) || e)); }
+}
+
 function cardHtml(c) {
   const open = !!S.open[c.key] || (S.onlyDiff && c.multi && hasDiff(c));
   const fibres = c.members.map(g => g.recipe.fiberName || g.recipe.fiber || '?').join(' + ');
@@ -1326,6 +1368,7 @@ function cardHtml(c) {
           : esc(c.members[0].recipe.sku || '')}</div>
         ${c.onHand > 0 || c.reserved ? `<div class="bins-line">${binChipsHtml(binsOf(c.members))}${resvChipHtml(c.reserved, c.resv)}</div>` : ''}
         ${cwFlags(c).length ? `<div>${flagChipsHtml(cwFlags(c))}</div>` : ''}
+        <div class="bagline">${c.members.map(g => bagPickHtml(g, c.multi)).join('')}</div>
       </div>
       <div class="buckets">
         ${BUCKETS.map(b => `<div class="bucket ${b.key} ${c[b.key] ? '' : 'zero'}"
@@ -1368,6 +1411,7 @@ function render() {
 
   renderBinFilter();
   pdfBarHtml();
+  renderBagButtons();
   wire();
   storeBarHtml();
   renderLog();
@@ -1390,6 +1434,12 @@ function renderBinFilter() {
 }
 
 function wire() {
+  document.querySelectorAll('[data-bagwrap]').forEach(el => el.addEventListener('click', e => e.stopPropagation()));
+  document.querySelectorAll('[data-bag]').forEach(el => el.addEventListener('change', () => {
+    const id = Number(el.dataset.bag);
+    if (el.checked) S.bagPick.add(id); else S.bagPick.delete(id);
+    render();
+  }));
   document.querySelectorAll('[data-toggle]').forEach(el => el.addEventListener('click', () => {
     const k = el.dataset.toggle;
     S.open[k] = !S.open[k];
@@ -1904,6 +1954,13 @@ document.getElementById('checkStores').addEventListener('click', () => checkStor
 document.getElementById('offOnly').addEventListener('click', () => { S.offOnly = !S.offOnly; render(); });
 document.getElementById('binFilter').addEventListener('change', (e) => { S.binFilter = e.target.value; render(); });
 document.getElementById('binPdf').addEventListener('click', () => makeBinPdf());
+document.getElementById('bagPrint').addEventListener('click', printPickedBagCards);
+document.getElementById('bagPick').addEventListener('click', () => {
+  const shown = visible().flatMap(c => c.members.map(g => g.recipeId));
+  if (shown.length && shown.every(id => S.bagPick.has(id))) shown.forEach(id => S.bagPick.delete(id));
+  else shown.forEach(id => S.bagPick.add(id));
+  render();
+});
 
 // Static shell is already rendered. Only now talk to Grist.
 try {
