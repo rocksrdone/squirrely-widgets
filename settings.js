@@ -41,6 +41,17 @@
     num(key, def) { const v = S.values[key]; return (typeof v === 'number' && isFinite(v)) ? v : def; },
     /* Text setting, or the default when blank / missing. */
     text(key, def) { return S.texts[key] !== undefined ? S.texts[key] : def; },
+    /* Headers for a call to an n8n webhook. The webhook addresses are public
+       (they are in the widget code), so n8n checks an X-SS-Key header against
+       its "SS Webhook Key" credential; the value lives only in the private Grist
+       doc, as Settings.Webhook_Key. Loads Settings first if needed. With no key
+       set it adds nothing, and a locked webhook then answers 403. */
+    async hookHeaders(extra) {
+      await S.load();
+      const h = Object.assign({}, extra || {});
+      if (S.texts.Webhook_Key) h['X-SS-Key'] = S.texts.Webhook_Key;
+      return h;
+    },
     /* Comma-separated list of positive numbers in the Text column ("5, 6, 7"). */
     list(key, def) {
       const t = S.texts[key]; if (!t) return def;

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Order Picker</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -850,7 +851,7 @@ async function refreshFromShopify() {
 
   try {
     const res = await fetch(SYNC_WEBHOOK_URL, {
-      method: 'GET', cache: 'no-store',
+      method: 'GET', cache: 'no-store', headers: await SSSettings.hookHeaders(),
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) throw new Error(`the workflow answered ${res.status} ${res.statusText}`);

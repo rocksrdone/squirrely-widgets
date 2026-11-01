@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Customer Audit</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -246,7 +247,7 @@ async function runAudit() {
       const batch = S.customers.slice(i, i + BATCH)
         .map(c => ({ id: c.id, name: c.name, email: c.email }));
       const res = await fetch(LOOKUP_WEBHOOK_URL, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ customers: batch }), cache: 'no-store',
         ...(ctrl ? { signal: ctrl.signal } : {}),
       });
