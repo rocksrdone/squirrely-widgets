@@ -800,16 +800,32 @@ function blankTag(n) {
 // answer for every customer; anything unset is the house logo.
 let LOGO_BY_CUSTOMER = {};
 
+/* Front: 'custom' | 'ss' | 'none'. Back: 'name' | 'custom' | 'none'.
+   "No front label" used to fall through to the house logo, so the sheet told
+   the labeller to stick an SS logo on spools that should have none. */
+let BACK_BY_CUSTOMER = {};
 function buildLogoIndex(custT) {
   const out = {};
+  BACK_BY_CUSTOMER = {};
   if (!custT) return out;
   const col = findColumn(custT, ['Label_Front_Logo', 'Front_Logo_Choice']);
-  if (!col) return out;
+  const bcol = findColumn(custT, ['Label_Back_Style', 'Back_Label_Style']);
   (custT.id || []).forEach((id, i) => {
-    const v = String(columnAsArray(custT, col)[i] || '');
-    out[id] = /customer/i.test(v) ? 'custom' : 'ss';
+    const v = col ? String(columnAsArray(custT, col)[i] || '').trim() : '';
+    out[id] = /^no\b/i.test(v) ? 'none' : /customer/i.test(v) ? 'custom' : 'ss';
+    const bv = bcol ? String(columnAsArray(custT, bcol)[i] || '').trim() : '';
+    BACK_BY_CUSTOMER[id] = /^no\b/i.test(bv) ? 'none' : /custom/i.test(bv) ? 'custom' : 'name';
   });
   return out;
+}
+function labelBlock(o) {
+  const f = LOGO_BY_CUSTOMER[o.custId] || 'ss', bk = BACK_BY_CUSTOMER[o.custId] || 'name';
+  const backTxt = bk === 'none' ? 'no back label' : bk === 'custom' ? 'custom back — see the Customer Card' : 'back: colorway name';
+  if (f === 'none' && bk === 'none') return `<div class="lbl"><div class="lbl-cap">Labels</div>
+       <div class="lbl-stock">NO LABELS</div><div class="lbl-desc"><em>${esc(o.customer)} takes no label on either side</em></div></div>`;
+  return `<div class="lbl"><div class="lbl-cap">Front logo</div>
+       <div class="lbl-stock">${f === 'none' ? 'NO FRONT LABEL' : f === 'custom' ? 'CUSTOMER LOGO' : 'SS LOGO'}</div>
+       <div class="lbl-desc">${bk === 'none' ? '<b>NO BACK LABEL</b>' : esc(backTxt)}<em>${f === 'none' ? 'leave the front bare' : f === 'custom' ? esc(o.customer) + '\u2019s own artwork' : 'house Squirrely Stash logo'}</em></div></div>`;
 }
 
 /* One sheet PER ORDER, not one per bag.
@@ -862,7 +878,6 @@ function orderBin(o) {
 
 function sheetOrder(b, n, o, idx, total) {
   const bin = orderBin(o);
-  const logo = LOGO_BY_CUSTOMER[o.custId] === 'custom' ? 'custom' : 'ss';
   return sheetShell(code(n),
     `<span class="ttl cw">${esc(b.colorway)}</span>`,
     total > 1 ? `one of ${total} orders from this lot` : '',
@@ -881,11 +896,7 @@ function sheetOrder(b, n, o, idx, total) {
            <td class="q">${o.qty}</td>
            <td style="text-align:center"><b>${esc(bin || '\u2014')}</b></td></tr>
      </table>
-     <div class="lbl">
-       <div class="lbl-cap">Front logo</div>
-       <div class="lbl-stock">${logo === 'custom' ? 'CUSTOMER LOGO' : 'SS LOGO'}</div>
-       <div class="lbl-desc"><em>${logo === 'custom' ? esc(o.customer) + '\u2019s own artwork' : 'house Squirrely Stash logo'}</em></div>
-     </div>
+     ${labelBlock(o)}
      <div class="stock"><b>Wound</b><div class="qb"></div><em>count back before bagging</em>
        <div class="sep"></div><b>Goes to ${esc(bin || 'order bin')}</b></div>
      <div class="nl"></div>

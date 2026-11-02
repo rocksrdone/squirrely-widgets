@@ -1246,6 +1246,10 @@ function orderPaneHtml() {
   const rows = currentRows();
   const groups = groupRows(rows);
   const customBack = cust && /custom/i.test(String(cust.back || ''));
+  /* "No back label" on the Customer Card: this customer's spools carry nothing
+     on the back, so there is no sheet to print for them. Saying so beats an
+     empty pane, and beats printing a sheet nobody should stick on. */
+  const noBack = cust && /^no\b/i.test(String(cust.back || '').trim());
   const unmatched = rows.filter(r => !r.matched);
 
   return orderPickerHtml() + profileHtml(cust, o) +
@@ -1253,7 +1257,8 @@ function orderPaneHtml() {
       ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}</div>` : '') +
     (unmatched.length ? `<div class="alert"><strong>${unmatched.length} line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
       The SKU isn't in Recipes, so there's no colorway name and no fiber to pick a sheet from. Fix the SKU or link the recipe.</div>` : '') +
-    (groups.length ? groups.map(g => groupHtml(g)).join('') : '<div class="empty-note">Nothing on this order to label.</div>') +
+    (noBack ? `<div class="empty-note"><strong>${esc(cust.name)} takes no back label</strong> — nothing to print for this order. Change it on the Customer Card if that's wrong.</div>`
+      : groups.length ? groups.map(g => groupHtml(g)).join('') : '<div class="empty-note">Nothing on this order to label.</div>') +
     frontSummaryHtml(rows, cust);
 }
 
@@ -1268,6 +1273,8 @@ function linesPaneHtml() {
     if (!l.qty) return false;
     const o = orderById[l.woId];
     if (!o) return false;
+    const c = customerForOrder(o);                       // no back label = nothing to put on a sheet
+    if (c && /^no\b/i.test(String(c.back || '').trim())) return false;
     if (S.lineOnlyActive && o.status && o.status !== 'Active') return false;
     if (!q) return true;
     const r = S.recipes[l.recipeId];
@@ -1733,6 +1740,9 @@ function groupHtml(g) {
 function frontSummaryHtml(rows, cust) {
   const total = rows.reduce((a, r) => a + effectiveQty(r), 0);
   if (!total || !cust) return '';
+  if (/^no\b/i.test(String(cust.front || '').trim())) return `<div class="front-summary">
+    <h3>Front labels to pull from stock</h3>
+    <div class="front-row"><span>No front label — ${esc(cust.name)} takes none</span><span class="fr-qty">0</span></div></div>`;
   return `<div class="front-summary">
     <h3>Front labels to pull from stock</h3>
     <div class="front-row"><span>${esc(cust.front || 'not set — check the Customer Card')}</span><span class="fr-qty">${total}</span></div>
