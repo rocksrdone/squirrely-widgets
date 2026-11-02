@@ -257,7 +257,7 @@ img.lazy-photo { transition: opacity 0.2s; }
 .note-input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 5px;
   font-size: 11px; font-family: 'Inter', sans-serif; outline: none; resize: vertical; margin-bottom: 6px; }
 .note-input:focus { border-color: var(--accent); }
-.pcard-links { display: flex; gap: 8px; align-items: center; }
+.pcard-links { display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; }
 .rot-btn { background: none; border: 1px solid var(--rule); border-radius: 3px; cursor: pointer;
   font-size: 12px; line-height: 1; padding: 2px 5px; color: #6B5E52;
   font-family: 'Inter', sans-serif; margin-left: auto; }
@@ -340,6 +340,12 @@ let lotImportMsg = '';   // HTML, already escaped
 const FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-photo';
 const PRODUCT_FILE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/file-product-photo';
 const DELETE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/delete-inbox-photo';
+const MOVE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/move-photo';
+const REVIEW_INBOX = 'Uploads/SS_Camera_Uploads/';
+/* Photos whose file is confirmed gone from Nextcloud (photo2 answered 404
+   "Photo not found"). Only ever set after that check, never from a plain
+   load error, which a busy proxy also produces. */
+const missingPhotos = new Set();
 const ROTATE_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/rotate-photo';
 
 const STATUSES = ['Pending', 'Approved', 'Rejected'];
@@ -554,7 +560,7 @@ function pumpImageQueue() {
     img.dataset.loaded = '1';
     const done = () => { imgInFlight--; pumpImageQueue(); };
     img.addEventListener('load', () => { img.classList.add('loaded'); done(); }, { once: true });
-    img.addEventListener('error', () => { img.style.opacity = 0.2; done(); }, { once: true });
+    img.addEventListener('error', () => { img.style.opacity = 0.2; done(); checkMissing(img); }, { once: true });
     img.src = url;
   }
 }
@@ -1150,9 +1156,18 @@ function recipeCardHTML(r) {
 function photoCardHTML(p) {
   const st = statusOf(p);
   const std = p.Is_Favorite;
+  if (missingPhotos.has(p.id)) return `
+    <div class="pcard rejected" data-pcard="${p.id}">
+      <div style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;font-size:12px;color:#8B3A2A;background:#F2E8E5">
+        File missing in Nextcloud<br>${esc(p.Source_Filename || '')}</div>
+      <div class="pcard-body">
+        <div class="pcard-meta">${esc(fmtDate(p.Lot_Date) || '')} · this row points at a file that no longer exists.</div>
+        <div class="pcard-links"><button class="mini-link" data-action="removerow" data-photo="${p.id}">Remove this row</button></div>
+      </div>
+    </div>`;
   return `
-    <div class="pcard ${std ? 'standard' : ''} ${st === 'Rejected' ? 'rejected' : ''}">
-      <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
+    <div class="pcard ${std ? 'standard' : ''} ${st === 'Rejected' ? 'rejected' : ''}" data-pcard="${p.id}">
+      <img class="lazy-photo" data-src="${esc(p.Nextcloud_URL || '')}" data-photoid="${p.id}" alt="${esc(p.Colorway_Name || '')}" loading="lazy">
       <div class="pcard-body">
         <div class="pcard-top">
           <button class="star-btn ${std ? 'on' : ''}" data-action="standard" data-photo="${p.id}" title="Set as the standard to show">★</button>
@@ -1164,7 +1179,9 @@ function photoCardHTML(p) {
         </div>
         <textarea class="note-input" rows="1" placeholder="Note (e.g. lot ran darker)" data-notefor="${p.id}">${esc(p.Notes || '')}</textarea>
         <div class="pcard-links">
-          <button class="mini-link" data-action="unlink" data-photo="${p.id}">Unlink</button>
+          <button class="mini-link" data-action="unlink" data-photo="${p.id}" title="Take it off this recipe; the photo stays in To link">Unlink</button>
+          <button class="mini-link" data-action="toinbox" data-photo="${p.id}" title="Move the file back to the Photo Inbox and remove its row">To inbox</button>
+          <button class="mini-link" data-action="deletefile" data-photo="${p.id}" style="color:#8B3A2A" title="Delete the file and its row for good">Delete</button>
           <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="ccw" title="Rotate 90° counter-clockwise">↺</button>
           <button class="rot-btn" data-action="rotate" data-photo="${p.id}" data-dir="cw" title="Rotate 90° clockwise">↻</button>
         </div>
@@ -1212,6 +1229,81 @@ async function linkPhoto(photoId, recipeId) {
   } catch (e) {
     console.error('Link failed:', e);
     showToast('Could not link — check widget access level');
+  }
+}
+
+/* ── Removing a photo ─────────────────────────────────────────────────────
+   Same rules as Recipe Builder's removeProductPhoto(): the FILE goes first and
+   the ROW second. SS - Import Lot Photos runs every 15 minutes and makes a row
+   for any file in lots/ that has none, so removing a row while its file stays
+   brings the photo straight back as a recipe-less duplicate. If the file step
+   fails, the row is left alone.
+
+   'inbox'  moves the file back to the Photo Inbox for another look, then
+            removes the row. Nothing is lost.
+   'delete' deletes the file for good, then removes the row.
+   'row'    only for a file already confirmed missing: removes the row.
+   Duplicate rows pointing at the same file go with it. */
+function photoPath(url) {
+  const m = /[?&]path=([^&]+)/.exec(url || '');
+  return m ? decodeURIComponent(m[1]) : '';
+}
+async function checkMissing(img) {
+  const id = Number(img.dataset.photoid);
+  if (!id || missingPhotos.has(id)) return;
+  try {
+    const r = await fetch(img.dataset.src, { cache: 'no-store' });
+    if (r.status !== 404) return;
+    const d = await r.json().catch(() => ({}));
+    if (!/not found/i.test(d.error || '')) return;
+    missingPhotos.add(id);
+    const card = document.querySelector(`[data-pcard="${id}"]`);
+    const p = allPhotos.find(x => x.id === id);
+    if (card && p) card.outerHTML = photoCardHTML(p);
+  } catch (e) { /* a network hiccup is not a missing file */ }
+}
+async function removePhoto(photoId, mode) {
+  const p = allPhotos.find(x => x.id === photoId);
+  if (!p) return;
+  const path = photoPath(p.Nextcloud_URL);
+  const fname = p.Source_Filename || path.split('/').pop() || ('photo #' + photoId);
+  const twins = path ? allPhotos.filter(x => x.id !== photoId && photoPath(x.Nextcloud_URL) === path) : [];
+  let shareNote = '';
+  try {
+    const shares = await grist.docApi.fetchTable('Photo_Shares');
+    const pc = findColumn(shares, ['Photo']);
+    const n = pc ? columnAsArray(shares, pc).filter(v => getRefId(v) === photoId).length : 0;
+    if (n) shareNote = `\n\nIt was shared with vendors ${n} time${n === 1 ? '' : 's'}. Those copies stay in vendor-share.`;
+  } catch (e) { /* optional table */ }
+  const dupNote = twins.length ? `\n\n${twins.length} duplicate row${twins.length === 1 ? '' : 's'} for the same file will be removed too.` : '';
+  const q = mode === 'inbox' ? `Send ${fname} back to the Photo Inbox and remove it from Product Photos?${dupNote}${shareNote}`
+    : mode === 'delete' ? `PERMANENTLY delete ${fname} and its Product Photos row?${dupNote}${shareNote}\n\nThis cannot be undone.`
+    : `Remove the Product Photos row for ${fname}? Its file is already gone from Nextcloud.${dupNote}`;
+  if (!confirm(q)) return;
+  if (mode !== 'row') {
+    if (!path) { showToast('This row has no file path — use Remove row'); return; }
+    try {
+      const res = mode === 'inbox'
+        ? await fetch(MOVE_WEBHOOK_URL, { method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ source_path: path, dest_path: `${REVIEW_INBOX}review_${Date.now()}${(/\.[^./]+$/.exec(fname) || ['.jpg'])[0]}` }) })
+        : await fetch(DELETE_WEBHOOK_URL, { method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ path }) });
+      if (!res.ok) throw new Error('webhook returned ' + res.status);
+    } catch (e) {
+      console.error('Photo file step failed:', e);
+      showToast(mode === 'inbox' ? 'Move failed — the file is untouched' : 'Delete failed — the file is untouched');
+      return;                       // file untouched, so the row stays
+    }
+  }
+  try {
+    await grist.docApi.applyUserActions([photoId, ...twins.map(t => t.id)].map(id => ['RemoveRecord', 'Product_Photos', id]));
+    const gone = new Set([photoId, ...twins.map(t => t.id)]);
+    allPhotos = allPhotos.filter(x => !gone.has(x.id));
+    showToast(mode === 'inbox' ? 'Sent back to the inbox' : mode === 'delete' ? 'Deleted' : 'Row removed');
+    renderAll();
+  } catch (e) {
+    console.error('Row removal failed:', e);
+    alert(`The file was ${mode === 'inbox' ? 'moved' : 'deleted'}, but the Grist row could not be removed. Delete Product_Photos row #${photoId} by hand.`);
   }
 }
 
@@ -1501,6 +1593,9 @@ document.body.addEventListener('click', (e) => {
   else if (action === 'standard') setStandard(photoId);
   else if (action === 'status') setStatus(photoId, el.dataset.status);
   else if (action === 'rotate') rotatePhoto(photoId, el.dataset.dir, el);
+  else if (action === 'toinbox') removePhoto(photoId, 'inbox');
+  else if (action === 'deletefile') removePhoto(photoId, 'delete');
+  else if (action === 'removerow') removePhoto(photoId, 'row');
   else if (action === 'pushstore') PhotoPush.openForRecipe(recipeId, { onDone: async () => { if (await loadGrist()) renderAll(); } });
   else if (action === 'expand') { expandedRecipeId = (expandedRecipeId === recipeId) ? null : recipeId; renderRecipes(); }
   else if (action === 'expandmissing') { expandedMissingId = (expandedMissingId === recipeId) ? null : recipeId; renderLink(); }
