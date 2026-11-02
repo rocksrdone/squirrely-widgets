@@ -637,6 +637,7 @@ async function loadEverything() {
     );
 
     // Photo state is a side note: if it fails, winding still works.
+    S.woInfo = woInfo;
     try { S.photos = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); S.photos = null; }
 
     render();
@@ -1275,20 +1276,89 @@ function photoBadge(lineId, withBtn) {
   const L = S.photos && lineId ? S.photos.line(lineId) : null;
   if (!L || L.state === 'none') return '';
   const btn = withBtn && L.state === 'needed'
-    ? ` <button class="glove ghost" style="padding:2px 8px;font-size:10px" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">set aside &#10003;</button>` : '';
+    ? ` <button class="glove ghost" style="padding:2px 8px;font-size:10px" onclick="event.stopPropagation(); pickPhoto(${lineId})">&#128444; pick photo</button>`
+      + ` <button class="glove ghost" style="padding:2px 8px;font-size:10px" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">set aside &#10003;</button>` : '';
   return SSPhotos.lineBadge(L) + btn;
 }
 function photoPromptHtml(lineId, afterWind) {
   const L = S.photos && lineId ? S.photos.line(lineId) : null;
   if (!L || L.state !== 'needed') return '';
   return `<div class="done-line check" style="background:#FFF3D6;border-color:#E2B65A">
-    <span>&#128247; This order wants photos. ${afterWind ? 'Pick' : 'When you wind, pick'} the <strong>best-looking spool</strong> of ${esc(L.name || 'this colourway')} and set it aside for command.</span>
+    <span>&#128247; This order wants photos of ${esc(L.name || 'this colourway')}. <strong>Pick the photo</strong> that looks most like what you wound — or, if none do, set your best-looking spool aside for command.</span>
     <span>
-      <button class="glove sort" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">&#10003; set aside</button>
+      <button class="glove sort" onclick="event.stopPropagation(); pickPhoto(${lineId})">&#128444; pick photo</button>
+      <button class="glove" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">set spool aside</button>
       ${afterWind ? `<button class="glove ghost" onclick="event.stopPropagation(); skipPhoto(${lineId})" title="Command already has a photo that matches — keep the spool with the order">already have one</button>` : ''}
     </span>
   </div>`;
 }
+/* Pick an existing photo right at the bench. Shows this colourway's photos
+   (favourites first, newest next, rejected left out) and shares the tapped one
+   to the order through the same "share-photo" workflow Photo Gallery uses —
+   so the order is done without anyone setting a spool aside. Images load only
+   when the picker opens, because each one is an n8n execution. */
+const SHARE_HOOK = 'https://squirrelystash.app.n8n.cloud/webhook/share-photo';
+let photoRows = null;
+async function loadPhotoRows() {
+  if (photoRows) return photoRows;
+  const t = await grist.docApi.fetchTable('Product_Photos');
+  const c = k => columnAsArray(t, k);
+  photoRows = (t.id || []).map((id, i) => ({
+    id, recipe: getRefId(c('Recipe')[i]), name: c('Colorway_Name')[i] || '', url: c('Nextcloud_URL')[i] || '',
+    file: c('Source_Filename')[i] || '', status: String(c('Status')[i] || ''), fav: !!c('Is_Favorite')[i],
+    date: Number(c('Lot_Date')[i]) || 0, fiber: c('Fiber_Type')[i] || '',
+  })).filter(p => p.url && p.file && !/reject/i.test(p.status));
+  return photoRows;
+}
+const bareName = s => String(s || '').toUpperCase().replace(/^.*?-\s+/, '').replace(/[^A-Z0-9]/g, '');
+async function pickPhoto(lineId) {
+  const L = S.photos && S.photos.line(lineId);
+  if (!L) return;
+  let rows;
+  try { rows = await loadPhotoRows(); } catch (e) { console.error(e); showToast('Could not load photos'); return; }
+  const nm = bareName(L.name);
+  const list = rows.filter(p => (L.recipeId && p.recipe === L.recipeId) || (nm && bareName(p.name) === nm))
+    .sort((a, b) => ((b.recipe === L.recipeId) - (a.recipe === L.recipeId)) || (b.fav - a.fav) || (b.date - a.date)).slice(0, 12);
+  const box = document.createElement('div');
+  box.id = 'photoPick';
+  box.style.cssText = 'position:fixed;inset:0;background:rgba(30,25,20,.55);z-index:999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow:auto';
+  box.onclick = e => { if (e.target === box) box.remove(); };
+  box.innerHTML = `<div style="background:#fff;border-radius:10px;padding:14px;max-width:760px;width:100%">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <strong>&#128444; ${esc(L.name)} — tap the photo that matches what you wound</strong>
+      <button class="glove ghost" onclick="document.getElementById('photoPick').remove()">close</button></div>
+    ${list.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">
+      ${list.map(p => `<button onclick="sharePicked(${lineId}, ${p.id}, this)" style="border:2px solid ${p.fav ? '#D4A017' : '#E8DFD4'};border-radius:8px;padding:4px;background:#FAF7F2;cursor:pointer;text-align:left">
+        <img src="${esc(p.url)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:5px;background:#eee" alt="">
+        <div style="font-size:10px;color:#6B5E52;margin-top:3px">${p.fav ? '&#9733; ' : ''}${esc(p.fiber)}${p.date ? ' · ' + esc(fmtDate(p.date)) : ''}</div></button>`).join('')}</div>`
+      : `<div class="empty-state" style="padding:20px">No photos of ${esc(L.name)} yet.</div>`}
+    <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="glove" onclick="document.getElementById('photoPick').remove(); setAsidePhoto(${lineId})">None match — set a spool aside for command</button></div>
+  </div>`;
+  document.body.appendChild(box);
+}
+async function sharePicked(lineId, photoId, el) {
+  const L = S.photos && S.photos.line(lineId);
+  const p = (photoRows || []).find(x => x.id === photoId);
+  const w = S.woInfo && L ? S.woInfo[L.woId] : null;
+  if (!L || !p || !w) return;
+  if (!w.customerCode) { showToast('This customer has no code — share from Photo Gallery'); return; }
+  el.disabled = true; el.style.opacity = .5;
+  try {
+    const r = await fetch(SHARE_HOOK, { method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ photo_id: p.id, work_order_id: L.woId, source_filename: p.file, source_path: p.url,
+        vendor_code: w.customerCode, order_number: w.orderNumber, colorway_name: p.name }) });
+    if (!r.ok) throw new Error('share-photo returned ' + r.status);
+    if (L.status) await SSPhotos.setLines(grist.docApi, [lineId], SSPhotos.DONE);
+    const box = document.getElementById('photoPick'); if (box) box.remove();
+    showToast(`Photo of ${L.name} sent to ${w.customerCode} — order ${w.orderNumber}`);
+    await loadEverything();
+    // First share makes the order's folder; make its link while we're here.
+    const o = S.photos && S.photos.order(L.woId);
+    if (o && !o.link && o.folder) { try { await SSPhotos.ensureLink(grist.docApi, o); } catch (e) { console.warn('link later', e); } }
+  } catch (e) { console.error(e); el.disabled = false; el.style.opacity = 1; showToast('Share failed — try Photo Gallery'); }
+}
+
 async function setAsidePhoto(lineId) {
   try { await SSPhotos.setLines(grist.docApi, [lineId], SSPhotos.AT); showToast('Set aside for photos — command has it'); await loadEverything(); }
   catch (e) { console.error(e); showToast(S.photos && !S.photos.hasCol ? 'Add Photo_Status to Work_Order_Lines first' : 'Could not save'); }
