@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Photo Gallery</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -664,7 +665,7 @@ async function sharePhoto(photoId, btnEl) {
   try {
     const res = await fetch(WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -707,7 +708,7 @@ async function rotatePhoto(photoId, direction, btnEl) {
   try {
     const res = await fetch(ROTATE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         photo_id: photoId,
         source_filename: p.Source_Filename,
@@ -748,7 +749,7 @@ async function unsharePhoto(photoId, shareId, destPath, btnEl) {
   try {
     const res = await fetch(UNSHARE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ share_id: shareId, dest_path: destPath }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);

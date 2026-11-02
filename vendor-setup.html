@@ -339,7 +339,7 @@ async function callWorkflow(action, vendors, fix) {
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(WEBHOOK_URL, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', signal: ctrl.signal,
+      method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }), cache: 'no-store', signal: ctrl.signal,
       body: JSON.stringify({ action, fix: fix || [], template_lock_id: templateLockId(), required_tags: requiredTags(),
         vendors: vendors.map(v => ({ row_id: v.id, name: v.name, code: v.code, email: v.email, phone: v.phone,
           first_name: v.first_name, last_name: v.last_name,

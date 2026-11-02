@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Recipe Builder</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261101"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 
@@ -893,7 +894,7 @@ async function rotateSlotPhoto(inputId, direction, btnEl) {
   try {
     const res = await fetch(ROTATE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ photo_url: url, direction: direction }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1079,7 +1080,7 @@ async function removeSlotPhoto(inputId, mode, btnEl) {
 
     const res = await fetch(toInbox ? UNFILE_WEBHOOK_URL : DELETE_FILE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(toInbox
         ? { source_path: path, recipe_id: currentRecipeId, photo_field: slot.photoField, note_field: slot.noteField }
         : { path }),
@@ -1168,7 +1169,7 @@ async function renamePhotosToMatch() {
       try {
         const res = await fetch(FILE_WEBHOOK_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             source_path: step.from,
             dest_folder: destFolder,
@@ -1504,7 +1505,7 @@ async function rotateProductPhoto(photoId, direction, btnEl) {
   try {
     const res = await fetch(ROTATE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ photo_id: photoId, source_filename: p.filename, nextcloud_url: p.url, direction }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1570,11 +1571,11 @@ async function removeProductPhoto(photoId, mode) {
   try {
     const res = toInbox
       ? await fetch(MOVE_WEBHOOK_URL, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ source_path: path, dest_path: `${REVIEW_INBOX}review_${Date.now()}${extOf(fname)}` }),
         })
       : await fetch(DELETE_FILE_WEBHOOK_URL, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ path }),
         });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1645,7 +1646,7 @@ async function renameProductPhotosToMatch() {
     }
     try {
       const res = await fetch(MOVE_WEBHOOK_URL, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ source_path: x.from, dest_path: x.to }),
       });
       if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -2863,7 +2864,7 @@ async function lookupShopifyUrl() {
   try {
     const resp = await fetch('https://squirrelystash.app.n8n.cloud/webhook/lookup-shopify-url', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ sku }),
     });
     const data = await resp.json();

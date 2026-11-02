@@ -6,7 +6,7 @@
 <title>Inventory Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js"></script>
-<script src="stock-ops.js?v=20261030c"></script>
+<script src="stock-ops.js?v=20261101"></script>
 <script src="bag-cards.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@300;400;500;600;700&display=swap');
@@ -1053,7 +1053,7 @@ async function checkStores() {
     for (let i = 0; i < skus.length; i += BATCH) {
       const res = await fetch(STORE_WEBHOOK_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ from: 'inventory-desk', skus: skus.slice(i, i + BATCH) }),
       });
       if (!res.ok) throw new Error('webhook returned ' + res.status);

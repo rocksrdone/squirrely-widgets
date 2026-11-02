@@ -987,7 +987,7 @@ async function sendPhotoToReview(label) {
   try {
     const res = await fetch(UNFILE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         source_path: sourcePath,
         recipe_id: currentRecipe.id,

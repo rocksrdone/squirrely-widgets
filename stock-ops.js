@@ -814,7 +814,7 @@
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), VENDOR_TIMEOUT_MS) : null;
     try {
-      r = await fetch(VENDOR_STOCK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      r = await fetch(VENDOR_STOCK_URL, { method: 'POST', headers: window.SSSettings ? await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }) : { 'Content-Type': 'application/json' },
         body: JSON.stringify(body), cache: 'no-store', ...(ctrl ? { signal: ctrl.signal } : {}) });
     } catch (e) {
       return { ok: false, error: (e && e.name === 'AbortError')

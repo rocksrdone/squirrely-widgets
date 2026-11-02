@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Photo Workbench</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -689,7 +690,7 @@ async function scanInbox() {
     const timeoutId = setTimeout(() => controller.abort(), 60000);
     let inboxRes;
     try {
-      const r = await fetch(LIST_WEBHOOK_URL, { signal: controller.signal });
+      const r = await fetch(LIST_WEBHOOK_URL, { headers: await SSSettings.hookHeaders(), signal: controller.signal });
       inboxRes = await r.json();
       clearTimeout(timeoutId);
     } catch (fetchErr) {
@@ -809,7 +810,7 @@ async function importLotPhotos() {
   lotImportBusy = true; lotImportMsg = ''; renderInbox();
   try {
     const res = await fetch(IMPORT_LOTS_WEBHOOK_URL, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', cache: 'no-store',
+      method: 'POST', headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }), body: '{}', cache: 'no-store',
     });
     if (!res.ok) throw new Error(`webhook returned ${res.status} ${res.statusText}`);
     const r = (await res.json()) || {};
@@ -1284,7 +1285,7 @@ async function rotatePhoto(photoId, direction, btnEl) {
   try {
     const res = await fetch(ROTATE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ photo_id: photoId, photo_url: p.Nextcloud_URL, direction }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1342,7 +1343,7 @@ async function rotateInboxPhoto(key, direction) {
   try {
     const res = await fetch(ROTATE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ path: p.path, photo_url: p.preview_url, direction: direction }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1373,7 +1374,7 @@ async function deleteInboxPhoto(key) {
   try {
     const res = await fetch(DELETE_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ path: p.path }),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
@@ -1438,7 +1439,7 @@ async function fileThisPhoto(key) {
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('Webhook returned ' + res.status);
