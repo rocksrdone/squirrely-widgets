@@ -112,6 +112,9 @@ const REGISTRY = [
   // Shipping
   { key: 'Ship_Weight_Round_Up_oz', area: 'Shipping', def: 1, unit: 'oz', usedBy: ['Shipping Setup'],
     notes: 'Package weights round up to the next multiple of this (0 = no rounding).' },
+  // Supplies
+  { key: 'Dye_Reorder_At_Jars', area: 'Supplies', def: 0, unit: 'jars', usedBy: ['Supply Desk', 'Reorder Setup'],
+    notes: 'Flag a dye to reorder when its good jars (sealed, or open and not ticked Low) are at or below this. 0 = when the last good jar is gone or low; 1 = keep one spare. A dye supply\'s own Reorder_At overrides it. Per-supply reorder points are set in Reorder Setup.' },
   // Kettle
   { key: 'Kettle_Pot_Temp_F_Default', area: 'Kettle dye', def: 180, unit: '°F', usedBy: ['Recipe Card'], notes: 'Pot temperature when a kettle recipe has none set.' },
   { key: 'Stock_Container_mL', area: 'Kettle dye', def: 350, unit: 'mL', usedBy: ['Recipe Card'], notes: 'Largest container used to mix stock solution; bigger amounts are split into equal containers.' },
@@ -150,7 +153,7 @@ const REGISTRY = [
   { key: 'Vendor_Lock_Template_Code', area: 'Vendor store', def: '', text: true, unit: 'code', usedBy: ['Vendor Setup'],
     notes: 'Code of the vendor whose Locksmith lock is set up exactly right. New vendor locks copy its settings, and Check compares every lock to it. Easiest to pick in Vendor Setup.' },
 ];
-const AREA_ORDER = ['Bins & racks', 'Batch Assignment', 'Thread', 'Planning', 'Payroll', 'Shipping', 'Kettle dye', 'Business', 'Vendor store'];
+const AREA_ORDER = ['Bins & racks', 'Batch Assignment', 'Thread', 'Planning', 'Payroll', 'Shipping', 'Supplies', 'Kettle dye', 'Business', 'Vendor store'];
 const AREA_ALIAS = { 'Kettle': 'Kettle dye' };
 
 /* Other setup areas, each a card with a quick summary and links to its pages. */

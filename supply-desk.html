@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Supply Desk</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261102"></script>
 <style>
 /* ══ Supply Desk ═════════════════════════════════════════════════════════════
    Where to go to reorder things. Two parts:
@@ -83,6 +84,7 @@ const col = (t, c) => (c && t && Array.isArray(t[c]) ? t[c] : []);
 const refId = v => typeof v === 'number' ? v || null : (Array.isArray(v) && v[0] === 'R' ? v[1] || null : null);
 const fmtDate = v => { const n = Number(v); return n > 0 ? new Date(n * 1000).toLocaleDateString(undefined, { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }) : ''; };
 const money = v => Number(v) > 0 ? '$' + Number(v).toFixed(2) : '';
+const numOrNull = v => (v === null || v === undefined || v === '' || !isFinite(Number(v))) ? null : Number(v);
 const isUrl = u => /^https?:\/\//i.test(String(u || '').trim());
 function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 
@@ -98,7 +100,10 @@ async function load() {
     (splT.id || []).forEach((id, i) => { S.suppliers[id] = { id, name: String(col(splT, c.name)[i] || 'Supplier #' + id),
       web: String(col(splT, c.web)[i] || '').trim(), acct: String(col(splT, c.acct)[i] || ''), last: col(splT, c.last)[i] }; });
   }
-  const c = {}; ['Name', 'Category', 'Supplier', 'Item_Code', 'Buy_Unit', 'Dye', 'Retired', 'Last_Ordered', 'Last_Price', 'Landed_Per_Buy', 'Manual_Price', 'Order_Link', 'Times_Ordered']
+  try { await SSSettings.load(); } catch (e) { /* defaults */ }
+  S.dyeAt = SSSettings.num('Dye_Reorder_At_Jars', 0);
+  const c = {}; ['Name', 'Category', 'Supplier', 'Item_Code', 'Buy_Unit', 'Dye', 'Retired', 'Last_Ordered', 'Last_Price', 'Landed_Per_Buy', 'Manual_Price', 'Order_Link', 'Times_Ordered',
+    'On_Hand', 'Reorder_At', 'Reorder_Qty', 'Counted_On']
     .forEach(n => { c[n] = findCol(supT, [n]); });
   S.supplies = (supT.id || []).map((id, i) => {
     const g = n => col(supT, c[n])[i];
@@ -107,7 +112,8 @@ async function load() {
     return { id, name: String(g('Name') || ''), cat: String(g('Category') || 'Other'), sup, code: String(g('Item_Code') || ''),
       unit: String(g('Buy_Unit') || ''), dye: refId(g('Dye')), retired: !!g('Retired'), last: g('Last_Ordered'),
       price: Number(g('Last_Price')) || Number(g('Landed_Per_Buy')) || Number(g('Manual_Price')) || 0, times: Number(g('Times_Ordered')) || 0,
-      link: isUrl(own) ? own : (sup && isUrl(sup.web) ? sup.web : ''), linkIsOwn: isUrl(own) };
+      link: isUrl(own) ? own : (sup && isUrl(sup.web) ? sup.web : ''), linkIsOwn: isUrl(own),
+      onHand: numOrNull(g('On_Hand')), at: numOrNull(g('Reorder_At')), qty: numOrNull(g('Reorder_Qty')), counted: g('Counted_On') };
   }).filter(s => s.name && !s.retired);
 
   /* Dyes from the jar stock. */
@@ -128,14 +134,17 @@ async function load() {
     S.supplies.forEach(s => { if (s.dye && !supplyByDye[s.dye]) supplyByDye[s.dye] = s; });
     S.dyeRows = Object.entries(by).map(([d, e]) => {
       const dye = S.dyes[d] || { name: 'Dye #' + d, brand: '' };
-      /* Reorder: nothing sealed, and every open jar is marked low (or there is
-         none). Watch: nothing sealed and exactly one good open jar left — the
-         normal state for most dyes, so it is hidden unless asked for. */
-      const good = e.open - e.low;
+      /* Good jars = sealed + open ones not ticked Low. Reorder when they are at
+         or below the dye's own Reorder_At (Reorder Setup), else the shop-wide
+         Settings.Dye_Reorder_At_Jars (default 0: the last good jar is gone or
+         low). Watch is one above that — the normal state for most dyes, so it
+         is hidden unless asked for. */
+      const sup = supplyByDye[d] || null;
+      const good = e.sealed + e.open - e.low, at = sup && sup.at != null ? sup.at : S.dyeAt;
       let level = null;
-      if (!e.sealed && good <= 0) level = 'reorder';
-      else if (!e.sealed && good === 1) level = 'watch';
-      return { id: Number(d), ...dye, ...e, level, supply: supplyByDye[d] || null };
+      if (good <= at) level = 'reorder';
+      else if (good === at + 1) level = 'watch';
+      return { id: Number(d), ...dye, ...e, good, at, level, supply: sup };
     }).filter(r => r.level).sort((a, b) => (a.level === b.level ? 0 : a.level === 'reorder' ? -1 : 1) || a.name.localeCompare(b.name));
   }
   const cats = [...new Set(S.supplies.map(s => s.cat))].sort();
@@ -159,18 +168,31 @@ function render() {
   const nRe = S.dyeRows.filter(r => r.level === 'reorder').length, nW = S.dyeRows.length - nRe;
   document.getElementById('dyes').innerHTML = (cat && cat !== 'Dye powder') ? '' : `
     <h2>Dyes to reorder <span class="n">${nRe}</span>
-      <button class="btn" id="watchBtn" style="margin-left:auto;text-transform:none;letter-spacing:0" title="Dyes with nothing sealed and one good open jar left">${S.showWatch ? 'Hide' : 'Show'} ${nW} down to their last jar</button></h2>
+      <button class="btn" id="watchBtn" style="margin-left:auto;text-transform:none;letter-spacing:0" title="Dyes one good jar above their reorder point">${S.showWatch ? 'Hide' : 'Show'} ${nW} down to their last jar</button></h2>
     <div class="panel">${dyes.length ? dyes.map(r => `<div class="row">
       <span class="chip ${r.level}">${r.level === 'reorder' ? 'Reorder' : 'Watch'}</span>
       <div class="main"><div class="nm">${esc(r.brand ? r.brand + ' ' : '')}${esc(r.name)}</div>
-        <div class="meta">${r.open} open${r.low ? ` (${r.low} marked low)` : ''} · ${r.sealed} sealed spare${[...r.sizes].length ? ' · jars of ' + [...r.sizes].map(g => g + ' g').join(', ') : ''}${
+        <div class="meta">${r.good} good jar${r.good === 1 ? '' : 's'} (reorder at ${r.at}) · ${r.open} open${r.low ? ` (${r.low} marked low)` : ''} · ${r.sealed} sealed spare${[...r.sizes].length ? ' · jars of ' + [...r.sizes].map(g => g + ' g').join(', ') : ''}${
           r.supply && r.supply.last ? ' · last ordered ' + esc(fmtDate(r.supply.last)) : ''}${r.supply && r.supply.price ? ' · ' + money(r.supply.price) : ''}</div></div>
       ${r.supply && r.supply.code ? `<span class="code" data-copy="${esc(r.supply.code)}" title="Copy">${esc(r.supply.code)}</span>` : ''}
       ${orderBtn(r.supply)}</div>`).join('')
       : `<div class="empty">${q ? 'No dye matches.' : 'Nothing to reorder: every dye has a sealed spare or an open jar that isn’t marked low.'}</div>`}</div>
-    <div class="status" style="margin-top:4px">From Dye_Powder: Reorder means no sealed spare and every open jar ticked <b>Low</b>. Tick Low on a jar when it runs low and this list stays right.</div>`;
+    <div class="status" style="margin-top:4px">From Dye_Powder: good jars are sealed ones plus open ones not ticked <b>Low</b>. The reorder point is set in Reorder Setup (Setup page). Tick Low on a jar when it runs low and this stays right.</div>`;
   const wb = document.getElementById('watchBtn');
   if (wb) wb.onclick = () => { S.showWatch = !S.showWatch; render(); };
+
+  /* Counted supplies at or below their reorder point (Reorder Setup). */
+  const low = S.supplies.filter(s => s.cat !== 'Dye powder' && s.at != null && s.onHand != null && s.onHand <= s.at
+    && (!cat || s.cat === cat) && (!q || norm([s.name, s.code, s.sup && s.sup.name].join(' ')).includes(q)));
+  const uncounted = S.supplies.filter(s => s.cat !== 'Dye powder' && s.at != null && s.onHand == null).length;
+  document.getElementById('dyes').insertAdjacentHTML('beforeend', `
+    <h2>Running low <span class="n">${low.length}</span></h2>
+    <div class="panel">${low.length ? low.map(s => `<div class="row"><span class="chip reorder">Reorder</span>
+      <div class="main"><div class="nm">${esc(s.name)}</div>
+        <div class="meta">${s.onHand} ${esc(s.unit || '')} on hand · reorder at ${s.at}${s.qty ? ` · order ${s.qty}` : ''}${s.counted ? ' · counted ' + esc(fmtDate(s.counted)) : ''}${s.sup ? ' · ' + esc(s.sup.name) : ''}</div></div>
+      ${s.code ? `<span class="code" data-copy="${esc(s.code)}" title="Copy">${esc(s.code)}</span>` : ''}${orderBtn(s)}</div>`).join('')
+      : `<div class="empty">${S.supplies.some(s => s.at != null) ? 'Nothing at or below its reorder point.' : 'No reorder points set yet — set them in Reorder Setup on the Setup page.'}</div>`}</div>
+    ${uncounted ? `<div class="status" style="margin-top:4px">${uncounted} suppl${uncounted === 1 ? 'y has' : 'ies have'} a reorder point but no count yet — enter On hand in Reorder Setup.</div>` : ''}`);
 
   /* Supplies by supplier */
   const list = S.supplies.filter(s => (!cat || s.cat === cat) && (!q || norm([s.name, s.code, s.cat, s.sup && s.sup.name].join(' ')).includes(q))

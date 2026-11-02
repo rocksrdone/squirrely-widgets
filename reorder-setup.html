@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reorder Setup</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js?v=20261102"></script>
+<style>
+/* ══ Reorder Setup ═══════════════════════════════════════════════════════════
+   Where the reorder signals are set. Supply Desk reads what is entered here.
+
+   Per supply, on the Supplies table:
+     On_Hand      how many buy-units you have (cases, rolls, jars…), when counted
+     Reorder_At   flag it when On_Hand is at or below this
+     Reorder_Qty  how many to order when it is flagged (shown as a reminder)
+     Counted_On   set to today whenever On_Hand is changed here
+
+   Dye powder is counted for you from Dye_Powder, jar by jar, so dyes have no
+   On_Hand box: a "good jar" is a sealed one or an open one not ticked Low.
+   A dye is flagged when its good jars are at or below its own Reorder_At, or,
+   when that is blank, Settings.Dye_Reorder_At_Jars (default 0: reorder when
+   the last good jar is gone or ticked Low).
+
+   Blank Reorder_At = never flagged. Missing columns are offered as one button,
+   so nothing here changes the schema without a click.                      */
+:root { --ink: #1A1614; --rule: #E8DFD4; --paper: #FDFBF7; --muted: #8B7D72; --accent: #8B3A2A; --accent-light: #F2E8E5;
+        --teal: #2A6B6B; --teal-light: #E4F0EF; --gold: #B07D2A; --gold-light: #F5EDD8; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 12px; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif; font-size: 13px; }
+.hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; } .hd h1 { font-size: 17px; margin: 0; } .hd .sub { font-size: 11.5px; color: var(--muted); }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.search { flex: 1; min-width: 160px; padding: 8px 10px; border: 1.5px solid var(--rule); border-radius: 6px; font: inherit; background: #fff; color: var(--ink); }
+select, input.n { font: inherit; padding: 6px 7px; border: 1.5px solid var(--rule); border-radius: 6px; background: #fff; color: var(--ink); }
+input.n { width: 74px; text-align: right; }
+input.n.saved { border-color: var(--teal); background: var(--teal-light); }
+input.n.err { border-color: var(--accent); background: var(--accent-light); }
+.btn { font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: 6px; cursor: pointer; border: 1.5px solid var(--rule); background: #fff; color: var(--ink); }
+.btn.go { background: var(--teal); border-color: var(--teal); color: #fff; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 4px 0 8px; }
+.warn { background: var(--gold-light); border: 1px solid #E2C98F; border-radius: 7px; padding: 9px 11px; margin: 8px 0; font-size: 12.5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rule { background: #fff; border: 1.5px solid var(--rule); border-radius: 7px; padding: 10px 12px; margin: 8px 0 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+table { width: 100%; border-collapse: collapse; background: #fff; border: 1.5px solid var(--rule); border-radius: 7px; overflow: hidden; }
+th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 7px 8px; border-bottom: 1.5px solid var(--rule); background: #FAF6F0; white-space: nowrap; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+tr.cat td { background: #FAF6F0; font-weight: 700; font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.nm { font-weight: 600; } .meta { font-size: 11px; color: var(--muted); }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.chip.reorder { background: var(--accent-light); color: var(--accent); } .chip.ok { background: var(--teal-light); color: var(--teal); } .chip.none { color: #B9AEA4; font-weight: 400; }
+.toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 7px 13px; border-radius: 6px; font-size: 12.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="hd"><h1>Reorder Setup</h1><span class="sub">When each supply should be flagged on Supply Desk</span></div>
+<div id="warn"></div>
+<div class="rule" id="dyeRule"></div>
+<div class="bar">
+  <input id="q" class="search" placeholder="Search supplies…">
+  <select id="cat"><option value="">All categories</option></select>
+  <label class="note" style="margin:0"><input type="checkbox" id="onlySet"> only ones with a reorder point</label>
+</div>
+<div id="list">Loading…</div>
+<div class="toast" id="toast"></div>
+<script>
+const COLS = { onHand: 'On_Hand', at: 'Reorder_At', qty: 'Reorder_Qty', counted: 'Counted_On' };
+const esc = s => (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+const findCol = (t, names) => Object.keys(t || {}).find(k => names.some(n => norm(n) === norm(k))) || null;
+const col = (t, c) => (c && t && Array.isArray(t[c]) ? t[c] : []);
+const refId = v => typeof v === 'number' ? v || null : (Array.isArray(v) && v[0] === 'R' ? v[1] || null : null);
+const numOrNull = v => (v === null || v === undefined || v === '' || !isFinite(Number(v))) ? null : Number(v);
+const fmtDate = v => { const n = Number(v); return n > 0 ? new Date(n * 1000).toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }) : ''; };
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+const todayEpoch = () => { const d = new Date(); return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 1000; };   // Grist Date = UTC midnight
+
+const S = { rows: [], c: {}, missing: [], goodJars: {}, settingsRowId: null, dyeDefault: 0 };
+
+async function load() {
+  await SSSettings.load();
+  S.dyeDefault = SSSettings.num('Dye_Reorder_At_Jars', 0);
+  const [supT, powT, setT] = await Promise.all(['Supplies', 'Dye_Powder', 'Settings'].map(n => grist.docApi.fetchTable(n).catch(() => null)));
+  if (!supT) throw new Error('no Supplies table');
+  const c = S.c = { name: findCol(supT, ['Name']), cat: findCol(supT, ['Category']), unit: findCol(supT, ['Buy_Unit']), dye: findCol(supT, ['Dye']),
+    retired: findCol(supT, ['Retired']), onHand: findCol(supT, [COLS.onHand]), at: findCol(supT, [COLS.at]), qty: findCol(supT, [COLS.qty]), counted: findCol(supT, [COLS.counted]) };
+  S.missing = Object.entries(COLS).filter(([k]) => !c[k]).map(([, v]) => v);
+  S.rows = (supT.id || []).map((id, i) => ({ id, name: String(col(supT, c.name)[i] || ''), cat: String(col(supT, c.cat)[i] || 'Other'),
+    unit: String(col(supT, c.unit)[i] || ''), dye: refId(col(supT, c.dye)[i]), retired: !!col(supT, c.retired)[i],
+    onHand: numOrNull(col(supT, c.onHand)[i]), at: numOrNull(col(supT, c.at)[i]), qty: numOrNull(col(supT, c.qty)[i]), counted: col(supT, c.counted)[i] }))
+    .filter(r => r.name && !r.retired);
+  S.goodJars = {};
+  if (powT) {
+    const pd = findCol(powT, ['Dye']), ps = findCol(powT, ['State']), pl = findCol(powT, ['Low']);
+    (powT.id || []).forEach((id, i) => { const d = refId(col(powT, pd)[i]); if (!d) return;
+      const sealed = /seal/i.test(String(col(powT, ps)[i] || '')), low = !!col(powT, pl)[i];
+      if (sealed || !low) S.goodJars[d] = (S.goodJars[d] || 0) + 1; else S.goodJars[d] = S.goodJars[d] || 0; });
+  }
+  S.settingsRowId = null;
+  if (setT) { const k = findCol(setT, ['Key']); (setT.id || []).forEach((id, i) => { if (col(setT, k)[i] === 'Dye_Reorder_At_Jars') S.settingsRowId = id; }); }
+  const cats = [...new Set(S.rows.map(r => r.cat))].sort();
+  document.getElementById('cat').innerHTML = '<option value="">All categories</option>' + cats.map(x => `<option>${esc(x)}</option>`).join('');
+}
+
+function state(r) {
+  if (r.dye) { const good = S.goodJars[r.dye] || 0, at = r.at != null ? r.at : S.dyeDefault;
+    return { have: good, at, flag: good <= at, haveLabel: `${good} good jar${good === 1 ? '' : 's'}` }; }
+  if (r.at == null) return { flag: null };
+  if (r.onHand == null) return { flag: null, haveLabel: 'not counted' };
+  return { have: r.onHand, at: r.at, flag: r.onHand <= r.at };
+}
+
+function render() {
+  document.getElementById('warn').innerHTML = S.missing.length ? `<div class="warn">Supplies needs ${S.missing.length} column${S.missing.length > 1 ? 's' : ''} for this: <b>${S.missing.join(', ')}</b>.
+    <button class="btn go" id="addCols">Add ${S.missing.length > 1 ? 'them' : 'it'}</button></div>` : '';
+  document.getElementById('dyeRule').innerHTML = `<b>Dyes</b><span class="note" style="margin:0">Flag a dye when its good jars (sealed, or open and not ticked Low) are at or below</span>
+    <input class="n" id="dyeDefault" type="number" min="0" step="1" value="${esc(S.dyeDefault)}">
+    <span class="note" style="margin:0">— 0 means reorder when the last good jar is gone or low; 1 keeps one spare. A dye's own Reorder At below overrides this.</span>`;
+  const q = norm(document.getElementById('q').value), cat = document.getElementById('cat').value, only = document.getElementById('onlySet').checked;
+  const list = S.rows.filter(r => (!cat || r.cat === cat) && (!q || norm(r.name + r.cat).includes(q)) && (!only || r.at != null))
+    .sort((a, b) => a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name));
+  let lastCat = '', html = '';
+  list.forEach(r => {
+    if (r.cat !== lastCat) { lastCat = r.cat; html += `<tr class="cat"><td colspan="6">${esc(r.cat)}</td></tr>`; }
+    const s = state(r), dis = S.missing.length ? 'disabled' : '';
+    html += `<tr data-id="${r.id}">
+      <td><div class="nm">${esc(r.name)}</div><div class="meta">${r.unit ? 'counted in ' + esc(r.unit) + 's' : ''}${r.counted && !r.dye ? ' · counted ' + esc(fmtDate(r.counted)) : ''}</div></td>
+      <td>${r.dye ? `<span class="meta">${esc(s.haveLabel)}</span>` : `<input class="n" type="number" min="0" step="any" data-f="onHand" value="${r.onHand ?? ''}" ${dis} placeholder="—">`}</td>
+      <td><input class="n" type="number" min="0" step="any" data-f="at" value="${r.at ?? ''}" ${dis} placeholder="${r.dye ? esc(S.dyeDefault) : '—'}"></td>
+      <td><input class="n" type="number" min="0" step="any" data-f="qty" value="${r.qty ?? ''}" ${dis} placeholder="—"></td>
+      <td>${s.flag === true ? '<span class="chip reorder">Reorder</span>' : s.flag === false ? '<span class="chip ok">OK</span>' : `<span class="chip none">${esc(s.haveLabel || 'no point set')}</span>`}</td></tr>`;
+  });
+  document.getElementById('list').innerHTML = list.length ? `<table><tr><th>Supply</th><th>On hand</th><th>Reorder at</th><th>Order qty</th><th>Now</th></tr>${html}</table>`
+    : '<div class="note">Nothing matches.</div>';
+}
+
+async function save(el) {
+  const tr = el.closest('tr'), id = Number(tr.dataset.id), f = el.dataset.f, r = S.rows.find(x => x.id === id);
+  const v = numOrNull(el.value), fields = { [S.c[f]]: v };
+  if (f === 'onHand') fields[S.c.counted] = v == null ? null : todayEpoch();
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Supplies', id, fields]]);
+    r[f] = v; if (f === 'onHand') r.counted = fields[S.c.counted];
+    el.classList.remove('err'); el.classList.add('saved'); setTimeout(() => el.classList.remove('saved'), 900);
+    const s = state(r), cell = tr.lastElementChild;
+    cell.innerHTML = s.flag === true ? '<span class="chip reorder">Reorder</span>' : s.flag === false ? '<span class="chip ok">OK</span>' : `<span class="chip none">${esc(s.haveLabel || 'no point set')}</span>`;
+  } catch (e) { el.classList.add('err'); toast('Could not save — does this widget have full access?'); }
+}
+
+async function saveDyeDefault(el) {
+  const v = Math.max(0, Math.round(Number(el.value) || 0));
+  try {
+    if (S.settingsRowId) await grist.docApi.applyUserActions([['UpdateRecord', 'Settings', S.settingsRowId, { Value: v }]]);
+    else { const res = await grist.docApi.applyUserActions([['AddRecord', 'Settings', null, { Key: 'Dye_Reorder_At_Jars', Value: v, Area: 'Supplies', Unit: 'jars',
+      Used_By: 'Supply Desk, Reorder Setup', Notes: 'Flag a dye when its good jars (sealed, or open and not ticked Low) are at or below this.' }]]);
+      S.settingsRowId = res && res.retValues ? res.retValues[0] : null; }
+    S.dyeDefault = v; el.value = v; toast('Dye rule saved'); render();
+  } catch (e) { toast('Could not save the dye rule'); }
+}
+
+async function addColumns() {
+  if (!confirm(`Add ${S.missing.join(', ')} to the Supplies table?`)) return;
+  const acts = S.missing.map(name => ['AddColumn', 'Supplies', name, { type: name === 'Counted_On' ? 'Date' : 'Numeric', isFormula: false }]);
+  try { await grist.docApi.applyUserActions(acts); toast('Columns added'); await load(); render(); }
+  catch (e) { toast('Could not add columns — the widget needs full access'); }
+}
+
+document.getElementById('q').addEventListener('input', render);
+document.getElementById('cat').addEventListener('change', render);
+document.getElementById('onlySet').addEventListener('change', render);
+document.body.addEventListener('change', e => {
+  if (e.target.matches('input.n[data-f]')) save(e.target);
+  else if (e.target.id === 'dyeDefault') saveDyeDefault(e.target);
+});
+document.body.addEventListener('click', e => { if (e.target.id === 'addCols') addColumns(); });
+
+grist.ready({ requiredAccess: 'full' });
+(async () => { try { await load(); render(); } catch (e) { document.getElementById('list').textContent = 'Could not load: ' + (e.message || e); } })();
+</script>
+</body>
+</html>
