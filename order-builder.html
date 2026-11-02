@@ -2630,7 +2630,10 @@ function pushPanelHtml(o) {
   }
 
   const sm = p.summary || {};
-  const warn = sm.addressConfident === false;
+  // No address at all is allowed (retail / one-off) and says so in the notes;
+  // only a partly filled address gets the "check it" warning.
+  const noAddr = /^none\b/i.test(sm.address || '');
+  const warn = sm.addressConfident === false && !noAddr;
   return `<div class="banner ${warn ? 'warn' : ''}">
     <strong>This is what would be sent.</strong> Nothing has been created yet.
     <table style="margin-top:6px;border-collapse:collapse">
