@@ -1168,7 +1168,12 @@ function storeFixes() {
     if (!v || !v.active) return null;
     const exp = Math.max(0, vendorExpected(g));
     if (v.qty === exp) return null;
-    return { g, sku, now: v.qty, to: exp };
+    /* The job carries the store's OWN spelling of the SKU. The match here
+       ignores case and punctuation, but the vendor-stock workflow looks the
+       SKU up exactly — so a store variant spelt even slightly differently
+       (ffn_scheherazade, FFN-SCHEHERAZADE) was found here and then "not
+       found" on Check & set. */
+    return { g, sku: v.sku || sku, now: v.qty, to: exp };
   }).filter(Boolean);
 }
 async function sendStoreFixes() {
