@@ -405,7 +405,7 @@ function openPreview() {
   const sheet = document.getElementById('sheet');
   sheet.innerHTML = `<h2>Create ${list.length} draft${list.length > 1 ? 's' : ''} on the retail store</h2>
     <div class="note">Each is created as a <strong>draft</strong> with stock 0. Nothing goes on sale.
-      Afterwards, in Shopify: add any missing photos, set sales channels, then activate when stock is moved to retail.</div>
+      Each is put on the store's sales channels as it is made, so once stock is moved to retail, setting it Active is the only step left.</div>
     ${list.map(L => `<div class="prev">
       ${L.imageUrl ? `<img src="${esc(L.imageUrl)}" alt="">` : '<div class="noimg">no photo</div>'}
       <div style="min-width:0;flex:1">
@@ -433,14 +433,19 @@ async function createDrafts(list) {
   for (let i = 0; i < list.length; i += BATCH) {
     const chunk = list.slice(i, i + BATCH);
     try {
-      const d = await callWebhook({ action: 'create', from: 'listing-desk',
+      /* Settings.Retail_Channels narrows the sales channels (comma separated,
+         names as Shopify shows them). Blank = every channel the store has. */
+      const channels = SSSettings.text('Retail_Channels', '').split(',').map(x => x.trim()).filter(Boolean);
+      const d = await callWebhook({ action: 'create', from: 'listing-desk', channels,
         listings: chunk.map(({ gaps, blocked, recipeId, ...L }) => L) });
       (d.results || []).forEach(r => {
         const L = chunk.find(x => x.sku === r.sku);
         const link = r.admin_url ? ` — <a href="${esc(r.admin_url)}" target="_blank" rel="noopener">open in Shopify</a>` : '';
         if (r.ok) {
           if (L) { S.made[L.recipeId] = { admin_url: r.admin_url }; S.picked.delete(L.recipeId); }
-          const extra = [!r.image && 'no photo', r.category_set === false && 'category not set'].filter(Boolean).join(', ');
+          const extra = [!r.image && 'no photo', r.category_set === false && 'category not set',
+            r.channels && r.channels.length ? 'on ' + r.channels.join(', ') : '',
+            r.channel_error ? 'sales channels not set: ' + r.channel_error : ''].filter(Boolean).join(' · ');
           box.innerHTML += `<div class="res ok">✓ ${esc(r.title)}${extra ? ` (${esc(extra)})` : ''}${link}</div>`;
         } else if (r.skipped) {
           if (L) S.picked.delete(L.recipeId);
