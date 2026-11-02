@@ -223,7 +223,7 @@ document.body.addEventListener('click', e => {
   navigator.clipboard.writeText(c.dataset.copy).then(() => toast('Copied ' + c.dataset.copy), () => toast(c.dataset.copy));
 });
 
-grist.ready({ requiredAccess: 'read table' });
+grist.ready({ requiredAccess: 'full' });
 (async () => {
   try { await load(); render(); }
   catch (e) { const st = document.getElementById('status'); st.className = 'status bad'; st.textContent = 'Could not load: ' + (e.message || e); }

@@ -1641,7 +1641,7 @@ function render() {
 
 /* Static shell is already rendered above. Only now talk to Grist. */
 try {
-  grist.ready({ requiredAccess: 'read table' });
+  grist.ready({ requiredAccess: 'full' });
   grist.onRecords(() => {});
   load();
 } catch (e) {
