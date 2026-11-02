@@ -60,6 +60,8 @@
         override: ov, customerWants: !!custWants[cid],
         link: String(col(wo, 'Photo_Share_URL')[i] || ''),
         orderNumber: col(wo, 'Order_Number')[i] || '',
+        customerName: col(wo, 'Customer_Name')[i] || '',
+        active: String(col(wo, 'Status')[i] || '') === 'Active',
         folder: '', lines: [],
       };
     });

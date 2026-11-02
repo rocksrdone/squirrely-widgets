@@ -156,6 +156,7 @@ body {
 </head>
 <body>
 
+<div id="photoQueue"></div>
 <div class="empty" id="emptyState">
   <div class="empty-icon">🖼️</div>
   <div class="empty-title">No order selected</div>
@@ -452,6 +453,24 @@ let photoState = null;
 async function refreshPhotoState() {
   try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); photoState = null; }
   renderPhotoState();
+  renderPhotoQueue();
+}
+/* Everything waiting at command for a photo, across all orders — the one
+   place to look after a winder taps "set aside". Click the order's row in
+   Work Orders to share its photos. */
+function renderPhotoQueue() {
+  const el = document.getElementById('photoQueue');
+  if (!el) return;
+  const list = photoState ? Object.values(photoState.orders)
+    .map(o => ({ o, waiting: o.lines.filter(l => l.state === 'command') }))
+    .filter(x => x.waiting.length) : [];
+  if (!list.length) { el.innerHTML = ''; return; }
+  const n = list.reduce((s, x) => s + x.waiting.length, 0);
+  el.innerHTML = `<div style="margin:0 0 12px;padding:9px 12px;border-radius:8px;background:#E3EEF9;border:1px solid #B5CDE6;font-size:12px">
+    <div style="font-weight:700;color:#1F4E79;margin-bottom:4px">📷 ${n} spool${n > 1 ? 's' : ''} set aside for photos</div>
+    ${list.map(x => `<div style="margin:2px 0"><b>${esc(x.o.orderNumber || '#' + x.o.id)}</b> <span style="color:#6B5E52">${esc(x.o.customerName)}</span> — ${x.waiting.map(l => esc(l.name || 'line ' + l.id)).join(', ')}</div>`).join('')}
+    <div style="font-size:10.5px;color:#6B5E52;margin-top:4px">Click that order in Work Orders, share a photo for each, and the spool goes back to the order.</div>
+  </div>`;
 }
 function lineState(line) { return photoState ? photoState.line(line.id) : null; }
 function renderPhotoState() {
@@ -837,6 +856,7 @@ grist.ready({
   requiredAccess: 'full'
 });
 
+setTimeout(() => refreshPhotoState(), 300);
 grist.onRecord(async (record) => {
   if (!record) {
     document.getElementById('emptyState').style.display = 'flex';
