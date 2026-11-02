@@ -2543,14 +2543,14 @@ async function deleteOrder(id) {
 
 /* ── Push to Shopify ────────────────────────────────────────────────────── */
 
-async function callPush(workOrderId, dryRun) {
+async function callPush(workOrderId, dryRun, asDraft) {
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), PUSH_TIMEOUT_MS) : null;
   try {
     const res = await fetch(PUSH_WEBHOOK_URL, {
       method: 'POST',
       headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ workOrderId, dryRun: !!dryRun }),
+      body: JSON.stringify({ workOrderId, dryRun: !!dryRun, asDraft: !!asDraft }),
       cache: 'no-store',
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
@@ -2561,12 +2561,12 @@ async function callPush(workOrderId, dryRun) {
   }
 }
 
-async function previewPush(id) {
+async function previewPush(id, asDraft) {
   if (!(await flushDraft(id))) return;
   if (S.pushBusy) return;
   S.pushBusy = true; S.push = null; render();
   try {
-    S.push = await callPush(id, true);
+    S.push = await callPush(id, true, asDraft);
   } catch (e) {
     console.error('Preview failed:', e);
     S.push = { ok: false, created: false, transport: true,
@@ -2584,7 +2584,8 @@ async function doPush(id) {
   const o = S.orders.find(x => x.id === id);
   const p = S.push;
   if (!o || !p || !p.summary) return;
-  if (!confirm(`Create a real Shopify order for ${o.number}?\n\n` +
+  const asDraft = !!p.as_draft;
+  if (!confirm((asDraft ? `Create a Shopify DRAFT order for ${o.number}?\n\n` : `Create a real Shopify order for ${o.number}?\n\n`) +
       `${p.summary.spools} spool(s), ${p.summary.lines} line(s), $${p.summary.value} ` +
       `to ${p.summary.customer}.\n${p.summary.address}\n\n` +
       `No email is sent and Shopify inventory is not touched. ` +
@@ -2592,7 +2593,7 @@ async function doPush(id) {
 
   S.pushBusy = true; render();
   try {
-    S.push = await callPush(id, false);
+    S.push = await callPush(id, false, asDraft);
     await loadAll();
     if (S.push && S.push.created) toast('Pushed as ' + (S.push.shopify_name || S.push.shopify_order_id));
   } catch (e) {
@@ -2616,6 +2617,15 @@ function pushPanelHtml(o) {
   if (S.pushBusy) return `<div class="banner">Talking to Shopify…</div>`;
   if (!p) return '';
 
+  if (p.created && p.is_draft) {
+    return `<div class="banner" style="background:var(--done-bg);border-color:#BBD79A;color:var(--done-text)">
+      <strong>Draft ${esc(p.shopify_name || p.shopify_order_id)} created in Shopify.</strong>
+      Next: open it and press <b>Send invoice</b> — the customer enters their address and pays, and Shopify turns it into an order.
+      <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the draft in Shopify ↗</a>` : ''}
+      ${p.invoice_url ? ` · <a href="${esc(p.invoice_url)}" target="_blank" rel="noopener">customer's pay link ↗</a>` : ''}</div>
+      ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
+    </div>`;
+  }
   if (p.created) {
     return `<div class="banner" style="background:var(--done-bg);border-color:#BBD79A;color:var(--done-text)">
       <strong>Created in Shopify as ${esc(p.shopify_name || p.shopify_order_id)}.</strong>
@@ -2626,7 +2636,9 @@ function pushPanelHtml(o) {
   if (p.reasons && p.reasons.length && !p.preview) {
     return `<div class="banner bad"><strong>${p.already_pushed ? 'Already pushed.'
       : (p.uncertain ? 'Uncertain — read this.' : 'Not sent.')}</strong>
-      <ul style="margin:5px 0 0 16px">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
+      <ul style="margin:5px 0 0 16px">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+      ${p.can_draft ? `<div style="margin-top:8px"><button class="btn" onclick="previewPush(${o.id}, true)">Push as draft instead…</button>
+        <span style="font-size:11px;color:#6B5E52;margin-left:6px">You then send the Shopify invoice; they add their address when they pay.</span></div>` : ''}</div>`;
   }
 
   const sm = p.summary || {};
@@ -2635,7 +2647,7 @@ function pushPanelHtml(o) {
   const noAddr = /^none\b/i.test(sm.address || '');
   const warn = sm.addressConfident === false && !noAddr;
   return `<div class="banner ${warn ? 'warn' : ''}">
-    <strong>This is what would be sent.</strong> Nothing has been created yet.
+    <strong>${p.as_draft ? 'This is the DRAFT that would be sent.' : 'This is what would be sent.'}</strong> Nothing has been created yet.
     <table style="margin-top:6px;border-collapse:collapse">
       <tr><td style="padding-right:10px;color:#8B7D72">Customer</td><td>${esc(sm.customer || '—')}</td></tr>
       <tr><td style="padding-right:10px;color:#8B7D72">Contents</td>
@@ -2650,7 +2662,7 @@ function pushPanelHtml(o) {
     ${(p.notes || []).length ? `<div style="margin-top:6px;color:#8B7D72">
       ${p.notes.map(esc).join('<br>')}</div>` : ''}
     <div style="margin-top:8px">
-      <button class="btn" onclick="doPush(${o.id})">Send it</button>
+      <button class="btn" onclick="doPush(${o.id})">${p.as_draft ? 'Create the draft' : 'Send it'}</button>
       <button class="btn secondary" onclick="S.push = null; render()">Cancel</button>
     </div>
   </div>`;
