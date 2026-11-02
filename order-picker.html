@@ -37,6 +37,22 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .badge.prod-ready { background: var(--done-bg); color: var(--done-text); }
 .badge.prod-progress { background: var(--gold-light); color: var(--gold); }
 .badge.prod-notstarted { background: var(--rule); color: #6B5E52; }
+/* Pipeline bar: boxed | wound | in hank | still to make, in spools. */
+.pipe { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--rule); margin-top: 6px; }
+.pipe span { display: block; height: 100%; }
+.pipe .b { background: #2A6B6B; } .pipe .w { background: #5B4A8B; } .pipe .h { background: #B07D2A; }
+.pipe-txt { font-size: 10.5px; color: #8B7D72; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.pipe-txt i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+.det-link { font-size: 10.5px; color: var(--teal); cursor: pointer; text-decoration: underline; margin-left: auto; }
+.det { margin-top: 8px; border-top: 1px dashed var(--rule); padding-top: 8px; cursor: default; }
+.det-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; font-size: 11.5px; }
+.det-grid .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; }
+.det table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11.5px; }
+.det th { text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: #8B7D72; border-bottom: 1px solid var(--rule); padding: 3px 4px; }
+.det td { border-bottom: 1px solid var(--rule); padding: 4px; vertical-align: top; }
+.det td.n { text-align: right; font-family: 'DM Mono', ui-monospace, monospace; }
+.det td.z { color: #C9BFB4; }
+.det .stg { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
 
 .order-list { display: flex; flex-direction: column; gap: 8px; }
 .order-card {
@@ -336,6 +352,8 @@ const SYNC_TIMEOUT_MS = 120000;
 const SHIPSTATION_URL = 'https://ship.shipstation.com/';
 const SHIPSTATION_DEEP_LINK = '';   // '' = copy-and-open; set a {order} template to link directly
 
+let allocByLine = {};
+const openDetails = new Set();
 function toggleDense() {
   denseMode = !denseMode;
   document.getElementById('denseToggle').classList.toggle('active', denseMode);
@@ -402,6 +420,7 @@ async function loadOrders() {
       orderNumber: columnAsArray(table, numCol)[i] || '',
       orderType: typeCol ? (columnAsArray(table, typeCol)[i] || '') : '',
       notes: notesCol ? (columnAsArray(table, notesCol)[i] || '') : '',
+      paymentTerms: rowOpt(c(['Payment_Terms']), i), paymentMethod: rowOpt(c(['Payment_Method']), i), poNumber: rowOpt(c(['PO_Number']), i),
     }));
 
     sawClosedOnLoad = allOrders.some(o => isClosedValue(o.status));
@@ -413,16 +432,36 @@ async function loadOrders() {
     // past "in bin" counts as boxed. Legacy Qty_Packed is still honoured
     // (whichever is higher) until that column is deleted.
     const allocBoxedByLine = {};
+    /* Every allocation, by line and stage, for the pipeline bar and the
+       details panel: hank (put away, not wound), wound (needs labels),
+       boxed. Lot numbers and order bins ride along for the details. */
+    allocByLine = {};
     try {
       const allocTable = await grist.docApi.fetchTable('Lot_Allocations');
       const aLineCol = findColumn(allocTable, ['Work_Order_Line']);
       const aQtyCol = findColumn(allocTable, ['Qty_Spools']);
       const aStatusCol = findColumn(allocTable, ['Status']);
+      const aLotCol = findColumn(allocTable, ['Lot']);
+      const aBinCol = findColumn(allocTable, ['Order_Bin']);
+      const lotNumById = {};
+      try {
+        const lotsT = await grist.docApi.fetchTable('Production_Lots');
+        const ln = findColumn(lotsT, ['Lot_Number']);
+        (lotsT.id || []).forEach((id, i) => { lotNumById[id] = String(columnAsArray(lotsT, ln)[i] || ''); });
+      } catch (e) { /* lot numbers are a nicety */ }
       if (aLineCol && aQtyCol) {
         (allocTable.id || []).forEach((id, i) => {
           const lineId = getRefId(columnAsArray(allocTable, aLineCol)[i]);
           if (!lineId) return;
           const status = (aStatusCol ? columnAsArray(allocTable, aStatusCol)[i] : '') || '';
+          const q0 = Number(columnAsArray(allocTable, aQtyCol)[i]) || 0;
+          const bk = allocBucket(status);
+          const st = allocByLine[lineId] = allocByLine[lineId] || { hank: 0, wound: 0, boxed: 0, lots: new Set(), bins: new Set() };
+          st[bk === 'pending' ? 'hank' : bk === 'wound' ? 'wound' : 'boxed'] += q0;
+          const lotRef = aLotCol ? getRefId(columnAsArray(allocTable, aLotCol)[i]) : null;
+          if (lotRef && lotNumById[lotRef]) st.lots.add(lotNumById[lotRef]);
+          const ob = aBinCol ? String(columnAsArray(allocTable, aBinCol)[i] || '').trim() : '';
+          if (ob) st.bins.add(ob);
           /* Only genuinely boxed spools count toward "Ready to ship". This
              used to test /unwound|in bin/i and count everything else as
              boxed — two drifts from the canonical function: "to wind" was
@@ -450,11 +489,20 @@ async function loadOrders() {
     const lPriorityCol = lc(['Production_Priority']);
     const lSkuCol = lc(['SKU']);
 
+    const lRecipeCol = lc(['Recipe']);
+    const lNotesCol = lc(['Notes']);
+    const recipeNameById = {};
+    try {
+      const rt = await grist.docApi.fetchTable('Recipes');
+      const rn = findColumn(rt, ['Recipe_Name']), rf = findColumn(rt, ['Fiber_Type']);
+      (rt.id || []).forEach((id, i) => { recipeNameById[id] = { name: String(columnAsArray(rt, rn)[i] || ''), fiber: String(columnAsArray(rt, rf)[i] || '') }; });
+    } catch (e) { /* names are a nicety; the SKU still shows */ }
     orderLineData = {};
     (linesTable.id || []).forEach((id, i) => {
       const woId = getRefId(columnAsArray(linesTable, lWoCol)[i]);
       if (!woId) return;
-      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, packed: 0, hasRush: false, skus: [], lines: 0, unlinked: 0 };
+      if (!orderLineData[woId]) orderLineData[woId] = { needed: 0, dyed: 0, packed: 0, hasRush: false, skus: [], lines: 0, unlinked: 0,
+        hank: 0, wound: 0, boxed: 0, made: 0, detail: [] };
       const d = orderLineData[woId];
       const needed = lNeededCol ? Number(columnAsArray(linesTable, lNeededCol)[i]) || 0 : 0;
       d.needed += needed;
@@ -465,11 +513,19 @@ async function loadOrders() {
       d.packed += Math.min(boxed, needed || Infinity);
       if (lPriorityCol && columnAsArray(linesTable, lPriorityCol)[i] === 'Rush') d.hasRush = true;
       const sku = lSkuCol ? columnAsArray(linesTable, lSkuCol)[i] : '';
-      if (sku) d.skus.push(sku);
+      if (sku) d.skus.push(sku); else d.unlinked += 1;
+      const a = allocByLine[id] || { hank: 0, wound: 0, boxed: 0, lots: new Set(), bins: new Set() };
+      const cap = v => Math.min(v, needed || Infinity);
+      d.hank += a.hank; d.wound += a.wound; d.boxed += a.boxed;
+      d.made += cap(a.hank + a.wound + a.boxed);
+      const rec = recipeNameById[getRefId(lRecipeCol ? columnAsArray(linesTable, lRecipeCol)[i] : null)] || null;
+      d.detail.push({ id, sku: sku || '', name: rec ? rec.name : '', fiber: rec ? rec.fiber : '', needed,
+        hank: a.hank, wound: a.wound, boxed: a.boxed, lots: [...a.lots], bins: [...a.bins],
+        notes: lNotesCol ? String(columnAsArray(linesTable, lNotesCol)[i] || '') : '',
+        priority: lPriorityCol ? String(columnAsArray(linesTable, lPriorityCol)[i] || '') : '' });
       // A line with no SKU is usually a custom or limited-edition item made to
       // order. It is called out in the close confirmation because it can never
       // be matched by the Shopify sync, so it will not close itself.
-      else d.unlinked += 1;
     });
 
     renderShipHint();
@@ -524,13 +580,66 @@ function paymentBadgeClass(status) {
   return 'pay-other';
 }
 
+/* Where the order is, from its allocations (what has actually been put away,
+   wound and boxed) rather than Qty_Dyed, which nothing keeps current — an MMI
+   order with 140 spools in its bin read "Not started". */
 function productionStatus(orderId) {
   const d = orderLineData[orderId];
   if (!d || !d.needed) return null;
   if (d.packed >= d.needed) return { cls: 'prod-ready', label: 'Ready to ship' };
-  if (d.dyed === 0) return { cls: 'prod-notstarted', label: 'Not started' };
-  return { cls: 'prod-progress', label: 'In progress' };
+  const toMake = Math.max(0, d.needed - d.made);
+  if (!d.made) return { cls: 'prod-notstarted', label: 'To dye' };
+  if (d.wound || (d.boxed && d.boxed < d.needed && !d.hank)) return { cls: 'prod-progress', label: toMake ? 'Labelling · some to dye' : 'Labelling & boxing' };
+  if (d.hank) return { cls: 'prod-progress', label: toMake ? 'Winding · some to dye' : 'To wind' };
+  return { cls: 'prod-progress', label: 'Part made' };
 }
+function stageOfLine(l) {
+  if (!l.needed) return { t: '—', c: '#8B7D72' };
+  if (l.boxed >= l.needed) return { t: 'Boxed', c: '#2A6B6B' };
+  if (l.wound) return { t: 'Wound, to label', c: '#5B4A8B' };
+  if (l.hank) return { t: 'In hank, to wind', c: '#B07D2A' };
+  if (l.boxed) return { t: 'Part boxed', c: '#2A6B6B' };
+  return { t: 'To dye', c: '#8B7D72' };
+}
+function pipelineHtml(o) {
+  const d = orderLineData[o.id];
+  if (!d || !d.needed) return '';
+  const toMake = Math.max(0, d.needed - d.made);
+  const pct = v => (100 * Math.min(v, d.needed) / d.needed).toFixed(2) + '%';
+  const seg = [['b', d.boxed, 'boxed'], ['w', d.wound, 'wound'], ['h', d.hank, 'in hank']];
+  return `<div class="pipe" title="${d.boxed} boxed · ${d.wound} wound · ${d.hank} in hank · ${toMake} to dye, of ${d.needed}">
+      ${seg.map(([c, v]) => v ? `<span class="${c}" style="width:${pct(v)}"></span>` : '').join('')}</div>
+    <div class="pipe-txt"><span>${d.needed} spools</span>
+      ${seg.map(([c, v, l]) => v ? `<span><i class="${c}" style="background:${c === 'b' ? '#2A6B6B' : c === 'w' ? '#5B4A8B' : '#B07D2A'}"></i>${v} ${l}</span>` : '').join('')}
+      ${toMake ? `<span><i style="background:#E8DFD4"></i>${toMake} to dye</span>` : ''}
+      <span class="det-link" onclick="event.stopPropagation(); toggleDetails(${o.id})">${openDetails.has(o.id) ? 'Hide details ▴' : 'Details ▾'}</span></div>`;
+}
+function detailsHtml(o) {
+  if (!openDetails.has(o.id)) return '';
+  const d = orderLineData[o.id] || { detail: [] };
+  const f = (k, v) => v ? `<div><div class="k">${k}</div><div>${v}</div></div>` : '';
+  const n = v => v ? `<td class="n">${v}</td>` : '<td class="n z">·</td>';
+  const ship = o.trackingUrl ? `<a href="${esc(o.trackingUrl)}" target="_blank" rel="noopener">${esc(o.tracking || 'track')} ↗</a>` : esc(o.tracking || '');
+  return `<div class="det" onclick="event.stopPropagation()">
+    <div class="det-grid">
+      ${f('Order', esc(o.orderNumber))}${f('Customer', esc(o.customerName))}${f('Type', esc([o.orderType, o.channel].filter(Boolean).join(' · ')))}
+      ${f('Ordered', o.orderDate ? esc(fmtDate(o.orderDate)) : '')}${f('Due', o.dueDate ? esc(fmtDate(o.dueDate)) : '')}
+      ${f('Status', esc(o.status))}${f('Payment', esc([o.paymentStatus, o.paymentTerms, o.paymentMethod].filter(Boolean).join(' · ')))}
+      ${f('PO', esc(o.poNumber))}${f('Fulfilment', esc(o.fulfillment))}${f('Shipped', o.shippedDate ? esc(fmtDate(o.shippedDate)) : '')}
+      ${f('Carrier', esc(o.carrier))}${f('Tracking', ship)}
+    </div>
+    ${d.detail.length ? `<table><tr><th>Colourway</th><th>SKU</th><th style="text-align:right">Need</th><th style="text-align:right">To dye</th>
+        <th style="text-align:right">Hank</th><th style="text-align:right">Wound</th><th style="text-align:right">Boxed</th><th>Stage</th></tr>
+      ${d.detail.map(l => { const sg = stageOfLine(l), toMake = Math.max(0, l.needed - l.hank - l.wound - l.boxed);
+        return `<tr><td><b>${esc(l.name || '—')}</b>${l.fiber ? ` <span style="color:#8B7D72">${esc(l.fiber)}</span>` : ''}${l.priority === 'Rush' ? ' <span class="badge rush">Rush</span>' : ''}
+          ${l.lots.length || l.bins.length ? `<div style="font-size:10px;color:#8B7D72">${esc([l.lots.join(', '), l.bins.join(', ')].filter(Boolean).join(' · '))}</div>` : ''}
+          ${l.notes ? `<div style="font-size:10.5px;color:#6B5E52">${esc(l.notes)}</div>` : ''}</td>
+          <td style="font-family:'DM Mono',monospace;font-size:10.5px">${esc(l.sku)}</td>${n(l.needed)}${n(toMake)}${n(l.hank)}${n(l.wound)}${n(l.boxed)}
+          <td><span class="stg" style="color:${sg.c}">${sg.t}</span></td></tr>`; }).join('')}</table>`
+      : '<div style="font-size:11.5px;color:#8B7D72;margin-top:6px">No lines on this order.</div>'}
+  </div>`;
+}
+function toggleDetails(id) { if (openDetails.has(id)) openDetails.delete(id); else openDetails.add(id); renderList(); }
 function orderHasRush(orderId) {
   const d = orderLineData[orderId];
   return !!(d && d.hasRush);
@@ -1003,6 +1112,8 @@ function renderList() {
           ${o.orderDate ? `<span>Ordered ${fmtDate(o.orderDate)}</span>` : ''}
           ${dueLabel && !closed ? `<span class="${dueSoon ? 'due-tag soon' : ''}">${esc(dueLabel)}</span>` : ''}
         </div>
+        ${!closed ? pipelineHtml(o) : `<div class="pipe-txt"><span class="det-link" onclick="event.stopPropagation(); toggleDetails(${o.id})">${openDetails.has(o.id) ? 'Hide details ▴' : 'Details ▾'}</span></div>`}
+        ${detailsHtml(o)}
         ${o.shopifyId ? `<div class="card-shopify">${shopifyUrl ? `<a class="shopify-link" href="${esc(shopifyUrl)}" target="_blank" onclick="event.stopPropagation()">Shopify #${esc(o.shopifyId)} ↗</a>` : `Shopify #${esc(o.shopifyId)}`}</div>` : ''}
         ${shipRowHtml(o)}
         ${editingNoteId === o.id
