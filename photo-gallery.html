@@ -6,6 +6,7 @@
 <title>Photo Gallery</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-push.js?v=20261101"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -538,12 +539,19 @@ function renderLines() {
     } else {
       body = `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`;
     }
+    /* One push button per recipe the matched photos belong to (usually one).
+       Pushing works on the recipe's own photos and its own SKU, so an FF
+       photo can never land on the E listing. */
+    const recipes = [...new Map((exact.length ? exact : close).map(p => [getRefId(p.Recipe), p]).filter(([id]) => id)).values()];
+    const pushBtns = recipes.map(p => `<button class="loadbar-btn" style="margin-left:auto" onclick="PhotoPush.openForRecipe(${getRefId(p.Recipe)})"
+      title="Put this colourway's photos on the retail or vendor store listing">⇪ Push to store${recipes.length > 1 ? ' · ' + esc(p.Fiber_Type || '') : ''}</button>`).join('');
     return `
       <div class="line-block">
         <div class="line-head">
           <span class="line-sku">${esc(line.SKU || '—')}</span>
           <span class="line-qty">qty ${line.Qty_Needed ?? '—'}</span>
           <span class="line-guess">matching "${esc(guess)}"</span>
+          ${pushBtns}
         </div>
         ${body}
       </div>`;

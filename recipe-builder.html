@@ -6,6 +6,7 @@
 <title>Recipe Builder</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-push.js?v=20261101"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 
@@ -1400,6 +1401,7 @@ function renderProductPhotoBar() {
   const pending = withUrl.filter(p => !shownProductPhotos.has(p.id)).length;
   const shown = withUrl.length - pending;
   bar.innerHTML =
+    `<button onclick="PhotoPush.openForRecipe(currentRecipeId, { onDone: () => loadProductPhotos() })" title="Put this recipe's photos on the retail or vendor store listing">⇪ Push to store</button>` +
     (pending ? `<button onclick="showAllProductPhotos()" title="Each photo loaded is one n8n execution">🖼 Load all ${pending} photo${pending === 1 ? '' : 's'}</button>` : '') +
     (shown ? `<button onclick="hideAllProductPhotos()" title="Stop showing the loaded photos">Hide photos</button>` : '') +
     `<span>${pending ? `${pending} photo${pending === 1 ? '' : 's'} not loaded` : 'All photos loaded'}</span>`;
