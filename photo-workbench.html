@@ -6,6 +6,7 @@
 <title>Photo Workbench</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-push.js?v=20261102"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -1138,7 +1139,10 @@ function recipeCardHTML(r) {
         <div class="rec-chev">▸</div>
       </div>
       <div class="rec-body">
-        ${isOpen ? `<div class="photo-grid">${photos.map(photoCardHTML).join('')}</div>` : ''}
+        ${isOpen ? `<div class="preview-bar" style="margin:0 0 8px">
+          <span class="preview-bar-note">Put this recipe's photos on the retail or vendor store listing for ${esc(r.SKU_Base || 'its SKU')}.</span>
+          <button data-action="pushstore" data-recipe="${r.id}">⇪ Push to store</button></div>
+          <div class="photo-grid">${photos.map(photoCardHTML).join('')}</div>` : ''}
       </div>
     </div>`;
 }
@@ -1497,6 +1501,7 @@ document.body.addEventListener('click', (e) => {
   else if (action === 'standard') setStandard(photoId);
   else if (action === 'status') setStatus(photoId, el.dataset.status);
   else if (action === 'rotate') rotatePhoto(photoId, el.dataset.dir, el);
+  else if (action === 'pushstore') PhotoPush.openForRecipe(recipeId, { onDone: async () => { if (await loadGrist()) renderAll(); } });
   else if (action === 'expand') { expandedRecipeId = (expandedRecipeId === recipeId) ? null : recipeId; renderRecipes(); }
   else if (action === 'expandmissing') { expandedMissingId = (expandedMissingId === recipeId) ? null : recipeId; renderLink(); }
   else if (action === 'showthumb') {
