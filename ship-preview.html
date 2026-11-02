@@ -6,6 +6,7 @@
 <title>Ship Preview</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-status.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -572,6 +573,8 @@ async function loadShipStation() {
 
   try {
     await loadGrist();
+    // Photo banner per order: a spool still at command means don't seal the box.
+    try { shipPhotos = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); shipPhotos = null; }
     const res = await fetch(PREVIEW_WEBHOOK_URL, {
       method: 'GET', cache: 'no-store', headers: await SSSettings.hookHeaders(),
       ...(ctrl ? { signal: ctrl.signal } : {}),
@@ -1069,6 +1072,9 @@ function keptMark(r, field) {
     : '';
 }
 
+var shipPhotos = null;
+function photoBannerFor(woId) { return shipPhotos && woId ? SSPhotos.orderBanner(shipPhotos.order(woId)) : ''; }
+
 function cardHtml(r) {
   if (r.kind === 'grist-only') {
     const g = r.g;
@@ -1083,6 +1089,7 @@ function cardHtml(r) {
         ${g.status ? `<span>${esc(g.status)}</span>` : ''}
         ${g.type ? `<span>${esc(g.type)}</span>` : ''}
       </div>
+      ${photoBannerFor(g.id)}
       <div class="why">${gristOnlyReading(g)}</div>
     </div>`;
   }
@@ -1134,6 +1141,7 @@ function cardHtml(r) {
       ${o.gift ? '<span>gift</span>' : ''}
       ${o.storeId != null && !store ? `<span>store ${esc(o.storeId)}</span>` : ''}
     </div>
+    ${g ? photoBannerFor(g.id) : ''}
 
     <div class="cols">
       <div class="col">

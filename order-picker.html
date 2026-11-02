@@ -6,6 +6,7 @@
 <title>Order Picker</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-status.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -52,6 +53,11 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .det td { border-bottom: 1px solid var(--rule); padding: 4px; vertical-align: top; }
 .det td.n { text-align: right; font-family: 'DM Mono', ui-monospace, monospace; }
 .det td.z { color: #C9BFB4; }
+.ph-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; padding:7px 9px; border-radius:6px; background:#F7F3EE; font-size:11.5px; }
+.ph-row select, .ph-row button { font-size:11px; padding:3px 8px; border:1px solid #D9CFC4; border-radius:4px; background:#fff; cursor:pointer; font-family:inherit; }
+.ph-row button.go { background:#2A6B6B; color:#fff; border-color:#2A6B6B; }
+.ph-link { font-family:'DM Mono',monospace; font-size:10.5px; word-break:break-all; }
+.ph-mini { font-size:10px; padding:1px 6px; border:1px solid #D9CFC4; border-radius:4px; background:#fff; cursor:pointer; margin-left:4px; }
 .det .stg { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
 
 .order-list { display: flex; flex-direction: column; gap: 8px; }
@@ -528,6 +534,7 @@ async function loadOrders() {
       // be matched by the Shopify sync, so it will not close itself.
     });
 
+    try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); photoState = null; }
     renderShipHint();
     renderFilters();
     renderList();
@@ -612,6 +619,7 @@ function pipelineHtml(o) {
     <div class="pipe-txt"><span>${d.needed} spools</span>
       ${seg.map(([c, v, l]) => v ? `<span><i class="${c}" style="background:${c === 'b' ? '#2A6B6B' : c === 'w' ? '#5B4A8B' : '#B07D2A'}"></i>${v} ${l}</span>` : '').join('')}
       ${toMake ? `<span><i style="background:#E8DFD4"></i>${toMake} to dye</span>` : ''}
+      ${photoChip(o.id)}
       <span class="det-link" onclick="event.stopPropagation(); toggleDetails(${o.id})">${openDetails.has(o.id) ? 'Hide details ▴' : 'Details ▾'}</span></div>`;
 }
 function detailsHtml(o) {
@@ -628,16 +636,74 @@ function detailsHtml(o) {
       ${f('PO', esc(o.poNumber))}${f('Fulfilment', esc(o.fulfillment))}${f('Shipped', o.shippedDate ? esc(fmtDate(o.shippedDate)) : '')}
       ${f('Carrier', esc(o.carrier))}${f('Tracking', ship)}
     </div>
+    ${photoRowHtml(o)}
     ${d.detail.length ? `<table><tr><th>Colourway</th><th>SKU</th><th style="text-align:right">Need</th><th style="text-align:right">To dye</th>
-        <th style="text-align:right">Hank</th><th style="text-align:right">Wound</th><th style="text-align:right">Boxed</th><th>Stage</th></tr>
+        <th style="text-align:right">Hank</th><th style="text-align:right">Wound</th><th style="text-align:right">Boxed</th><th>Stage</th>${photoOn(o.id) ? '<th>Photo</th>' : ''}</tr>
       ${d.detail.map(l => { const sg = stageOfLine(l), toMake = Math.max(0, l.needed - l.hank - l.wound - l.boxed);
         return `<tr><td><b>${esc(l.name || '—')}</b>${l.fiber ? ` <span style="color:#8B7D72">${esc(l.fiber)}</span>` : ''}${l.priority === 'Rush' ? ' <span class="badge rush">Rush</span>' : ''}
           ${l.lots.length || l.bins.length ? `<div style="font-size:10px;color:#8B7D72">${esc([l.lots.join(', '), l.bins.join(', ')].filter(Boolean).join(' · '))}</div>` : ''}
           ${l.notes ? `<div style="font-size:10.5px;color:#6B5E52">${esc(l.notes)}</div>` : ''}</td>
           <td style="font-family:'DM Mono',monospace;font-size:10.5px">${esc(l.sku)}</td>${n(l.needed)}${n(toMake)}${n(l.hank)}${n(l.wound)}${n(l.boxed)}
-          <td><span class="stg" style="color:${sg.c}">${sg.t}</span></td></tr>`; }).join('')}</table>`
+          <td><span class="stg" style="color:${sg.c}">${sg.t}</span></td>${photoOn(o.id) ? `<td>${photoCell(l.id)}</td>` : ''}</tr>`; }).join('')}</table>`
       : '<div style="font-size:11.5px;color:#8B7D72;margin-top:6px">No lines on this order.</div>'}
   </div>`;
+}
+/* ── Photos (photo-status.js) ─────────────────────────────────────────
+   Whether the order wants photos, how many colourways are done, any spool
+   still out at command, and the order's own share link to send. */
+let photoState = null;
+function photoOn(woId) { const o = photoState && photoState.order(woId); return !!(o && o.wanted); }
+function photoChip(woId) {
+  const o = photoState && photoState.order(woId);
+  if (!o || !o.wanted || !o.total) return '';
+  const c = o.counts, col = c.command ? '#8B3A2A' : c.needed ? '#B07D2A' : '#2E5E1A';
+  const t = c.command ? `${c.command} at command` : `${c.done}/${o.total}`;
+  return `<span style="color:${col};font-weight:600" title="${esc(SSPhotos.orderSummary(o).text)}">📷 ${t}</span>`;
+}
+function photoCell(lineId) {
+  const L = photoState && photoState.line(lineId);
+  if (!L) return '';
+  const b = SSPhotos.lineBadge(L);
+  if (L.state === 'command') return b + `<button class="ph-mini" onclick="photoLine(${lineId}, 'Done')" title="Photo taken and the spool is back with the order">back ✓</button>`;
+  if (L.state === 'needed') return b + `<button class="ph-mini" onclick="photoLine(${lineId}, 'Not needed')">skip</button>`;
+  if (L.state === 'skip') return b + `<button class="ph-mini" onclick="photoLine(${lineId}, '')">undo</button>`;
+  return b;
+}
+function photoRowHtml(ord) {
+  const o = photoState && photoState.order(ord.id);
+  if (!o) return '';
+  const def = o.customerWants ? 'yes' : 'no';
+  const sel = `<select onchange="setSendPhotos(${ord.id}, this.value)" title="Blank follows the customer's setting">
+      <option value="" ${!o.override ? 'selected' : ''}>Customer default (${def})</option>
+      <option value="Yes" ${o.override === 'Yes' ? 'selected' : ''}>Yes</option>
+      <option value="No" ${o.override === 'No' ? 'selected' : ''}>No</option></select>`;
+  if (!o.wanted) return `<div class="ph-row"><b>📷 Photos</b> ${sel}</div>`;
+  const link = o.link
+    ? `<span class="ph-link">${esc(o.link)}</span><button class="go" onclick="copyPhotoLink(${ord.id})">Copy link</button><a href="${esc(o.link)}" target="_blank" rel="noopener" style="font-size:11px">open ↗</a>`
+    : (o.folder ? `<button class="go" onclick="copyPhotoLink(${ord.id})">Make share link</button>`
+                : `<span style="color:#8B7D72">Link appears after the first photo is shared (Photo Gallery)</span>`);
+  return `<div class="ph-row"><b>📷 Photos</b> ${sel} <span>${esc(SSPhotos.orderSummary(o).text.replace(/^📷 /, ''))}</span> ${link}</div>`;
+}
+async function setSendPhotos(woId, v) {
+  try { await grist.docApi.applyUserActions([['UpdateRecord', 'Work_Orders', woId, { Send_Photos: v || null }]]); await refreshPhotos(); }
+  catch (e) { console.error(e); alert('Could not save — check the Send_Photos column exists on Work_Orders.'); }
+}
+async function photoLine(lineId, v) {
+  try { await SSPhotos.setLines(grist.docApi, [lineId], v); await refreshPhotos(); }
+  catch (e) { console.error(e); alert('Could not save the photo status.'); }
+}
+async function copyPhotoLink(woId) {
+  const o = photoState && photoState.order(woId);
+  if (!o) return;
+  try {
+    const url = await SSPhotos.ensureLink(grist.docApi, o);
+    try { await navigator.clipboard.writeText(url); } catch (e) { prompt('Copy this link:', url); }
+    renderList();
+  } catch (e) { console.error(e); alert(e.message || 'Could not make the link'); }
+}
+async function refreshPhotos() {
+  try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn(e); }
+  renderList();
 }
 function toggleDetails(id) { if (openDetails.has(id)) openDetails.delete(id); else openDetails.add(id); renderList(); }
 function orderHasRush(orderId) {

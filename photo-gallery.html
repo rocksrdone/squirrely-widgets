@@ -6,6 +6,7 @@
 <title>Photo Gallery</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-status.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -166,6 +167,7 @@ body {
     <div class="order-title" id="orderTitle"></div>
     <div class="order-sub" id="orderSub"></div>
     <div class="order-tag" id="orderChannel"></div>
+    <div id="photoState"></div>
   </div>
 
   <div class="loadbar">
@@ -437,6 +439,58 @@ async function loadData(record) {
   document.getElementById('mainView').style.display = 'block';
   document.getElementById('searchBox').value = '';
   document.getElementById('searchResults').innerHTML = '';
+  await refreshPhotoState();
+  renderLines();
+}
+
+/* ── Order photo state (photo-status.js) ───────────────────────────────
+   Which colourways still need a photo, which spools are sitting here at
+   command, and the order's own share link. Sharing a photo for a colourway
+   whose spool is "At command" marks it Done — the spool goes back to the
+   order. The share link is made by the first share and kept on the order. */
+let photoState = null;
+async function refreshPhotoState() {
+  try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); photoState = null; }
+  renderPhotoState();
+}
+function lineState(line) { return photoState ? photoState.line(line.id) : null; }
+function renderPhotoState() {
+  const el = document.getElementById('photoState');
+  if (!el) return;
+  const o = photoState && currentOrder ? photoState.order(currentOrder.id) : null;
+  if (!o || !o.wanted) { el.innerHTML = o ? `<div class="share-note" style="margin-top:6px">This order isn't set to get photos (Order Picker → Details to change).</div>` : ''; return; }
+  const waiting = o.lines.filter(l => l.state === 'command');
+  el.innerHTML = `${SSPhotos.orderBanner(o)}
+    ${waiting.length ? `<div class="share-note">At command now: ${waiting.map(l => esc(l.name)).join(', ')} — share a photo for each (or pick an older one that still matches) and the spool goes back to the order.</div>` : ''}
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
+      ${o.link ? `<button class="loadbar-btn" onclick="copyOrderLink()">Copy share link</button><a class="share-note" href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.link)}</a>`
+        : o.folder ? `<button class="loadbar-btn" onclick="copyOrderLink()">Make share link</button>`
+        : `<span class="share-note">The share link is made once the first photo is shared.</span>`}
+    </div>`;
+}
+async function copyOrderLink() {
+  const o = photoState && currentOrder ? photoState.order(currentOrder.id) : null;
+  if (!o) return;
+  try {
+    const url = await SSPhotos.ensureLink(grist.docApi, o);
+    try { await navigator.clipboard.writeText(url); showToast('Link copied'); } catch (e) { prompt('Copy this link:', url); }
+    renderPhotoState();
+  } catch (e) { console.error(e); showToast(e.message || 'Could not make the link'); }
+}
+async function setLinePhoto(lineId, v) {
+  try { await SSPhotos.setLines(grist.docApi, [lineId], v); await refreshPhotoState(); renderLines(); }
+  catch (e) { console.error(e); showToast('Could not save'); }
+}
+/* After a share: spools that were waiting here and now have their photo go
+   back to the order, and the first share makes the order's link. */
+async function afterShare() {
+  await refreshPhotoState();
+  const o = photoState && currentOrder ? photoState.order(currentOrder.id) : null;
+  if (!o || !o.wanted) return;
+  const back = o.lines.filter(l => l.shared && l.status === SSPhotos.AT).map(l => l.id);
+  if (back.length) { try { await SSPhotos.setLines(grist.docApi, back, SSPhotos.DONE); } catch (e) { console.warn(e); } }
+  if (!o.link && o.folder) { try { await SSPhotos.ensureLink(grist.docApi, o); } catch (e) { console.warn('link not made yet', e); } }
+  await refreshPhotoState();
   renderLines();
 }
 
@@ -519,6 +573,16 @@ function photoCardHTML(p) {
     </div>`;
 }
 
+function linePhotoHead(line) {
+  const L = lineState(line);
+  if (!L || L.state === 'none') return '';
+  const btn = (v, t, tip) => `<button class="rot-btn" style="width:auto;padding:1px 7px;font-size:10px" title="${tip}" onclick="setLinePhoto(${line.id}, '${v}')">${t}</button>`;
+  return `<span style="margin-left:auto;display:inline-flex;gap:5px;align-items:center">${SSPhotos.lineBadge(L)}
+    ${L.state === 'command' ? btn('Done', 'back ✓', 'Photo done — spool is back with the order') : ''}
+    ${L.state === 'needed' ? btn('Not needed', 'skip', 'No photo for this colourway') : ''}
+    ${L.state === 'skip' ? btn('', 'undo', 'Needs a photo after all') : ''}</span>`;
+}
+
 function renderLines() {
   const container = document.getElementById('linesContainer');
   if (!orderLines.length) {
@@ -544,6 +608,7 @@ function renderLines() {
           <span class="line-sku">${esc(line.SKU || '—')}</span>
           <span class="line-qty">qty ${line.Qty_Needed ?? '—'}</span>
           <span class="line-guess">matching "${esc(guess)}"</span>
+          ${linePhotoHead(line)}
         </div>
         ${body}
       </div>`;
@@ -673,6 +738,7 @@ async function sharePhoto(photoId, btnEl) {
     showToast(`Sent to ${vendorCode} — order ${currentOrder.Order_Number}`);
     const searchValue = document.getElementById('searchBox').value;
     await loadData(currentOrder);
+    await afterShare();
     document.getElementById('searchBox').value = searchValue;
     renderSearchNow(searchValue);
   } catch (e) {

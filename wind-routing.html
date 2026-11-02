@@ -6,6 +6,7 @@
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="stock-ops.js?v=20261101"></script>
 <script src="settings.js"></script>
+<script src="photo-status.js"></script>
 <style>
   :root {
     --ink: #3A3028; --rule: #DDD3C7; --paper: #FDFBF7;
@@ -635,6 +636,9 @@ async function loadEverything() {
       (b.pastDue - a.pastDue) || (b.bump - a.bump) || (dueValue(a.dueDate) - dueValue(b.dueDate))
     );
 
+    // Photo state is a side note: if it fails, winding still works.
+    try { S.photos = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); S.photos = null; }
+
     render();
   } catch (e) {
     console.error('Failed to load wind routing:', e);
@@ -706,7 +710,7 @@ function rowHtml(l) {
         </div>
         <span class="line-qty" title="Spools still to wind for this line">${l.outstanding} <span class="unit">to wind</span></span>
       </div>
-      <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag}</div>
+      <div class="line-sub">${esc(l.orderNumber || '')}${l.orderNumber ? ' · ' : ''}${sub} ${tag} ${photoBadge(l.lineId)}</div>
     </div>
     ${open && l.ready ? fillPanel(l) : ''}`;
 }
@@ -1175,14 +1179,14 @@ function binsHtml(withTitle) {
     const rows = b.itemList.map(it => {
       const hankRow = it.hankQty > 0 ? `<div class="bin-item">
            <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.hankQty}</span>
-             <span style="font-size:11px;color:#B07D2A;font-weight:600"> in hank &mdash; wind first</span></span>
+             <span style="font-size:11px;color:#B07D2A;font-weight:600"> in hank &mdash; wind first</span> ${photoBadge(lineIdOfKey(it.key), true)}</span>
            <span class="bin-btns"><button class="glove" onclick="markWound(${b.woId}, '${it.key}')"
              title="These ${it.hankQty} are wound now — move them on to labelling">Wound &#10003;</button></span>
          </div>` : '';
       if (it.qty === 0 && it.hankQty > 0) return hankRow;
       if (it.qty === 0) {
         return `<div class="bin-item done">
-           <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty}</span>
+           <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty} ${photoBadge(lineIdOfKey(it.key), true)}</span>
            <span class="bin-item-tick">&#10003; boxed</span>
          </div>`;
       }
@@ -1202,7 +1206,7 @@ function binsHtml(withTitle) {
         : `<button class="glove pack" onclick="markPacked(${b.woId}, '${it.key}')"
              title="Labels are on these ${it.qty} spool${it.qty === 1 ? '' : 's'} and they're in the box">Labelled &rarr; box</button>`;
       return hankRow + `<div class="bin-item">
-           <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span></span>
+           <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span> ${photoBadge(lineIdOfKey(it.key), true)}</span>
            <span class="bin-btns">${sortBtn}${labelBtn}</span>
          </div>`;
     }).join('');
@@ -1231,6 +1235,7 @@ function binsHtml(withTitle) {
             : `<button class="glove ghost" onclick="markPacked(${b.woId}, null)"
                  title="Mark all ${openItems} remaining colorways labelled and boxed">All ${openItems} done</button>`) : ''}
         </div>
+        ${S.photos ? SSPhotos.orderBanner(S.photos.order(b.woId)) : ''}
         <div class="bin-items">${rows}</div>
       </div>`;
   }).join('');
@@ -1257,6 +1262,40 @@ function viewBar() {
   return `<div class="viewbar">${btn('wind', '1 · Wind & bag', nWind)}${
     btn('labels', '2 · Label & box', nBins)}${btn('all', 'Both')}</div>
     <div class="view-hint">${VIEW_HINT[S.view] || ''}</div>`;
+}
+
+/* ── Photos ────────────────────────────────────────────────────────────
+   Answers "do I need to take a picture?" before anyone asks. On an order that
+   wants photos, the winder picks the best-looking spool of each colourway and
+   sets it aside for command — one tap. Command shares the photo (or picks an
+   older one that still looks right) and sends the spool back to the order;
+   packing sees that banner until every spool is back. */
+function lineIdOfKey(key) { return /^L\d+$/.test(key || '') ? Number(key.slice(1)) : null; }
+function photoBadge(lineId, withBtn) {
+  const L = S.photos && lineId ? S.photos.line(lineId) : null;
+  if (!L || L.state === 'none') return '';
+  const btn = withBtn && L.state === 'needed'
+    ? ` <button class="glove ghost" style="padding:2px 8px;font-size:10px" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">set aside &#10003;</button>` : '';
+  return SSPhotos.lineBadge(L) + btn;
+}
+function photoPromptHtml(lineId, afterWind) {
+  const L = S.photos && lineId ? S.photos.line(lineId) : null;
+  if (!L || L.state !== 'needed') return '';
+  return `<div class="done-line check" style="background:#FFF3D6;border-color:#E2B65A">
+    <span>&#128247; This order wants photos. ${afterWind ? 'Pick' : 'When you wind, pick'} the <strong>best-looking spool</strong> of ${esc(L.name || 'this colourway')} and set it aside for command.</span>
+    <span>
+      <button class="glove sort" onclick="event.stopPropagation(); setAsidePhoto(${lineId})">&#10003; set aside</button>
+      ${afterWind ? `<button class="glove ghost" onclick="event.stopPropagation(); skipPhoto(${lineId})" title="Command already has a photo that matches — keep the spool with the order">already have one</button>` : ''}
+    </span>
+  </div>`;
+}
+async function setAsidePhoto(lineId) {
+  try { await SSPhotos.setLines(grist.docApi, [lineId], SSPhotos.AT); showToast('Set aside for photos — command has it'); await loadEverything(); }
+  catch (e) { console.error(e); showToast(S.photos && !S.photos.hasCol ? 'Add Photo_Status to Work_Order_Lines first' : 'Could not save'); }
+}
+async function skipPhoto(lineId) {
+  try { await SSPhotos.setLines(grist.docApi, [lineId], SSPhotos.SKIP); showToast('No spool set aside'); await loadEverything(); }
+  catch (e) { console.error(e); showToast('Could not save'); }
 }
 
 /* Hank put away to an order, now wound: status moves on to labelling. The lot's
@@ -1371,7 +1410,7 @@ function render() {
     <div class="done-line wound">
       <span>&#129525; <strong>${esc(d.customerName || 'order')}</strong> — ${esc(d.summary)} wound into the bin</span>
       <span class="undo-link" onclick="undoWind(${i})">↺ undo</span>
-    </div>${checkHtml(d, i)}`).join('');
+    </div>${checkHtml(d, i)}${d.lineId ? photoPromptHtml(d.lineId, true) : ''}`).join('');
 
   const boxedHtml = S.boxed.map((d, i) => `
     <div class="done-line boxed">
@@ -1548,6 +1587,7 @@ function fillPanel(l) {
       ${mixWarn}
       ${brokenHtml}
       ${stockHtml}
+      ${photoPromptHtml(l.lineId)}
       <div id="tally" class="tally ok"></div>
       <button class="go" id="confirmBtn" onclick="confirmWind()">✓ Wind &amp; bag for ${esc(l.customerName || 'order')}</button>
       ${flagPanelHtml(l)}
@@ -1818,7 +1858,7 @@ async function confirmWind() {
 
     S.done.unshift({
       customerName: p.line.customerName, allocIds: newIds,
-      stockUndo, stockAdded: p.stock,
+      stockUndo, stockAdded: p.stock, lineId: p.line.lineId,
       brokenRows,
       /* Only when something is actually going to back stock. A wind that
          exactly covers an order leaves no bag to count, and asking anyway
