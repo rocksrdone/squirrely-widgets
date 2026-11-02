@@ -551,7 +551,12 @@ async function loadEverything() {
       const bucket = allocBucket(a.status);
       const waiting = bucket === 'wound';
       const boxed = bucket === 'boxed';
-      if (!waiting && !boxed) return;
+      /* Put away to the order as HANK at Lot Desk ("Unwound - Bagged"): in the
+         order's bin, but not wound. Nothing used to turn these into wound
+         spools, so an order put away that way could never reach this step.
+         They now show here, to be wound and marked, then labelled as usual. */
+      const hank = bucket === 'pending';
+      if (!waiting && !boxed && !hank) return;
       const meta = lineMeta[a.lineId];
       if (!meta || !meta.woId) return;
       const info = woInfo[meta.woId];
@@ -559,7 +564,7 @@ async function loadEverything() {
       const b = binsByWo[meta.woId] = binsByWo[meta.woId] || {
         woId: meta.woId, orderNumber: info.orderNumber || '',
         customerName: info.customerName || '', customerCode: info.customerCode || '',
-        items: {}, total: 0,
+        items: {}, total: 0, hank: 0,
       };
       // One row per order line, because that is one colorway going into the box.
       const key = a.lineId != null ? `L${a.lineId}` : `R${meta.recipeId}`;
@@ -569,8 +574,9 @@ async function loadEverything() {
         // allocRows keeps each row's own quantity beside its id. borrowFrom
         // used to count rows as if each were one spool, because the ids alone
         // do not say how many spools a row carries.
-        qty: 0, allocIds: [], allocRows: [], boxedQty: 0, sortedQty: 0,
+        qty: 0, allocIds: [], allocRows: [], boxedQty: 0, sortedQty: 0, hankQty: 0, hankIds: [],
       };
+      if (hank) { it.hankQty += a.qty; it.hankIds.push(a.id); b.hank += a.qty; return; }
       if (waiting) {
         it.qty += a.qty; it.allocIds.push(a.id); it.allocRows.push({ id: a.id, qty: a.qty });
         b.total += a.qty;
@@ -581,10 +587,10 @@ async function loadEverything() {
     // Only orders with something still waiting; already-boxed rows ride along so
     // the card shows how far through the box you are.
     S.bins = Object.values(binsByWo)
-      .filter(b => b.total > 0)
+      .filter(b => b.total > 0 || b.hank > 0)
       .map(b => {
         b.itemList = Object.values(b.items).sort((x, y) => x.name.localeCompare(y.name));
-        b.doneCount = b.itemList.filter(i => i.qty === 0).length;
+        b.doneCount = b.itemList.filter(i => i.qty === 0 && i.hankQty === 0).length;
         return b;
       })
       .sort((x, y) => String(x.customerName).localeCompare(String(y.customerName)));
@@ -688,7 +694,8 @@ function rowHtml(l) {
   const sub = l.ready
     ? `${due}${l.drying ? ` · ${l.drying} more drying` : ''}`
     : (l.shortByDrying
-        ? `${due} · <span class="drying-note">${l.availNow} ready, ${l.outstanding - l.availNow} still on wet rack</span>`
+        ? `${due} · <span class="drying-note">${l.availNow} ready, ${l.outstanding - l.availNow} still on wet rack</span>
+           <button class="glove ghost" style="padding:3px 9px;font-size:11px;margin-left:6px" onclick="markDry(${l.lineId}, event)" title="It's dry — let it be wound">Mark dry</button>`
         : `${due} · only ${l.availNow} of ${l.outstanding} made`);
   return `
     <div class="line-card ${open ? 'active' : ''} ${l.ready ? '' : 'not-ready'}" onclick="selectLine(${l.lineId})">
@@ -1166,6 +1173,13 @@ function binsHtml(withTitle) {
     const canSort = !!S.cols.ALLOC.orderBin;
 
     const rows = b.itemList.map(it => {
+      const hankRow = it.hankQty > 0 ? `<div class="bin-item">
+           <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.hankQty}</span>
+             <span style="font-size:11px;color:#B07D2A;font-weight:600"> in hank &mdash; wind first</span></span>
+           <span class="bin-btns"><button class="glove" onclick="markWound(${b.woId}, '${it.key}')"
+             title="These ${it.hankQty} are wound now — move them on to labelling">Wound &#10003;</button></span>
+         </div>` : '';
+      if (it.qty === 0 && it.hankQty > 0) return hankRow;
       if (it.qty === 0) {
         return `<div class="bin-item done">
            <span class="bin-item-name">${esc(it.name)} &times;${it.boxedQty}</span>
@@ -1187,7 +1201,7 @@ function binsHtml(withTitle) {
         ? `<button class="glove" disabled title="Sort it into the bin first">Labelled &rarr; box</button>`
         : `<button class="glove pack" onclick="markPacked(${b.woId}, '${it.key}')"
              title="Labels are on these ${it.qty} spool${it.qty === 1 ? '' : 's'} and they're in the box">Labelled &rarr; box</button>`;
-      return `<div class="bin-item">
+      return hankRow + `<div class="bin-item">
            <span class="bin-item-name">${esc(it.name)} <span class="bin-item-qty">&times;${it.qty}</span></span>
            <span class="bin-btns">${sortBtn}${labelBtn}</span>
          </div>`;
@@ -1207,8 +1221,10 @@ function binsHtml(withTitle) {
           <div class="bin-who">
             <div><span class="bin-name">${esc(b.customerName || 'order')}</span></div>
             <div class="bin-meta">${esc(b.orderNumber || '')}${b.orderNumber ? ' &middot; ' : ''}${
-              b.total} spool${b.total === 1 ? '' : 's'} still to label${progress}</div>
+              b.total} spool${b.total === 1 ? '' : 's'} still to label${b.hank ? ` &middot; ${b.hank} still in hank` : ''}${progress}</div>
           </div>
+          ${b.hank && b.itemList.filter(i => i.hankQty > 0).length > 1 ? `<button class="glove" onclick="markWound(${b.woId}, null)"
+                 title="Every colorway in hank on this order is wound now">All wound &#10003;</button>` : ''}
           ${openItems > 1 ? (canSort && b.itemList.some(i => i.qty > 0 && i.sortedQty < i.qty)
             ? `<button class="glove sort" onclick="markSorted(${b.woId}, null)"
                  title="All remaining bagged colorways into ${esc(bin)}">All &rarr; ${esc(bin || 'bin')}</button>`
@@ -1241,6 +1257,42 @@ function viewBar() {
   return `<div class="viewbar">${btn('wind', '1 · Wind & bag', nWind)}${
     btn('labels', '2 · Label & box', nBins)}${btn('all', 'Both')}</div>
     <div class="view-hint">${VIEW_HINT[S.view] || ''}</div>`;
+}
+
+/* Hank put away to an order, now wound: status moves on to labelling. The lot's
+   Spools_Made already counts these (the kettle wrote the dyed count and a
+   put-away to an order does not lower it), so only the status changes. */
+async function markWound(woId, itemKey) {
+  const b = S.bins.find(x => x.woId === woId);
+  if (!b) return;
+  const items = (itemKey ? b.itemList.filter(i => i.key === itemKey) : b.itemList).filter(i => i.hankQty > 0);
+  const ids = items.reduce((acc, i) => acc.concat(i.hankIds), []);
+  if (!ids.length) return;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Lot_Allocations', ids,
+      { [S.cols.ALLOC.status]: ids.map(() => BIN_STATUS) }]]);
+    showToast(`${items.reduce((n, i) => n + i.hankQty, 0)} spools marked wound`);
+    await loadEverything();
+  } catch (e) { console.error(e); showToast('Could not mark them wound'); }
+}
+
+/* "Drying - Wet Rack" is written at the kettle and nothing clears it since the
+   rack screen was retired, but this screen will not wind wet thread. When the
+   wet status is all that holds a line up, this marks that colourway's waiting
+   lots dry. */
+async function markDry(lineId, ev) {
+  if (ev) ev.stopPropagation();
+  const l = S.lines.find(x => x.lineId === lineId);
+  if (!l || !S.cols.LOT.drying) return;
+  const ids = l.lots.filter(x => x.freshWet > 0).map(x => x.lotId);
+  if (!ids.length) return;
+  if (!confirm(`Mark ${ids.length} lot${ids.length === 1 ? '' : 's'} of ${l.recipeName} as dry?`)) return;
+  try {
+    await grist.docApi.applyUserActions([['BulkUpdateRecord', 'Production_Lots', ids,
+      { [S.cols.LOT.drying]: ids.map(() => 'Drying - Dry Rack') }]]);
+    showToast('Marked dry');
+    await loadEverything();
+  } catch (e) { console.error(e); showToast('Could not mark them dry'); }
 }
 
 /* itemKey null = everything still waiting in this order's bin. */
