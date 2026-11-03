@@ -43,8 +43,11 @@
     ]);
     const hasCol = Array.isArray(wol.Photo_Status);
 
-    const custWants = {};
-    col(cust, 'id').forEach((id, i) => { custWants[id] = !!col(cust, 'Wants_Product_Photos')[i]; });
+    const custWants = {}, custCode = {};
+    col(cust, 'id').forEach((id, i) => {
+      custWants[id] = !!col(cust, 'Wants_Product_Photos')[i];
+      custCode[id] = String(col(cust, 'Code')[i] || '').trim();
+    });
     const recName = {}, recBySku = {};
     col(rec, 'id').forEach((id, i) => {
       recName[id] = col(rec, 'Recipe_Name')[i] || '';
@@ -59,7 +62,9 @@
         id, wanted: ov === 'Yes' ? true : ov === 'No' ? false : !!custWants[cid],
         override: ov, customerWants: !!custWants[cid],
         link: String(col(wo, 'Photo_Share_URL')[i] || ''),
+        linkMade: Number(col(wo, 'Photo_Share_Made')[i]) || 0,
         orderNumber: col(wo, 'Order_Number')[i] || '',
+        customerCode: custCode[cid] || '',
         customerName: col(wo, 'Customer_Name')[i] || '',
         active: String(col(wo, 'Status')[i] || '') === 'Active',
         folder: '', lines: [],
@@ -104,6 +109,9 @@
       lines[id] = L; o.lines.push(L);
     });
     Object.values(orders).forEach(o => {
+      // No photo shared yet: the folder the share workflow WOULD use, so a link
+      // can be made (and the folder created) before anything is in it.
+      if (!o.folder) o.folder = orderFolder(o.customerCode, o.orderNumber);
       const c = { needed: 0, command: 0, done: 0, skip: 0 };
       o.lines.forEach(l => { if (c[l.state] != null) c[l.state]++; });
       o.counts = c;
@@ -111,6 +119,14 @@
       o.shareCount = (sharedTo[o.id] || {}).count || 0;
     });
     return { hasCol, orders, lines, order: id => orders[id], line: id => lines[id] };
+  }
+
+  /* Same rule as "SS - Share Photo to Vendor": vendor-share/<code lower>/
+     order-<number without # ? % \>. Drafts stay "order-D53". */
+  function orderFolder(code, number) {
+    const c = String(code || '').trim().toLowerCase().replace(/[#?%\\]/g, '');
+    const n = String(number || '').trim().replace(/[#?%\\]/g, '');
+    return c && n ? `Squirrely Stash/product-photos/vendor-share/${c}/order-${n}` : '';
   }
 
   async function setLines(docApi, lineIds, status) {
@@ -152,9 +168,14 @@
      later click just copies it. Needs at least one photo shared, because the
      folder doesn't exist in Nextcloud until then. */
   const LINK_HOOK = 'https://squirrelystash.app.n8n.cloud/webhook/order-photo-link';
+  /* Links expire after Nextcloud's default (90 days). A link made more than
+     85 days ago is replaced with a fresh one rather than handed out dead.
+     A link with no recorded date (made before dates were kept) is kept. */
+  const LINK_DAYS = 85;
   async function ensureLink(docApi, o) {
-    if (o.link) return o.link;
-    if (!o.folder) throw new Error('Share a photo to this order first — the folder is made by the first share.');
+    const stale = o.link && o.linkMade && (Date.now() / 1000 - o.linkMade) > LINK_DAYS * 86400;
+    if (o.link && !stale) return o.link;
+    if (!o.folder) throw new Error('This order has no customer code, so it has no folder.');
     const headers = window.SSSettings ? await SSSettings.hookHeaders({ 'Content-Type': 'application/json' })
                                       : { 'Content-Type': 'application/json' };
     const r = await fetch(LINK_HOOK, { method: 'POST', headers, body: JSON.stringify({ folder_path: o.folder, work_order_id: o.id, order_number: o.orderNumber }) });
@@ -162,10 +183,10 @@
     const j = await r.json().catch(() => ({}));
     const url = j.url || (j.ocs && j.ocs.data && j.ocs.data.url) || '';
     if (!url) throw new Error('Link workflow gave no url');
-    await docApi.applyUserActions([['UpdateRecord', 'Work_Orders', o.id, { Photo_Share_URL: url }]]);
+    await docApi.applyUserActions([['UpdateRecord', 'Work_Orders', o.id, { Photo_Share_URL: url, Photo_Share_Made: Date.now() / 1000 }]]);
     o.link = url;
     return url;
   }
 
-  window.SSPhotos = { AT, DONE, SKIP, load, setLines, lineBadge, orderSummary, orderBanner, ensureLink };
+  window.SSPhotos = { AT, DONE, SKIP, load, setLines, lineBadge, orderSummary, orderBanner, ensureLink, orderFolder };
 })();

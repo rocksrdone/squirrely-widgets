@@ -949,10 +949,21 @@ async function saveInvoiceCopy(pdf, invoiceNum) {
   try {
     const b64 = pdf.output('datauristring').replace(/^data:[^,]*,/, '');
     const code = (customerRecord && customerRecord.code) || '';
+    const orderNumber0 = document.getElementById('sourceOrderNumber').value || '';
+    // A second copy goes in the customer's order folder — the folder shared
+    // with them, next to the order's photos. Same naming as the photo share.
+    const woId0 = await findWorkOrderId(orderNumber0);
+    let gristNumber = '';
+    if (woId0) {
+      try { const t = await grist.docApi.fetchTable('Work_Orders'); gristNumber = t.Order_Number[t.id.indexOf(woId0)] || ''; } catch (e) {}
+    }
+    const scrub = v => String(v || '').trim().replace(/[#?%\\]/g, '');
+    const orderFolder = code && gristNumber
+      ? `Squirrely Stash/product-photos/vendor-share/${scrub(code).toLowerCase()}/order-${scrub(gristNumber)}` : '';
     const res = await fetch(SAVE_INVOICE_URL, {
       method: 'POST',
       headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ invoice_number: invoiceNum, customer_code: code, pdf_base64: b64 }),
+      body: JSON.stringify({ invoice_number: invoiceNum, customer_code: code, pdf_base64: b64, order_folder: orderFolder }),
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok || !out.ok || !out.path) throw new Error(out.message || ('save answered ' + res.status));
@@ -969,7 +980,8 @@ async function saveInvoiceCopy(pdf, invoiceNum) {
     await grist.docApi.applyUserActions([i >= 0
       ? ['UpdateRecord', 'Customs_Invoices', t.id[i], fields]
       : ['AddRecord', 'Customs_Invoices', null, fields]]);
-    statusEl.textContent = `Downloaded, and a copy saved to Nextcloud (${out.path.split('/').slice(-2).join('/')}).`;
+    statusEl.textContent = `Downloaded, and a copy saved to Nextcloud (${out.path.split('/').slice(-2).join('/')})`
+      + (out.order_path ? ' and to the order folder shared with the customer.' : '.');
     statusEl.className = 'status-msg';
     await renderSavedInvoices(orderNumber);
   } catch (e) {

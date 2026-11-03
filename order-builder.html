@@ -6,6 +6,7 @@
 <title>Order Builder</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="settings.js?v=20261101"></script>
+<script src="photo-status.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
 :root {
@@ -2609,19 +2610,34 @@ async function copyPayEmail(id, btn) {
     po_line: o.po ? ` (PO ${o.po})` : '',
     pay_link: link, order_total: money(total), spool_count: String(lines.reduce((t, l) => t + l.qty, 0)),
     order_lines: lines.map(l => `  • ${l.qty} × ${l.recipeName || l.sku}${l.price ? ' — ' + money(l.qty * l.price) : ''}`).join('\n'),
+ files_line: await filesLine(o, c),
     intl_note: c.foreign ? '\n\nAs this order ships outside the US, your country may charge import VAT or duties when it arrives; those are collected by the carrier on delivery.' : '',
     today: new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }),
   };
   const missing = new Set();
   const fill = t => String(t || '').replace(/\{([a-z_]+)\}/g, (m, k) => {
     const v = vals[k];
-    if (v == null || (v === '' && !['po_line', 'intl_note'].includes(k))) { missing.add(k); return m; }
+    if (v == null || (v === '' && !['po_line', 'intl_note', 'files_line'].includes(k))) { missing.add(k); return m; }
     return v;
   });
   const text = fill((T.Subject || [])[i]) + '\n\n' + fill((T.Body || [])[i]);
   try { await navigator.clipboard.writeText(text); if (btn) btn.textContent = 'Email copied ✓'; }
   catch (e) { prompt('Copy the email:', text); }
   if (missing.size) toast('Check before sending — not filled: ' + [...missing].map(k => '{' + k + '}').join(', '));
+}
+
+/* The order's shared folder (photos, customs invoice), for the pay email.
+   Only when there will be something in it: the customer wants photos, or the
+   order ships abroad (customs invoice). Makes the folder + link if needed. */
+async function filesLine(o, c) {
+  try {
+    const P = await SSPhotos.load(grist.docApi);
+    const po = P.order(o.id);
+    if (!po || !(po.wanted || c.foreign)) return '';
+    const url = await SSPhotos.ensureLink(grist.docApi, po);
+    const what = po.wanted && c.foreign ? 'Photos and paperwork' : po.wanted ? 'Photos' : 'Paperwork';
+    return url ? `\n\n${what} for this order will be shared here as they're ready:\n${url}` : '';
+  } catch (e) { console.warn('files link', e); return ''; }
 }
 
 /* The draft's pay link, as text for pasting into an email. */
