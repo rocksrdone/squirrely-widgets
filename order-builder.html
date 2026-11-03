@@ -1010,6 +1010,7 @@ async function loadCustomers() {
       csz: txt(['Ship_City_State_Zip', 'Ship_CSZ']), country: txt(['Ship_Country', 'Country']),
       labelFront: txt(['Label_Front_Logo']), labelBack: txt(['Label_Back_Style']), labelNotes: txt(['Label_Notes']),
       reqs: txt(['Special_Requirements', 'Requirements']), currency: txt(['Currency']),
+      custType: txt(['Type', 'Customer_Type']),
       customsType: txt(['Customs_ID_Type']), customsId: txt(['Customs_ID_2', 'PCC']), taxId: txt(['Tax_ID']),
     };
     S.customers = (t.id || []).map((id, i) => ({
@@ -2588,10 +2589,11 @@ async function copyPayEmail(id, btn) {
   const lines = (S.lines[id] || []).filter(l => l.qty > 0);
   const total = lines.reduce((t, l) => t + l.qty * (l.price || 0), 0);
   const vals = {
-    // No contact on file: a person's name gives their first name; a business
-    // (it has a vendor code) keeps its whole name.
+    // No contact on file: a retail customer's name is a person's, so use the
+    // first name; a business keeps its whole name.
     first_name: contact ? contact.split(/\s+/)[0]
-      : (c.code ? (c.name || o.customerName || '') : String(c.name || o.customerName || '').trim().split(/\s+/)[0]),
+      : (/retail|individual|person/i.test(info.custType || '')
+          ? String(c.name || o.customerName || '').trim().split(/\s+/)[0] : (c.name || o.customerName || '')),
     contact_name: contact, business: c.name || o.customerName || '', email: info.email || '', code: c.code || '',
     order_number: String(o.number || '').replace(/^#/, ''), po_number: o.po || '',
     po_line: o.po ? ` (PO ${o.po})` : '',
