@@ -208,6 +208,9 @@ table.items input[type="text"] {
   width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; font-size: 12px;
 }
 table.items .hs-input { font-family: 'DM Mono', monospace; }
+/* Explicit light boxes: without a background these drew dark in dark mode. */
+table.items input, .table-tools input, .field-block input, .field-block textarea, .meta-item input,
+.meta-item select, .totals-table input, textarea { background-color: #fff; color: #1A1614; }
 .line-total { font-family: 'DM Mono', monospace; text-align: right; }
 th.th-right, td.line-total { text-align: right; }
 .col-check { width: 26px; text-align: center; }
@@ -581,7 +584,9 @@ tr.fully-shipped td { opacity: .5; }
 
     <div class="table-tools">
       <button class="add-line-btn" onclick="addCustomLine()">+ Add custom line</button>
-      <span>Set every HS code to</span>
+      <button class="add-line-btn" type="button" onclick="fillHsFromProducts(true)"
+        title="Each line gets the HS code of its product (FF Nylon, E Nylon, FF Cotton…) from the Products table">Fill HS codes from Products</button>
+      <span>or set every HS code to</span>
       <input id="bulkHs" placeholder="5401.10" oninput="applyBulkHs(this.value)">
     </div>
 
@@ -1127,6 +1132,9 @@ async function lookupOrder() {
     // Shopify address has no country set was getting no destination guidance at
     // all — which is exactly the international customer who needs it most.
     productSpecs = (data && data.products) || {};
+    await loadGristProducts();
+    // Net weights from Products when the lookup didn't send them.
+    Object.entries(gristProducts).forEach(([k, v]) => { if (!productSpecs[k] && v.net_g) productSpecs[k] = { net_g: v.net_g }; });
     const gristCountry = (data.customer && data.customer.ship_country) || '';
     const cc = st.country_code || isoFromChoice(gristCountry);
     const cName = st.country || choiceLabel(gristCountry);
@@ -1159,6 +1167,7 @@ async function lookupOrder() {
       : 'order';
     statusEl.textContent = `Loaded ${kind} ${data.order_number} — ${shopifyLines.length} line item(s).`;
 
+    fillHsFromProducts(false);
     renderSavedInvoices(data.order_number);
     renderDiscountNotice(data, appliedFields);
     renderShipmentPicker();
@@ -2176,6 +2185,44 @@ function totalUnitsThisShipment() {
 // Product specs from the Grist Products table, keyed on the SKU's leading
 // segment: FFN_AUTUMN_MMI -> FFN.
 let productSpecs = {};
+
+/* HS code and net weight per product, straight from Grist's Products table
+   (Product_Code = the SKU's first segment: FFN, EN, FFC). A new kind of
+   product gets its code by adding a Products row — nothing to change here. */
+let gristProducts = {};
+async function loadGristProducts() {
+  try {
+    const t = await grist.docApi.fetchTable('Products');
+    gristProducts = {};
+    (t.id || []).forEach((id, i) => {
+      const code = String((t.Product_Code || [])[i] || '').trim().toUpperCase();
+      if (!code) return;
+      let hs = (t.HS_Code || [])[i];
+      hs = typeof hs === 'number' ? (hs ? hs.toFixed(2) : '') : String(hs || '').trim();
+      const net = Number((t.Net_Weight_g || [])[i]) || null;
+      gristProducts[code] = { hs, net_g: net };
+    });
+  } catch (e) { console.warn('Products table', e); }
+}
+function hsForSku(sku) {
+  const key = String(sku || '').split('_')[0].trim().toUpperCase();
+  return (gristProducts[key] && gristProducts[key].hs) || '';
+}
+/* overwrite=false fills only blank lines (on load); the button refills all. */
+function fillHsFromProducts(overwrite) {
+  let n = 0, missing = new Set();
+  shopifyLines.forEach(li => {
+    if (!overwrite && (li.hs || '').trim()) return;
+    const hs = hsForSku(li.sku);
+    if (hs) { li.hs = hs; n++; } else if (li.sku) missing.add(String(li.sku).split('_')[0]);
+  });
+  if (overwrite || n) { renderItems(); renderCertification(); }
+  if (overwrite) {
+    const st = document.getElementById('statusMsg');
+    st.textContent = `HS codes filled on ${n} line(s) from Products.` + (missing.size ? ` No HS code in Products for: ${[...missing].join(', ')} — add it there.` : '');
+    st.className = missing.size ? 'status-msg error' : 'status-msg';
+  }
+}
 
 function productForSku(sku) {
   const key = String(sku || '').split('_')[0].trim().toUpperCase();
