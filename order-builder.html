@@ -2763,6 +2763,15 @@ window.addEventListener('beforeunload', (e) => {
 
 /* ── Render ─────────────────────────────────────────────────────────────── */
 
+/* Opened from a link (Customers → Edit) with a manual order selected: open it. */
+try {
+  grist.onRecord(rec => {
+    if (!rec || rec.id === S.selected) return;
+    const go = () => { if (S.orders.some(o => o.id === rec.id && isManual(o))) selectOrder(rec.id); };
+    if (S.orders && S.orders.length) go(); else setTimeout(go, 1500);
+  });
+} catch (e) { /* standalone */ }
+
 function selectOrder(id) {
   if (S.selected && S.selected !== id && isDirty(S.selected)) {
     const cur = S.orders.find(x => x.id === S.selected);

@@ -1160,7 +1160,7 @@ function renderList() {
            title="Set Status to ${esc(CLOSED_STATUS)} — production records are left alone">${busy ? 'Saving…' : 'Close order'}</button>`;
 
     return `
-      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass} ${closed ? 'is-closed' : ''}" onclick="selectOrder(${o.id})">
+      <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass} ${closed ? 'is-closed' : ''}" data-order-id="${o.id}" onclick="selectOrder(${o.id})">
         <div class="card-top">
           <span class="card-ordernum">${esc(o.orderNumber || '—')}</span>
           <span class="card-customer">${esc(o.customerName || '(no customer)')}</span>
@@ -1220,6 +1220,17 @@ async function selectOrder(id) {
 }
 
 grist.ready({ requiredAccess: 'full' });
+/* Opened from a link (Customers → View) the page arrives with a work order
+   selected: show it with Details open and scroll to it. Our own clicks set the
+   cursor too, but those already match selectedId, so they change nothing. */
+grist.onRecord(rec => {
+  if (!rec || rec.id === selectedId) return;
+  selectedId = rec.id;
+  openDetails.add(rec.id);
+  const show = () => { renderList(); const el = document.querySelector(`[data-order-id="${rec.id}"]`) || document.getElementById('card-' + rec.id);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' }); };
+  if (typeof allOrders !== 'undefined' && allOrders.length) show(); else setTimeout(show, 1500);
+});
 loadOrders();
 </script>
 </body>

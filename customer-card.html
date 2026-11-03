@@ -185,6 +185,9 @@ table.price-table tbody tr:nth-child(even) { background: #FBF8F4; }
 
 /* ---------- orders ---------- */
 table.orders-table { width: 100%; border-collapse: collapse; }
+td.ord-acts { white-space: nowrap; text-align: right; }
+a.ord-link { font-size: 10.5px; padding: 2px 7px; margin-left: 4px; border: 1px solid var(--rule); border-radius: 4px; text-decoration: none; color: inherit; }
+a.ord-link:hover { border-color: #3A8B7A; color: #3A8B7A; }
 table.orders-table thead th {
   text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
   color: var(--muted); padding: 5px 9px; font-weight: 600; border-bottom: 1px solid var(--rule);
@@ -542,6 +545,7 @@ async function loadOrdersTable() {
       status: findColumn(t, ['Status']),
       channel: findColumn(t, ['Channel']),
       pay: findColumn(t, ['Payment_Status']),
+      type: findColumn(t, ['Order_Type']),
     };
     const ids = t.id || [];
     S.orders = ids.map((id, i) => ({
@@ -554,6 +558,7 @@ async function loadOrdersTable() {
       status: c.status ? columnAsArray(t, c.status)[i] : '',
       channel: c.channel ? columnAsArray(t, c.channel)[i] : '',
       pay: c.pay ? columnAsArray(t, c.pay)[i] : '',
+      type: c.type ? columnAsArray(t, c.type)[i] : '',
     }));
   } catch (e) {
     console.warn('Work_Orders unavailable — order history hidden', e);
@@ -832,6 +837,19 @@ function labelSettingsHtml() {
   </div>`;
 }
 
+/* Links into the other order screens. A Grist row anchor (#a1.s<section>.r<row>)
+   opens the page with that work order selected, and each widget there loads it:
+   Order Picker (Order Dashboard) shows it with Details open, Order Builder opens
+   a manual order for editing, Split Invoice loads it for a customs invoice. */
+const DOC_URL = 'https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations';
+const ORDER_LINKS = {
+  view:    id => `${DOC_URL}/p/64#a1.s253.r${id}`,
+  edit:    id => `${DOC_URL}/p/64#a1.s342.r${id}`,
+  invoice: id => `${DOC_URL}/p/96#a1.s327.r${id}`,
+};
+const isManualOrder = o => String(o.type || '') === 'Manual' || /^M-\d+$/i.test(String(o.num || '').trim());
+const isClosedOrder = o => /closed|cancel/i.test(String(o.status || ''));
+
 function ordersHtml() {
   const c = selected();
   if (!c) return '';
@@ -841,6 +859,8 @@ function ordersHtml() {
     (!o.custId && name && String(o.custName || '').trim().toLowerCase() === name));
   if (!mine.length) return `<div class="setup-note">No orders linked to this customer yet.</div>`;
   mine.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+  const foreign = !/^\s*(us\b|usa\b|united states|$)/i.test(String(val('shipCountry') || '').trim());
+  const a = (href, txt, tip) => `<a class="ord-link" href="${href}" target="_blank" rel="noopener" title="${tip}">${txt}</a>`;
   const rows = mine.slice(0, 10).map(o => `<tr>
     <td class="ord-num">${esc(o.num || '—')}</td>
     <td class="ord-date">${esc(fmtDate(o.date))}</td>
@@ -848,9 +868,12 @@ function ordersHtml() {
     <td>${esc(o.status || '')}</td>
     <td>${esc(o.channel || '')}</td>
     <td>${esc(o.pay || '')}</td>
+    <td class="ord-acts">${a(ORDER_LINKS.view(o.id), 'View', 'Open in Order Picker with the full details')}${
+      isManualOrder(o) && !isClosedOrder(o) ? a(ORDER_LINKS.edit(o.id), 'Edit', 'Open in Order Builder to change it') : ''}${
+      foreign ? a(ORDER_LINKS.invoice(o.id), 'Invoice', 'Open in Split Invoice to make (or remake) the customs invoice') : ''}</td>
   </tr>`).join('');
   return `<table class="orders-table">
-    <thead><tr><th>Order</th><th>Placed</th><th>Due</th><th>Status</th><th>Channel</th><th>Payment</th></tr></thead>
+    <thead><tr><th>Order</th><th>Placed</th><th>Due</th><th>Status</th><th>Channel</th><th>Payment</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
     ${mine.length > 10 ? `<div style="font-size:10px;color:var(--muted);padding:6px 9px;">Showing 10 of ${mine.length}.</div>` : ''}`;
 }
