@@ -411,6 +411,7 @@ tr.fully-shipped td { opacity: .5; }
   </div>
   <div class="hint">Draft orders are numbered separately from real orders. A draft shows as <strong>#D14</strong> in Shopify even when your storefront orders read SV#1083 — type the D number.</div>
   <div class="status-msg" id="statusMsg"></div>
+  <div id="savedInvoices"></div>
   <div id="shipmentPicker"></div>
   <div id="orderBrowser"></div>
 </div>
@@ -919,6 +920,112 @@ function unmergeLast() {
   recalcTotals();
 }
 
+/* ------------------------------------------------ saved copies (Nextcloud)
+
+   Every Download PDF also files a copy in Nextcloud, through "SS - Save
+   Customs Invoice":
+     Squirrely Stash/operations/customs-invoices/<year>/<CODE>/<invoice>.pdf
+   and logs it in Customs_Invoices, so it can be reopened to reprint or send
+   again. Re-saving the same invoice number replaces the file and its row.
+   Saved copies open through "SS - Serve Nextcloud File" (nc-file). */
+const SAVE_INVOICE_URL = 'https://squirrelystash.app.n8n.cloud/webhook/customs-invoice-save';
+const SERVE_FILE_URL = 'https://squirrelystash.app.n8n.cloud/webhook/nc-file';
+let currentWorkOrderId = null;
+let savedRows = [];
+
+const normNum = v => String(v || '').toUpperCase().replace(/^SV/, '').replace(/[^A-Z0-9]/g, '');
+async function findWorkOrderId(orderNumber) {
+  if (currentWorkOrderId) return currentWorkOrderId;
+  try {
+    const t = await grist.docApi.fetchTable('Work_Orders');
+    const want = normNum(orderNumber);
+    const i = (t.Order_Number || []).findIndex(n => normNum(n) === want);
+    return i >= 0 ? t.id[i] : null;
+  } catch (e) { return null; }
+}
+
+async function saveInvoiceCopy(pdf, invoiceNum) {
+  const statusEl = document.getElementById('statusMsg');
+  try {
+    const b64 = pdf.output('datauristring').replace(/^data:[^,]*,/, '');
+    const code = (customerRecord && customerRecord.code) || '';
+    const res = await fetch(SAVE_INVOICE_URL, {
+      method: 'POST',
+      headers: await SSSettings.hookHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ invoice_number: invoiceNum, customer_code: code, pdf_base64: b64 }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok || !out.path) throw new Error(out.message || ('save answered ' + res.status));
+    const orderNumber = document.getElementById('sourceOrderNumber').value || '';
+    const woId = await findWorkOrderId(orderNumber);
+    const fields = {
+      Invoice_Number: invoiceNum, Work_Order: woId || null, Order_Number: orderNumber,
+      Customer_Code: code, Saved_At: Date.now() / 1000,
+      Total: parseFloat(String(document.getElementById('grandTotal').textContent).replace(/[^0-9.\-]/g, '')) || 0,
+      Currency: document.getElementById('currency').value || 'USD', File_Path: out.path,
+    };
+    const t = await grist.docApi.fetchTable('Customs_Invoices');
+    const i = (t.File_Path || []).indexOf(out.path);
+    await grist.docApi.applyUserActions([i >= 0
+      ? ['UpdateRecord', 'Customs_Invoices', t.id[i], fields]
+      : ['AddRecord', 'Customs_Invoices', null, fields]]);
+    statusEl.textContent = `Downloaded, and a copy saved to Nextcloud (${out.path.split('/').slice(-2).join('/')}).`;
+    statusEl.className = 'status-msg';
+    await renderSavedInvoices(orderNumber);
+  } catch (e) {
+    console.error('save copy', e);
+    statusEl.textContent = 'Downloaded — but saving the copy to Nextcloud failed. Download again to retry.';
+    statusEl.className = 'status-msg error';
+  }
+}
+
+async function renderSavedInvoices(orderNumber) {
+  const el = document.getElementById('savedInvoices');
+  if (!el) return;
+  savedRows = [];
+  try {
+    const t = await grist.docApi.fetchTable('Customs_Invoices');
+    const want = normNum(orderNumber);
+    const woId = currentWorkOrderId;
+    (t.id || []).forEach((id, i) => {
+      const wo = Array.isArray(t.Work_Order[i]) ? t.Work_Order[i][1] : t.Work_Order[i];
+      if ((woId && wo === woId) || (want && normNum(t.Order_Number[i]) === want)) {
+        savedRows.push({ id, inv: t.Invoice_Number[i], at: t.Saved_At[i], total: t.Total[i], cur: t.Currency[i], path: t.File_Path[i] });
+      }
+    });
+  } catch (e) { /* table not there yet */ }
+  savedRows.sort((a, b) => (b.at || 0) - (a.at || 0));
+  el.innerHTML = savedRows.length ? `<div class="notice" style="margin-top:8px">
+    <strong>Saved invoices for this order</strong>
+    ${savedRows.map((r, i) => `<div style="display:flex;gap:8px;align-items:center;margin-top:4px;flex-wrap:wrap">
+      <span style="font-family:'DM Mono',monospace">${esc(r.inv)}</span>
+      <span style="color:#8B7D72">${r.at ? new Date(r.at * 1000).toLocaleDateString() : ''} · ${esc(r.cur || '')} ${Number(r.total || 0).toFixed(2)}</span>
+      <button type="button" class="btn" style="padding:3px 9px;font-size:11px" onclick="openSavedInvoice(${i}, false)">Open</button>
+      <button type="button" class="btn" style="padding:3px 9px;font-size:11px" onclick="openSavedInvoice(${i}, true)">Download</button>
+    </div>`).join('')}</div>` : '';
+}
+
+async function openSavedInvoice(i, download) {
+  const r = savedRows[i];
+  if (!r) return;
+  const win = download ? null : window.open('', '_blank');
+  try {
+    const res = await fetch(`${SERVE_FILE_URL}?path=${encodeURIComponent(r.path)}`, { headers: await SSSettings.hookHeaders() });
+    if (!res.ok) throw new Error('file answered ' + res.status);
+    const url = URL.createObjectURL(new Blob([await res.blob()], { type: 'application/pdf' }));
+    if (download) {
+      const a = document.createElement('a'); a.href = url; a.download = `${r.inv}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+    } else if (win) win.location.href = url;
+    else window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    console.error(e);
+    if (win) win.close();
+    alert('Could not open the saved copy — is "SS - Serve Nextcloud File" active?');
+  }
+}
+
 /* ------------------------------------------------------------------ lookup */
 
 /* Opened from a link (Order Builder's "Customs invoice ↗") the page arrives
@@ -930,6 +1037,7 @@ try {
     const n = rec && String(rec.Order_Number || '').trim();
     if (!n || n === autoLoadedOrder) return;
     autoLoadedOrder = n;
+    currentWorkOrderId = rec.id || null;
     const inp = document.getElementById('orderNumberInput');
     if (!inp) return;
     inp.value = n;
@@ -1026,6 +1134,9 @@ async function lookupOrder() {
       : 'order';
     statusEl.textContent = `Loaded ${kind} ${data.order_number} — ${shopifyLines.length} line item(s).`;
 
+    if (!autoLoadedOrder || normNum(autoLoadedOrder) !== normNum(data.order_number)) currentWorkOrderId = null;
+    currentWorkOrderId = await findWorkOrderId(data.order_number);
+    renderSavedInvoices(data.order_number);
     renderDiscountNotice(data, appliedFields);
     renderShipmentPicker();
     renderItems();
@@ -2287,6 +2398,7 @@ async function downloadPDF() {
       html2canvas: { scale: 2, backgroundColor: '#ffffff' },
     });
     pdf.save(`${invoiceNum}.pdf`);
+    saveInvoiceCopy(pdf, invoiceNum);   // not awaited: the download is already done
   } catch (e) {
     console.error(e);
     alert('PDF generation failed — try the Print button instead.');
