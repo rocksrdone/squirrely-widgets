@@ -1132,6 +1132,18 @@ async function lookupOrder() {
     const cName = st.country || choiceLabel(gristCountry);
     applyDestinationHints(cc, cName);
     if (!st.country && cName) document.getElementById('toCountry').value = cName;
+    // The work order says who the customer is; trust that over the lookup's
+    // guess (by SKU code or name), which misses retail-style SKUs.
+    if (!autoLoadedOrder || normNum(autoLoadedOrder) !== normNum(data.order_number)) currentWorkOrderId = null;
+    currentWorkOrderId = await findWorkOrderId(data.order_number);
+    const woCust = await gristCustomerForOrder(currentWorkOrderId);
+    if (woCust && (!data.customer || !data.customer.matched || data.customer.row_id !== woCust.row_id)) {
+      data.customer = woCust;
+      const cc2 = countryCodeOf(woCust.ship_country);
+      if (!st.country && woCust.ship_country) {
+        applyDestinationHints(cc2 || isoFromChoice(woCust.ship_country), choiceLabel(woCust.ship_country) || woCust.ship_country);
+      }
+    }
     const appliedFields = applyCustomerRecord(data.customer);
     if (!st.address1 && consigneeFromGrist(data.customer)) appliedFields.push('ship-to address from the Grist customer card');
     applyConsigneeWording(data.customer, st);
@@ -1147,8 +1159,6 @@ async function lookupOrder() {
       : 'order';
     statusEl.textContent = `Loaded ${kind} ${data.order_number} — ${shopifyLines.length} line item(s).`;
 
-    if (!autoLoadedOrder || normNum(autoLoadedOrder) !== normNum(data.order_number)) currentWorkOrderId = null;
-    currentWorkOrderId = await findWorkOrderId(data.order_number);
     renderSavedInvoices(data.order_number);
     renderDiscountNotice(data, appliedFields);
     renderShipmentPicker();
@@ -1468,18 +1478,58 @@ shipperFromSettings();
 /* Consignee address from the Grist customer card, for when the Shopify order
    has none (a draft before the customer has paid, or an order pushed without
    one). Only fills what Shopify left empty. */
+/* Most of Europe writes the postcode BEFORE the city ("23552 Lübeck") and
+   uses no state; the US-style "City, State, ZIP" reads wrong to their post. */
+const POSTCODE_FIRST = /^(DE|AT|CH|LI|FR|BE|NL|LU|IT|ES|PT|PL|CZ|SK|HU|SI|HR|DK|SE|NO|FI|IS|EE|LV|LT|GR|RO|BG)$/;
+function countryCodeOf(v) {
+  const t = String(v || '').trim();
+  const m = t.match(/^([A-Z]{2})\b/); if (m) return m[1];
+  const names = { germany: 'DE', deutschland: 'DE', austria: 'AT', switzerland: 'CH', france: 'FR', belgium: 'BE', netherlands: 'NL',
+    italy: 'IT', spain: 'ES', portugal: 'PT', poland: 'PL', denmark: 'DK', sweden: 'SE', norway: 'NO', finland: 'FI',
+    'czech republic': 'CZ', czechia: 'CZ', hungary: 'HU', greece: 'GR', ireland: 'IE' };
+  return names[t.toLowerCase()] || '';
+}
 function consigneeFromGrist(cust) {
   const f = (cust && cust.fields) || {};
   const g = k => String(f[k] || '').trim();
   if (!g('Ship_Addr1')) return false;
   const set = (id, v) => { const el = document.getElementById(id); if (el && v && !el.value.trim()) el.value = v; };
-  set('toName', [g('Ship_Company'), g('Ship_To_Name') || g('Customer_Name')].filter(Boolean).join(' — '));
+  const cc = countryCodeOf(g('Ship_Country'));
+  set('toName', [g('Ship_Company'), g('Ship_To_Name') || g('Main_Contact') || g('Customer_Name')].filter(Boolean).join(' — '));
   set('toAddr1', g('Ship_Addr1'));
   set('toAddr2', [g('Ship_Addr2'), g('Ship_Addr3')].filter(Boolean).join(', '));
-  set('toCityStateZip', [g('Ship_City'), g('Ship_State'), g('Ship_Zip')].filter(Boolean).join(', ') || g('Ship_City_State_Zip'));
+  const csz = POSTCODE_FIRST.test(cc)
+    ? [g('Ship_Zip'), g('Ship_City')].filter(Boolean).join(' ')
+    : [g('Ship_City'), g('Ship_State'), g('Ship_Zip')].filter(Boolean).join(', ');
+  set('toCityStateZip', csz || g('Ship_City_State_Zip'));
   set('toCountry', String(g('Ship_Country')).replace(/^[A-Z]{2}\s*[—-]\s*/, ''));
   set('toPhone', g('Phone'));
   return true;
+}
+
+/* The customer ON THE WORK ORDER (its Customer link), read straight from
+   Grist — used when the n8n lookup couldn't match one by SKU code or name.
+   Same shape the lookup returns, so the customs ID fields fill the same way. */
+async function gristCustomerForOrder(woId) {
+  if (!woId) return null;
+  try {
+    const [wo, cu] = await Promise.all([grist.docApi.fetchTable('Work_Orders'), grist.docApi.fetchTable('Customers')]);
+    const i = (wo.id || []).indexOf(woId); if (i < 0) return null;
+    const ref = wo.Customer ? wo.Customer[i] : null;
+    const cid = Array.isArray(ref) ? ref[1] : ref;
+    const j = (cu.id || []).indexOf(cid); if (j < 0) return null;
+    const fields = {}; Object.keys(cu).forEach(k => { if (k !== 'id') fields[k] = cu[k][j]; });
+    const pick = ks => { for (const k of ks) { const v = fields[k]; if (v != null && String(v).trim()) return String(v).trim(); } return ''; };
+    return { matched: true, row_id: cid, code: pick(['Code']), name: pick(['Customer_Name']),
+      customs_code: pick(['PCC', 'PCCC', 'Customs_Code', 'Personal_Customs_Code', 'Customs_Clearance_Code', 'Clearance_Code', 'Customs_ID']),
+      tax_id: pick(['Tax_ID', 'VAT', 'VAT_Number', 'EORI', 'Business_Registration_Number', 'Business_Reg_No', 'Importer_Tax_ID']),
+      customs_id_type: pick(['Customs_ID_Type', 'Tax_ID_Type', 'Importer_ID_Type', 'ID_Type']),
+      tax_id_2: pick(['Customs_ID_2', 'Tax_ID_2', 'Secondary_Tax_ID', 'Importer_VAT']),
+      ship_country: pick(['Ship_Country', 'Country', 'Destination_Country']),
+      incoterms: pick(['Incoterms', 'Terms_of_Sale']), hs_code: pick(['HS_Code', 'Default_HS_Code', 'Harmonized_Code', 'Tariff_Code']),
+      country_of_origin: pick(['Country_of_Origin', 'Origin_Country']), phone: pick(['Phone', 'Consignee_Phone', 'Contact_Phone']),
+      customs_notes: pick(['Customs_Notes', 'Shipping_Notes', 'Export_Notes']), fields, fromWorkOrder: true };
+  } catch (e) { console.warn('customer from order', e); return null; }
 }
 
 /* A private person is the consignee, but "importer" reads as a business
