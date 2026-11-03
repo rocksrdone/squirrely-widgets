@@ -1318,8 +1318,13 @@ async function pickPhoto(lineId) {
   let rows;
   try { rows = await loadPhotoRows(); } catch (e) { console.error(e); showToast('Could not load photos'); return; }
   const nm = bareName(L.name);
-  const list = rows.filter(p => (L.recipeId && p.recipe === L.recipeId) || (nm && bareName(p.name) === nm))
-    .sort((a, b) => ((b.recipe === L.recipeId) - (a.recipe === L.recipeId)) || (b.fav - a.fav) || (b.date - a.date)).slice(0, 12);
+  // Only this line's fibre: an FF photo is a different product from an E one.
+  const fiber = String(L.fiber || '').trim().toLowerCase();
+  const all = rows.filter(p => (L.recipeId && p.recipe === L.recipeId) || (nm && bareName(p.name) === nm))
+    .sort((a, b) => ((b.recipe === L.recipeId) - (a.recipe === L.recipeId)) || (b.fav - a.fav) || (b.date - a.date));
+  const sameFiber = p => !fiber || !p.fiber || String(p.fiber).trim().toLowerCase() === fiber || p.recipe === L.recipeId;
+  const otherN = all.filter(p => !sameFiber(p)).length;
+  const list = (pickPhoto.allFibers === lineId ? all : all.filter(sameFiber)).slice(0, 12);
   const box = document.createElement('div');
   box.id = 'photoPick';
   box.style.cssText = 'position:fixed;inset:0;background:rgba(30,25,20,.55);z-index:999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow:auto';
@@ -1332,7 +1337,8 @@ async function pickPhoto(lineId) {
       ${list.map(p => `<button onclick="sharePicked(${lineId}, ${p.id}, this)" style="border:2px solid ${p.fav ? '#D4A017' : '#E8DFD4'};border-radius:8px;padding:4px;background:#FAF7F2;cursor:pointer;text-align:left">
         <img src="${esc(p.url)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:5px;background:#eee" alt="">
         <div style="font-size:10px;color:#6B5E52;margin-top:3px">${p.fav ? '&#9733; ' : ''}${esc(p.fiber)}${p.date ? ' · ' + esc(fmtDate(p.date)) : ''}</div></button>`).join('')}</div>`
-      : `<div class="empty-state" style="padding:20px">No photos of ${esc(L.name)} yet.</div>`}
+      : `<div class="empty-state" style="padding:20px">No ${esc(L.fiber ? L.fiber.replace(/\b\w/g, c => c.toUpperCase()).replace(/^Ff /, 'FF ') : '')} photos of ${esc(L.name)} yet.</div>`}
+    ${otherN && pickPhoto.allFibers !== lineId ? `<div style="margin-top:8px"><button class="glove ghost" onclick="pickPhoto.allFibers = ${lineId}; document.getElementById('photoPick').remove(); pickPhoto(${lineId})">Show ${otherN} photo${otherN === 1 ? '' : 's'} of other fibres</button></div>` : ''}
     <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
       <button class="glove" onclick="document.getElementById('photoPick').remove(); setAsidePhoto(${lineId})">None match — set a spool aside for command</button></div>
   </div>`;

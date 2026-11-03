@@ -379,6 +379,7 @@ async function loadData(record) {
   // there would collapse every photo the user had just opened.
   if (lastLoadedOrderId !== orderId) {
     shownPhotos = new Set();
+    otherFibersShown.clear();
     lastLoadedOrderId = orderId;
   }
 
@@ -603,6 +604,20 @@ function linePhotoHead(line) {
     ${L.state === 'skip' ? btn('', 'undo', 'Needs a photo after all') : ''}</span>`;
 }
 
+/* Each line is one fibre (its SKU prefix), and a photo of the same colourway
+   on another fibre is a different product. So a line shows only its own
+   fibre's photos; the other fibres' wait behind a button, for colourways with
+   no photo on this fibre yet. Photos with no fibre recorded always show. */
+const FIBER_BY_PREFIX = { FFN: 'FF Nylon', EN: 'E Nylon', FFC: 'FF Cotton', CFF: 'FF Cotton' };
+function fiberOfSku(sku) { return FIBER_BY_PREFIX[String(sku || '').split('_')[0].toUpperCase()] || ''; }
+const otherFibersShown = new Set();
+function showOtherFibers(lineId) { otherFibersShown.add(lineId); renderLines(); }
+function splitByFiber(list, fiber) {
+  if (!fiber) return { mine: list, other: [] };
+  const same = p => !p.Fiber_Type || String(p.Fiber_Type).trim().toLowerCase() === fiber.toLowerCase();
+  return { mine: list.filter(same), other: list.filter(p => !same(p)) };
+}
+
 function renderLines() {
   const container = document.getElementById('linesContainer');
   if (!orderLines.length) {
@@ -611,7 +626,17 @@ function renderLines() {
   }
   container.innerHTML = orderLines.map(line => {
     const guess = parseColorwayFromSKU(line.SKU);
-    const { exact, close } = matchPhotos(guess);
+    const fiber = fiberOfSku(line.SKU);
+    const m = matchPhotos(guess);
+    const ex = splitByFiber(m.exact, fiber), cl = splitByFiber(m.close, fiber);
+    const showOther = otherFibersShown.has(line.id);
+    const exact = showOther ? ex.mine.concat(ex.other) : ex.mine;
+    const close = showOther ? cl.mine.concat(cl.other) : cl.mine;
+    const hiddenN = showOther ? 0 : ex.other.length + (exact.length ? 0 : cl.other.length);
+    const otherNames = [...new Set(ex.other.concat(cl.other).map(p => p.Fiber_Type).filter(Boolean))].join(' / ');
+    const otherBtn = hiddenN
+      ? `<div class="no-match">${exact.length || close.length ? '' : `No ${esc(fiber)} photos of "${esc(guess)}" yet. `}<button class="loadbar-btn" onclick="showOtherFibers(${line.id})">Show ${hiddenN} ${esc(otherNames || 'other fibre')} photo${hiddenN === 1 ? '' : 's'}</button></div>`
+      : '';
     let body;
     if (exact.length) {
       body = `<div class="photo-grid">${exact.map(photoCardHTML).join('')}</div>`;
@@ -620,13 +645,14 @@ function renderLines() {
         <div class="no-match">No exact match for "${esc(guess)}" — close names only, check before sharing.</div>
         <div class="photo-grid">${close.map(photoCardHTML).join('')}</div>`;
     } else {
-      body = `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`;
+      body = hiddenN ? '' : `<div class="no-match">No photos matched automatically — search below to find one manually.</div>`;
     }
+    body += otherBtn;
     return `
       <div class="line-block">
         <div class="line-head">
           <span class="line-sku">${esc(line.SKU || '—')}</span>
-          <span class="line-qty">qty ${line.Qty_Needed ?? '—'}</span>
+          <span class="line-qty">qty ${line.Qty_Needed ?? '—'}${fiber ? ' · ' + esc(fiber) : ''}</span>
           <span class="line-guess">matching "${esc(guess)}"</span>
           ${linePhotoHead(line)}
         </div>

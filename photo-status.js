@@ -48,9 +48,10 @@
       custWants[id] = !!col(cust, 'Wants_Product_Photos')[i];
       custCode[id] = String(col(cust, 'Code')[i] || '').trim();
     });
-    const recName = {}, recBySku = {};
+    const recName = {}, recBySku = {}, recFiber = {};
     col(rec, 'id').forEach((id, i) => {
       recName[id] = col(rec, 'Recipe_Name')[i] || '';
+      recFiber[id] = String(col(rec, 'Fiber_Type')[i] || '').trim().toLowerCase();
       const s = norm(col(rec, 'SKU_Base')[i]); if (s) recBySku[s] = id;
     });
 
@@ -72,10 +73,11 @@
     });
 
     // What has been shared to each order: recipe ids and bare colourway names.
+    // Name matches are kept per fibre: an FF photo doesn't answer an E line.
     const photoRec = {}, photoName = {};
     if (photos) col(photos, 'id').forEach((id, i) => {
       photoRec[id] = getRefId(col(photos, 'Recipe')[i]);
-      photoName[id] = bare(col(photos, 'Colorway_Name')[i]);
+      photoName[id] = bare(col(photos, 'Colorway_Name')[i]) + '|' + String(col(photos, 'Fiber_Type')[i] || '').trim().toLowerCase();
     });
     const sharedTo = {};
     if (shares) col(shares, 'id').forEach((id, i) => {
@@ -96,7 +98,7 @@
       const rid = getRefId(col(wol, 'Recipe')[i]) || recBySku[norm(col(wol, 'SKU')[i])] || null;
       const st = hasCol ? String(col(wol, 'Photo_Status')[i] || '') : '';
       const sh = sharedTo[w];
-      const shared = !!sh && ((rid && sh.recipes.has(rid)) || (rid && sh.names.has(bare(recName[rid]))));
+      const shared = !!sh && ((rid && sh.recipes.has(rid)) || (rid && sh.names.has(bare(recName[rid]) + '|' + (recFiber[rid] || ''))));
       let state;
       if (!o.wanted) state = 'none';
       else if (st === SKIP) state = 'skip';
@@ -105,7 +107,7 @@
       else state = 'needed';
       // A spool still "At command" is out of the order even if a photo is
       // already shared — packing waits until command sends it back (Done).
-      const L = { id, woId: w, recipeId: rid, name: recName[rid] || '', status: st, shared, state };
+      const L = { id, woId: w, recipeId: rid, name: recName[rid] || '', fiber: recFiber[rid] || '', status: st, shared, state };
       lines[id] = L; o.lines.push(L);
     });
     Object.values(orders).forEach(o => {
