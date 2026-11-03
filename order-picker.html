@@ -54,6 +54,8 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .det td { border-bottom: 1px solid var(--rule); padding: 4px; vertical-align: top; }
 .det td.n { text-align: right; font-family: 'DM Mono', ui-monospace, monospace; }
 .det td.z { color: #C9BFB4; }
+.customs-link { font-size: 11px; padding: 3px 9px; border: 1px solid #2A6B6B; border-radius: 4px; color: #2A6B6B; text-decoration: none; white-space: nowrap; background: #fff; }
+.customs-link:hover { background: #2A6B6B; color: #fff; }
 .ph-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; padding:7px 9px; border-radius:6px; background:#F7F3EE; font-size:11.5px; }
 .ph-row select, .ph-row button { font-size:11px; padding:3px 8px; border:1px solid #D9CFC4; border-radius:4px; background:#fff; cursor:pointer; font-family:inherit; }
 .ph-row button.go { background:#2A6B6B; color:#fff; border-color:#2A6B6B; }
@@ -536,6 +538,7 @@ async function loadOrders() {
     });
 
     try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn('photo state', e); photoState = null; }
+    await loadCustomsInfo(table);
     renderShipHint();
     renderFilters();
     renderList();
@@ -706,6 +709,37 @@ async function refreshPhotos() {
   try { photoState = await SSPhotos.load(grist.docApi); } catch (e) { console.warn(e); }
   renderList();
 }
+/* ── Customs invoices (Split Invoice) ─────────────────────────────────
+   Orders shipping outside the US get a "Customs invoice" link that opens Split
+   Invoice (Ship Preview page, section 327) with the order loaded, and say how
+   many invoices are already saved for it (Customs_Invoices) — those are listed
+   there with Open / Download. Foreign = the customer's Ship_Country isn't US. */
+const SPLIT_INVOICE_URL = id => `https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations/p/96#a1.s327.r${id}`;
+let foreignOrders = new Set();
+let savedInvoiceCount = {};
+async function loadCustomsInfo(woT) {
+  foreignOrders = new Set(); savedInvoiceCount = {};
+  try {
+    const cust = await grist.docApi.fetchTable('Customers');
+    const foreignCust = new Set();
+    (cust.id || []).forEach((id, i) => {
+      const c = String((cust.Ship_Country || [])[i] || '').trim();
+      if (c && !/^\s*(us\b|usa\b|united states)/i.test(c)) foreignCust.add(id);
+    });
+    (woT.id || []).forEach((id, i) => { if (foreignCust.has(getRefId((woT.Customer || [])[i]))) foreignOrders.add(id); });
+  } catch (e) { console.warn('customers', e); }
+  try {
+    const inv = await grist.docApi.fetchTable('Customs_Invoices');
+    (inv.id || []).forEach((id, i) => { const w = getRefId(inv.Work_Order[i]); if (w) savedInvoiceCount[w] = (savedInvoiceCount[w] || 0) + 1; });
+  } catch (e) { /* no table yet */ }
+}
+function customsLinkHtml(o) {
+  const n = savedInvoiceCount[o.id] || 0;
+  if (!foreignOrders.has(o.id) && !n) return '';
+  return `<a class="customs-link" href="${SPLIT_INVOICE_URL(o.id)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"
+    title="Open Split Invoice with this order loaded — make a customs invoice${n ? ', or open the saved one' + (n > 1 ? 's' : '') : ''}">🧾 Customs invoice${n ? ` (${n} saved)` : ''} ↗</a>`;
+}
+
 function toggleDetails(id) { if (openDetails.has(id)) openDetails.delete(id); else openDetails.add(id); renderList(); }
 function orderHasRush(orderId) {
   const d = orderLineData[orderId];
@@ -1194,6 +1228,7 @@ function renderList() {
           : `<div class="card-notes-row" onclick="event.stopPropagation()">
                ${o.notes ? `<span class="card-notes">${esc(o.notes)}</span>` : `<span class="no-note">No note</span>`}
                <span class="note-edit-link" onclick="startEditNote(${o.id})">${o.notes ? 'edit' : '+ add note'}</span>
+               ${customsLinkHtml(o)}
                ${statusBtn}
              </div>`}
       </div>
