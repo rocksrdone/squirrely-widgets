@@ -2637,6 +2637,8 @@ function pushPanelHtml(o) {
     return `<div class="banner" style="background:var(--done-bg);border-color:#BBD79A;color:var(--done-text)">
       <strong>Created in Shopify as ${esc(p.shopify_name || p.shopify_order_id)}.</strong>
       ${p.wrote_back ? ' Its id is recorded here, so it can\'t be pushed twice.' : ''}
+      <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the order in Shopify ↗</a>` : ''}
+      ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>` : ''}</div>
       ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
     </div>`;
   }
