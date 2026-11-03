@@ -2569,6 +2569,16 @@ async function callPush(workOrderId, dryRun, asDraft) {
    "Pay request — customer adds address") with this order's lines, total and
    pay link, and copies subject + body as plain text for pasting into an email.
    Wording lives in Email Templates, so it is edited there, not here. */
+/* The Split Invoice widget lives on the Ship Preview page (view 96), section
+   327, a Work_Orders section — so a row anchor opens it with this order
+   selected, and the widget loads it. For customers outside the US. */
+const SPLIT_INVOICE_URL = id => `https://stash.getgrist.com/bzapKqZXV47Y/Squirrely-Stash-Operations/p/96#a1.s327.r${id}`;
+function customsLink(o, style) {
+  const c = S.customers.find(x => x.id === o.customerId);
+  if (!c || !c.foreign) return '';
+  return `<a class="btn secondary" style="${style || ''}" href="${SPLIT_INVOICE_URL(o.id)}" target="_blank" rel="noopener"
+    title="Opens Split Invoice with this order loaded, to finish the customs invoice">Customs invoice ↗</a>`;
+}
 const PAY_TPL = { regular: 'Pay request', draft: 'Pay request — customer adds address' };
 const money = v => '$' + Number(v || 0).toFixed(2);
 async function copyPayEmail(id, btn) {
@@ -2683,7 +2693,8 @@ function pushPanelHtml(o) {
       Next: open it and press <b>Send invoice</b> — the customer enters their address and pays, and Shopify turns it into an order.
       <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the draft in Shopify ↗</a>` : ''}
       ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>
-        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}</div>
+        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}
+      ${customsLink(o, 'margin-left:6px;text-decoration:none')}</div>
       ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
     </div>`;
   }
@@ -2693,7 +2704,8 @@ function pushPanelHtml(o) {
       ${p.wrote_back ? ' Its id is recorded here, so it can\'t be pushed twice.' : ''}
       <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the order in Shopify ↗</a>` : ''}
       ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>
-        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}</div>
+        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}
+      ${customsLink(o, 'margin-left:6px;text-decoration:none')}</div>
       ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
     </div>`;
   }
@@ -3294,6 +3306,7 @@ function renderMain() {
         ${S.ackFor === o.id ? 'Close acknowledgement' : 'Acknowledge order…'}</button>` : ''}
       ${o.payLink ? `<button class="btn secondary" onclick="copyPayEmail(${o.id}, this)"
         title="A ready-to-paste email with the pay link and order summary (Email Templates → Pay request)">Copy pay email</button>` : ''}
+      ${pushed ? customsLink(o, 'text-decoration:none') : ''}
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;

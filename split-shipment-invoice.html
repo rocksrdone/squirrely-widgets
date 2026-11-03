@@ -921,6 +921,22 @@ function unmergeLast() {
 
 /* ------------------------------------------------------------------ lookup */
 
+/* Opened from a link (Order Builder's "Customs invoice ↗") the page arrives
+   with that work order selected; load it straight away so the invoice is
+   ready to finish. Also follows the selection when you click a row. */
+let autoLoadedOrder = null;
+try {
+  grist.onRecord(rec => {
+    const n = rec && String(rec.Order_Number || '').trim();
+    if (!n || n === autoLoadedOrder) return;
+    autoLoadedOrder = n;
+    const inp = document.getElementById('orderNumberInput');
+    if (!inp) return;
+    inp.value = n;
+    lookupOrder();
+  });
+} catch (e) { /* standalone */ }
+
 async function lookupOrder() {
   const raw = document.getElementById('orderNumberInput').value.trim();
   const statusEl = document.getElementById('statusMsg');
