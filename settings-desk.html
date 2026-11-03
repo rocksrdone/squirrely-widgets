@@ -128,9 +128,11 @@ const REGISTRY = [
   // Business — defaults stay blank: the repo is public, so the real values live only in Grist
   { key: 'Business_Name', area: 'Business', def: '', text: true, unit: 'name', usedBy: ['Inventory Desk', 'Shipping Station'],
     notes: 'Vendor on retail Shopify listings (Listing CSV) and the letterhead on the vendor invoice. The invoice will not print without it.' },
-  { key: 'Business_Address', area: 'Business', def: '', text: true, unit: 'address', usedBy: ['Shipping Station'],
+  { key: 'Business_Address', area: 'Business', def: '', text: true, unit: 'address', usedBy: ['Shipping Station', 'Split Shipment Invoice'],
     notes: 'Letterhead address on the vendor invoice; also the check address when Pay_Check_Remit_To is blank.' },
-  { key: 'Business_Phone', area: 'Business', def: '', text: true, unit: 'phone', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
+  { key: 'Business_Phone', area: 'Business', def: '', text: true, unit: 'phone', usedBy: ['Shipping Station', 'Split Shipment Invoice'], notes: 'On the invoice letterhead.' },
+  { key: 'Exporter_Tax_ID', area: 'Business', def: '', text: true, unit: 'EIN', usedBy: ['Split Shipment Invoice'],
+    notes: 'Optional. Your EIN, printed as the exporter tax ID on customs invoices.' },
   { key: 'Business_Email', area: 'Business', def: '', text: true, unit: 'email', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
   { key: 'Business_Website', area: 'Business', def: '', text: true, unit: 'link', usedBy: ['Shipping Station'], notes: 'On the invoice letterhead.' },
   { key: 'Pay_Wise_Details', area: 'Business', def: '', text: true, unit: 'bank details', usedBy: ['Shipping Station'],

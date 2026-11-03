@@ -474,7 +474,7 @@ tr.fully-shipped td { opacity: .5; }
         </div>
       </div>
       <div class="field-block">
-        <h3>Consignee / Importer</h3>
+        <h3 id="toHeading">Consignee / Importer</h3>
         <label>Name / Company</label>
         <input id="toName">
         <label>Address Line 1</label>
@@ -1012,6 +1012,8 @@ async function lookupOrder() {
     applyDestinationHints(cc, cName);
     if (!st.country && cName) document.getElementById('toCountry').value = cName;
     const appliedFields = applyCustomerRecord(data.customer);
+    if (!st.address1 && consigneeFromGrist(data.customer)) appliedFields.push('ship-to address from the Grist customer card');
+    applyConsigneeWording(data.customer, st);
     const profile = applyCustomerProfile();
     if (profile) appliedFields.push('saved export settings for this customer');
     refreshProfileFromGrist();   // not awaited — the cached copy is already applied
@@ -1297,6 +1299,80 @@ SHIPPER_IDS.forEach(id => {
 });
 document.getElementById('forgetShipperBtn').addEventListener('click', forgetShipper);
 loadShipper();
+
+/* Your business address, from Settings (Business_Name, Business_Address,
+   Business_Phone, Exporter_Tax_ID) — the same everywhere, so it is not typed
+   per browser. Wins over anything saved on this device; when Business_Address
+   is blank the old per-device details still apply. */
+function splitBusinessAddress(text) {
+  let lines = String(text || '').split(/\r?\n|;/).map(x => x.trim()).filter(Boolean);
+  if (lines.length === 1 && lines[0].includes(',')) {
+    const parts = lines[0].split(',').map(x => x.trim());
+    lines = [parts[0], parts.slice(1).join(', ')];
+  }
+  if (lines.length > 1 && /^(united states( of america)?|usa|us)$/i.test(lines[lines.length - 1])) lines.pop();
+  if (!lines.length) return null;
+  const csz = lines.length > 1 ? lines.pop() : '';
+  return { addr1: lines[0] || '', addr2: lines.slice(1).join(', '), csz };
+}
+async function shipperFromSettings() {
+  try {
+    await SSSettings.load();
+    const a = splitBusinessAddress(SSSettings.text('Business_Address', ''));
+    const note = document.getElementById('shipperSavedNote');
+    if (!a) {
+      if (!document.getElementById('fromAddr1').value.trim()) {
+        note.textContent = 'Set Business_Address in Settings Desk (Business) and this fills in by itself.';
+        note.style.color = '#8B7D72';
+      }
+      return;
+    }
+    const set = (id, v) => { if (v) document.getElementById(id).value = v; };
+    set('fromCompany', SSSettings.text('Business_Name', ''));
+    document.getElementById('fromAddr1').value = a.addr1;
+    document.getElementById('fromAddr2').value = a.addr2;
+    document.getElementById('fromCityStateZip').value = a.csz;
+    set('fromPhone', SSSettings.text('Business_Phone', ''));
+    set('fromTaxId', SSSettings.text('Exporter_Tax_ID', ''));
+    note.textContent = 'From Settings → Business.';
+    note.style.color = '#3A8B7A';
+    markEmptyFieldsForPrint();
+  } catch (e) { console.warn('settings', e); }
+}
+shipperFromSettings();
+
+/* Consignee address from the Grist customer card, for when the Shopify order
+   has none (a draft before the customer has paid, or an order pushed without
+   one). Only fills what Shopify left empty. */
+function consigneeFromGrist(cust) {
+  const f = (cust && cust.fields) || {};
+  const g = k => String(f[k] || '').trim();
+  if (!g('Ship_Addr1')) return false;
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v && !el.value.trim()) el.value = v; };
+  set('toName', [g('Ship_Company'), g('Ship_To_Name') || g('Customer_Name')].filter(Boolean).join(' — '));
+  set('toAddr1', g('Ship_Addr1'));
+  set('toAddr2', [g('Ship_Addr2'), g('Ship_Addr3')].filter(Boolean).join(', '));
+  set('toCityStateZip', [g('Ship_City'), g('Ship_State'), g('Ship_Zip')].filter(Boolean).join(', ') || g('Ship_City_State_Zip'));
+  set('toCountry', String(g('Ship_Country')).replace(/^[A-Z]{2}\s*[—-]\s*/, ''));
+  set('toPhone', g('Phone'));
+  return true;
+}
+
+/* A private person is the consignee, but "importer" reads as a business
+   importer of record. Retail customers (and orders with no company) get
+   "Consignee (Recipient)" and recipient wording on their ID field. */
+function applyConsigneeWording(cust, st) {
+  const f = (cust && cust.fields) || {};
+  const type = String(f.Type || '');
+  const isPerson = /retail|individual|person/i.test(type) || (!type && !(st && st.company));
+  document.getElementById('toHeading').textContent = isPerson ? 'Consignee (Recipient)' : 'Consignee / Importer';
+  if (isPerson) {
+    ['toTaxIdLabel', 'toTaxId2Label'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = el.textContent.replace(/^Importer\b/, 'Recipient').replace(/^Second Importer\b/, 'Second Recipient');
+    });
+  }
+}
 
 /* ------------------------------- customer record from Grist (PCC etc.) */
 
