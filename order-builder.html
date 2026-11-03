@@ -522,6 +522,7 @@ async function loadAll() {
       orderDate: c(['Order_Date']), dueDate: c(['Due_Date']), notes: c(['Notes']),
       terms: c(TERMS_ORDER_COL), pay: c(PAYMETHOD_ORDER_COL),
       po: c(['PO_Number', 'PO', 'Purchase_Order', 'PO_No']),
+      payLink: c(['Pay_Link']),
     };
     const lc = (cands) => findColumn(wolT, cands);
     S.lineCols = {
@@ -569,6 +570,7 @@ async function loadAll() {
       terms: S.cols.terms ? String(columnAsArray(woT, S.cols.terms)[i] || '').trim() : '',
       pay: S.cols.pay ? String(columnAsArray(woT, S.cols.pay)[i] || '').trim() : '',
       po: S.cols.po ? String(columnAsArray(woT, S.cols.po)[i] || '').trim() : '',
+      payLink: S.cols.payLink ? String(columnAsArray(woT, S.cols.payLink)[i] || '').trim() : '',
       orderDate: S.cols.orderDate ? columnAsArray(woT, S.cols.orderDate)[i] : null,
       dueDate: S.cols.dueDate ? columnAsArray(woT, S.cols.dueDate)[i] : null,
     }));
@@ -2561,6 +2563,55 @@ async function callPush(workOrderId, dryRun, asDraft) {
   }
 }
 
+/* ── Pay-request email ──────────────────────────────────────────────────
+   Fills the "Pay request" template from Email Templates (or the draft one,
+   "Pay request — customer adds address") with this order's lines, total and
+   pay link, and copies subject + body as plain text for pasting into an email.
+   Wording lives in Email Templates, so it is edited there, not here. */
+const PAY_TPL = { regular: 'Pay request', draft: 'Pay request — customer adds address' };
+const money = v => '$' + Number(v || 0).toFixed(2);
+async function copyPayEmail(id, btn) {
+  const o = S.orders.find(x => x.id === id);
+  if (!o) return;
+  const link = (S.push && S.push.created && S.push.invoice_url && S.selected === id) ? S.push.invoice_url : o.payLink;
+  if (!link) { alert('No pay link saved on this order yet.'); return; }
+  const isDraft = /draft/i.test(o.type) || /^#?D\d+$/i.test(o.number);
+  let T;
+  try { T = await grist.docApi.fetchTable('Email_Templates'); } catch (e) { alert('No Email_Templates table.'); return; }
+  const names = T.Name || [];
+  const want = isDraft ? PAY_TPL.draft : PAY_TPL.regular;
+  let i = names.indexOf(want); if (i < 0) i = names.indexOf(PAY_TPL.regular);
+  if (i < 0) { alert(`Add a template named "${want}" in Email Templates.`); return; }
+  const c = S.customers.find(x => x.id === o.customerId) || {};
+  const info = c.info || {};
+  const contact = String(info.contact || '').trim();
+  const lines = (S.lines[id] || []).filter(l => l.qty > 0);
+  const total = lines.reduce((t, l) => t + l.qty * (l.price || 0), 0);
+  const vals = {
+    // No contact on file: a person's name gives their first name; a business
+    // (it has a vendor code) keeps its whole name.
+    first_name: contact ? contact.split(/\s+/)[0]
+      : (c.code ? (c.name || o.customerName || '') : String(c.name || o.customerName || '').trim().split(/\s+/)[0]),
+    contact_name: contact, business: c.name || o.customerName || '', email: info.email || '', code: c.code || '',
+    order_number: String(o.number || '').replace(/^#/, ''), po_number: o.po || '',
+    po_line: o.po ? ` (PO ${o.po})` : '',
+    pay_link: link, order_total: money(total), spool_count: String(lines.reduce((t, l) => t + l.qty, 0)),
+    order_lines: lines.map(l => `  • ${l.qty} × ${l.recipeName || l.sku}${l.price ? ' — ' + money(l.qty * l.price) : ''}`).join('\n'),
+    intl_note: c.foreign ? '\n\nAs this order ships outside the US, your country may charge import VAT or duties when it arrives; those are collected by the carrier on delivery.' : '',
+    today: new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }),
+  };
+  const missing = new Set();
+  const fill = t => String(t || '').replace(/\{([a-z_]+)\}/g, (m, k) => {
+    const v = vals[k];
+    if (v == null || (v === '' && !['po_line', 'intl_note'].includes(k))) { missing.add(k); return m; }
+    return v;
+  });
+  const text = fill((T.Subject || [])[i]) + '\n\n' + fill((T.Body || [])[i]);
+  try { await navigator.clipboard.writeText(text); if (btn) btn.textContent = 'Email copied ✓'; }
+  catch (e) { prompt('Copy the email:', text); }
+  if (missing.size) toast('Check before sending — not filled: ' + [...missing].map(k => '{' + k + '}').join(', '));
+}
+
 /* The draft's pay link, as text for pasting into an email. */
 async function copyPayLink(btn) {
   const url = btn.getAttribute('data-url') || '';
@@ -2629,7 +2680,8 @@ function pushPanelHtml(o) {
       <strong>Draft ${esc(p.shopify_name || p.shopify_order_id)} created in Shopify.</strong>
       Next: open it and press <b>Send invoice</b> — the customer enters their address and pays, and Shopify turns it into an order.
       <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the draft in Shopify ↗</a>` : ''}
-      ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>` : ''}</div>
+      ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>
+        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}</div>
       ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
     </div>`;
   }
@@ -2638,7 +2690,8 @@ function pushPanelHtml(o) {
       <strong>Created in Shopify as ${esc(p.shopify_name || p.shopify_order_id)}.</strong>
       ${p.wrote_back ? ' Its id is recorded here, so it can\'t be pushed twice.' : ''}
       <div style="margin-top:6px">${p.admin_url ? `<a href="${esc(p.admin_url)}" target="_blank" rel="noopener">Open the order in Shopify ↗</a>` : ''}
-      ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>` : ''}</div>
+      ${p.invoice_url ? ` <button class="btn secondary" style="margin-left:8px" onclick="copyPayLink(this)" data-url="${esc(p.invoice_url)}">Copy pay link</button>
+        <button class="btn" style="margin-left:6px" onclick="copyPayEmail(${o.id}, this)">Copy email</button>` : ''}</div>
       ${(p.reasons || []).length ? `<div style="margin-top:6px">${p.reasons.map(esc).join('<br>')}</div>` : ''}
     </div>`;
   }
@@ -3237,6 +3290,8 @@ function renderMain() {
       ${lines.length ? `<button class="btn secondary" onclick="toggleAck(${o.id})"
         title="A PDF of this order and a 'we've got your order' email to send them">
         ${S.ackFor === o.id ? 'Close acknowledgement' : 'Acknowledge order…'}</button>` : ''}
+      ${o.payLink ? `<button class="btn secondary" onclick="copyPayEmail(${o.id}, this)"
+        title="A ready-to-paste email with the pay link and order summary (Email Templates → Pay request)">Copy pay email</button>` : ''}
       <button class="btn danger" onclick="deleteOrder(${o.id})" ${pushed ? 'disabled' : ''}>Delete</button>
     </div>
   </div>`;

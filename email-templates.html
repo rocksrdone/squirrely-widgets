@@ -67,6 +67,9 @@ const PLACEHOLDERS = [
   ['email', 'Customer email'], ['code', 'Vendor code'], ['order_number', 'Order #'], ['po_number', 'PO number'],
   ['po_line', '" (PO …)" when there is a PO'], ['order_date', 'Order date'], ['due_date', 'Due date'], ['ship_date', 'Shipped date'],
   ['carrier', 'Carrier'], ['tracking_number', 'Tracking #'], ['tracking_url', 'Tracking link'], ['store_url', 'Vendor store link'], ['today', 'Today'],
+  ['pay_link', 'Shopify pay link (saved on the order when pushed)'],
+  ['order_lines', 'List of colourways (filled by Order Builder → Copy pay email)'], ['order_total', 'Subtotal (Order Builder)'],
+  ['spool_count', 'Spool count (Order Builder)'], ['intl_note', 'Import VAT/duty note for non-US (Order Builder)'],
 ];
 
 const S = { templates: [], customers: [], orders: [], tplId: null, custId: null, orderId: null, editing: false, draft: null };
@@ -87,7 +90,8 @@ async function load() {
     .filter(c => c.name).sort((a, b) => a.name.localeCompare(b.name));
   S.orders = (W.id || []).map((id, i) => ({ id, cust: col(W, 'Customer')[i], num: col(W, 'Order_Number')[i], po: col(W, 'PO_Number')[i],
     date: col(W, 'Order_Date')[i], due: col(W, 'Due_Date')[i], shipped: col(W, 'Shipped_Date')[i], carrier: col(W, 'Carrier')[i],
-    trackNo: col(W, 'Tracking_Number')[i], trackUrl: col(W, 'Tracking_URL')[i], status: col(W, 'Status')[i] }));
+    trackNo: col(W, 'Tracking_Number')[i], trackUrl: col(W, 'Tracking_URL')[i], status: col(W, 'Status')[i],
+    payLink: col(W, 'Pay_Link')[i] }));
   if (!S.templates.some(t => t.id === S.tplId)) S.tplId = S.templates[0] ? S.templates[0].id : null;
   render();
 }
@@ -107,6 +111,7 @@ function values() {
     ship_date: o ? fmtDate(o.shipped) : '', carrier: o ? (o.carrier || '') : '', tracking_number: o ? (o.trackNo || '') : '',
     tracking_url: o ? (o.trackUrl || '') : '', store_url: SSSettings.text('Vendor_Store_URL', 'https://squirrelvendor.com'),
     today: new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }),
+    pay_link: o ? (o.payLink || '') : '', intl_note: null,
   };
 }
 /* Fill {placeholders}. Unknown/empty ones are left as {name} (and listed) so nothing silently goes out blank. */
