@@ -387,6 +387,9 @@ function impose(total, perPage) {
 async function load() {
   await SSSettings.load();
   BIN_CAPACITY = SSSettings.num('Back_Stock_Bin_Capacity', 150);
+  PULL_CFG.srcCap = SSSettings.num('Dye_Bin_Jar_Capacity', 10);
+  PULL_CFG.srcRows = Math.max(1, Math.round(SSSettings.num('Dye_Rack_Rows', 4)));
+  PULL_CFG.srcCols = Math.max(1, Math.round(SSSettings.num('Dye_Rack_Columns', 4)));
   try {
     const [dp, recT, wolT, woT, lotT, allocT, custT, binsT, clsT, tplT, phT, compT, dyeT, stkT] = await Promise.all([
       grist.docApi.fetchTable('Day_Plan'),
@@ -866,7 +869,7 @@ function idFields(b, extra) {
     ${extra}`;
 }
 
-// Order bin code. Same prefix discipline as the dye and staging racks: O- means
+// Order bin code. Same prefix discipline as the dye shelf (S-) and prep station (P-): O- means
 // a customer order bin, so a code never has to be guessed at.
 function orderBin(o) {
   const code = (o.code || '').toUpperCase();
@@ -970,9 +973,10 @@ function sheetFor(item) {
 
 /* ══ dye pull sheet ═══════════════════════════════════════════════════════
    The morning pull, derived from the same printable list as the tags above,
-   so a staging bin code always names the same pot as the bag code beside it.
-   Shelf geometry lives here — change it if the racks change. */
-const PULL_CFG = { srcRows: 4, srcCols: 4, srcCap: 12, stgRows: 6, stgCols: 5 };
+   so a prep slot always names the same pot as the bag code beside it.
+   Made-dye shelf geometry lives here (rows are letters); the jar limit comes
+   from Settings.Dye_Bin_Jar_Capacity. The prep station is PREP_* below. */
+const PULL_CFG = { srcRows: 4, srcCols: 4, srcCap: 10 };
 const LETTERS = 'ABCDEFGHIJKL';
 
 function normalize(s) { return (s == null ? '' : String(s)).trim().toUpperCase(); }
@@ -999,51 +1003,50 @@ function longDate(sec) {
     { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-/* Bin codes. "B3", "b-3" and "M-B3" all mean B3. Letters are columns and numbers
-   are rows, matching back stock and dye-stock.html — so B3 is column B, third
-   shelf down. A plain legacy number is mapped down the columns (1-4 are column
-   A, 5-8 column B), and kept alongside as `legacy` so it prints next to the code
-   and a wrong mapping shows up immediately instead of quietly misdirecting
-   someone.
-
-   Keying the legacy mapping on ROWS rather than COLS matters: the made-dye shelf
-   is getting narrower bins later, so the column count will grow. Dividing by
-   rows means widening the shelf appends new letters and leaves every existing
-   code pointing at the same drawer. */
-/* Staging codes. A straight run of shelf positions, numbered in pot order, so
-   staging S-A1 holds the first pot of the day. Filled ACROSS a shelf before
-   dropping to the next — A1 B1 C1 D1 E1, then A2 — because the sheets and their
-   dyes get lined up left to right along a shelf as the day goes.
-
-   Deliberately NOT gridCode(): that one fills down a column, which is right for
-   the made-dye shelf and wrong here. Same letters-as-columns convention, opposite
-   fill order, so they must stay separate functions. */
-function stageCode(index0, cols) {
-  return 'S-' + LETTERS[index0 % cols] + String(Math.floor(index0 / cols) + 1);
-}
-function gridCode(index0, rows) {
-  return LETTERS[Math.floor(index0 / rows)] + String((index0 % rows) + 1);
+/* Made-dye (Solution) shelf codes: S-A1 .. S-D4. Letters are ROWS, top to
+   bottom; numbers run along the row — same as normBin() in dye-stock.html.
+   "b3", "S-B3" and "s b-3" are all S-B3. A plain number is counted along the
+   rows (1-4 = S-A1..S-A4) and kept as `legacy` so it prints beside the code.
+   Re-laid out 2026-11-04 (was M- with letters as columns); every jar was
+   re-shelved, so an old M- code reads as "no bin" until it's put away again. */
+function gridCode(index0, cols) {
+  return 'S-' + LETTERS[Math.floor(index0 / cols)] + String((index0 % cols) + 1);
 }
 function parseBin(raw, rows, cols) {
   const s = normalize(raw).replace(/[\s\-_.]/g, '');
   if (!s) return null;
-  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
+  if (/^M[A-L]\d{1,2}$/.test(s)) return null;   // retired M- shelf code
+  let m = /^S?([A-L])(\d{1,2})$/.exec(s);
   if (m) {
-    const col = LETTERS.indexOf(m[1]), row = Number(m[2]) - 1;
-    if (col >= 0 && row >= 0) {
-      const inGrid = col < cols && row < rows;
-      return { code: m[1] + (row + 1), order: col * rows + row, legacy: '', offGrid: !inGrid };
+    const row = LETTERS.indexOf(m[1]), col = Number(m[2]) - 1;
+    if (row >= 0 && col >= 0) {
+      const inGrid = row < rows && col < cols;
+      return { code: 'S-' + m[1] + (col + 1), order: row * cols + col, legacy: '', offGrid: !inGrid };
     }
   }
   m = /^(\d{1,3})$/.exec(s);
   if (m) {
     const n = Number(m[1]);
     if (n >= 1 && n <= rows * cols) {
-      return { code: gridCode(n - 1, rows), order: n - 1, legacy: String(n), offGrid: false };
+      return { code: gridCode(n - 1, cols), order: n - 1, legacy: String(n), offGrid: false };
     }
     return { code: 'bin ' + n, order: 9000 + n, legacy: '', offGrid: true };
   }
   return { code: normalize(raw), order: 9500, legacy: '', offGrid: true };
+}
+
+/* ── Prep station codes — KEEP BYTE-IDENTICAL (print-day, batch-assignment, batch-planner) ──
+   Boxes P-A1 .. P-C4: letters are rows (A on top), numbers along the row.
+   Each box takes TWO pots, front then back: pot 1 is P-A1 front, pot 2 P-A1
+   back, pot 3 P-A2 front … 24 pots in all. The pot's sheet, tag and dyes go in
+   its slot. Replaced the S- staging shelf and the planner's P1-P3 jar zones
+   on 2026-11-04. */
+const PREP_ROWS = 3, PREP_COLS = 4, PREP_SIDES = ['front', 'back'];
+const PREP_SLOTS = PREP_ROWS * PREP_COLS * PREP_SIDES.length;
+function prepCode(index0) {
+  if (!(index0 >= 0) || index0 >= PREP_SLOTS) return '';
+  const box = Math.floor(index0 / PREP_SIDES.length);
+  return 'P-' + 'ABCDEFGHIJKL'[Math.floor(box / PREP_COLS)] + (box % PREP_COLS + 1) + ' ' + PREP_SIDES[index0 % PREP_SIDES.length];
 }
 
 let PULL = null;      // { dye, jarsByDye, binCount, compsByRecipe, planDate }
@@ -1143,10 +1146,9 @@ function buildPullState(compT, dyeT, stkT, planDate) {
 let PULL_MIX = null;
 function buildPull(printable) {
   if (!PULL) return null;
-  const { stgRows, stgCols } = PULL_CFG;
   const active = printable.slice();
   active.forEach((b, i) => {
-    b.stage = i < stgRows * stgCols ? stageCode(i, stgCols) : null;
+    b.stage = prepCode(i) || null;
     b.yards = b.spools * yardsPerSpool(b.fiber);
     b.manifest = [];
     b.comps = PULL.compsByRecipe[b.rid] || [];
@@ -1366,15 +1368,13 @@ function pl_remake(r) {
 function shelfMap(usesNumbers) {
   if (!usesNumbers) return '';
   const rows = PULL_CFG.srcRows, cols = PULL_CFG.srcCols;
-  // Drawn in reading order — A1 B1 C1 D1 across the top, A2 B2 ... beneath — so
-  // the printed map matches the shelf you are standing in front of instead of
-  // its transpose. The legacy number under each code is the one that maps to it,
-  // not the cell's position, or the two would disagree on a non-square shelf.
+  // Drawn as the shelf stands — row A (S-A1 S-A2 …) across the top, row B
+  // beneath — with the plain number that maps to each code under it.
   let cells = '';
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const code = LETTERS[c] + (r + 1);
-      const legacyNum = c * rows + r + 1;
+      const code = 'S-' + LETTERS[r] + (c + 1);
+      const legacyNum = r * cols + c + 1;
       cells += `<div class="c"><b>${esc(code)}</b><span>${legacyNum}</span></div>`;
     }
   }
@@ -1489,8 +1489,8 @@ function renderPull(printable, leadBreak) {
   const html = `<div class="pl-doc${leadBreak ? ' pl-brk' : ''}">
       ${head('Dye pull \u2014 mixed bins')}
       ${shelfMap(usesNumbers)}
-      <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its staging
-        bin, and put that pot's tag and bag sheet in the same bin. A jar marked <b>shared jar</b> serves more
+      <div class="pl-lede">Work one bin at a time, top to bottom. Tick each jar as it goes into its prep
+        slot, and put that pot's tag and bag sheet in the same slot. A jar marked <b>shared jar</b> serves more
         than one pot \u2014 it still goes to the one bin named on the right.</div>
       ${body || '<div class="pl-lede">Nothing to pull for this day.</div>'}
       <div class="pl-foot"><b>Spool check:</b> ${spoolTotal} spools across ${B.active.length} pots.
@@ -1498,8 +1498,9 @@ function renderPull(printable, leadBreak) {
         <b>Put-back:</b> every jar goes home to the bin printed above it.</div>
     </div>
     <div class="pl-doc pl-brk">
-      ${head('Staging bins \u2014 what should be in each')}
-      <div class="pl-lede">One block per staging bin, in pot order. <b>Hand this page over with the dyes:</b>
+      ${head('Prep station \u2014 what goes in each slot')}
+      <div class="pl-lede">One block per prep slot, in pot order. Each box holds two pots: the <b>front</b>
+        one is worked first, the <b>back</b> one next. <b>Hand this page over with the dyes:</b>
         the code on the left of each line is the bin that jar goes back to. <b>NEW</b> means it was mixed
         today and control gives it a bin.</div>
       <div class="pl-mf">${B.active.map(pl_manifest).join('')}</div>
@@ -1515,7 +1516,7 @@ function renderPull(printable, leadBreak) {
 
   const warn = [];
   const over = B.active.filter(b => !b.stage);
-  if (over.length) warn.push(`<span class="warn">${over.length} pot${over.length === 1 ? '' : 's'} past the last staging bin</span> &mdash; the grid holds ${PULL_CFG.stgRows * PULL_CFG.stgCols}.`);
+  if (over.length) warn.push(`<span class="warn">${over.length} pot${over.length === 1 ? '' : 's'} past the last prep slot</span> &mdash; the station holds ${PREP_SLOTS} (P-A1 front to P-C4 back).`);
   if (PULL.dupeDyes) warn.push(`<span class="warn">${PULL.dupeDyes} dye${PULL.dupeDyes === 1 ? '' : 's'} with more than one jar logged</span> &mdash; only one jar should ever exist; merge them in Dye Stock.`);
   const full = Object.entries(PULL.binCount).filter(([, n]) => n > PULL_CFG.srcCap);
   if (full.length) warn.push(`<span class="warn">${full.map(([c, n]) => `${esc(c)} holds ${n}`).join(', ')}</span> &mdash; over the ${PULL_CFG.srcCap}-jar limit.`);
@@ -1598,7 +1599,7 @@ function render() {
     html += '<div class="page">' + cells + '</div>';
   }
   // Pull pages go last so the tag and sheet pages stay one contiguous stack to
-  // guillotine. Same printable array, so staging bin N is always bag code N.
+  // guillotine. Same printable array, so prep slot N is always bag code N.
   let pullWarn = [];
   if (PULL && document.getElementById('wPull').checked && printable.length) {
     const r = renderPull(printable, html.length > 0);
@@ -1633,7 +1634,7 @@ function render() {
     </div>
     ${pullNote ? `<div class="muted" style="margin-top:6px"><span class="warn">${esc(pullNote)}</span></div>` : ''}
     ${pullWarn.length ? `<div class="muted" style="margin-top:6px">
-        Dye pull: staging ${esc(printable[0] && printable[0].stage || '?')}&ndash;${esc(printable[printable.length - 1] && printable[printable.length - 1].stage || '?')}.
+        Dye pull: prep ${esc(printable[0] && printable[0].stage || '?')}&ndash;${esc(printable[printable.length - 1] && printable[printable.length - 1].stage || '?')}.
         ${pullWarn.join(' ')}</div>` : ''}` : '';
 }
 

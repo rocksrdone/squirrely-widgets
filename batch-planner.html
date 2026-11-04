@@ -97,37 +97,43 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 
 <script>
 /* ── Mixed-dye bin codes — KEEP BYTE-IDENTICAL ACROSS WIDGETS ──
-   The made-dye shelf is M-A1 .. M-D4: letters are columns, numbers are rows,
-   matching back stock. Every widget that reads Dye_Stock.Bin_Location must
-   normalise before displaying OR grouping. Skipping it is what let one drawer
-   show up as several bins: "5", "b3", "B-3" and "M-B3" are all one place, and
-   an un-normalised group key splits them into four.
+   The made-dye (Solution) shelf is S-A1 .. S-D4. Letters are ROWS, top to
+   bottom (A1-A4 is the top row, D1-D4 the bottom); numbers are positions
+   along the row. Each bin holds 10 jars (Settings.Dye_Bin_Jar_Capacity).
+   Re-laid out 2026-11-04: it was M-A1 .. M-D4 with letters as columns, and
+   every jar was re-shelved, so an old M- code no longer names a real bin and
+   reads as "no bin" until the jar is put away again.
 
-   Only Dye_Stock goes through here. Back stock bins (bare A1-D7) are a
-   different rack, are not being renamed, and must NOT be passed to normBin. */
-let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows / Dye_Rack_Columns, via applyRackSettings()
-/* Called by settings.js once the Settings table is read. Columns can grow or
-   shrink (letters A-L); changing ROWS renumbers bins, so only for a new rack. */
+   Every widget that reads Dye_Stock.Bin_Location must normalise before
+   displaying OR grouping: "b3", "B-3", "s b3" and "S-B3" are all one bin, and
+   an un-normalised group key splits them apart.
+
+   Only Dye_Stock goes through here. Back stock bins (bare A1-D7), order bins
+   (O-) and the prep station (P-) are different racks and must NOT be passed
+   to normBin. */
+let DYE_BIN_ROWS = 4, DYE_BIN_COLS = 4;   // Settings.Dye_Rack_Rows (letters) / Dye_Rack_Columns (numbers), via applyRackSettings()
+/* Called by settings.js once the Settings table is read. Rows are letters
+   (A-L), columns are numbers; adding a column appends a number to every row. */
 function applyRackSettings() {
   if (!window.SSSettings) return;
-  DYE_BIN_ROWS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
-  DYE_BIN_COLS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
+  DYE_BIN_ROWS = Math.max(1, Math.min(12, Math.round(SSSettings.num('Dye_Rack_Rows', 4))));
+  DYE_BIN_COLS = Math.max(1, Math.min(99, Math.round(SSSettings.num('Dye_Rack_Columns', 4))));
 }
 const BIN_LETTERS = 'ABCDEFGHIJKL';
 const NO_BIN = '(no bin)';
 
-// Fills down a column before moving to the next. Keyed on ROWS, not COLS, so
-// widening the shelf later appends new letters instead of remapping every code.
+// Fills along a row before dropping to the next: S-A1 S-A2 S-A3 S-A4, S-B1 …
 function dyeBinCode(index0) {
-  const col = Math.floor(index0 / DYE_BIN_ROWS);
-  const row = index0 % DYE_BIN_ROWS;
-  return 'M-' + BIN_LETTERS[col] + (row + 1);
+  const row = Math.floor(index0 / DYE_BIN_COLS);
+  const col = index0 % DYE_BIN_COLS;
+  return 'S-' + BIN_LETTERS[row] + (col + 1);
 }
 function normBin(raw) {
   const s = String(raw || '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
   if (!s) return '';
-  let m = /^M?([A-L])(\d{1,2})$/.exec(s);
-  if (m) return 'M-' + m[1] + Number(m[2]);
+  if (/^M[A-L]\d{1,2}$/.test(s)) return '';   // retired M- shelf code: jar not re-shelved yet
+  let m = /^S?([A-L])(\d{1,2})$/.exec(s);
+  if (m) return 'S-' + m[1] + Number(m[2]);
   m = /^(\d{1,3})$/.exec(s);
   if (m) {
     const n = Number(m[1]);
@@ -137,9 +143,9 @@ function normBin(raw) {
 }
 // Shelf position, for sorting. Off-grid codes sort last instead of colliding at 0.
 function binOrder(code) {
-  const m = /^M-([A-L])(\d{1,2})$/.exec(String(code || ''));
+  const m = /^S-([A-L])(\d{1,2})$/.exec(String(code || ''));
   if (!m) return 9000;
-  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_ROWS + (Number(m[2]) - 1);
+  return BIN_LETTERS.indexOf(m[1]) * DYE_BIN_COLS + (Number(m[2]) - 1);
 }
 function binSortFn(a, b) {
   const d = binOrder(a) - binOrder(b);
@@ -151,7 +157,7 @@ function binLabel(raw) {
   return normBin(raw) || NO_BIN;
 }
 // First grid position with nothing in it. Returns '' when the shelf is full, so
-// the caller can say so instead of inventing an M-E1 that does not exist.
+// the caller can say so instead of inventing an S-E1 that does not exist.
 function nextFreeBin(binGroups) {
   for (let i = 0; i < DYE_BIN_ROWS * DYE_BIN_COLS; i++) {
     const code = dyeBinCode(i);
@@ -160,13 +166,19 @@ function nextFreeBin(binGroups) {
   return '';
 }
 
-// ── PREP TABLE CONFIG ──────────────────────────────────────────────
-// How many physical staging zones the prep table has (P1..Pn).
-// Groups rotate through these slots; Batch Assignment will only tell you to
-// "stage at Pn" if the next use is fewer than PREP_ZONES groups away —
-// beyond that the slot would already be reused by something else.
-// Change this ONE number here and in batch-assignment.html if the bench changes.
-const PREP_ZONES = 3;
+/* ── Prep station codes — KEEP BYTE-IDENTICAL (print-day, batch-assignment, batch-planner) ──
+   Boxes P-A1 .. P-C4: letters are rows (A on top), numbers along the row.
+   Each box takes TWO pots, front then back: pot 1 is P-A1 front, pot 2 P-A1
+   back, pot 3 P-A2 front … 24 pots in all. The pot's sheet, tag and dyes go in
+   its slot. Replaced the S- staging shelf and the planner's P1-P3 jar zones
+   on 2026-11-04. */
+const PREP_ROWS = 3, PREP_COLS = 4, PREP_SIDES = ['front', 'back'];
+const PREP_SLOTS = PREP_ROWS * PREP_COLS * PREP_SIDES.length;
+function prepCode(index0) {
+  if (!(index0 >= 0) || index0 >= PREP_SLOTS) return '';
+  const box = Math.floor(index0 / PREP_SIDES.length);
+  return 'P-' + 'ABCDEFGHIJKL'[Math.floor(box / PREP_COLS)] + (box % PREP_COLS + 1) + ' ' + PREP_SIDES[index0 % PREP_SIDES.length];
+}
 // ───────────────────────────────────────────────────────────────────
 
 const DYE_COLORS = {
@@ -671,20 +683,11 @@ function runPlan() {
   // The flat running order is what the prep table actually experiences.
   lastSequence = [];
   groups.forEach(g => g.lines.forEach(line => lastSequence.push(line)));
-  const steps = allocatePrepZones(
-    lastSequence.map(l => l.recipeId),
-    rid => recipeDyes[rid] || [],
-    PREP_ZONES
-  );
-
+  // Each pot's prep slot, in running order: P-A1 front, P-A1 back, P-A2 front …
+  // Past the 24th pot there is no slot; the tag says so instead of inventing one.
   zoneTagsByLine = {};
   lastSequence.forEach((line, i) => {
-    const mine = recipeDyes[line.recipeId] || [];
-    const tags = [];
-    steps[i].zones.forEach((dyeId, zi) => {
-      if (dyeId && mine.indexOf(dyeId) >= 0) tags.push({ slot: 'P' + (zi + 1), dyeId });
-    });
-    zoneTagsByLine[line.id] = tags;
+    zoneTagsByLine[line.id] = [{ slot: prepCode(i) || 'no prep slot (station full)' }];
   });
 
   renderPlan(groups);
@@ -711,13 +714,10 @@ async function saveTodaysPlan() {
     lastSequence.forEach(job => {
       seq++;
       const tags = zoneTagsByLine[job.id] || [];
-      // Human-readable record of the bench at that moment, e.g.
-      // "P1 Turquoise · P2 Hot Pink · P3 Deep Purple". Batch Assignment does NOT
-      // read this — it recomputes from Sequence so there's only one source of
-      // truth. This column is for you reading the table in Grist.
-      const slotSummary = tags.length
-        ? tags.map(t => `${t.slot} ${(dyes[t.dyeId] && dyes[t.dyeId].Dye_Name) || 'dye #' + t.dyeId}`).join(' · ')
-        : '—';
+      // The pot's prep slot, e.g. "P-A2 front". Batch Assignment and Print Day
+      // recompute it from Sequence, so there's one source of truth; this column
+      // is for reading the table in Grist (and the Dye Prep Sheet header).
+      const slotSummary = (tags[0] && tags[0].slot) || '—';
       // One row per real order line so each customer's order stays traceable,
       // but every line of a job shares a Sequence — they're one trip to the kettle.
       job.lines.forEach(line => {
@@ -811,7 +811,7 @@ function zoneTagsHtml(lineId) {
   const tags = zoneTagsByLine[lineId] || [];
   if (!tags.length) return '';
   return `<div class="zone-tags">` + tags.map(t =>
-    `<span class="zone-tag"><b>${t.slot}</b> ${(dyes[t.dyeId] && dyes[t.dyeId].Dye_Name) || 'dye #' + t.dyeId}</span>`
+    `<span class="zone-tag" title="Prep station slot for this pot"><b>Prep</b> ${esc(t.slot)}</span>`
   ).join('') + `</div>`;
 }
 
