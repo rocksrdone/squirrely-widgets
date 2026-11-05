@@ -443,6 +443,7 @@ let COLS = null, hasPowderTable = false, hasCountedCol = false;
 let loadError = '', setupMissing = [];
 let tab = 'count', activeLetter = 'A', openDetail = null, picked = new Set();
 let findQuery = '', findFilter = 'all', activeBox = null;
+let countFilter = 'all';   // letter view: 'all' | 'attention' (low or none on hand)
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
@@ -462,6 +463,24 @@ function openJar(dyeId) { return openJars(dyeId)[0] || null; }
 function spares(dyeId) {
   return (jarsByDye[dyeId] || []).filter(j => j.Location === BACK || j.State !== 'Open');
 }
+/* "None on hand": no jar recorded at all. Counted or not — a letter not yet
+   marked counted is flagged on the row instead of hidden, so the filter is
+   useful before every shelf has been walked. */
+function isNone(dyeId) { return !(jarsByDye[dyeId] || []).length; }
+function needsAttention(d) { return isLow(d.id) || isNone(d.id); }
+const STOCK_FILTERS = [['all', 'Everything'], ['attention', 'Low or none'], ['low', 'Running low'], ['none', 'None on hand'], ['held', 'On hand']];
+function applyStockFilter(rows, f) {
+  if (f === 'held') return rows.filter(d => !isNone(d.id));
+  if (f === 'low') return rows.filter(d => isLow(d.id));
+  if (f === 'none') return rows.filter(d => isNone(d.id));
+  if (f === 'attention') return rows.filter(needsAttention);
+  return rows;
+}
+function stockPills(current, setter) {
+  return STOCK_FILTERS.map(([k, l]) => '<button class="btn btn-small' + (current === k ? ' btn-ink' : '') +
+    '" onclick="' + setter + '=\'' + k + '\'; render()">' + l + '</button>').join('');
+}
+
 /* Low only means low when every jar you have open is low. A nearly-empty 10g
    next to a fresh 100g is not a reorder signal. */
 function isLow(dyeId) {
@@ -818,7 +837,9 @@ function letterRail() {
       'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();pickLetter(\'' + l + '\')}">' +
       '<span class="lr-key">' + esc(boxes.length ? boxLabel(boxes[0]).split('-')[0] : l) + '</span>' +
       '<span class="lr-meta' + (done ? ' lr-done' : '') + '">' +
-      (done ? '✓ ' : '') + logged + '/' + dyes.length + '</span></div>';
+      (done ? '✓ ' : '') + logged + '/' + dyes.length +
+      (countFilter !== 'all' ? ' <span class="hold-low">· ' + applyStockFilter(dyes, countFilter).length + '</span>' : '') +
+      '</span></div>';
   }).join('');
   const orphan = dyesInLetter(NO_LETTER, activeRack);
   return '<div class="letter-rail">' + rows +
@@ -863,7 +884,7 @@ function holdingLine(d) {
   if (!sh.length && !bk.length) {
     return d.counted
       ? '<div class="holding"><span class="hold-none">None on hand</span></div>'
-      : '<div class="holding"><span class="hold-none">Not counted yet</span></div>';
+      : '<div class="holding"><span class="hold-none">None recorded</span> <span class="dye-sub">· letter not counted yet</span></div>';
   }
   const parts = [];
   if (sh.length) {
@@ -999,15 +1020,20 @@ function renderCount() {
         (done ? 'Reopen ' + noun : 'Mark ' + noun + ' counted') + '</button>'
       : '') +
     '</div>';
-  const body = dyes.length
-    ? dyes.map(d => dyeRow(d, { tick: true })).join('')
-    : '<div class="empty-state">' + (oneBox ? 'No reactive dyes in the catalog yet.' : 'No dyes file under this letter.') + '</div>';
+  const shown = applyStockFilter(dyes, countFilter);
+  const filterBar = '<div class="pill-group" style="margin:4px 0 10px">' + stockPills(countFilter, 'countFilter') +
+    (countFilter !== 'all' ? '<span class="dye-sub" style="margin-left:6px">' + shown.length + ' of ' + dyes.length + ' here</span>' : '') + '</div>';
+  const body = shown.length
+    ? shown.map(d => dyeRow(d, { tick: true })).join('')
+    : '<div class="empty-state">' + (!dyes.length
+        ? (oneBox ? 'No reactive dyes in the catalog yet.' : 'No dyes file under this letter.')
+        : 'Nothing ' + (countFilter === 'low' ? 'running low' : countFilter === 'held' ? 'on hand' : 'low or missing') + ' under this letter.') + '</div>';
   const bulk = picked.size
     ? '<div class="bulk-bar"><span>' + picked.size + ' selected</span>' +
       '<button class="btn btn-small" onclick="addToPicked()">Add one open shelf jar to each</button>' +
       '<button class="btn btn-small" onclick="clearPicked()">Clear</button></div>'
     : '<div style="margin-top:10px"><button class="btn btn-small" onclick="pickAllBlank()">Select everything not yet logged</button></div>';
-  const inner = '<div>' + rackTabs + head + sizeBar(dyes) + body + bulk + '</div>';
+  const inner = '<div>' + rackTabs + head + filterBar + sizeBar(dyes) + body + bulk + '</div>';
   // No alphabetical rail for a single box — there is nothing to navigate.
   return oneBox
     ? '<div class="panel">' + inner + '</div>'
@@ -1018,13 +1044,11 @@ function renderFind() {
   const q = norm(findQuery);
   let rows = allDyes;
   if (q) rows = rows.filter(d => norm(d.Dye_Name).includes(q) || norm(d.Brand + d.Serial).includes(q));
-  if (findFilter === 'held') rows = rows.filter(d => (jarsByDye[d.id] || []).length);
-  else if (findFilter === 'low') rows = rows.filter(d => isLow(d.id));
-  else if (findFilter === 'none') rows = rows.filter(d => d.counted && !(jarsByDye[d.id] || []).length);
+  rows = applyStockFilter(rows, findFilter);
+  const total = rows.length;
   rows = rows.slice().sort((a, b) => fold(a.Dye_Name).localeCompare(fold(b.Dye_Name))).slice(0, 300);
-  const pills = [['all', 'Everything'], ['held', 'On hand'], ['low', 'Running low'], ['none', 'None on hand']]
-    .map(([k, l]) => '<button class="btn btn-small' + (findFilter === k ? ' btn-ink' : '') +
-      '" onclick="findFilter=\'' + k + '\'; render()">' + l + '</button>').join('');
+  const pills = stockPills(findFilter, 'findFilter') +
+    (findFilter !== 'all' ? '<span class="dye-sub" style="margin-left:6px">' + total + ' dye' + (total === 1 ? '' : 's') + '</span>' : '');
   const body = rows.length ? rows.map(d => {
     const box = (jarsByDye[d.id] || []).map(j => j.Box).filter(Boolean)[0] || defaultBoxFor(d.id);
     return '<div class="dye-row">' +
