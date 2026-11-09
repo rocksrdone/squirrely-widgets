@@ -3442,14 +3442,15 @@ function dueHint(o) {
 }
 /* Typing a date fires change after each part (month, day, year). Redrawing
    then would rebuild the box under the cursor and lose the year half-typed —
-   so while typing only the hint updates (and the order list when you leave the box). */
+   so while typing only the hint updates. */
 function dueTyped(id, str, leaving) {
   const v = dueFromInput(str);
   if (str && !v && !leaving) return;           // still mid-typing
   draftSet(id, 'dueDate', v, false);
   const o = withDraft(S.orders.find(x => x.id === id));
   const h = document.getElementById('dueHint'); if (h) h.innerHTML = dueHint(o);
-  if (leaving) renderSide();
+  // Nothing is redrawn on leaving the box: a redraw there would swallow the
+  // click that moved focus away (e.g. on another order). The list catches up on Save.
 }
 function dueSideHtml(o) {
   if (!o.dueDate || o.status === 'Shipped' || o.status === 'Complete') return '';
