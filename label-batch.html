@@ -143,6 +143,13 @@ body {
 
 .alert { margin-top: 10px; padding: 9px 12px; border-radius: 6px; font-size: 11.5px; line-height: 1.6; background: var(--gold-light); border: 1px solid #E4CF9E; color: #6E4C13; }
 .alert strong { font-weight: 700; }
+.bc-panel { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--rule, #DDD3C7); border-radius: 6px; background: #fff; font-size: 11.5px; }
+.bc-panel h4 { margin: 0 0 6px; font-size: 12px; }
+.bc-row { display: grid; grid-template-columns: minmax(120px, 1.3fr) 150px auto auto minmax(90px, 1fr); gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid #EFE8DE; }
+.bc-row input[type=text] { font-family: 'DM Mono', monospace; font-size: 12px; padding: 4px 6px; border: 1px solid #D9CFC4; border-radius: 4px; width: 100%; box-sizing: border-box; background: #fff; color: #1A1614; }
+.bc-row select { font-size: 11px; padding: 3px 4px; background: #fff; color: #1A1614; }
+.bc-ok { color: #2E5E1A; font-weight: 600; } .bc-bad { color: #8B3A2A; font-weight: 600; } .bc-none { color: #B07D2A; font-weight: 600; }
+.bc-img { font-size: 11px; padding: 3px 8px; border: 1px solid #D9CFC4; border-radius: 4px; background: #fff; cursor: pointer; white-space: nowrap; }
 .alert.note { background: var(--warm, #F6F1E9); border-color: var(--rule, #DDD3C7); color: var(--mid, #6B5E52); }
 
 /* ---------- stock group ---------- */
@@ -273,6 +280,8 @@ input[type=checkbox]:disabled { cursor: default; }
 
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Reads a barcode out of a customer's image, so the number never has to be typed. Optional: without it, codes are typed. -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
 /* ============================================================
    Spool Label Batch — Squirrely Stash
@@ -555,6 +564,7 @@ async function loadAll() {
     /* The one-time name a customer asked for on THIS order. Optional: without
        the column every row falls back to the recipe name exactly as before. */
     displayName: findColumn(wolT, ['Display_Name', 'Label_Name', 'Custom_Name']),
+    barcode: findColumn(wolT, ['Barcode']),
   };
   S.lines = (wolT.id || []).map((id, i) => {
     const sku = columnAsArray(wolT, lc.sku)[i] || '';
@@ -565,8 +575,11 @@ async function loadAll() {
       productName: lc.product ? columnAsArray(wolT, lc.product)[i] || '' : '',
       displayName: lc.displayName ? (columnAsArray(wolT, lc.displayName)[i] || '').toString().trim() : '',
       qty: Number(columnAsArray(wolT, lc.qty)[i]) || 0,
+      barcode: lc.barcode ? String(columnAsArray(wolT, lc.barcode)[i] || '').trim() : '',
     };
   });
+  S.hasLineBarcode = !!lc.barcode;
+  await loadCustomerBarcodes();
 
   await loadTemplates(problems);
   await loadPrinterCals(problems);
@@ -964,6 +977,150 @@ function setBanner(items) {
    Falls through to the recipe name, then the imported product name, then the
    SKU. With no Display_Name column present this is byte-for-byte the old
    behaviour. */
+/* ---------- Barcodes on the back label ----------
+   For a customer whose back style is "Colorway name + barcode": their own
+   EAN-13 (a till code, usually starting with 2) printed in the middle of the
+   back label, name above, digits below. The front label is untouched.
+
+   Where the code comes from, first match wins:
+     1. Work_Order_Lines.Barcode — this order only
+     2. Customer_Barcodes (Customer + Recipe) — kept for every order of theirs
+   Codes are typed or read out of the image the customer sends, and the bars
+   are DRAWN, never pasted as a picture: a shrunk picture blurs the thin bars,
+   which is what makes a barcode stop scanning.
+
+   Size: their own sticker (EAN 2100000079681 on Perfect Ten, Nov 2026) is
+   0.81" of bars x 0.17" tall and scans at their till — so that's the target.
+   It fits inside the ring on the 1.25" circle; the 1" circle gets as wide as
+   fits and is flagged for a test scan.                                      */
+const BARCODE_TARGET_W = 0.81;       // inches of bars (95 modules), as the customer scans now
+const BARCODE_TESTED_MIN_W = 0.75;   // below this, flag "test-scan first"
+const BARCODE_BACK = /barcode/i;
+
+S.custBarcodes = {};   // custId -> recipeId -> { id, value }
+async function loadCustomerBarcodes() {
+  S.custBarcodes = {}; S.hasCustBarcodes = false;
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Barcodes');
+    S.hasCustBarcodes = true;
+    (t.id || []).forEach((id, i) => {
+      const c = getRefId((t.Customer || [])[i]), r = getRefId((t.Recipe || [])[i]);
+      const v = String((t.Barcode || [])[i] || '').trim();
+      if (!c || !r) return;
+      (S.custBarcodes[c] = S.custBarcodes[c] || {})[r] = { id, value: v };
+    });
+  } catch (e) { /* table not created — barcode labels just aren't offered */ }
+}
+function wantsBarcode(cust) { return !!(cust && BARCODE_BACK.test(String(cust.back || ''))); }
+function barcodeFor(l, cust) {
+  if (!wantsBarcode(cust)) return { barcodeMode: false };
+  const saved = (S.custBarcodes[cust.id] || {})[l.recipeId] || null;
+  const raw = l.barcode || (saved ? saved.value : '');
+  const ean = eanNormalize(raw);
+  return { barcodeMode: true, custId: cust.id, barcodeRaw: raw, ean: ean.ok ? ean.code : '', eanError: raw ? ean.error : '',
+    barcodeScope: l.barcode ? 'order' : 'customer', savedBarcodeId: saved ? saved.id : null };
+}
+
+/* EAN-13 (and UPC-A, which is EAN-13 with a leading 0). Returns the 13 digits
+   or why not. A wrong last digit is almost always a typo, so it's refused. */
+function eanCheckDigit(d12) {
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Number(d12[i]) * (i % 2 ? 3 : 1);
+  return String((10 - (sum % 10)) % 10);
+}
+function eanNormalize(raw) {
+  const d = String(raw || '').replace(/[\s\-]/g, '');
+  if (!d) return { ok: false, error: 'missing' };
+  if (!/^\d+$/.test(d)) return { ok: false, error: 'digits only' };
+  let code = d.length === 12 ? '0' + d : d;   // UPC-A
+  if (code.length !== 13) return { ok: false, error: d.length + ' digits — EAN-13 has 13' };
+  if (eanCheckDigit(code.slice(0, 12)) !== code[12]) return { ok: false, error: 'last digit doesn’t check — typo?' };
+  return { ok: true, code };
+}
+const EAN_L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+const EAN_G = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+const EAN_R = ['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
+const EAN_PARITY = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+function eanModules(code) {   // 95 chars of 1/0
+  const p = EAN_PARITY[Number(code[0])];
+  let m = '101';
+  for (let i = 1; i <= 6; i++) m += (p[i - 1] === 'L' ? EAN_L : EAN_G)[Number(code[i])];
+  m += '01010';
+  for (let i = 7; i <= 12; i++) m += EAN_R[Number(code[i])];
+  return m + '101';
+}
+const EAN_GUARD = new Set([0, 1, 2, 45, 46, 47, 48, 49, 92, 93, 94]);
+
+/* Name on top, bars in the middle, digits under the bars (6 + 6, like the
+   customer's own sticker). Everything is kept inside the clear
+   circle within the ring, so the ring text prints exactly as on every spool.
+   Returns the bar width used, for the "test-scan" warning. */
+function drawBarcodeBack(doc, name, code, cx, cy, g) {
+  const clearR = g.dia * (NAME_FIT_RATIO / 2) * (g.ringRatio / RING_RADIUS_RATIO);
+  const k = g.dia / 1.25;
+  const barH = 0.17 * k, guardExt = 0.04 * k;
+  const digPt = Math.max(4.5, 5.5 * k), digH = digPt / 72 * 0.75;
+  const gap = 0.03 * k;
+  const chord = off => { const v = clearR * clearR - off * off; return v > 0 ? 2 * Math.sqrt(v) : 0; };
+
+  // Name: one line if it fits, else two, shrinking as needed — above the bars.
+  doc.setFont(NAME_FONT[0], NAME_FONT[1]); doc.setTextColor(0);
+  const words = String(name).trim().split(/\s+/);
+  let fit = null;
+  for (let pt = g.fontPt; pt >= 5 && !fit; pt -= 0.25) {
+    doc.setFontSize(pt);
+    const lead = pt * NAME_LINE_HEIGHT / 72;
+    for (const lines of [[String(name)], words.length > 1 ? splitTwo(doc, words) : null]) {
+      if (!lines) continue;
+      const blockH = lines.length * lead;
+      const T = blockH + gap + barH + Math.max(guardExt, digH + 0.012);
+      const top = cy - T / 2;
+      const ok = lines.every((ln, i) => {
+        const yMid = top + lead * (i + 0.5);
+        return doc.getTextWidth(ln) <= chord(Math.abs(yMid - cy) + pt * 0.36 / 72);
+      });
+      if (ok) { fit = { pt, lines, lead, top, T }; break; }
+    }
+  }
+  if (!fit) {
+    doc.setFontSize(5);
+    const lead = 5 * NAME_LINE_HEIGHT / 72, lines = [String(name)];
+    const T = lead + gap + barH + Math.max(guardExt, digH + 0.012);
+    fit = { pt: 5, lines, lead, top: cy - T / 2, T };
+  }
+  doc.setFontSize(fit.pt);
+  fit.lines.forEach((ln, i) => doc.text(ln, cx, fit.top + fit.lead * (i + 0.5), { align: 'center', baseline: 'middle' }));
+
+  // Bars: as wide as the target, or as wide as the circle allows at that height.
+  const yb = fit.top + fit.lines.length * fit.lead + gap;
+  const yBottom = yb + barH + guardExt;
+  const dy = Math.max(Math.abs(yb - cy), Math.abs(yBottom - cy));
+  const barW = Math.min(BARCODE_TARGET_W, chord(dy));
+  const mod = barW / 95;
+  const x0 = cx - barW / 2;
+  const mods = eanModules(code);
+  doc.setFillColor(0);
+  let i = 0;
+  while (i < 95) {
+    if (mods[i] !== '1') { i++; continue; }
+    let j = i; while (j < 95 && mods[j] === '1') j++;
+    const guard = EAN_GUARD.has(i);
+    // Bars are drawn a hair narrower than nominal: inkjet ink spreads, and a
+    // fat bar is what makes a small code misread.
+    doc.rect(x0 + i * mod, yb, (j - i) * mod - mod * 0.08, barH + (guard ? guardExt : 0), 'F');
+    i = j;
+  }
+  // Human-readable digits: 6 + 6 under the bars, as on the customer's own
+  // sticker. The leading digit is left off — it would sit on the ring text.
+  doc.setFont(NAME_FONT[0], 'normal');
+  doc.setFontSize(digPt);
+  const yd = yb + barH + digH + 0.006;
+  doc.text(code.slice(1, 7), x0 + mod * 24, yd, { align: 'center' });
+  doc.text(code.slice(7), x0 + mod * 70, yd, { align: 'center' });
+  doc.setFont(NAME_FONT[0], NAME_FONT[1]);
+  return barW;
+}
+
 function labelNameFor(l, r) {
   return (l && l.displayName)
     || (r ? r.name : '')
@@ -984,6 +1141,7 @@ function rowFromLine(l) {
     sheetOnHand: r ? r.sheetOnHand : false, matched: !!r,
     defaultQty: l.qty, stock: r ? r.stock : 0,
     orderNum: o ? o.num : '', custName: cust ? cust.name : (o ? o.custName : ''),
+    ...barcodeFor(l, cust),
   };
 }
 /* ---------- Manual names ----------
@@ -1240,6 +1398,104 @@ function orderPickerHtml() {
   </div>`;
 }
 
+/* Barcode entry for this order. One row per colourway: the code (typed, or
+   read from the customer's image), whether it's kept for all their orders or
+   just this one, and whether it checks out. Saved as you go. */
+function barcodePanelHtml(cust, rows) {
+  const lines = rows.filter(r => r.lineId && r.matched);
+  if (!S.hasCustBarcodes) return `<div class="alert"><strong>Barcode labels need the Customer_Barcodes table.</strong> It's missing from this document.</div>`;
+  const missing = lines.filter(r => !r.ean).length;
+  const body = lines.map(r => {
+    const st = r.ean ? `<span class="bc-ok">✓ ${esc(r.ean)}</span>`
+      : r.barcodeRaw ? `<span class="bc-bad">✗ ${esc(r.eanError)}</span>` : `<span class="bc-none">needs a code</span>`;
+    return `<div class="bc-row">
+      <span><b>${esc(r.name)}</b> <span style="color:var(--muted)">${esc(fiberCode(r.fiber) || '')}</span></span>
+      <input type="text" inputmode="numeric" placeholder="13 digits" value="${esc(r.barcodeRaw || '')}" data-bcinput="${esc(r.rowKey)}">
+      <label class="bc-img" title="Read the code from the customer's barcode image">📷 from image
+        <input type="file" accept="image/*" data-bcfile="${esc(r.rowKey)}" style="display:none"></label>
+      <select data-bcscope="${esc(r.rowKey)}" title="Keep this code for every order of theirs, or only this one">
+        <option value="customer" ${r.barcodeScope !== 'order' ? 'selected' : ''}>all their orders</option>
+        <option value="order" ${r.barcodeScope === 'order' ? 'selected' : ''} ${S.hasLineBarcode ? '' : 'disabled'}>this order only</option>
+      </select>
+      ${st}
+    </div>`;
+  }).join('');
+  return `<div class="bc-panel">
+    <h4>Barcodes — ${esc(cust.name)} gets a barcode on the back of each spool</h4>
+    <div style="color:var(--muted);margin-bottom:4px">Type the number, or use 📷 to read it from the image they sent. Saved as soon as you leave the box.
+      ${missing ? `<b class="bc-none">${missing} still need${missing === 1 ? 's' : ''} a code</b> — those print with the name only.` : '<b class="bc-ok">All set.</b>'}</div>
+    ${body || '<div class="empty-note">No colourways on this order.</div>'}
+  </div>`;
+}
+
+async function saveBarcode(rowKey, raw, scope) {
+  const row = currentRows().find(r => r.rowKey === rowKey);
+  if (!row || !row.custId) return;
+  const val = String(raw || '').replace(/[\s\-]/g, '');
+  if (val) {
+    const chk = eanNormalize(val);
+    if (!chk.ok) { showToast(`${row.name}: ${chk.error}. Not saved.`, true); return; }
+  }
+  // Nothing changed (same code, same scope) — don't write, and never add a
+  // second row for the same colourway.
+  if (val === String(row.barcodeRaw || '').replace(/[\s\-]/g, '') && scope === row.barcodeScope) return;
+  if (S.savingBarcode) return;
+  S.savingBarcode = true;
+  setTimeout(() => { S.savingBarcode = false; }, 1500);
+  const acts = [];
+  if (scope === 'order') {
+    acts.push(['UpdateRecord', 'Work_Order_Lines', row.lineId, { Barcode: val }]);
+  } else {
+    if (row.savedBarcodeId) acts.push(['UpdateRecord', 'Customer_Barcodes', row.savedBarcodeId, { Barcode: val, Updated: Date.now() / 1000 }]);
+    else if (val) acts.push(['AddRecord', 'Customer_Barcodes', null, { Customer: row.custId, Recipe: row.recipeId, Barcode: val, Updated: Date.now() / 1000 }]);
+    // Saving for all orders clears a one-off on this line, so it can't shadow it.
+    if (S.hasLineBarcode && row.barcodeScope === 'order') acts.push(['UpdateRecord', 'Work_Order_Lines', row.lineId, { Barcode: '' }]);
+  }
+  if (!acts.length) return;
+  try {
+    await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    render();
+    showToast(val ? `${row.name}: barcode saved` : `${row.name}: barcode cleared`);
+  } catch (e) { console.error(e); showToast('Could not save the barcode: ' + (e.message || e), true); }
+}
+
+/* Read a barcode out of an image file (the picture the customer sends).
+   Customers' images are often cropped right to the bars with no white margin,
+   and a reader needs that margin to find where the code starts — so each try
+   draws the image onto a white canvas with a border (scaled up if small),
+   then runs ZXing's reader directly with both of its binarizers. */
+async function readBarcodeFromFile(file) {
+  if (!window.ZXing || !ZXing.MultiFormatReader) throw new Error('The barcode reader did not load — type the number instead.');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('not an image')); i.src = url; });
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.CODE_128]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const canvasFor = (padFrac, minW) => {
+      const scale = Math.max(1, minW / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+      const pad = Math.round(w * padFrac);
+      const c = document.createElement('canvas');
+      c.width = w + pad * 2; c.height = h + pad * 2;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      x.imageSmoothingEnabled = false; x.drawImage(img, pad, pad, w, h);
+      return c;
+    };
+    for (const [pad, minW] of [[0.15, 0], [0.15, 900], [0, 0]]) {
+      const c = canvasFor(pad, minW);
+      for (const Bin of [ZXing.HybridBinarizer, ZXing.GlobalHistogramBinarizer]) {
+        try {
+          const bmp = new ZXing.BinaryBitmap(new Bin(new ZXing.HTMLCanvasElementLuminanceSource(c)));
+          return String(new ZXing.MultiFormatReader().decode(bmp, hints).getText());
+        } catch (e) { /* next try */ }
+      }
+    }
+    throw new Error('no barcode found');
+  } finally { URL.revokeObjectURL(url); }
+}
+
 function orderPaneHtml() {
   const o = currentOrder();
   if (!o) return orderPickerHtml();
@@ -1254,6 +1510,7 @@ function orderPaneHtml() {
   const unmatched = rows.filter(r => !r.matched);
 
   return orderPickerHtml() + profileHtml(cust, o) +
+    (wantsBarcode(cust) && !noBack ? barcodePanelHtml(cust, rows) : '') +
     (customBack ? `<div class="alert"><strong>Custom back design.</strong> ${esc(cust.name)} doesn't take the standard colorway-name back.
       ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}</div>` : '') +
     (unmatched.length ? `<div class="alert"><strong>${unmatched.length} line${unmatched.length === 1 ? '' : 's'} had no matching recipe.</strong>
@@ -1753,6 +2010,28 @@ function frontSummaryHtml(rows, cust) {
 
 /* ---------- events ---------- */
 function bindPane() {
+  document.querySelectorAll('[data-bcinput]').forEach(el => el.addEventListener('change', () => {
+    const sc = document.querySelector(`[data-bcscope="${el.dataset.bcinput}"]`);
+    saveBarcode(el.dataset.bcinput, el.value, sc ? sc.value : 'customer');
+  }));
+  document.querySelectorAll('[data-bcscope]').forEach(el => el.addEventListener('change', () => {
+    const inp = document.querySelector(`[data-bcinput="${el.dataset.bcscope}"]`);
+    if (inp && inp.value.trim()) saveBarcode(el.dataset.bcscope, inp.value, el.value);
+  }));
+  document.querySelectorAll('[data-bcfile]').forEach(el => el.addEventListener('change', async () => {
+    const f = el.files && el.files[0];
+    if (!f) return;
+    try {
+      const code = await readBarcodeFromFile(f);
+      const inp = document.querySelector(`[data-bcinput="${el.dataset.bcfile}"]`);
+      if (inp) inp.value = code;
+      const sc = document.querySelector(`[data-bcscope="${el.dataset.bcfile}"]`);
+      await saveBarcode(el.dataset.bcfile, code, sc ? sc.value : 'customer');
+    } catch (e) {
+      console.warn(e);
+      showToast((e && /did not load/.test(e.message)) ? e.message : 'Couldn\u2019t read a barcode in that image — try a sharper or larger one, or type the number.', true);
+    }
+  }));
   document.querySelectorAll('[data-onhand]').forEach(el => el.addEventListener('change', async () => {
     const row = currentRows().find(r => r.rowKey === el.dataset.onhand);
     if (!row) return;
@@ -2467,6 +2746,7 @@ async function buildPdf(group) {
   }
 
   const shrunk = new Set();   // names that wouldn't fit at full size
+  const noBarcode = new Set(), smallBarcode = new Set();
   let slot = startAt - 1;   // 0-based position on the current sheet
   labels.forEach((r, idx) => {
     if (idx > 0 && slot === 0) doc.addPage();
@@ -2483,18 +2763,24 @@ async function buildPdf(group) {
     const rt = ringText(r.fiber);
     if (rt) drawRingText(doc, rt, cx, cy, g.dia, g.ringPt, g.ringRatio);
 
-    // Shrink long colorway names to stay inside the ring rather than
-    // letting them run under the curved text.
-    doc.setFont(NAME_FONT[0], NAME_FONT[1]);
-    doc.setTextColor(0);
-    const fit = fitName(doc, String(r.name), g.dia, g.fontPt, g.ringRatio);
-    if (fit.pt < g.fontPt) shrunk.add(r.name);
-    // Two lines straddle the centre; one line sits on it.
-    const lead = fit.pt * NAME_LINE_HEIGHT / 72;
-    const y0 = cy - lead * (fit.lines.length - 1) / 2;
-    fit.lines.forEach((ln, li) => {
-      doc.text(ln, cx, y0 + li * lead, { align: 'center', baseline: 'middle' });
-    });
+    if (r.barcodeMode && r.ean) {
+      const w = drawBarcodeBack(doc, String(r.name), r.ean, cx, cy, g);
+      if (w < BARCODE_TESTED_MIN_W) smallBarcode.add(r.name);
+    } else {
+      if (r.barcodeMode) noBarcode.add(r.name);
+      // Shrink long colorway names to stay inside the ring rather than
+      // letting them run under the curved text.
+      doc.setFont(NAME_FONT[0], NAME_FONT[1]);
+      doc.setTextColor(0);
+      const fit = fitName(doc, String(r.name), g.dia, g.fontPt, g.ringRatio);
+      if (fit.pt < g.fontPt) shrunk.add(r.name);
+      // Two lines straddle the centre; one line sits on it.
+      const lead = fit.pt * NAME_LINE_HEIGHT / 72;
+      const y0 = cy - lead * (fit.lines.length - 1) / 2;
+      fit.lines.forEach((ln, li) => {
+        doc.text(ln, cx, y0 + li * lead, { align: 'center', baseline: 'middle' });
+      });
+    }
 
     slot = (slot + 1) % perSheet;
   });
@@ -2540,7 +2826,9 @@ async function buildPdf(group) {
   if (blanks) msg += ` + ${blanks} blank ${fillCode} ring${blanks === 1 ? '' : 's'} to hand-write`;
   if (shrunk.size) msg += ` — ${shrunk.size} name${shrunk.size === 1 ? '' : 's'} shrunk to fit (${[...shrunk].slice(0, 2).join(', ')}${shrunk.size > 2 ? '...' : ''})`;
   if (missingArt.length) msg += ` — no ring spec for ${missingArt.join(', ')}, names only`;
-  showToast(msg + '.', missingArt.length > 0);
+  if (noBarcode.size) msg += ` — ${noBarcode.size} printed WITHOUT a barcode (none entered): ${[...noBarcode].slice(0, 3).join(', ')}${noBarcode.size > 3 ? '...' : ''}`;
+  if (smallBarcode.size) msg += ` — barcodes on this small label are under ${BARCODE_TESTED_MIN_W}" wide: test-scan one before sending`;
+  showToast(msg + '.', missingArt.length > 0 || noBarcode.size > 0);
 }
 
 /* ---------- front labels ----------
@@ -2879,6 +3167,10 @@ function buildCsv(g, onlyFiber) {
   const o = currentOrder();
   const cust = S.mode === 'order' ? customerForOrder(o) : null;
   const headers = ['Name', 'Fiber', 'Yards', 'SKU', 'Customer', 'Order'];
+  // Barcode customers: their EAN-13 as a column, so a Maestro design can bind
+  // a barcode object to it. Only added when something in the batch has one.
+  const withBarcode = g.rows.some(r => r.barcodeMode);
+  if (withBarcode) headers.push('Barcode');
   if (!perSpool) headers.push('Qty');
   const lines = [headers.join(',')];
   g.rows.forEach(r => {
@@ -2890,6 +3182,7 @@ function buildCsv(g, onlyFiber) {
     const rowOrd = r.orderNum || (o ? o.num : '');
     const base = [r.name, fiberCode(r.fiber) || r.fiber || '', yardsPerSpool(r.fiber),
       r.sku || '', rowCust, rowOrd];
+    if (withBarcode) base.push(r.ean || '');
     if (perSpool) { for (let i = 0; i < qty; i++) lines.push(base.map(csvCell).join(',')); }
     else lines.push(base.concat([qty]).map(csvCell).join(','));
   });
