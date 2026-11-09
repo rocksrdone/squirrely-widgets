@@ -99,6 +99,14 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .cust-info .v.loud { color: var(--accent); font-weight: 600; }
 .cust-info .edit { grid-column: 1 / -1; font-size: 10.5px; color: #8B7D72; }
 .badge.unsaved { background: #FFF3D6; color: #7A4A00; }
+.ln-name { font-size: 11px; color: var(--muted, #8B7D72); margin-top: 2px; }
+.ln-name b { color: #1F5A4E; } .ln-name a { color: var(--teal, #3A8B7A); margin-left: 4px; }
+.ln-name a.ln-name-add { margin-left: 0; color: var(--muted, #8B7D72); text-decoration: none; } .ln-name a.ln-name-add:hover { color: var(--teal, #3A8B7A); }
+.ln-name-scope { font-size: 10px; background: #EAF3DE; color: #2E5E1A; border-radius: 8px; padding: 0 6px; }
+.ln-name-edit { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ln-name-edit input { flex: 1 1 160px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: #fff; color: #1A1614; font: inherit; font-size: 12px; }
+.ln-name-edit select { font-size: 11px; padding: 3px 4px; background: #fff; color: #1A1614; }
+.ln-name-help { flex-basis: 100%; font-size: 10.5px; color: var(--muted, #8B7D72); }
 input.po { width: 160px; font-family: 'DM Mono', monospace; }
 input.due { width: 150px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: #fff; color: #1A1614; font: inherit; }
 .due-hint { font-size: 11px; color: var(--muted, #8B7D72); margin-left: 4px; }
@@ -541,6 +549,8 @@ async function loadAll() {
          behaves exactly as before — so the Toggle default of false is the
          safe one, and an older doc without the column simply never overrides. */
       makeFresh: lc(['Make_Fresh', 'Dye_Fresh', 'No_Stock']),
+      // The name printed on the label for this line only (Label Batch uses it too).
+      displayName: lc(['Display_Name']),
     };
 
     /* Writing to a column that does not exist 400s the whole request, so the
@@ -596,9 +606,11 @@ async function loadAll() {
         price: S.lineCols.price ? num(columnAsArray(wolT, S.lineCols.price)[i]) : 0,
         makeFresh: S.lineCols.makeFresh
           ? !!columnAsArray(wolT, S.lineCols.makeFresh)[i] : false,
+        lineName: S.lineCols.displayName ? String(columnAsArray(wolT, S.lineCols.displayName)[i] || '').trim() : '',
       });
     });
 
+    await loadStandingNames();
     await loadCustomers();
     await loadPricing();
     await loadStock();
@@ -2920,6 +2932,82 @@ function stockHint(recipeId) {
 
 /* The shelf, per line. Reading only — every write is behind a button and a
    confirmation that names the lots. */
+/* ── Label names ────────────────────────────────────────────────────────
+   What prints on the spool labels for a line, when the customer wants their
+   own name for a colourway. Same two places Label Batch uses:
+     this order only  → Work_Order_Lines.Display_Name
+     all their orders → Customer_Barcodes.Label_Name (customer + colourway)
+   The colourway, stock, SKU and Shopify line are untouched. Saved straight
+   away (not staged with Save), exactly as in Label Batch. */
+async function loadStandingNames() {
+  S.standing = {}; S.hasStanding = false;
+  try {
+    const t = await grist.docApi.fetchTable('Customer_Barcodes');
+    S.hasStanding = Array.isArray(t.Label_Name);
+    (t.id || []).forEach((id, i) => {
+      const c = getRefId((t.Customer || [])[i]), r = getRefId((t.Recipe || [])[i]);
+      if (c && r) (S.standing[c] = S.standing[c] || {})[r] = { id, name: String((t.Label_Name || [])[i] || '').trim(), code: String((t.Barcode || [])[i] || '').trim() };
+    });
+  } catch (e) { /* no table: only per-order names */ }
+}
+function standingFor(o, l) {
+  const c = o && o.customerId; if (!c || !l.recipeId) return null;
+  return (S.standing[c] || {})[l.recipeId] || null;
+}
+function labelNameHtml(o, l) {
+  if (!l.recipeId || (!S.lineCols.displayName && !S.hasStanding)) return '';
+  const st = standingFor(o, l), standing = st && st.name;
+  if (S.nameEdit === l.id) {
+    const scope = l.lineName || !standing ? 'order' : 'customer';
+    return `<div class="ln-name-edit" onclick="event.stopPropagation()">
+      <input type="text" id="lnName" value="${esc(l.lineName || standing || '')}" placeholder="${esc(l.recipeName)}"
+        onkeydown="if(event.key==='Enter')saveLineName(${o.id},${l.id});if(event.key==='Escape'){S.nameEdit=null;render();}">
+      <select id="lnScope">
+        <option value="order" ${scope === 'order' ? 'selected' : ''} ${S.lineCols.displayName ? '' : 'disabled'}>this order only</option>
+        <option value="customer" ${scope === 'customer' ? 'selected' : ''} ${S.hasStanding && o.customerId ? '' : 'disabled'}>all their orders</option>
+      </select>
+      <button class="btn small" type="button" onclick="saveLineName(${o.id},${l.id})">Save</button>
+      <button class="btn secondary small" type="button" onclick="S.nameEdit=null;render()">Cancel</button>
+      <div class="ln-name-help">Only the label changes. Empty = the store name.</div>
+    </div>`;
+  }
+  const shown = l.lineName || standing;
+  return shown
+    ? `<div class="ln-name">🏷 prints as <b>“${esc(shown)}”</b> <span class="ln-name-scope">${l.lineName ? 'this order' : 'always, for them'}</span>
+        <a href="#" onclick="event.preventDefault();S.nameEdit=${l.id};render();setTimeout(()=>{const i=document.getElementById('lnName');i&&i.focus();},0)">change</a></div>`
+    : `<div class="ln-name"><a href="#" class="ln-name-add" onclick="event.preventDefault();S.nameEdit=${l.id};render();setTimeout(()=>{const i=document.getElementById('lnName');i&&i.focus();},0)">🏷 label name…</a></div>`;
+}
+async function saveLineName(oid, lid) {
+  const o = S.orders.find(x => x.id === oid), l = (S.lines[oid] || []).find(x => x.id === lid);
+  if (!o || !l || S.savingName) return;
+  let val = (document.getElementById('lnName') || {}).value || '';
+  const scope = (document.getElementById('lnScope') || {}).value || 'order';
+  val = val.trim(); if (val.toLowerCase() === String(l.recipeName).toLowerCase()) val = '';
+  const st = standingFor(o, l), now = Date.now() / 1000, acts = [];
+  if (scope === 'customer') {
+    if (st) acts.push(['UpdateRecord', 'Customer_Barcodes', st.id, { Label_Name: val, Updated: now }]);
+    else if (val) acts.push(['AddRecord', 'Customer_Barcodes', null, { Customer: o.customerId, Recipe: l.recipeId, Label_Name: val, Updated: now }]);
+    if (l.lineName && S.lineCols.displayName) acts.push(['UpdateRecord', 'Work_Order_Lines', l.id, { [S.lineCols.displayName]: '' }]);
+  } else if (val !== l.lineName) {
+    acts.push(['UpdateRecord', 'Work_Order_Lines', l.id, { [S.lineCols.displayName]: val }]);
+  }
+  S.nameEdit = null;
+  if (!acts.length) { render(); return; }
+  S.savingName = true;
+  try {
+    const res = await grist.docApi.applyUserActions(acts);
+    if (scope === 'customer') {
+      l.lineName = '';
+      if (st) st.name = val;
+      else if (val) (S.standing[o.customerId] = S.standing[o.customerId] || {})[l.recipeId] = { id: res && res.retValues ? res.retValues[0] : null, name: val, code: '' };
+    } else l.lineName = val;
+    render();
+    toast(val ? `${l.recipeName} prints as “${val}”${scope === 'customer' ? ' on all their orders' : ' on this order'}` : `${l.recipeName}: back to the store name`);
+  } catch (e) { console.error(e); alertBar('Could not save the label name: ' + (e.message || e)); render(); }
+  finally { S.savingName = false; }
+}
+function alertBar(msg) { toast(msg); }
+
 function stockLineHtml(l) {
   if (!Object.keys(S.stockCols).length) return '';
   const st = lineStock(l);
@@ -3211,7 +3299,7 @@ function renderMain() {
             onclick="undoRemove(${o.id}, ${l.id})">undo</button></td>
         </tr>`;
         return `<tr class="${l.changed ? 'ln-changed' : ''}">
-          <td>${esc(l.recipeName || l.sku)}${l.changed ? '<span class="ln-tag chg">changed</span>' : ''}${stockLineHtml(l)}</td>
+          <td>${esc(l.recipeName || l.sku)}${l.changed ? '<span class="ln-tag chg">changed</span>' : ''}${labelNameHtml(o, l)}${stockLineHtml(l)}</td>
           <td class="sku">${esc(l.sku)}</td>
           <td class="num"><input type="number" min="0" value="${l.qty}"
             onchange="stageQty(${o.id}, ${l.id}, this.value)"></td>
