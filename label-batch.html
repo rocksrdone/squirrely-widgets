@@ -149,6 +149,10 @@ body {
 .bc-row input[type=text] { font-family: 'DM Mono', monospace; font-size: 12px; padding: 4px 6px; border: 1px solid #D9CFC4; border-radius: 4px; width: 100%; box-sizing: border-box; background: #fff; color: #1A1614; }
 .bc-row select { font-size: 11px; padding: 3px 4px; background: #fff; color: #1A1614; }
 .bc-ok { color: #2E5E1A; font-weight: 600; } .bc-bad { color: #8B3A2A; font-weight: 600; } .bc-none { color: #B07D2A; font-weight: 600; }
+.nm-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(140px, 1.4fr) auto minmax(90px, .8fr); gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid #EFE8DE; }
+.nm-row input[type=text] { font-size: 12px; padding: 4px 6px; border: 1px solid #D9CFC4; border-radius: 4px; width: 100%; box-sizing: border-box; background: #fff; color: #1A1614; }
+.nm-row select { font-size: 11px; padding: 3px 4px; background: #fff; color: #1A1614; }
+details.bc-panel summary { cursor: pointer; }
 .bc-img { font-size: 11px; padding: 3px 8px; border: 1px solid #D9CFC4; border-radius: 4px; background: #fff; cursor: pointer; white-space: nowrap; }
 .alert.note { background: var(--warm, #F6F1E9); border-color: var(--rule, #DDD3C7); color: var(--mid, #6B5E52); }
 
@@ -570,13 +574,18 @@ async function loadAll() {
     return {
       id, woId: getRefId(columnAsArray(wolT, lc.wo)[i]), recipeId: rid, sku,
       productName: lc.product ? columnAsArray(wolT, lc.product)[i] || '' : '',
+      // lineName: typed on this order line. displayName: what prints — the
+      // line's name, else the customer's standing name (set after load).
+      lineName: lc.displayName ? (columnAsArray(wolT, lc.displayName)[i] || '').toString().trim() : '',
       displayName: lc.displayName ? (columnAsArray(wolT, lc.displayName)[i] || '').toString().trim() : '',
       qty: Number(columnAsArray(wolT, lc.qty)[i]) || 0,
       barcode: lc.barcode ? String(columnAsArray(wolT, lc.barcode)[i] || '').trim() : '',
     };
   });
   S.hasLineBarcode = !!lc.barcode;
+  S.hasLineName = !!lc.displayName;
   await loadCustomerBarcodes();
+  applyStandingNames();
 
   await loadTemplates(problems);
   await loadPrinterCals(problems);
@@ -1002,10 +1011,24 @@ async function loadCustomerBarcodes() {
     (t.id || []).forEach((id, i) => {
       const c = getRefId((t.Customer || [])[i]), r = getRefId((t.Recipe || [])[i]);
       const v = String((t.Barcode || [])[i] || '').trim();
+      const name = String((t.Label_Name || [])[i] || '').trim();
       if (!c || !r) return;
-      (S.custBarcodes[c] = S.custBarcodes[c] || {})[r] = { id, value: v };
+      (S.custBarcodes[c] = S.custBarcodes[c] || {})[r] = { id, value: v, name };
     });
+    S.hasStandingName = Array.isArray(t.Label_Name);
   } catch (e) { /* table not created — barcode labels just aren't offered */ }
+}
+/* A customer's standing name for a colourway (Customer_Barcodes.Label_Name)
+   prints on every order of theirs, unless the order line has its own name.
+   Nothing about the colourway changes: they still order it by its store name. */
+function applyStandingNames() {
+  const byId = {}; (S.orders || []).forEach(o => { byId[o.id] = o; });
+  S.lines.forEach(l => {
+    const c = customerForOrder(byId[l.woId]);
+    const saved = c && l.recipeId ? (S.custBarcodes[c.id] || {})[l.recipeId] : null;
+    l.standingName = (saved && saved.name) || '';
+    l.displayName = l.lineName || l.standingName;
+  });
 }
 function wantsBarcode(cust) { return !!(cust && BARCODE_BACK.test(String(cust.back || ''))); }
 function barcodeFor(l, cust) {
@@ -1299,6 +1322,64 @@ function orderPickerHtml() {
 /* Barcode entry for this order. One row per colourway: the code (typed, or
    read from the customer's image), whether it's kept for all their orders or
    just this one, and whether it checks out. Saved as you go. */
+/* Rename panel: the name printed on the label, for this order only or for
+   every order of theirs. Collapsed unless something on the order is renamed. */
+function namesPanelHtml(cust, o) {
+  const lines = S.lines.filter(l => l.woId === o.id && l.recipeId && S.recipes[l.recipeId]);
+  if (!lines.length) return '';
+  const renamed = lines.filter(l => l.displayName).length;
+  const canStanding = !!(cust && S.hasStandingName), canLine = !!S.hasLineName;
+  const body = lines.map(l => {
+    const r = S.recipes[l.recipeId];
+    const scope = l.lineName || !l.standingName ? 'order' : 'customer';
+    const st = l.lineName ? '<span class="bc-ok">this order</span>' : l.standingName ? '<span class="bc-ok">always, for them</span>' : '<span style="color:var(--muted)">store name</span>';
+    return `<div class="nm-row">
+      <span><b>${esc(r.name)}</b> <span style="color:var(--muted)">${esc(fiberCode(r.fiber) || '')}</span></span>
+      <input type="text" placeholder="${esc(r.name)}" value="${esc(l.displayName || '')}" data-nminput="${l.id}">
+      <select data-nmscope="${l.id}" title="Use this name on this order only, or on every order of theirs">
+        <option value="order" ${scope === 'order' ? 'selected' : ''} ${canLine ? '' : 'disabled'}>this order only</option>
+        <option value="customer" ${scope === 'customer' ? 'selected' : ''} ${canStanding ? '' : 'disabled'}>all their orders</option>
+      </select>
+      ${st}
+    </div>`;
+  }).join('');
+  return `<details class="bc-panel" ${renamed ? 'open' : ''}>
+    <summary><b>✏️ Label names</b> <span style="color:var(--muted)">${renamed ? `${renamed} renamed on this order` : 'print a different name on a colourway for this customer'}</span></summary>
+    <div style="color:var(--muted);margin:6px 0 4px">Only the printed label changes — the colourway, stock and SKU stay the same. Leave a box empty for the store name. Saved when you leave the box.</div>
+    ${body}
+  </details>`;
+}
+
+async function saveLabelName(lineId, raw, scope) {
+  const l = S.lines.find(x => x.id === lineId); if (!l) return;
+  const r = S.recipes[l.recipeId], o = S.orders.find(x => x.id === l.woId), cust = customerForOrder(o);
+  let val = String(raw || '').trim();
+  if (r && val.toLowerCase() === String(r.name).toLowerCase()) val = '';   // typing the store name = no rename
+  const acts = [];
+  if (scope === 'customer') {
+    if (!cust || !S.hasStandingName) return;
+    const saved = (S.custBarcodes[cust.id] || {})[l.recipeId];
+    if (val === l.standingName && !l.lineName) return;
+    if (saved) acts.push(['UpdateRecord', 'Customer_Barcodes', saved.id, { Label_Name: val, Updated: Date.now() / 1000 }]);
+    else if (val) acts.push(['AddRecord', 'Customer_Barcodes', null, { Customer: cust.id, Recipe: l.recipeId, Label_Name: val, Updated: Date.now() / 1000 }]);
+    if (l.lineName && S.hasLineName) acts.push(['UpdateRecord', 'Work_Order_Lines', l.id, { Display_Name: '' }]);
+  } else {
+    if (!S.hasLineName || val === l.lineName) return;
+    acts.push(['UpdateRecord', 'Work_Order_Lines', l.id, { Display_Name: val }]);
+  }
+  if (!acts.length) return;
+  // One save at a time per line: a second change event (blur + Enter) must not add a second row.
+  const lockKey = lineId + '|' + scope + '|' + val;
+  if (S.savingName === lockKey) return;
+  S.savingName = lockKey; setTimeout(() => { if (S.savingName === lockKey) S.savingName = null; }, 2000);
+  try {
+    await grist.docApi.applyUserActions(acts);
+    await loadAll(); render();
+    showToast(val ? `${r ? r.name : 'Colourway'} prints as “${val}”${scope === 'customer' ? ' on all their orders' : ' on this order'}`
+                  : `${r ? r.name : 'Colourway'} prints under its store name${l.standingName && scope === 'order' ? ' (their standing name)' : ''}`);
+  } catch (e) { console.error(e); showToast('Could not save the name: ' + (e.message || e), true); }
+}
+
 function barcodePanelHtml(cust, rows) {
   const lines = rows.filter(r => r.lineId && r.matched);
   if (!S.hasCustBarcodes) return `<div class="alert"><strong>Barcode labels need the Customer_Barcodes table.</strong> It's missing from this document.</div>`;
@@ -1408,6 +1489,7 @@ function orderPaneHtml() {
   const unmatched = rows.filter(r => !r.matched);
 
   return orderPickerHtml() + profileHtml(cust, o) +
+    (!noBack ? namesPanelHtml(cust, o) : '') +
     (wantsBarcode(cust) && !noBack ? barcodePanelHtml(cust, rows) : '') +
     (customBack ? `<div class="alert"><strong>Custom back design.</strong> ${esc(cust.name)} doesn't take the standard colorway-name back.
       ${cust.notes ? 'Notes: ' + esc(cust.notes) : 'No label notes recorded — check the Customer Card.'}</div>` : '') +
@@ -1908,6 +1990,14 @@ function frontSummaryHtml(rows, cust) {
 
 /* ---------- events ---------- */
 function bindPane() {
+  document.querySelectorAll('[data-nminput]').forEach(el => el.addEventListener('change', () => {
+    const sc = document.querySelector(`[data-nmscope="${el.dataset.nminput}"]`);
+    saveLabelName(Number(el.dataset.nminput), el.value, sc ? sc.value : 'order');
+  }));
+  document.querySelectorAll('[data-nmscope]').forEach(el => el.addEventListener('change', () => {
+    const inp = document.querySelector(`[data-nminput="${el.dataset.nmscope}"]`);
+    if (inp && inp.value.trim()) saveLabelName(Number(el.dataset.nmscope), inp.value, el.value);
+  }));
   document.querySelectorAll('[data-bcinput]').forEach(el => el.addEventListener('change', () => {
     const sc = document.querySelector(`[data-bcscope="${el.dataset.bcinput}"]`);
     saveBarcode(el.dataset.bcinput, el.value, sc ? sc.value : 'customer');

@@ -77,6 +77,7 @@ tr:last-child td { border-bottom: none; }
 td.code { font-family: 'DM Mono', monospace; font-size: 13px; }
 td.when { font-size: 11px; color: var(--muted); white-space: nowrap; }
 td.acts { text-align: right; white-space: nowrap; }
+.asname { font-size: 11px; color: var(--teal); }
 .fibre { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); margin-left: 4px; }
 tr.flash td { animation: flash 1.6s ease-out; }
 @keyframes flash { from { background: #DFF0EA; } to { background: transparent; } }
@@ -96,7 +97,7 @@ details summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var
   <div class="head">
     <div>
       <h1>Customer Barcodes</h1>
-      <div class="sub">The customer's own EAN-13 for each colourway. Label Batch prints it on the back label.</div>
+      <div class="sub">The customer's own barcode — and their own name, if they use one — for each colourway. Label Batch prints them on the back label.</div>
     </div>
   </div>
   <div class="custs" id="custs"></div>
@@ -200,7 +201,8 @@ async function load() {
   S.custById = Object.fromEntries(S.customers.map(c => [c.id, c]));
   S.recipes = (rec.id || []).map((id, i) => ({ id, name: rec.Recipe_Name[i] || '', fiber: rec.Fiber_Type[i] || '', status: rec.Status[i] || '' })).filter(r => r.name);
   S.recById = Object.fromEntries(S.recipes.map(r => [r.id, r]));
-  S.codes = (cb.id || []).map((id, i) => ({ id, cust: getRefId(cb.Customer[i]), recipe: getRefId(cb.Recipe[i]), code: String(cb.Barcode[i] || '').trim(), updated: Number(cb.Updated[i]) || 0, notes: (cb.Notes || [])[i] || '' }));
+  S.codes = (cb.id || []).map((id, i) => ({ id, cust: getRefId(cb.Customer[i]), recipe: getRefId(cb.Recipe[i]), code: String(cb.Barcode[i] || '').trim(), updated: Number(cb.Updated[i]) || 0, notes: (cb.Notes || [])[i] || '', name: String((cb.Label_Name || [])[i] || '').trim() }));
+  S.hasNameCol = Array.isArray(cb.Label_Name);
   // What each customer has ordered: recipe -> last order date, newest first.
   const woCust = {}, woDate = {};
   (wo.id || []).forEach((id, i) => { woCust[id] = getRefId(wo.Customer[i]); woDate[id] = Number((wo.Order_Date || wo.Created || [])[i]) || id; });
@@ -237,7 +239,7 @@ function renderMain() {
   if (!c) { $('main').innerHTML = '<div class="card"><div class="empty-note">Pick a customer above.</div></div>'; return; }
   const on = BARCODE_BACK.test(c.back);
   $('main').innerHTML = `
-    ${on ? '' : `<div class="warn"><span><b>${esc(c.name)}'s back labels don't print barcodes yet</b> (back label: ${esc(c.back || 'not set')}). Codes saved here are kept, but only print once this is on.</span><button class="btn small" id="turnOn">Turn on barcodes</button></div>`}
+    ${on ? '' : `<div class="warn"><span><b>${esc(c.name)}'s back labels don't print barcodes yet</b> (back label: ${esc(c.back || 'not set')}). Barcodes saved here only print once this is on. Names print either way.</span><button class="btn small" id="turnOn">Turn on barcodes</button></div>`}
     <div class="card">
       <h2>Add a barcode</h2>
       <div class="add">
@@ -256,7 +258,9 @@ function renderMain() {
           <div class="status mid" id="codeStatus">Type the number under the bars, or drop their picture below.</div>
           <div class="drop" id="drop" tabindex="0">📷 Drop the barcode picture here, paste it (Ctrl+V), or click to choose a file
             <input type="file" id="fileIn" accept="image/*" style="display:none"></div>
-          <div class="field" style="margin-top:10px"><label for="notesIn">Note (optional)</label><input type="text" id="notesIn" placeholder="e.g. From their PO email"></div>
+          <div class="field" style="margin-top:10px"><label for="nameIn">Their name for it (optional)</label><input type="text" id="nameIn" placeholder="Leave empty to print the store name" ${S.hasNameCol ? '' : 'disabled'}>
+            <div class="note">Printed on their labels instead of the store name, on every order of theirs. They still order it by the store name. For a one-off name, use Label names in Label Batch instead.</div></div>
+          <div class="field"><label for="notesIn">Note (optional)</label><input type="text" id="notesIn" placeholder="e.g. From their PO email"></div>
           <div class="row"><button class="btn primary" id="saveBtn" disabled>Save barcode</button><span class="note">Enter saves too.</span></div>
         </div>
         <div class="preview" id="preview"></div>
@@ -298,8 +302,9 @@ function bindAdd() {
     items = suggestions(recIn.value); hi = 0;
     const ord = S.ordered[S.custId] || {};
     sugg.innerHTML = items.length ? items.map((r, i) => {
-      const has = codeFor(S.custId, r.id);
-      return `<div data-i="${i}" class="${i === hi ? 'hi' : ''}"><span>${esc(r.name)}</span><span class="fib">${esc(fiberCode(r.fiber))}</span>${has ? '<span class="tag has">has a code</span>' : ord[r.id] ? '<span class="tag ord">they order this</span>' : ''}</div>`;
+      const has = codeFor(S.custId, r.id) || {};
+      const tag = has.code ? 'has a code' : has.name ? 'renamed' : '';
+      return `<div data-i="${i}" class="${i === hi ? 'hi' : ''}"><span>${esc(r.name)}</span><span class="fib">${esc(fiberCode(r.fiber))}</span>${tag ? `<span class="tag has">${tag}</span>` : ord[r.id] ? '<span class="tag ord">they order this</span>' : ''}</div>`;
     }).join('') : '<div style="color:var(--muted);cursor:default">No colourway matches</div>';
     sugg.classList.add('open');
     sugg.querySelectorAll('[data-i]').forEach(d => d.onmousedown = e => { e.preventDefault(); choose(items[Number(d.dataset.i)]); });
@@ -308,6 +313,7 @@ function bindAdd() {
     S.pick = r; recIn.value = recLabel(r); sugg.classList.remove('open');
     const ex = codeFor(S.custId, r.id);
     if (ex && !codeIn.value) codeIn.value = ex.code;
+    if (ex && !$('nameIn').value) $('nameIn').value = ex.name || '';
     updatePreview(); codeIn.focus(); codeIn.select();
   };
   recIn.onfocus = show;
@@ -325,6 +331,8 @@ function bindAdd() {
   codeIn.oninput = updatePreview;
   codeIn.onkeydown = e => { if (e.key === 'Enter') saveFromForm(); };
   $('notesIn').onkeydown = e => { if (e.key === 'Enter') saveFromForm(); };
+  $('nameIn').onkeydown = e => { if (e.key === 'Enter') saveFromForm(); };
+  $('nameIn').oninput = updatePreview;
   $('saveBtn').onclick = saveFromForm;
 
   const drop = $('drop'), fileIn = $('fileIn');
@@ -354,7 +362,14 @@ function formState() {
   const v = checkCode($('codeIn').value);
   const dupe = v.ok ? S.codes.find(x => x.cust === S.custId && x.code === v.code && (!S.pick || x.recipe !== S.pick.id)) : null;
   const ex = S.pick ? codeFor(S.custId, S.pick.id) : null;
-  return { v, dupe, ex };
+  let name = $('nameIn') ? $('nameIn').value.trim() : '';
+  if (S.pick && name.toLowerCase() === S.pick.name.toLowerCase()) name = '';
+  const raw = $('codeIn').value.trim();
+  // Something to save: a valid code and/or a name, and it differs from what's saved.
+  const codeOk = v.ok || !raw;
+  const changed = !ex || (v.ok && v.code !== ex.code) || name !== (ex.name || '');
+  const can = !!(S.pick && codeOk && (v.ok || name || ex) && !dupe && changed);
+  return { v, dupe, ex, name, raw, can };
 }
 function updatePreview() {
   if (!$('preview')) return;
@@ -362,47 +377,53 @@ function updatePreview() {
   if (raw) {
     if (!v.ok) { st.className = 'status ' + (v.partial ? 'mid' : 'bad'); st.textContent = v.error; }
     else if (dupe) { st.className = 'status bad'; st.textContent = `That code is already saved for ${(S.recById[dupe.recipe] || {}).name || 'another colourway'} — check it's not a copy-paste slip.`; }
-    else if (ex && ex.code === v.code) { st.className = 'status mid'; st.textContent = 'Already saved — no change.'; }
+    else if (ex && ex.code === v.code) { st.className = 'status mid'; st.textContent = 'Barcode already saved.'; }
     else if (ex) { st.className = 'status ok'; st.textContent = `✓ Valid — replaces ${ex.code}`; }
     else if (!st.textContent.startsWith('✓ Read')) { st.className = 'status ok'; st.textContent = '✓ Valid EAN-13'; }
   }
   const p = S.pick;
+  const fs = formState(), shown = fs.name || (p ? p.name : 'Colourway');
   $('preview').innerHTML = v.ok
-    ? `<div class="pname">${esc(p ? p.name : 'Colourway')}</div>${barcodeSvg(v.code, 2)}<div class="note" style="margin-top:8px">How it prints on the back label</div>`
+    ? `<div class="pname">${esc(shown)}</div>${barcodeSvg(v.code, 2)}<div class="note" style="margin-top:8px">How it prints on the back label</div>`
+    : fs.name ? `<div class="pname">${esc(fs.name)}</div><div class="note">Prints instead of “${esc(p ? p.name : '')}”${raw ? '' : ' — no barcode'}</div>`
     : `<div class="empty">The barcode shows here<br>once the number checks out.</div>`;
-  $('saveBtn').disabled = !(v.ok && p && !dupe && !(ex && ex.code === v.code));
-  $('saveBtn').textContent = ex && v.ok && ex.code !== v.code ? 'Replace barcode' : 'Save barcode';
+  $('saveBtn').disabled = !fs.can;
+  $('saveBtn').textContent = !v.ok && fs.name ? 'Save name' : ex && v.ok && ex.code && ex.code !== v.code ? 'Replace barcode' : 'Save';
 }
 async function saveFromForm() {
-  const { v, ex, dupe } = formState();
+  const { v, dupe, name, raw, can } = formState();
   if (dupe) return;
   if (!S.pick) { toast('Pick the colourway first', true); $('recIn').focus(); return; }
-  if (!v.ok) { toast(v.error || 'Enter the barcode number', true); $('codeIn').focus(); return; }
-  if (ex && ex.code === v.code) return;
+  if (raw && !v.ok) { toast(v.error || 'Check the barcode number', true); $('codeIn').focus(); return; }
+  if (!can) return;
   const notes = $('notesIn').value.trim();
   const btn = $('saveBtn'); btn.disabled = true;
   try {
-    const rid = await upsert(S.pick.id, v.code, notes);
-    toast(`Saved ${S.pick.name}: ${v.code}`);
+    const rid = await upsert(S.pick.id, v.ok ? v.code : null, notes, name);
+    toast(`Saved ${S.pick.name}${name ? ` → “${name}”` : ''}${v.ok ? ': ' + v.code : ''}`);
     S.flash = rid; S.pick = null;
     await refresh(true);
     $('recIn').focus();
   } catch (e) { toast('Not saved: ' + e.message, true); btn.disabled = false; }
 }
-async function upsert(recipeId, code, notes) {
+// code null = leave the barcode as it is; name undefined = leave the name.
+async function upsert(recipeId, code, notes, name) {
   const ex = codeFor(S.custId, recipeId), now = Date.now() / 1000;
   if (ex) {
-    const f = { Barcode: code, Updated: now }; if (notes) f.Notes = notes;
+    const f = { Updated: now }; if (code) f.Barcode = code; if (notes) f.Notes = notes;
+    if (name !== undefined && S.hasNameCol) f.Label_Name = name;
     await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Barcodes', ex.id, f]]);
     return ex.id;
   }
-  const r = await grist.docApi.applyUserActions([['AddRecord', 'Customer_Barcodes', null, { Customer: S.custId, Recipe: recipeId, Barcode: code, Updated: now, Notes: notes }]]);
+  const add = { Customer: S.custId, Recipe: recipeId, Barcode: code || '', Updated: now, Notes: notes || '' };
+  if (name && S.hasNameCol) add.Label_Name = name;
+  const r = await grist.docApi.applyUserActions([['AddRecord', 'Customer_Barcodes', null, add]]);
   return r && r.retValues ? r.retValues[0] : null;
 }
 async function refresh(keepForm) {
   await load(); renderCustomers();
   if (keepForm) {
-    $('recIn').value = ''; $('codeIn').value = ''; $('notesIn').value = '';
+    $('recIn').value = ''; $('codeIn').value = ''; $('notesIn').value = ''; $('nameIn').value = '';
     $('codeStatus').className = 'status mid'; $('codeStatus').textContent = 'Type the number under the bars, or drop their picture below.';
     updatePreview(); renderMissing(); renderSaved();
   } else renderMain();
@@ -415,7 +436,7 @@ async function turnOnBarcodes() {
 /* ---------- ordered but no code ---------- */
 function renderMissing() {
   const ord = S.ordered[S.custId] || {};
-  const miss = Object.keys(ord).map(Number).filter(r => S.recById[r] && !codeFor(S.custId, r))
+  const miss = Object.keys(ord).map(Number).filter(r => S.recById[r] && !(codeFor(S.custId, r) || {}).code)
     .sort((a, b) => ord[b] - ord[a]);
   const c = S.custById[S.custId];
   if (!miss.length || !BARCODE_BACK.test(c.back)) { $('missingCard').innerHTML = ''; return; }
@@ -438,26 +459,45 @@ function renderMissing() {
 function renderSaved() {
   const n = norm(S.filter);
   const rows = codesFor(S.custId).map(x => ({ ...x, r: S.recById[x.recipe] || { name: '(missing colourway)', fiber: '' } }))
-    .filter(x => !n || norm(x.r.name).includes(n) || x.code.includes(S.filter.trim()))
+    .filter(x => !n || norm(x.r.name).includes(n) || norm(x.name).includes(n) || x.code.includes(S.filter.trim()))
     .sort((a, b) => a.r.name.localeCompare(b.r.name));
   if (!rows.length) { $('savedList').innerHTML = `<div class="empty-note">${S.filter ? 'Nothing matches.' : 'No barcodes saved yet.'}</div>`; return; }
   const fmt = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   $('savedList').innerHTML = `<table><thead><tr><th>Colourway</th><th></th><th>Barcode</th><th>Updated</th><th></th></tr></thead><tbody>${rows.map(x => {
     const v = checkCode(x.code);
     return `<tr data-id="${x.id}" class="${x.id === S.flash ? 'flash' : ''}">
-      <td><b>${esc(x.r.name)}</b><span class="fibre">${esc(fiberCode(x.r.fiber))}</span>${x.notes ? `<div class="note">${esc(x.notes)}</div>` : ''}</td>
-      <td>${v.ok ? barcodeSvg(v.code, 0.9) : '<span class="status bad">✗ ' + esc(v.error || 'empty') + '</span>'}</td>
+      <td><b>${esc(x.r.name)}</b><span class="fibre">${esc(fiberCode(x.r.fiber))}</span>
+        <div data-namecell="${x.id}">${x.name ? `<span class="asname">prints as <b>“${esc(x.name)}”</b></span>` : ''}</div>${x.notes ? `<div class="note">${esc(x.notes)}</div>` : ''}</td>
+      <td>${v.ok ? barcodeSvg(v.code, 0.9) : x.code ? '<span class="status bad">✗ ' + esc(v.error) + '</span>' : '<span class="note">no barcode</span>'}</td>
       <td class="code" data-codecell="${x.id}">${esc(x.code)}</td>
       <td class="when">${fmt(x.updated)}</td>
-      <td class="acts"><button class="btn link" data-edit="${x.id}">Edit</button><button class="btn link danger" data-del="${x.id}">Remove</button></td></tr>`;
+      <td class="acts">${S.hasNameCol ? `<button class="btn link" data-rename="${x.id}">${x.name ? 'Rename' : 'Add name'}</button>` : ''}<button class="btn link" data-edit="${x.id}">${x.code ? 'Edit code' : 'Add code'}</button><button class="btn link danger" data-del="${x.id}">Remove</button></td></tr>`;
   }).join('')}</tbody></table>`;
   S.flash = null;
   $('savedList').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editRow(Number(b.dataset.edit)));
+  $('savedList').querySelectorAll('[data-rename]').forEach(b => b.onclick = () => renameRow(Number(b.dataset.rename)));
   $('savedList').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delRow(Number(b.dataset.del), b));
+}
+function renameRow(id) {
+  const x = S.codes.find(c => c.id === id), cell = $('savedList').querySelector(`[data-namecell="${id}"]`), rn = (S.recById[x.recipe] || {}).name || '';
+  cell.innerHTML = `<input class="inline" style="width:220px;font-family:inherit" value="${esc(x.name)}" placeholder="${esc(rn)}"> <span class="note">Enter to save · empty = store name · Esc</span>`;
+  const inp = cell.querySelector('input'); inp.focus(); inp.select();
+  inp.onkeydown = async e => {
+    if (e.key === 'Escape') return renderSaved();
+    if (e.key !== 'Enter') return;
+    let v = inp.value.trim(); if (v.toLowerCase() === rn.toLowerCase()) v = '';
+    if (v === x.name) return renderSaved();
+    try {
+      // A row that only held a name and loses it has nothing left — remove it.
+      if (!v && !x.code) await grist.docApi.applyUserActions([['RemoveRecord', 'Customer_Barcodes', id]]);
+      else await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Barcodes', id, { Label_Name: v, Updated: Date.now() / 1000 }]]);
+      S.flash = id; toast(v ? `Prints as “${v}”` : 'Back to the store name'); await refresh(true);
+    } catch (err) { toast('Not saved: ' + err.message, true); }
+  };
 }
 function editRow(id) {
   const x = S.codes.find(c => c.id === id), cell = $('savedList').querySelector(`[data-codecell="${id}"]`);
-  cell.innerHTML = `<input class="inline" value="${esc(x.code)}" inputmode="numeric"> <div class="status mid" style="font-size:11px">Enter to save · Esc to cancel</div>`;
+  cell.innerHTML = `<input class="inline" value="${esc(x.code)}" inputmode="numeric" placeholder="13 digits"> <div class="status mid" style="font-size:11px">Enter to save · Esc to cancel</div>`;
   const inp = cell.querySelector('input'), st = cell.querySelector('.status');
   inp.focus(); inp.select();
   inp.oninput = () => { const v = checkCode(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
@@ -577,10 +617,10 @@ function buildTestSheet(custName, rows) {
     doc.setDrawColor(190); doc.setLineWidth(0.005); doc.circle(cx, cy, g.dia / 2, 'S');
     doc.setFont(NAME_FONT[0], NAME_FONT[1]); doc.setTextColor(0);
     drawRingText(doc, ringTextFor(fk), cx, cy, g.dia, g.ringPt, g.ringRatio);
-    drawBarcodeBack(doc, x.r.name, checkCode(x.code).code, cx, cy, g);
+    drawBarcodeBack(doc, x.name || x.r.name, checkCode(x.code).code, cx, cy, g);
     const below = cy + 0.625 + 0.22;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(0);
-    doc.text(`${x.r.name}${fk === 'EN' ? ' (size E)' : ''}`, cx, below, { align: 'center' });
+    doc.text(`${x.name || x.r.name}${fk === 'EN' ? ' (size E)' : ''}`, cx, below, { align: 'center' });
     doc.setFont('courier', 'normal'); doc.text(x.code, cx, below + 0.17, { align: 'center' });
     if (++col === cols) { col = 0; y += dy; }
   });
