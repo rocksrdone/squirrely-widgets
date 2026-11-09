@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<style id="ss-light">/* Light pages: keep dropdowns, inputs and buttons light even when the computer is in dark mode (white text on a white box otherwise). Placed first so this page's own styles still win. */ :root { color-scheme: light; } select, option, input, textarea { color: #1A1614; } option { background: #fff; }</style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Barcodes</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC;
+  --accent: #8B3A2A; --teal: #3A8B7A; --gold: #9A6B22; --gold-light: #F6EDDA;
+  --muted: #8B7D72; --mid: #6B5E52; --ok: #2E5E1A; --ok-bg: #EAF3DE; --bad: #8B3A2A; --bad-bg: #FBF2F0;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; }
+button { font: inherit; cursor: pointer; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 14px 16px 60px; }
+.head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.head h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0; }
+.head .sub { font-size: 11px; color: var(--muted); }
+
+.custs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.chip { border: 1px solid var(--rule); background: #fff; border-radius: 16px; padding: 4px 12px; font-size: 12px; font-weight: 600; color: var(--mid); }
+.chip:hover { border-color: var(--mid); }
+.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.chip .n { font-weight: 400; opacity: .7; margin-left: 4px; }
+.custs select { border: 1px dashed var(--rule); background: transparent; border-radius: 16px; padding: 4px 10px; font-size: 12px; color: var(--mid); }
+
+.card { background: #fff; border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--mid); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.note { font-size: 11px; color: var(--muted); }
+.warn { background: var(--gold-light); color: #7A4A00; border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center; }
+.warn button { margin-left: auto; }
+
+/* Add form */
+.add { display: grid; grid-template-columns: 1fr 260px; gap: 18px; }
+@media (max-width: 720px) { .add { grid-template-columns: 1fr; } }
+.field { margin-bottom: 10px; position: relative; }
+.field label { display: block; font-size: 11px; font-weight: 600; color: var(--mid); margin-bottom: 3px; }
+.field input[type=text], .field textarea { width: 100%; border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; font-size: 14px; background: #fff; }
+.field input:focus, .field textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(58,139,122,.15); }
+#codeIn { font-family: 'DM Mono', monospace; font-size: 18px; letter-spacing: .08em; }
+.row { display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--rule); background: #fff; border-radius: 6px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--ink); }
+.btn:hover { border-color: var(--mid); }
+.btn.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+.btn.primary:disabled { background: var(--rule); border-color: var(--rule); cursor: default; }
+.btn.small { padding: 3px 8px; font-size: 11px; }
+.btn.link { border: none; background: none; color: var(--teal); padding: 2px 4px; }
+.btn.danger { color: var(--bad); }
+.status { font-size: 12px; font-weight: 600; min-height: 18px; }
+.status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.mid { color: var(--muted); font-weight: 500; }
+
+.sugg { position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff; border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.08); max-height: 260px; overflow: auto; display: none; }
+.sugg.open { display: block; }
+.sugg div { padding: 6px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.sugg div.hi, .sugg div:hover { background: var(--paper); }
+.sugg .fib { font-size: 10px; color: var(--muted); font-family: 'DM Mono', monospace; }
+.sugg .tag { font-size: 10px; border-radius: 8px; padding: 0 6px; margin-left: auto; }
+.tag.has { background: var(--ok-bg); color: var(--ok); }
+.tag.ord { background: var(--gold-light); color: #7A4A00; }
+
+.drop { border: 2px dashed var(--rule); border-radius: 8px; text-align: center; padding: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.drop.over { border-color: var(--teal); background: #F0F7F5; color: var(--teal); }
+.preview { border: 1px solid var(--rule); border-radius: 8px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 150px; padding: 12px; }
+.preview .pname { font-weight: 700; font-size: 13px; margin-bottom: 6px; text-align: center; }
+.preview .empty { color: var(--muted); font-size: 12px; text-align: center; }
+
+/* Lists */
+.filter { border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px; font-size: 12px; width: 180px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--rule); }
+td { padding: 6px 8px; border-bottom: 1px solid #EFE9E2; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+td.code { font-family: 'DM Mono', monospace; font-size: 13px; }
+td.when { font-size: 11px; color: var(--muted); white-space: nowrap; }
+td.acts { text-align: right; white-space: nowrap; }
+.fibre { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); margin-left: 4px; }
+tr.flash td { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: #DFF0EA; } to { background: transparent; } }
+td input.inline { font-family: 'DM Mono', monospace; font-size: 13px; width: 150px; border: 1px solid var(--rule); border-radius: 5px; padding: 3px 6px; }
+.empty-note { color: var(--muted); font-size: 12px; padding: 8px 0; }
+
+details summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--mid); }
+#bulkIn { font-family: 'DM Mono', monospace; font-size: 12px; min-height: 110px; }
+.bulk-ok { color: var(--ok); } .bulk-bad { color: var(--bad); }
+
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
+.toast.show { opacity: 1; } .toast.bad { background: var(--bad); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>Customer Barcodes</h1>
+      <div class="sub">The customer's own EAN-13 for each colourway. Label Batch prints it on the back label.</div>
+    </div>
+  </div>
+  <div class="custs" id="custs"></div>
+  <div id="main"><div class="empty-note">Loading…</div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+const BARCODE_BACK = /barcode/i;
+const BARCODE_STYLE = 'Colorway name + barcode';
+const S = { custId: null, recipes: [], recById: {}, customers: [], custById: {}, codes: [], ordered: {}, pick: null, filter: '', bulk: [] };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+const $ = id => document.getElementById(id);
+function getRefId(r) {
+  if (r == null) return null;
+  if (typeof r === 'number') return r || null;
+  if (Array.isArray(r)) return r.length > 1 ? Number(r[1]) || null : null;
+  if (typeof r === 'object' && 'id' in r) return Number(r.id) || null;
+  return Number(r) || null;
+}
+function fiberCode(f) { return ({ 'ff nylon': 'FF', 'e nylon': 'E', 'ff cotton': 'FF cotton' })[String(f || '').toLowerCase()] || String(f || ''); }
+function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 2600); }
+
+/* ---------- EAN-13 (same rules as Label Batch) ---------- */
+function eanCheckDigit(d12) { let s = 0; for (let i = 0; i < 12; i++) s += Number(d12[i]) * (i % 2 ? 3 : 1); return String((10 - (s % 10)) % 10); }
+function eanNormalize(raw) {
+  const d = String(raw || '').replace(/[\s\-]/g, '');
+  if (!d) return { ok: false, error: '' };
+  if (!/^\d+$/.test(d)) return { ok: false, error: 'Digits only' };
+  // 12 digits is a UPC-A (an EAN-13 starting with 0) only if it checks; otherwise they're still typing.
+  if (d.length === 12 && eanCheckDigit('0' + d.slice(0, 11)) !== d[11]) return { ok: false, error: '12 of 13 digits', partial: true };
+  const code = d.length === 12 ? '0' + d : d;
+  if (code.length < 13) return { ok: false, error: `${d.length} of 13 digits`, partial: true };
+  if (code.length > 13) return { ok: false, error: `${d.length} digits — EAN-13 has 13` };
+  if (eanCheckDigit(code.slice(0, 12)) !== code[12]) return { ok: false, error: `Last digit doesn't check (should be ${eanCheckDigit(code.slice(0, 12))}) — probably a typo` };
+  return { ok: true, code };
+}
+const EAN_L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+const EAN_G = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+const EAN_R = ['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
+const EAN_PARITY = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+const EAN_GUARD = new Set([0, 1, 2, 45, 46, 47, 48, 49, 92, 93, 94]);
+function eanModules(code) {
+  const p = EAN_PARITY[Number(code[0])]; let m = '101';
+  for (let i = 1; i <= 6; i++) m += (p[i - 1] === 'L' ? EAN_L : EAN_G)[Number(code[i])];
+  m += '01010';
+  for (let i = 7; i <= 12; i++) m += EAN_R[Number(code[i])];
+  return m + '101';
+}
+// Drawn barcode, the same layout as the back label: 6 + 6 digits under the bars.
+function barcodeSvg(code, mw) {
+  const m = eanModules(code), q = 9, W = (95 + q * 2) * mw, barH = 40 * mw / 2, ext = 5 * mw / 2, fs = 9 * mw / 2;
+  let bars = '';
+  for (let i = 0; i < 95; i++) if (m[i] === '1') {
+    let j = i; while (j + 1 < 95 && m[j + 1] === '1' && EAN_GUARD.has(j + 1) === EAN_GUARD.has(i)) j++;
+    bars += `<rect x="${(q + i) * mw}" y="0" width="${(j - i + 1) * mw}" height="${barH + (EAN_GUARD.has(i) ? ext : 0)}"/>`;
+    i = j;
+  }
+  const t = (s, x) => `<text x="${x * mw}" y="${barH + fs}" font-size="${fs}" text-anchor="middle" font-family="DM Mono, monospace">${s}</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${barH + fs + 2}" viewBox="0 0 ${W} ${barH + fs + 2}" fill="#000">${bars}${t(code.slice(1, 7), q + 24)}${t(code.slice(7), q + 70)}</svg>`;
+}
+
+/* ---------- reading a code out of a picture ---------- */
+async function readBarcodeFromFile(file) {
+  if (!window.ZXing || !ZXing.MultiFormatReader) throw new Error('The barcode reader did not load — type the number instead.');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('That file is not a picture')); i.src = url; });
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.CODE_128]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const canvasFor = (padFrac, minW) => {
+      const scale = Math.max(1, minW / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale), pad = Math.round(w * padFrac);
+      const c = document.createElement('canvas'); c.width = w + pad * 2; c.height = h + pad * 2;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      x.imageSmoothingEnabled = false; x.drawImage(img, pad, pad, w, h); return c;
+    };
+    for (const [pad, minW] of [[0.15, 0], [0.15, 900], [0, 0]]) {
+      const c = canvasFor(pad, minW);
+      for (const Bin of [ZXing.HybridBinarizer, ZXing.GlobalHistogramBinarizer]) {
+        try { return String(new ZXing.MultiFormatReader().decode(new ZXing.BinaryBitmap(new Bin(new ZXing.HTMLCanvasElementLuminanceSource(c))), hints).getText()); }
+        catch (e) { /* next */ }
+      }
+    }
+    throw new Error("Couldn't find a barcode in that picture — type the number instead.");
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/* ---------- data ---------- */
+async function load() {
+  const [cust, rec, cb, wo, wol] = await Promise.all([
+    grist.docApi.fetchTable('Customers'), grist.docApi.fetchTable('Recipes'),
+    grist.docApi.fetchTable('Customer_Barcodes'),
+    grist.docApi.fetchTable('Work_Orders'), grist.docApi.fetchTable('Work_Order_Lines'),
+  ]);
+  S.customers = (cust.id || []).map((id, i) => ({ id, name: cust.Customer_Name[i] || '', code: cust.Code[i] || '', back: cust.Label_Back_Style[i] || '', status: cust.Status[i] || '' }))
+    .filter(c => c.name);
+  S.custById = Object.fromEntries(S.customers.map(c => [c.id, c]));
+  S.recipes = (rec.id || []).map((id, i) => ({ id, name: rec.Recipe_Name[i] || '', fiber: rec.Fiber_Type[i] || '', status: rec.Status[i] || '' })).filter(r => r.name);
+  S.recById = Object.fromEntries(S.recipes.map(r => [r.id, r]));
+  S.codes = (cb.id || []).map((id, i) => ({ id, cust: getRefId(cb.Customer[i]), recipe: getRefId(cb.Recipe[i]), code: String(cb.Barcode[i] || '').trim(), updated: Number(cb.Updated[i]) || 0, notes: (cb.Notes || [])[i] || '' }));
+  // What each customer has ordered: recipe -> last order date, newest first.
+  const woCust = {}, woDate = {};
+  (wo.id || []).forEach((id, i) => { woCust[id] = getRefId(wo.Customer[i]); woDate[id] = Number((wo.Order_Date || wo.Created || [])[i]) || id; });
+  S.ordered = {};
+  (wol.id || []).forEach((id, i) => {
+    const w = getRefId(wol.Work_Order[i]), c = woCust[w], r = getRefId(wol.Recipe[i]);
+    if (!c || !r) return;
+    const m = S.ordered[c] = S.ordered[c] || {};
+    m[r] = Math.max(m[r] || 0, woDate[w] || 0);
+  });
+}
+const codesFor = c => S.codes.filter(x => x.cust === c);
+const codeFor = (c, r) => S.codes.find(x => x.cust === c && x.recipe === r) || null;
+
+/* ---------- customer chips ---------- */
+function renderCustomers() {
+  const withCodes = new Set(S.codes.map(c => c.cust));
+  const main = S.customers.filter(c => BARCODE_BACK.test(c.back) || withCodes.has(c.id) || c.id === S.custId);
+  const others = S.customers.filter(c => !main.includes(c)).sort((a, b) => a.name.localeCompare(b.name));
+  $('custs').innerHTML = main.map(c => `<button class="chip ${c.id === S.custId ? 'on' : ''}" data-cust="${c.id}">${esc(c.name)}<span class="n">${codesFor(c.id).length}</span></button>`).join('')
+    + `<select id="otherCust"><option value="">+ another customer…</option>${others.map(c => `<option value="${c.id}">${esc(c.name)}${c.code ? ' (' + esc(c.code) + ')' : ''}</option>`).join('')}</select>`;
+  $('custs').querySelectorAll('[data-cust]').forEach(b => b.onclick = () => selectCustomer(Number(b.dataset.cust)));
+  $('otherCust').onchange = e => e.target.value && selectCustomer(Number(e.target.value));
+}
+function selectCustomer(id) {
+  if (S.custId === id) return;
+  S.custId = id; S.pick = null; S.filter = ''; S.bulk = [];
+  renderCustomers(); renderMain();
+}
+
+/* ---------- main ---------- */
+function renderMain() {
+  const c = S.custById[S.custId];
+  if (!c) { $('main').innerHTML = '<div class="card"><div class="empty-note">Pick a customer above.</div></div>'; return; }
+  const on = BARCODE_BACK.test(c.back);
+  $('main').innerHTML = `
+    ${on ? '' : `<div class="warn"><span><b>${esc(c.name)}'s back labels don't print barcodes yet</b> (back label: ${esc(c.back || 'not set')}). Codes saved here are kept, but only print once this is on.</span><button class="btn small" id="turnOn">Turn on barcodes</button></div>`}
+    <div class="card">
+      <h2>Add a barcode</h2>
+      <div class="add">
+        <div>
+          <div class="field">
+            <label for="recIn">Colourway</label>
+            <input type="text" id="recIn" autocomplete="off" placeholder="Start typing a colourway…">
+            <div class="sugg" id="sugg"></div>
+          </div>
+          <div class="field">
+            <label for="codeIn">Barcode number</label>
+            <div class="row">
+              <input type="text" id="codeIn" inputmode="numeric" autocomplete="off" placeholder="13 digits">
+            </div>
+          </div>
+          <div class="status mid" id="codeStatus">Type the number under the bars, or drop their picture below.</div>
+          <div class="drop" id="drop" tabindex="0">📷 Drop the barcode picture here, paste it (Ctrl+V), or click to choose a file
+            <input type="file" id="fileIn" accept="image/*" style="display:none"></div>
+          <div class="field" style="margin-top:10px"><label for="notesIn">Note (optional)</label><input type="text" id="notesIn" placeholder="e.g. From their PO email"></div>
+          <div class="row"><button class="btn primary" id="saveBtn" disabled>Save barcode</button><span class="note">Enter saves too.</span></div>
+        </div>
+        <div class="preview" id="preview"></div>
+      </div>
+    </div>
+    <div id="missingCard"></div>
+    <div class="card">
+      <h2>Saved for ${esc(c.name)} <span class="right"><input class="filter" id="filterIn" placeholder="Filter…" value="${esc(S.filter)}"></span></h2>
+      <div id="savedList"></div>
+    </div>
+    <div class="card">
+      <details id="bulkBox"><summary>Paste a list from the customer (name and code on each line)</summary>
+        <div class="note" style="margin:8px 0">One colourway per line, e.g. <code>Perfect Ten, 2100000079681</code> — tabs from a spreadsheet work too. Check the matches, then save them all.</div>
+        <div class="field"><textarea id="bulkIn" placeholder="Perfect Ten	2100000079681&#10;Peacock	2100000089444"></textarea></div>
+        <div id="bulkOut"></div>
+      </details>
+    </div>`;
+  if ($('turnOn')) $('turnOn').onclick = turnOnBarcodes;
+  bindAdd(); renderMissing(); renderSaved();
+  $('filterIn').oninput = e => { S.filter = e.target.value; renderSaved(); };
+  $('bulkIn').oninput = parseBulk;
+  updatePreview();
+}
+
+/* ---------- add form ---------- */
+function recLabel(r) { return r ? `${r.name} · ${fiberCode(r.fiber)}` : ''; }
+function suggestions(q) {
+  const n = norm(q), ord = S.ordered[S.custId] || {};
+  let list = S.recipes.filter(r => !n || norm(r.name).includes(n));
+  const score = r => (norm(r.name).startsWith(n) ? 0 : 1) * 4 + (ord[r.id] ? 0 : 2) + (r.status === 'Active' ? 0 : 1);
+  list.sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name));
+  return list.slice(0, 40);
+}
+function bindAdd() {
+  const recIn = $('recIn'), sugg = $('sugg'), codeIn = $('codeIn');
+  let hi = 0, items = [];
+  const show = () => {
+    items = suggestions(recIn.value); hi = 0;
+    const ord = S.ordered[S.custId] || {};
+    sugg.innerHTML = items.length ? items.map((r, i) => {
+      const has = codeFor(S.custId, r.id);
+      return `<div data-i="${i}" class="${i === hi ? 'hi' : ''}"><span>${esc(r.name)}</span><span class="fib">${esc(fiberCode(r.fiber))}</span>${has ? '<span class="tag has">has a code</span>' : ord[r.id] ? '<span class="tag ord">they order this</span>' : ''}</div>`;
+    }).join('') : '<div style="color:var(--muted);cursor:default">No colourway matches</div>';
+    sugg.classList.add('open');
+    sugg.querySelectorAll('[data-i]').forEach(d => d.onmousedown = e => { e.preventDefault(); choose(items[Number(d.dataset.i)]); });
+  };
+  const choose = r => {
+    S.pick = r; recIn.value = recLabel(r); sugg.classList.remove('open');
+    const ex = codeFor(S.custId, r.id);
+    if (ex && !codeIn.value) codeIn.value = ex.code;
+    updatePreview(); codeIn.focus(); codeIn.select();
+  };
+  recIn.onfocus = show;
+  recIn.oninput = () => { S.pick = null; show(); updatePreview(); };
+  recIn.onblur = () => setTimeout(() => sugg.classList.remove('open'), 120);
+  recIn.onkeydown = e => {
+    if (!sugg.classList.contains('open')) return;
+    const rows = sugg.querySelectorAll('[data-i]');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); hi = Math.max(0, Math.min(rows.length - 1, hi + (e.key === 'ArrowDown' ? 1 : -1)));
+      rows.forEach((d, i) => d.classList.toggle('hi', i === hi)); rows[hi] && rows[hi].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && items[hi]) { e.preventDefault(); choose(items[hi]); }
+    else if (e.key === 'Escape') sugg.classList.remove('open');
+  };
+  codeIn.oninput = updatePreview;
+  codeIn.onkeydown = e => { if (e.key === 'Enter') saveFromForm(); };
+  $('notesIn').onkeydown = e => { if (e.key === 'Enter') saveFromForm(); };
+  $('saveBtn').onclick = saveFromForm;
+
+  const drop = $('drop'), fileIn = $('fileIn');
+  drop.onclick = () => fileIn.click();
+  fileIn.onchange = () => fileIn.files[0] && fromImage(fileIn.files[0]);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = [...e.dataTransfer.files].find(f => /^image\//.test(f.type)); if (f) fromImage(f); };
+}
+// Paste a screenshot anywhere on the page.
+document.addEventListener('paste', e => {
+  if (!$('drop')) return;
+  const it = [...(e.clipboardData || {}).items || []].find(i => /^image\//.test(i.type));
+  if (it) { e.preventDefault(); fromImage(it.getAsFile()); }
+});
+async function fromImage(file) {
+  const st = $('codeStatus'); st.className = 'status mid'; st.textContent = 'Reading the picture…';
+  try {
+    const code = await readBarcodeFromFile(file);
+    $('codeIn').value = code;
+    st.className = 'status ok'; st.textContent = '✓ Read from the picture: ' + code + (S.pick ? '' : ' — now pick the colourway');
+    updatePreview();   // still warns if it doesn't check or is already used
+    if (eanNormalize(code).ok) (S.pick ? $('saveBtn') : $('recIn')).focus();
+  } catch (e) { st.className = 'status bad'; st.textContent = e.message; }
+}
+function formState() {
+  const v = eanNormalize($('codeIn').value);
+  const dupe = v.ok ? S.codes.find(x => x.cust === S.custId && x.code === v.code && (!S.pick || x.recipe !== S.pick.id)) : null;
+  const ex = S.pick ? codeFor(S.custId, S.pick.id) : null;
+  return { v, dupe, ex };
+}
+function updatePreview() {
+  if (!$('preview')) return;
+  const { v, dupe, ex } = formState(), st = $('codeStatus'), raw = $('codeIn').value.trim();
+  if (raw) {
+    if (!v.ok) { st.className = 'status ' + (v.partial ? 'mid' : 'bad'); st.textContent = v.error; }
+    else if (dupe) { st.className = 'status bad'; st.textContent = `That code is already saved for ${(S.recById[dupe.recipe] || {}).name || 'another colourway'} — check it's not a copy-paste slip.`; }
+    else if (ex && ex.code === v.code) { st.className = 'status mid'; st.textContent = 'Already saved — no change.'; }
+    else if (ex) { st.className = 'status ok'; st.textContent = `✓ Valid — replaces ${ex.code}`; }
+    else if (!st.textContent.startsWith('✓ Read')) { st.className = 'status ok'; st.textContent = '✓ Valid EAN-13'; }
+  }
+  const p = S.pick;
+  $('preview').innerHTML = v.ok
+    ? `<div class="pname">${esc(p ? p.name : 'Colourway')}</div>${barcodeSvg(v.code, 2)}<div class="note" style="margin-top:8px">How it prints on the back label</div>`
+    : `<div class="empty">The barcode shows here<br>once the number checks out.</div>`;
+  $('saveBtn').disabled = !(v.ok && p && !dupe && !(ex && ex.code === v.code));
+  $('saveBtn').textContent = ex && v.ok && ex.code !== v.code ? 'Replace barcode' : 'Save barcode';
+}
+async function saveFromForm() {
+  const { v, ex, dupe } = formState();
+  if (dupe) return;
+  if (!S.pick) { toast('Pick the colourway first', true); $('recIn').focus(); return; }
+  if (!v.ok) { toast(v.error || 'Enter the barcode number', true); $('codeIn').focus(); return; }
+  if (ex && ex.code === v.code) return;
+  const notes = $('notesIn').value.trim();
+  const btn = $('saveBtn'); btn.disabled = true;
+  try {
+    const rid = await upsert(S.pick.id, v.code, notes);
+    toast(`Saved ${S.pick.name}: ${v.code}`);
+    S.flash = rid; S.pick = null;
+    await refresh(true);
+    $('recIn').focus();
+  } catch (e) { toast('Not saved: ' + e.message, true); btn.disabled = false; }
+}
+async function upsert(recipeId, code, notes) {
+  const ex = codeFor(S.custId, recipeId), now = Date.now() / 1000;
+  if (ex) {
+    const f = { Barcode: code, Updated: now }; if (notes) f.Notes = notes;
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Barcodes', ex.id, f]]);
+    return ex.id;
+  }
+  const r = await grist.docApi.applyUserActions([['AddRecord', 'Customer_Barcodes', null, { Customer: S.custId, Recipe: recipeId, Barcode: code, Updated: now, Notes: notes }]]);
+  return r && r.retValues ? r.retValues[0] : null;
+}
+async function refresh(keepForm) {
+  await load(); renderCustomers();
+  if (keepForm) {
+    $('recIn').value = ''; $('codeIn').value = ''; $('notesIn').value = '';
+    $('codeStatus').className = 'status mid'; $('codeStatus').textContent = 'Type the number under the bars, or drop their picture below.';
+    updatePreview(); renderMissing(); renderSaved();
+  } else renderMain();
+}
+async function turnOnBarcodes() {
+  await grist.docApi.applyUserActions([['UpdateRecord', 'Customers', S.custId, { Label_Back_Style: BARCODE_STYLE }]]);
+  toast('Barcode back labels turned on'); await refresh(false);
+}
+
+/* ---------- ordered but no code ---------- */
+function renderMissing() {
+  const ord = S.ordered[S.custId] || {};
+  const miss = Object.keys(ord).map(Number).filter(r => S.recById[r] && !codeFor(S.custId, r))
+    .sort((a, b) => ord[b] - ord[a]);
+  const c = S.custById[S.custId];
+  if (!miss.length || !BARCODE_BACK.test(c.back)) { $('missingCard').innerHTML = ''; return; }
+  $('missingCard').innerHTML = `<div class="card"><h2>They've ordered these — no barcode yet <span class="right note">${miss.length} — these print with the name only</span></h2>
+    <table><tbody>${miss.map(r => { const R = S.recById[r]; return `<tr><td><b>${esc(R.name)}</b><span class="fibre">${esc(fiberCode(R.fiber))}</span></td>
+      <td><input class="inline" data-miss="${r}" inputmode="numeric" placeholder="13 digits"></td><td class="status" data-missst="${r}"></td></tr>`; }).join('')}</tbody></table></div>`;
+  $('missingCard').querySelectorAll('[data-miss]').forEach(inp => {
+    const st = $('missingCard').querySelector(`[data-missst="${inp.dataset.miss}"]`);
+    inp.oninput = () => { const v = eanNormalize(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial || !inp.value ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
+    inp.onkeydown = async e => {
+      if (e.key !== 'Enter') return;
+      const v = eanNormalize(inp.value); if (!v.ok) return;
+      try { S.flash = await upsert(Number(inp.dataset.miss), v.code, ''); toast(`Saved ${S.recById[inp.dataset.miss].name}`); await refresh(true); }
+      catch (err) { toast('Not saved: ' + err.message, true); }
+    };
+  });
+}
+
+/* ---------- saved list ---------- */
+function renderSaved() {
+  const n = norm(S.filter);
+  const rows = codesFor(S.custId).map(x => ({ ...x, r: S.recById[x.recipe] || { name: '(missing colourway)', fiber: '' } }))
+    .filter(x => !n || norm(x.r.name).includes(n) || x.code.includes(S.filter.trim()))
+    .sort((a, b) => a.r.name.localeCompare(b.r.name));
+  if (!rows.length) { $('savedList').innerHTML = `<div class="empty-note">${S.filter ? 'Nothing matches.' : 'No barcodes saved yet.'}</div>`; return; }
+  const fmt = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  $('savedList').innerHTML = `<table><thead><tr><th>Colourway</th><th></th><th>Barcode</th><th>Updated</th><th></th></tr></thead><tbody>${rows.map(x => {
+    const v = eanNormalize(x.code);
+    return `<tr data-id="${x.id}" class="${x.id === S.flash ? 'flash' : ''}">
+      <td><b>${esc(x.r.name)}</b><span class="fibre">${esc(fiberCode(x.r.fiber))}</span>${x.notes ? `<div class="note">${esc(x.notes)}</div>` : ''}</td>
+      <td>${v.ok ? barcodeSvg(v.code, 0.9) : '<span class="status bad">✗ ' + esc(v.error || 'empty') + '</span>'}</td>
+      <td class="code" data-codecell="${x.id}">${esc(x.code)}</td>
+      <td class="when">${fmt(x.updated)}</td>
+      <td class="acts"><button class="btn link" data-edit="${x.id}">Edit</button><button class="btn link danger" data-del="${x.id}">Remove</button></td></tr>`;
+  }).join('')}</tbody></table>`;
+  S.flash = null;
+  $('savedList').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editRow(Number(b.dataset.edit)));
+  $('savedList').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delRow(Number(b.dataset.del), b));
+}
+function editRow(id) {
+  const x = S.codes.find(c => c.id === id), cell = $('savedList').querySelector(`[data-codecell="${id}"]`);
+  cell.innerHTML = `<input class="inline" value="${esc(x.code)}" inputmode="numeric"> <div class="status mid" style="font-size:11px">Enter to save · Esc to cancel</div>`;
+  const inp = cell.querySelector('input'), st = cell.querySelector('.status');
+  inp.focus(); inp.select();
+  inp.oninput = () => { const v = eanNormalize(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
+  inp.onkeydown = async e => {
+    if (e.key === 'Escape') return renderSaved();
+    if (e.key !== 'Enter') return;
+    const v = eanNormalize(inp.value); if (!v.ok) return;
+    if (v.code === x.code) return renderSaved();
+    try { await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Barcodes', id, { Barcode: v.code, Updated: Date.now() / 1000 }]]); S.flash = id; toast('Updated'); await refresh(true); }
+    catch (err) { toast('Not saved: ' + err.message, true); }
+  };
+}
+function delRow(id, btn) {
+  // Two clicks, no browser dialog: the first arms it, the second removes.
+  if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = 'Click again to remove'; setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = 'Remove'; } }, 3000); return; }
+  grist.docApi.applyUserActions([['RemoveRecord', 'Customer_Barcodes', id]])
+    .then(() => { toast('Removed'); return refresh(true); })
+    .catch(err => toast('Not removed: ' + err.message, true));
+}
+
+/* ---------- paste a list ---------- */
+function matchRecipe(name) {
+  const n = norm(name); if (!n) return { cands: [] };
+  const ord = S.ordered[S.custId] || {};
+  let cands = S.recipes.filter(r => norm(r.name) === n);
+  if (!cands.length) cands = S.recipes.filter(r => norm(r.name).includes(n) || n.includes(norm(r.name)) && norm(r.name).length > 3);
+  cands.sort((a, b) => (ord[b.id] ? 1 : 0) - (ord[a.id] ? 1 : 0) || (a.fiber === 'FF Nylon' ? -1 : 1) - (b.fiber === 'FF Nylon' ? -1 : 1));
+  return { cands, pick: cands[0] || null };
+}
+function parseBulk() {
+  const lines = $('bulkIn').value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  S.bulk = lines.map(l => {
+    const m = l.match(/(\d[\d\s-]{5,16}\d)/);
+    const raw = m ? m[1].replace(/[\s-]/g, '') : '';
+    const name = (m ? l.replace(m[0], '') : l).replace(/[\t,;|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const v = eanNormalize(raw), mt = matchRecipe(name);
+    return { line: l, name, raw, v, cands: mt.cands, pick: mt.pick ? mt.pick.id : null };
+  });
+  renderBulk();
+}
+function renderBulk() {
+  if (!S.bulk.length) { $('bulkOut').innerHTML = ''; return; }
+  const good = S.bulk.filter(b => b.v.ok && b.pick && !((codeFor(S.custId, b.pick) || {}).code === b.v.code));
+  $('bulkOut').innerHTML = `<table><thead><tr><th>Their name</th><th>Colourway</th><th>Barcode</th><th></th></tr></thead><tbody>${S.bulk.map((b, i) => {
+    const ex = b.pick ? codeFor(S.custId, b.pick) : null;
+    const note = !b.v.ok ? `<span class="bulk-bad">✗ ${esc(b.v.error || 'no barcode on this line')}</span>`
+      : !b.pick ? '<span class="bulk-bad">✗ no colourway matches</span>'
+      : ex && ex.code === b.v.code ? '<span class="note">already saved</span>'
+      : ex ? `<span class="bulk-ok">replaces ${esc(ex.code)}</span>` : '<span class="bulk-ok">✓ new</span>';
+    const sel = b.cands.length > 1 ? `<select data-bpick="${i}">${b.cands.slice(0, 12).map(r => `<option value="${r.id}" ${r.id === b.pick ? 'selected' : ''}>${esc(recLabel(r))}</option>`).join('')}</select>`
+      : b.pick ? esc(recLabel(S.recById[b.pick])) : '—';
+    return `<tr><td>${esc(b.name)}</td><td>${sel}</td><td class="code">${esc(b.raw)}</td><td>${note}</td></tr>`;
+  }).join('')}</tbody></table>
+  <div class="row" style="margin-top:8px"><button class="btn primary" id="bulkSave" ${good.length ? '' : 'disabled'}>Save ${good.length} barcode${good.length === 1 ? '' : 's'}</button>
+  <span class="note">Lines with ✗ are skipped.</span></div>`;
+  $('bulkOut').querySelectorAll('[data-bpick]').forEach(s => s.onchange = () => { S.bulk[Number(s.dataset.bpick)].pick = Number(s.value); renderBulk(); });
+  if ($('bulkSave')) $('bulkSave').onclick = saveBulk;
+}
+async function saveBulk() {
+  const seen = new Set(), acts = [], now = Date.now() / 1000;
+  for (const b of S.bulk) {
+    if (!b.v.ok || !b.pick || seen.has(b.pick)) continue; seen.add(b.pick);
+    const ex = codeFor(S.custId, b.pick);
+    if (ex && ex.code === b.v.code) continue;
+    acts.push(ex ? ['UpdateRecord', 'Customer_Barcodes', ex.id, { Barcode: b.v.code, Updated: now }]
+                 : ['AddRecord', 'Customer_Barcodes', null, { Customer: S.custId, Recipe: b.pick, Barcode: b.v.code, Updated: now, Notes: 'Pasted list' }]);
+  }
+  if (!acts.length) { toast('Nothing new to save'); return; }
+  try { await grist.docApi.applyUserActions(acts); toast(`Saved ${acts.length} barcode${acts.length === 1 ? '' : 's'}`); S.bulk = []; await refresh(false); }
+  catch (e) { toast('Not saved: ' + e.message, true); }
+}
+
+/* ---------- start ---------- */
+grist.ready({ requiredAccess: 'full' });
+// On a Customers page, follow the selected customer.
+grist.onRecord(rec => {
+  if (!rec || !rec.id) return;
+  const id = rec.Customer_Name !== undefined ? rec.id : getRefId(rec.Customer);
+  if (id && S.custById[id]) selectCustomer(id);
+  else if (id) S.wantCust = id;
+});
+(async () => {
+  try {
+    await load();
+    const first = S.wantCust && S.custById[S.wantCust] ? S.wantCust
+      : (S.customers.find(c => BARCODE_BACK.test(c.back)) || {}).id || null;
+    S.custId = first; renderCustomers(); renderMain();
+  } catch (e) {
+    $('main').innerHTML = `<div class="card"><div class="status bad">Couldn't load: ${esc(e.message)}</div><div class="note">This widget needs full document access, and the Customer_Barcodes table.</div></div>`;
+  }
+})();
+</script>
+</body>
+</html>
