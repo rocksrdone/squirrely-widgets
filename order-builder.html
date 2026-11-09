@@ -99,6 +99,9 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .cust-info .v.loud { color: var(--accent); font-weight: 600; }
 .cust-info .edit { grid-column: 1 / -1; font-size: 10.5px; color: #8B7D72; }
 input.po { width: 160px; font-family: 'DM Mono', monospace; }
+input.due { width: 150px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: #fff; color: #1A1614; font: inherit; }
+.due-hint { font-size: 11px; color: var(--muted, #8B7D72); margin-left: 4px; }
+.due-late { color: #8B3A2A; font-weight: 600; } .due-soon { color: #9A6B22; font-weight: 600; }
 textarea.order-notes { flex: 1 1 260px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--rule);
   border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 12px; resize: vertical; background: white; color: var(--ink); }
 .ack { margin-top: 12px; border: 1.5px solid var(--teal); border-radius: 8px; padding: 12px; background: var(--teal-light); }
@@ -1328,7 +1331,7 @@ function withDraft(o) {
 function draftSet(id, key, value, redraw) {
   const o = S.orders.find(x => x.id === id);
   const d = S.draft[id] = S.draft[id] || {};
-  if (o && String(o[key] == null ? '' : o[key]) === String(value)) delete d[key];
+  if (o && String(o[key] == null ? '' : o[key]) === String(value == null ? '' : value)) delete d[key];
   else d[key] = value;
   if (!Object.keys(d).length) delete S.draft[id];
   if (redraw) render(); else updateSaveUi(id);
@@ -2890,7 +2893,7 @@ function renderSide() {
         <span class="num">${esc(o.number)}</span> ${badge}
       </div>
       <div class="cust">${esc(o.customerName || '(no customer)')}</div>
-      <div class="meta">${spools} spool(s) · ${lines.length} line(s)</div>
+      <div class="meta">${spools} spool(s) · ${lines.length} line(s)${dueSideHtml(o)}</div>
     </div>`;
   }).join('');
 }
@@ -3242,6 +3245,17 @@ function renderMain() {
             oninput="draftSet(${o.id}, 'po', this.value.trim())">`
         : `<span class="st-listed">add a Text column <code>PO_Number</code> to Work_Orders</span>`}
     </div>
+    <div class="field-row">
+      <label class="lab">Due by</label>
+      ${S.cols.dueDate
+        ? `<input type="date" class="due" value="${dueInputValue(o.dueDate)}"
+            onchange="draftSet(${o.id}, 'dueDate', dueFromInput(this.value), true)">
+          ${[['+1 wk', 7], ['+2 wks', 14], ['+3 wks', 21]].map(([t, n]) =>
+            `<button class="btn secondary small" type="button" onclick="draftSet(${o.id}, 'dueDate', dueInDays(${n}), true)">${t}</button>`).join('')}
+          ${o.dueDate ? `<button class="btn secondary small" type="button" onclick="draftSet(${o.id}, 'dueDate', null, true)">clear</button>` : ''}
+          <span class="due-hint">${dueHint(o)}</span>`
+        : `<span class="st-listed">add a Date column <code>Due_Date</code> to Work_Orders</span>`}
+    </div>
     ${S.cols.notes ? `<div class="field-row" style="align-items:flex-start">
       <label class="lab" style="padding-top:6px">For this order</label>
       <textarea class="order-notes" placeholder="Anything different about this order — a deadline, a label change, split shipping…"
@@ -3402,6 +3416,36 @@ async function ackPdfLib() {
   if (!window.jspdf.jsPDF.API.autoTable) await ackLoadScript(ACK_PDF_LIBS[1]);
   return window.jspdf.jsPDF;
 }
+/* ---------- Due date ----------
+   Grist Date = epoch seconds at UTC midnight. Planning (Morning Planning, Day
+   Board, Wind Routing) sorts by it: an order with no date counts as due
+   Order_Date + the planning window (Settings), so setting one only matters when
+   it's sooner or later than that. */
+function dueInputValue(v) {
+  const n = Number(v); if (!n) return '';
+  return new Date(n * 1000).toISOString().slice(0, 10);
+}
+function dueFromInput(str) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || '')); if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000;
+}
+function todayUtc() { const t = new Date(); return Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) / 1000; }
+function dueInDays(n) { return todayUtc() + n * 86400; }
+function dueDays(v) { const n = Number(v); return n ? Math.round((n - todayUtc()) / 86400) : null; }
+function dueShort(v) { const n = Number(v); return n ? new Date(n * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }) : ''; }
+function dueHint(o) {
+  const d = dueDays(o.dueDate);
+  if (d == null) return 'No date — planning treats it as due a couple of weeks after the order date.';
+  if (d < 0) return `<b class="due-late">${-d} day${d === -1 ? '' : 's'} overdue</b>`;
+  if (d === 0) return '<b class="due-soon">due today</b>';
+  return d <= 3 ? `<b class="due-soon">in ${d} day${d === 1 ? '' : 's'}</b>` : `in ${d} days`;
+}
+function dueSideHtml(o) {
+  if (!o.dueDate || o.status === 'Shipped' || o.status === 'Complete') return '';
+  const d = dueDays(o.dueDate), cls = d < 0 ? 'due-late' : d <= 3 ? 'due-soon' : '';
+  return ` · <span class="${cls}">due ${dueShort(o.dueDate)}</span>`;
+}
+
 function ackDate(v) {
   if (v == null || v === '' || v === 0) return '';
   const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
