@@ -1058,36 +1058,47 @@ const EAN_GUARD = new Set([0, 1, 2, 45, 46, 47, 48, 49, 92, 93, 94]);
 function drawBarcodeBack(doc, name, code, cx, cy, g) {
   const clearR = g.dia * (NAME_FIT_RATIO / 2) * (g.ringRatio / RING_RADIUS_RATIO);
   const k = g.dia / 1.25;
-  const barH = 0.17 * k, guardExt = 0.04 * k;
+  const guardExt = 0.04 * k;
   const digPt = Math.max(4.5, 5.5 * k), digH = digPt / 72 * 0.75;
   const gap = 0.03 * k;
   const chord = off => { const v = clearR * clearR - off * off; return v > 0 ? 2 * Math.sqrt(v) : 0; };
 
-  // Name: one line if it fits, else two, shrinking as needed — above the bars.
+  /* Name above the bars. Tried in order until one fits inside the ring:
+       full-height bars, then shorter bars (down to 70%);
+       at each, the name at full size shrinking to 4.5pt, on 1, 2 or 3 lines.
+     Wrapping and shorter bars come before tiny type, because a name a person
+     can't read is worse than slightly shorter bars the scanner still reads. */
   doc.setFont(NAME_FONT[0], NAME_FONT[1]); doc.setTextColor(0);
   const words = String(name).trim().split(/\s+/);
+  const splits = [[String(name)]];
+  if (words.length > 1) splits.push(splitTwo(doc, words));
+  if (words.length > 2) splits.push(splitThree(doc, words));
   let fit = null;
-  for (let pt = g.fontPt; pt >= 5 && !fit; pt -= 0.25) {
-    doc.setFontSize(pt);
-    const lead = pt * NAME_LINE_HEIGHT / 72;
-    for (const lines of [[String(name)], words.length > 1 ? splitTwo(doc, words) : null]) {
-      if (!lines) continue;
-      const blockH = lines.length * lead;
-      const T = blockH + gap + barH + Math.max(guardExt, digH + 0.012);
-      const top = cy - T / 2;
-      const ok = lines.every((ln, i) => {
-        const yMid = top + lead * (i + 0.5);
-        return doc.getTextWidth(ln) <= chord(Math.abs(yMid - cy) + pt * 0.36 / 72);
-      });
-      if (ok) { fit = { pt, lines, lead, top, T }; break; }
+  for (const hScale of [1, 0.85, 0.7]) {
+    const barH = 0.17 * k * hScale;
+    for (let pt = g.fontPt; pt >= 4.5 && !fit; pt -= 0.25) {
+      doc.setFontSize(pt);
+      const lead = pt * NAME_LINE_HEIGHT / 72;
+      for (const lines of splits) {
+        const blockH = lines.length * lead;
+        const T = blockH + gap + barH + Math.max(guardExt, digH + 0.012);
+        const top = cy - T / 2;
+        const ok = lines.every((ln, i) => {
+          const yMid = top + lead * (i + 0.5);
+          return doc.getTextWidth(ln) <= chord(Math.abs(yMid - cy) + pt * 0.36 / 72);
+        });
+        if (ok) { fit = { pt, lines, lead, top, T, barH }; break; }
+      }
     }
+    if (fit) break;
   }
-  if (!fit) {
-    doc.setFontSize(5);
-    const lead = 5 * NAME_LINE_HEIGHT / 72, lines = [String(name)];
-    const T = lead + gap + barH + Math.max(guardExt, digH + 0.012);
-    fit = { pt: 5, lines, lead, top: cy - T / 2, T };
+  if (!fit) {   // nothing fits: smallest type, three lines, short bars — never past the ring
+    doc.setFontSize(4.5);
+    const lead = 4.5 * NAME_LINE_HEIGHT / 72, lines = splits[splits.length - 1], barH = 0.17 * k * 0.7;
+    const T = lines.length * lead + gap + barH + Math.max(guardExt, digH + 0.012);
+    fit = { pt: 4.5, lines, lead, top: cy - T / 2, T, barH };
   }
+  const barH = fit.barH;
   doc.setFontSize(fit.pt);
   fit.lines.forEach((ln, i) => doc.text(ln, cx, fit.top + fit.lead * (i + 0.5), { align: 'center', baseline: 'middle' }));
 
@@ -2645,6 +2656,19 @@ function nameChordWidth(dia, pt, lineCount, lineIndex, ringRatio) {
   const offset = Math.abs((lineIndex - (lineCount - 1) / 2) * lead) + pt * 0.36 / 72;
   const inner = clearR * clearR - offset * offset;
   return inner > 0 ? 2 * Math.sqrt(inner) : 0;
+}
+
+// Three lines for the longest names, split so the widest line is as narrow as possible.
+function splitThree(doc, words) {
+  let best = null;
+  for (let a = 1; a < words.length - 1; a++) {
+    for (let b = a + 1; b < words.length; b++) {
+      const lines = [words.slice(0, a).join(' '), words.slice(a, b).join(' '), words.slice(b).join(' ')];
+      const w = Math.max(...lines.map(l => doc.getTextWidth(l)));
+      if (!best || w < best.w) best = { w, lines };
+    }
+  }
+  return best ? best.lines : [words.join(' ')];
 }
 
 // Break at whichever word gap leaves the two lines closest in width.
