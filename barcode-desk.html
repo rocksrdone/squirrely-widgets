@@ -105,7 +105,9 @@ details summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var
 <div class="toast" id="toast"></div>
 
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="label-draw.js"></script>
 <script>
 const BARCODE_BACK = /barcode/i;
 const BARCODE_STYLE = 'Colorway name + barcode';
@@ -123,9 +125,11 @@ function getRefId(r) {
 function fiberCode(f) { return ({ 'ff nylon': 'FF', 'e nylon': 'E', 'ff cotton': 'FF cotton' })[String(f || '').toLowerCase()] || String(f || ''); }
 function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 2600); }
 
-/* ---------- EAN-13 (same rules as Label Batch) ---------- */
-function eanCheckDigit(d12) { let s = 0; for (let i = 0; i < 12; i++) s += Number(d12[i]) * (i % 2 ? 3 : 1); return String((10 - (s % 10)) % 10); }
-function eanNormalize(raw) {
+/* ---------- EAN-13 ----------
+   Tables, check digit and eanModules come from label-draw.js (shared with
+   Label Batch). checkCode is this page's friendlier version for typing:
+   it knows the difference between "still typing" and "typo". */
+function checkCode(raw) {
   const d = String(raw || '').replace(/[\s\-]/g, '');
   if (!d) return { ok: false, error: '' };
   if (!/^\d+$/.test(d)) return { ok: false, error: 'Digits only' };
@@ -136,18 +140,6 @@ function eanNormalize(raw) {
   if (code.length > 13) return { ok: false, error: `${d.length} digits — EAN-13 has 13` };
   if (eanCheckDigit(code.slice(0, 12)) !== code[12]) return { ok: false, error: `Last digit doesn't check (should be ${eanCheckDigit(code.slice(0, 12))}) — probably a typo` };
   return { ok: true, code };
-}
-const EAN_L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
-const EAN_G = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
-const EAN_R = ['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
-const EAN_PARITY = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
-const EAN_GUARD = new Set([0, 1, 2, 45, 46, 47, 48, 49, 92, 93, 94]);
-function eanModules(code) {
-  const p = EAN_PARITY[Number(code[0])]; let m = '101';
-  for (let i = 1; i <= 6; i++) m += (p[i - 1] === 'L' ? EAN_L : EAN_G)[Number(code[i])];
-  m += '01010';
-  for (let i = 7; i <= 12; i++) m += EAN_R[Number(code[i])];
-  return m + '101';
 }
 // Drawn barcode, the same layout as the back label: 6 + 6 digits under the bars.
 function barcodeSvg(code, mw) {
@@ -191,11 +183,18 @@ async function readBarcodeFromFile(file) {
 
 /* ---------- data ---------- */
 async function load() {
-  const [cust, rec, cb, wo, wol] = await Promise.all([
+  const [cust, rec, cb, wo, wol, tpl] = await Promise.all([
     grist.docApi.fetchTable('Customers'), grist.docApi.fetchTable('Recipes'),
     grist.docApi.fetchTable('Customer_Barcodes'),
     grist.docApi.fetchTable('Work_Orders'), grist.docApi.fetchTable('Work_Order_Lines'),
+    grist.docApi.fetchTable('Label_Templates').catch(() => null),
   ]);
+  S.tplByFiber = {};
+  if (tpl) (tpl.id || []).forEach((id, i) => {
+    const dia = Number((tpl.Label_Diameter_In || [])[i]) || 0; if (!dia) return;
+    const t = { dia, fontPt: Number((tpl.Name_Font_Size_Pt || [])[i]) || 7.5, ringPt: Number((tpl.Ring_Font_Size_Pt || [])[i]) || 0, ringRatio: Number((tpl.Ring_Radius_Ratio || [])[i]) || 0 };
+    String((tpl.Fiber_Codes || [])[i] || '').split(/[,;/|\s]+/).map(f => f.trim().toUpperCase()).filter(Boolean).forEach(f => { if (!S.tplByFiber[f]) S.tplByFiber[f] = t; });
+  });
   S.customers = (cust.id || []).map((id, i) => ({ id, name: cust.Customer_Name[i] || '', code: cust.Code[i] || '', back: cust.Label_Back_Style[i] || '', status: cust.Status[i] || '' }))
     .filter(c => c.name);
   S.custById = Object.fromEntries(S.customers.map(c => [c.id, c]));
@@ -265,7 +264,7 @@ function renderMain() {
     </div>
     <div id="missingCard"></div>
     <div class="card">
-      <h2>Saved for ${esc(c.name)} <span class="right"><input class="filter" id="filterIn" placeholder="Filter…" value="${esc(S.filter)}"></span></h2>
+      <h2>Saved for ${esc(c.name)} <span class="right row"><button class="btn small" id="sheetBtn" title="A page of their back labels, drawn exactly as Label Batch prints them, for the customer to print and scan">🖨 Test sheet PDF</button><input class="filter" id="filterIn" placeholder="Filter…" value="${esc(S.filter)}"></span></h2>
       <div id="savedList"></div>
     </div>
     <div class="card">
@@ -278,6 +277,7 @@ function renderMain() {
   if ($('turnOn')) $('turnOn').onclick = turnOnBarcodes;
   bindAdd(); renderMissing(); renderSaved();
   $('filterIn').oninput = e => { S.filter = e.target.value; renderSaved(); };
+  $('sheetBtn').onclick = testSheet;
   $('bulkIn').oninput = parseBulk;
   updatePreview();
 }
@@ -347,11 +347,11 @@ async function fromImage(file) {
     $('codeIn').value = code;
     st.className = 'status ok'; st.textContent = '✓ Read from the picture: ' + code + (S.pick ? '' : ' — now pick the colourway');
     updatePreview();   // still warns if it doesn't check or is already used
-    if (eanNormalize(code).ok) (S.pick ? $('saveBtn') : $('recIn')).focus();
+    if (checkCode(code).ok) (S.pick ? $('saveBtn') : $('recIn')).focus();
   } catch (e) { st.className = 'status bad'; st.textContent = e.message; }
 }
 function formState() {
-  const v = eanNormalize($('codeIn').value);
+  const v = checkCode($('codeIn').value);
   const dupe = v.ok ? S.codes.find(x => x.cust === S.custId && x.code === v.code && (!S.pick || x.recipe !== S.pick.id)) : null;
   const ex = S.pick ? codeFor(S.custId, S.pick.id) : null;
   return { v, dupe, ex };
@@ -424,10 +424,10 @@ function renderMissing() {
       <td><input class="inline" data-miss="${r}" inputmode="numeric" placeholder="13 digits"></td><td class="status" data-missst="${r}"></td></tr>`; }).join('')}</tbody></table></div>`;
   $('missingCard').querySelectorAll('[data-miss]').forEach(inp => {
     const st = $('missingCard').querySelector(`[data-missst="${inp.dataset.miss}"]`);
-    inp.oninput = () => { const v = eanNormalize(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial || !inp.value ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
+    inp.oninput = () => { const v = checkCode(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial || !inp.value ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
     inp.onkeydown = async e => {
       if (e.key !== 'Enter') return;
-      const v = eanNormalize(inp.value); if (!v.ok) return;
+      const v = checkCode(inp.value); if (!v.ok) return;
       try { S.flash = await upsert(Number(inp.dataset.miss), v.code, ''); toast(`Saved ${S.recById[inp.dataset.miss].name}`); await refresh(true); }
       catch (err) { toast('Not saved: ' + err.message, true); }
     };
@@ -443,7 +443,7 @@ function renderSaved() {
   if (!rows.length) { $('savedList').innerHTML = `<div class="empty-note">${S.filter ? 'Nothing matches.' : 'No barcodes saved yet.'}</div>`; return; }
   const fmt = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   $('savedList').innerHTML = `<table><thead><tr><th>Colourway</th><th></th><th>Barcode</th><th>Updated</th><th></th></tr></thead><tbody>${rows.map(x => {
-    const v = eanNormalize(x.code);
+    const v = checkCode(x.code);
     return `<tr data-id="${x.id}" class="${x.id === S.flash ? 'flash' : ''}">
       <td><b>${esc(x.r.name)}</b><span class="fibre">${esc(fiberCode(x.r.fiber))}</span>${x.notes ? `<div class="note">${esc(x.notes)}</div>` : ''}</td>
       <td>${v.ok ? barcodeSvg(v.code, 0.9) : '<span class="status bad">✗ ' + esc(v.error || 'empty') + '</span>'}</td>
@@ -460,11 +460,11 @@ function editRow(id) {
   cell.innerHTML = `<input class="inline" value="${esc(x.code)}" inputmode="numeric"> <div class="status mid" style="font-size:11px">Enter to save · Esc to cancel</div>`;
   const inp = cell.querySelector('input'), st = cell.querySelector('.status');
   inp.focus(); inp.select();
-  inp.oninput = () => { const v = eanNormalize(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
+  inp.oninput = () => { const v = checkCode(inp.value); st.className = 'status ' + (v.ok ? 'ok' : v.partial ? 'mid' : 'bad'); st.textContent = v.ok ? '✓ Enter to save' : v.error; };
   inp.onkeydown = async e => {
     if (e.key === 'Escape') return renderSaved();
     if (e.key !== 'Enter') return;
-    const v = eanNormalize(inp.value); if (!v.ok) return;
+    const v = checkCode(inp.value); if (!v.ok) return;
     if (v.code === x.code) return renderSaved();
     try { await grist.docApi.applyUserActions([['UpdateRecord', 'Customer_Barcodes', id, { Barcode: v.code, Updated: Date.now() / 1000 }]]); S.flash = id; toast('Updated'); await refresh(true); }
     catch (err) { toast('Not saved: ' + err.message, true); }
@@ -493,7 +493,7 @@ function parseBulk() {
     const m = l.match(/(\d[\d\s-]{5,16}\d)/);
     const raw = m ? m[1].replace(/[\s-]/g, '') : '';
     const name = (m ? l.replace(m[0], '') : l).replace(/[\t,;|]+/g, ' ').replace(/\s+/g, ' ').trim();
-    const v = eanNormalize(raw), mt = matchRecipe(name);
+    const v = checkCode(raw), mt = matchRecipe(name);
     return { line: l, name, raw, v, cands: mt.cands, pick: mt.pick ? mt.pick.id : null };
   });
   renderBulk();
@@ -528,6 +528,72 @@ async function saveBulk() {
   if (!acts.length) { toast('Nothing new to save'); return; }
   try { await grist.docApi.applyUserActions(acts); toast(`Saved ${acts.length} barcode${acts.length === 1 ? '' : 's'}`); S.bulk = []; await refresh(false); }
   catch (e) { toast('Not saved: ' + e.message, true); }
+}
+
+/* ---------- test sheet ----------
+   A letter page of this customer's back labels, drawn by the same code Label
+   Batch prints with (label-draw.js) at the same sizes (Label_Templates), so
+   if the sheet scans at their till, the real labels will. Uses whatever the
+   Saved list is showing — filter it first to send just a few. */
+const RING_SPEC = { FFN: ['100% Nylon', 'FF'], FFC: ['100% Cotton', 'FF'], EN: ['100% Nylon', 'E'] };
+function fibreKey(f) { const s = String(f || '').toUpperCase(); return /E\s*NYLON/.test(s) ? 'EN' : /COTTON/.test(s) ? 'FFC' : 'FFN'; }
+function ringTextFor(fk) {
+  const sp = RING_SPEC[fk], yd = fk === 'EN' ? 150 : 100;
+  return `Made in USA • ${sp[0]} • Size ${sp[1]} • ${Math.round(yd * 0.9144)} Meters / ${yd} Yards`;
+}
+function geomFor(fk) {
+  const t = S.tplByFiber[fk] || (fk === 'EN' ? { dia: 1, fontPt: 7.5 } : { dia: 1.25, fontPt: 8.5 });
+  return { dia: t.dia, fontPt: t.fontPt, ringPt: t.ringPt || t.dia * 72 * RING_FONT_RATIO, ringRatio: t.ringRatio || RING_RADIUS_RATIO };
+}
+function sheetRows() {
+  const n = norm(S.filter);
+  return codesFor(S.custId).map(x => ({ ...x, r: S.recById[x.recipe] }))
+    .filter(x => x.r && checkCode(x.code).ok)
+    .filter(x => !n || norm(x.r.name).includes(n) || x.code.includes(S.filter.trim()))
+    .sort((a, b) => fibreKey(a.r.fiber).localeCompare(fibreKey(b.r.fiber)) || a.r.name.localeCompare(b.r.name));
+}
+function buildTestSheet(custName, rows) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'in', format: 'letter', orientation: 'portrait' });
+  const sizes = [...new Set(rows.map(x => geomFor(fibreKey(x.r.fiber)).dia))].map(d => d + '"').join(' and ');
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(0);
+  doc.text(`Barcode test sheet — ${custName}`, 0.75, 0.85);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(60);
+  ['These are the back labels for your spools, with your own barcodes, drawn exactly as we will print them' + (sizes ? ` (${sizes} labels).` : '.'),
+   'Please print this page at 100% ("Actual size" — not "Fit to page") and scan each circle at your register.',
+   'The number your scanner reads should match the number printed under each circle.',
+   'To check the print size: the line below should measure exactly 2 inches.'].forEach((t, i) => doc.text(t, 0.75, 1.15 + i * 0.19));
+  const ry = 2.05; doc.setDrawColor(0); doc.setLineWidth(0.01);
+  doc.line(0.75, ry, 2.75, ry); doc.line(0.75, ry - 0.06, 0.75, ry + 0.06); doc.line(2.75, ry - 0.06, 2.75, ry + 0.06);
+  doc.setFontSize(8); doc.text('2 inches', 1.75, ry + 0.17, { align: 'center' });
+  const foot = () => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120);
+    doc.text('Grey circles show the label edge only — they are not printed on the real labels.  Squirrely Stash · squirrelvendor.com', 4.25, 10.55, { align: 'center' }); };
+  const cols = 3, x0 = 1.6, dx = 2.65, dy = 2.2;
+  let y = 3.25, col = 0;
+  rows.forEach(x => {
+    const fk = fibreKey(x.r.fiber), g = geomFor(fk);
+    if (y + 0.62 + 0.45 > 10.3) { foot(); doc.addPage(); y = 1.4; col = 0; }
+    const cx = x0 + col * dx, cy = y;
+    doc.setDrawColor(190); doc.setLineWidth(0.005); doc.circle(cx, cy, g.dia / 2, 'S');
+    doc.setFont(NAME_FONT[0], NAME_FONT[1]); doc.setTextColor(0);
+    drawRingText(doc, ringTextFor(fk), cx, cy, g.dia, g.ringPt, g.ringRatio);
+    drawBarcodeBack(doc, x.r.name, checkCode(x.code).code, cx, cy, g);
+    const below = cy + 0.625 + 0.22;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(0);
+    doc.text(`${x.r.name}${fk === 'EN' ? ' (size E)' : ''}`, cx, below, { align: 'center' });
+    doc.setFont('courier', 'normal'); doc.text(x.code, cx, below + 0.17, { align: 'center' });
+    if (++col === cols) { col = 0; y += dy; }
+  });
+  foot();
+  return doc;
+}
+function testSheet() {
+  const c = S.custById[S.custId], rows = sheetRows();
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('The PDF library did not load — refresh and try again.', true); return; }
+  if (!rows.length) { toast(S.filter ? 'Nothing in the filtered list to print' : 'No saved barcodes to print yet', true); return; }
+  const doc = buildTestSheet(c.name, rows);
+  doc.save(`${c.name.replace(/[^\w\- ]+/g, '').trim()} - barcode test sheet.pdf`);
+  toast(`Test sheet made: ${rows.length} label${rows.length === 1 ? '' : 's'}`);
 }
 
 /* ---------- start ---------- */
