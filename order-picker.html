@@ -1259,8 +1259,11 @@ grist.ready({ requiredAccess: 'full' });
 /* Opened from a link (Customers → View) the page arrives with a work order
    selected: show it with Details open and scroll to it. Our own clicks set the
    cursor too, but those already match selectedId, so they change nothing. */
+let gristRow = null;   // follow the Grist cursor only when it moves — it re-sends the same row on every data change
 grist.onRecord(rec => {
-  if (!rec || rec.id === selectedId) return;
+  if (!rec || rec.id === gristRow) return;
+  gristRow = rec.id;
+  if (rec.id === selectedId) return;
   selectedId = rec.id;
   openDetails.add(rec.id);
   const show = () => { renderList(); const el = document.querySelector(`[data-order-id="${rec.id}"]`) || document.getElementById('card-' + rec.id);

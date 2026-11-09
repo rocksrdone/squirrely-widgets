@@ -2785,8 +2785,14 @@ window.addEventListener('beforeunload', (e) => {
 
 /* Opened from a link (Customers → Edit) with a manual order selected: open it. */
 try {
+  /* Follow the Grist table only when its cursor MOVES to another row. Grist
+     re-sends the same row whenever any order data changes (a save here, a
+     sync, another widget) — following that would yank you back to it every
+     time, so clicks on other orders in this list seem to do nothing. */
   grist.onRecord(rec => {
-    if (!rec || rec.id === S.selected) return;
+    if (!rec || rec.id === S.gristRow) return;
+    S.gristRow = rec.id;
+    if (rec.id === S.selected) return;
     const go = () => { if (S.orders.some(o => o.id === rec.id && isManual(o))) selectOrder(rec.id); };
     if (S.orders && S.orders.length) go(); else setTimeout(go, 1500);
   });
