@@ -3249,11 +3249,11 @@ function renderMain() {
       <label class="lab">Due by</label>
       ${S.cols.dueDate
         ? `<input type="date" class="due" value="${dueInputValue(o.dueDate)}"
-            onchange="draftSet(${o.id}, 'dueDate', dueFromInput(this.value), true)">
+            onchange="dueTyped(${o.id}, this.value)" onblur="dueTyped(${o.id}, this.value, true)">
           ${[['+1 wk', 7], ['+2 wks', 14], ['+3 wks', 21]].map(([t, n]) =>
             `<button class="btn secondary small" type="button" onclick="draftSet(${o.id}, 'dueDate', dueInDays(${n}), true)">${t}</button>`).join('')}
           ${o.dueDate ? `<button class="btn secondary small" type="button" onclick="draftSet(${o.id}, 'dueDate', null, true)">clear</button>` : ''}
-          <span class="due-hint">${dueHint(o)}</span>`
+          <span class="due-hint" id="dueHint">${dueHint(o)}</span>`
         : `<span class="st-listed">add a Date column <code>Due_Date</code> to Work_Orders</span>`}
     </div>
     ${S.cols.notes ? `<div class="field-row" style="align-items:flex-start">
@@ -3439,6 +3439,17 @@ function dueHint(o) {
   if (d < 0) return `<b class="due-late">${-d} day${d === -1 ? '' : 's'} overdue</b>`;
   if (d === 0) return '<b class="due-soon">due today</b>';
   return d <= 3 ? `<b class="due-soon">in ${d} day${d === 1 ? '' : 's'}</b>` : `in ${d} days`;
+}
+/* Typing a date fires change after each part (month, day, year). Redrawing
+   then would rebuild the box under the cursor and lose the year half-typed —
+   so while typing only the hint updates (and the order list when you leave the box). */
+function dueTyped(id, str, leaving) {
+  const v = dueFromInput(str);
+  if (str && !v && !leaving) return;           // still mid-typing
+  draftSet(id, 'dueDate', v, false);
+  const o = withDraft(S.orders.find(x => x.id === id));
+  const h = document.getElementById('dueHint'); if (h) h.innerHTML = dueHint(o);
+  if (leaving) renderSide();
 }
 function dueSideHtml(o) {
   if (!o.dueDate || o.status === 'Shipped' || o.status === 'Complete') return '';
