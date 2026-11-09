@@ -98,6 +98,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 .cust-info .v.none { color: #A89B8F; font-style: italic; }
 .cust-info .v.loud { color: var(--accent); font-weight: 600; }
 .cust-info .edit { grid-column: 1 / -1; font-size: 10.5px; color: #8B7D72; }
+.badge.unsaved { background: #FFF3D6; color: #7A4A00; }
 input.po { width: 160px; font-family: 'DM Mono', monospace; }
 input.due { width: 150px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: #fff; color: #1A1614; font: inherit; }
 .due-hint { font-size: 11px; color: var(--muted, #8B7D72); margin-left: 4px; }
@@ -2798,17 +2799,12 @@ try {
   });
 } catch (e) { /* standalone */ }
 
+/* Switching orders never asks. A browser pop-up here (the old "Save your
+   changes first?") freezes the whole Grist tab until it's answered, and it can
+   end up out of sight. Unsaved changes simply stay with their order — drafts
+   are kept per order — and the list marks it "unsaved" until you go back and
+   Save or Discard. */
 function selectOrder(id) {
-  if (S.selected && S.selected !== id && isDirty(S.selected)) {
-    const cur = S.orders.find(x => x.id === S.selected);
-    if (confirm(`Save your changes to ${cur ? cur.number : 'this order'} first?\n\nOK saves them. Cancel throws them away.`)) {
-      const from = S.selected;
-      saveOrder(from, true).then(ok => { if (ok) { S.selected = id; render(); } });
-      return;
-    }
-    delete S.draft[S.selected];
-    delete S.lineDraft[S.selected];
-  }
   S.selected = id; render();
 }
 
@@ -2896,7 +2892,7 @@ function renderSide() {
           : '<span class="badge active">released</span>');
     return `<div class="order-item ${S.selected === o.id ? 'sel' : ''}" onclick="selectOrder(${o.id})">
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
-        <span class="num">${esc(o.number)}</span> ${badge}
+        <span class="num">${esc(o.number)}</span> ${badge}${isDirty(o.id) ? ' <span class="badge unsaved" title="Changes not saved yet — open it and click Save or Discard">● unsaved</span>' : ''}
       </div>
       <div class="cust">${esc(o.customerName || '(no customer)')}</div>
       <div class="meta">${spools} spool(s) · ${lines.length} line(s)${dueSideHtml(o)}</div>
