@@ -83,6 +83,20 @@ label.pick { display: flex; gap: 5px; align-items: center; cursor: pointer; font
 .prev details { font-size: 11.5px; margin-top: 4px; }
 .res { font-size: 12px; margin: 3px 0; }
 .res.ok { color: var(--teal); } .res.bad { color: var(--accent); } .res.skip { color: var(--gold); }
+.tabs { display: flex; gap: 4px; margin-top: 10px; border-bottom: 1.5px solid var(--rule); }
+.tab { font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 14px; border: 1.5px solid transparent; border-bottom: 0;
+       border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); cursor: pointer; margin-bottom: -1.5px; }
+.tab.on { background: var(--paper); color: var(--ink); border-color: var(--rule); }
+.vis { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: var(--purple-light); color: var(--purple); }
+.vis.all { background: var(--teal-light); color: var(--teal); }
+.photos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.photos label { position: relative; cursor: pointer; }
+.photos img { width: 58px; height: 58px; object-fit: cover; border-radius: 5px; border: 2.5px solid transparent; display: block; background: #F3EEE7; }
+.photos input { position: absolute; top: 3px; left: 3px; margin: 0; }
+.photos input:checked + img { border-color: var(--teal); }
+.photos .cap { font-size: 9.5px; color: var(--muted); text-align: center; max-width: 58px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.opt { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin: 8px 0 2px; }
+.opt label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
 .note { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
 a { color: var(--teal); }
 </style>
@@ -90,19 +104,21 @@ a { color: var(--teal); }
 <body>
 <div class="hd">
   <h1>Listing Desk</h1>
-  <span class="sub">Create retail store drafts from Grist recipes</span>
+  <span class="sub" id="sub">Create store listings from Grist recipes</span>
+</div>
+<div class="tabs">
+  <button class="tab" data-store="retail">Retail store</button>
+  <button class="tab" data-store="vendor">Vendor store</button>
 </div>
 <div class="bar">
   <input id="q" class="search" placeholder="Search colourway or SKU…">
   <select id="show">
-    <option value="missing">Not on retail yet</option>
+    <option value="missing">Not listed yet</option>
     <option value="all">Everything</option>
   </select>
-  <select id="scope">
-    <option value="retail">Retail scope</option>
-    <option value="all">All scopes</option>
-  </select>
-  <button class="btn" id="recheck">Re-check retail</button>
+  <select id="scope"></select>
+  <select id="cust" style="display:none"></select>
+  <button class="btn" id="recheck">Re-check</button>
 </div>
 <div id="status" class="status">Loading…</div>
 <div id="list"></div>
@@ -114,8 +130,31 @@ a { color: var(--teal); }
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 
 <script>
-/* The n8n webhook. Holds the retail credential; the widget never sees a token. */
-const WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/retail-listings';
+/* ══ Listing Desk ══ two stores, one table.
+   Retail:  drafts on squirrely-stash via "SS - Retail Listings" (n8n).
+   Vendor:  listings on squirrelvender via "SS - Vendor Listings" (n8n).
+   Both webhooks hold their store's credential; this page never sees a token.
+
+   Vendor store rules, from how the store is set up:
+   - Title/description/type from the Product_Templates rows with Store = Vendor
+     ("FF Nylon - {colorway}", "Picture is only an estimation…").
+   - Visibility is a tag, following how the store is already tagged: a
+     Customer Reserved recipe gets Vendor-<its Linked_Customer's Code> (only
+     they see it, in their collection); everything else — General, Limited
+     Edition, One-off, even with a Linked_Customer — gets Vendor-All (every
+     vendor; it lands in New Products and the fibre collection by the store's
+     own rules). A Customer Reserved recipe with no Linked_Customer is refused
+     rather than shown to everyone.
+   - Price: Cost_Settings Vendor_Price:<fibre>. Stock 0, keeps selling when
+     out (made to order), origin and HS code from Products.
+   - Photos: the recipe's favourite (or first) is ticked; tick more to show
+     variations. Never another recipe's photo.                                 */
+const STORES = {
+  retail: { label: 'retail store', url: 'https://squirrelystash.app.n8n.cloud/webhook/retail-listings',
+            priceKey: 'Retail_Price', channelsKey: 'Retail_Channels', sub: 'Create retail store drafts from Grist recipes' },
+  vendor: { label: 'vendor store', url: 'https://squirrelystash.app.n8n.cloud/webhook/vendor-listings',
+            priceKey: 'Vendor_Price', channelsKey: 'Vendor_Channels', sub: 'Create vendor store listings from Grist recipes' },
+};
 const FIBRES = [
   { code: 'FFN', name: 'FF Nylon' },
   { code: 'EN', name: 'E Nylon' },
@@ -124,19 +163,20 @@ const FIBRES = [
 /* Recipe_Scope values that never get a retail listing of their own. */
 const NOT_RETAIL = ['customer reserved', 'college/university', 'one-off'];
 const BATCH = 5;   // listings per webhook call; each takes a few Shopify calls
+const COUNTRY = { 'united states': 'US', 'usa': 'US', 'us': 'US' };
 
-/* The webhook's password. It lives in the Grist Settings table (Webhook_Key),
+/* The webhook's password lives in the Grist Settings table (Webhook_Key),
    never in this file — the repo and this page are public, the Grist doc is
-   not. n8n's Header Auth credential holds the same value and refuses any call
-   without it, so knowing the webhook address alone gets nobody anywhere. */
-async function callWebhook(payload) {
+   not. n8n's Header Auth credential holds the same value. */
+async function callWebhook(store, payload) {
   const key = SSSettings.text('Webhook_Key', '');
   if (!key) throw new Error('no Webhook_Key in Settings — add it on Settings Desk');
-  const res = await fetch(WEBHOOK_URL, { method: 'POST',
+  const res = await fetch(STORES[store].url, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-SS-Key': key },
     body: JSON.stringify(payload) });
   if (res.status === 401 || res.status === 403)
     throw new Error('n8n refused the Webhook_Key — check it matches the "SS Webhook Key" credential');
+  if (res.status === 404) throw new Error(`the ${STORES[store].label} workflow is not active in n8n`);
   if (!res.ok) throw new Error('webhook returned ' + res.status);
   const d = await res.json();
   if (!d || d.ok === false) throw new Error((d && d.error) || 'the workflow reported a failure');
@@ -144,8 +184,12 @@ async function callWebhook(payload) {
 }
 
 const S = {
-  recipes: [], cols: [], tplByFiber: {}, tplDefault: null, priceByFiber: {}, weightByFiber: {},
-  photoByRecipe: {}, retail: null, retailError: '', loading: true, picked: new Set(), made: {},
+  store: 'retail', recipes: [], customers: {},
+  tpl: { retail: { byFiber: {}, def: null }, vendor: { byFiber: {}, def: null } }, hasTemplates: { retail: false, vendor: false },
+  price: { retail: {}, vendor: {} }, weightByFiber: {}, productByFiber: {}, photosByRecipe: {},
+  live: { retail: null, vendor: null }, liveError: { retail: '', vendor: '' },
+  made: { retail: {}, vendor: {} }, picked: { retail: new Set(), vendor: new Set() },
+  photoPick: {}, loading: true,
 };
 
 function esc(s) {
@@ -177,6 +221,7 @@ function fiberCode(f) {
   if (/NYLON/.test(s)) return 'FFN';
   return s;
 }
+const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
 /* Same as Inventory Desk: unknown tokens are left in place so a typo shows. */
 function fillTemplate(text, vars) {
   if (text == null) return '';
@@ -184,9 +229,9 @@ function fillTemplate(text, vars) {
     Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m);
 }
 /* Field by field: a fibre row overrides only what it fills; the blank-fibre
-   row supplies the rest. */
-function templateFor(code) {
-  const own = S.tplByFiber[code] || null, def = S.tplDefault;
+   row of the same store supplies the rest. */
+function templateFor(store, code) {
+  const T = S.tpl[store], own = T.byFiber[code] || null, def = T.def;
   if (!own) return def;
   if (!def) return own;
   const out = Object.assign({}, def);
@@ -196,11 +241,11 @@ function templateFor(code) {
   });
   return out;
 }
-function handleFor(title, sku) {
-  const slug = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+function slug(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug(title) || slug(sku) || 'listing';
 }
+function handleFor(title, sku) { return slug(title) || slug(sku) || 'listing'; }
 
 async function loadGrist() {
   try { await SSSettings.load(); } catch (e) { console.warn('Settings unavailable', e); }
@@ -209,6 +254,7 @@ async function loadGrist() {
     name: findColumn(recT, ['Recipe_Name']), sku: findColumn(recT, ['SKU_Base']),
     fiber: findColumn(recT, ['Fiber_Type']), scope: findColumn(recT, ['Recipe_Scope']),
     status: findColumn(recT, ['Status']), cw: findColumn(recT, ['Colorway']),
+    cust: findColumn(recT, ['Linked_Customer']),
   };
   S.recipes = (recT.id || []).map((id, i) => ({
     id,
@@ -218,32 +264,43 @@ async function loadGrist() {
     scope: String(col(recT, c.scope)[i] || '').trim(),
     status: String(col(recT, c.status)[i] || '').trim(),
     cw: getRefId(col(recT, c.cw)[i]),
+    custId: getRefId(col(recT, c.cust)[i]),
   })).filter(r => r.name && r.sku && FIBRES.some(f => f.code === r.fiber));
 
-  /* Templates */
-  S.tplByFiber = {}; S.tplDefault = null; S.hasTemplates = false;
+  S.customers = {};
+  try {
+    const t = await grist.docApi.fetchTable('Customers');
+    (t.id || []).forEach((id, i) => {
+      S.customers[id] = { id, name: String(col(t, 'Customer_Name')[i] || '').trim(), code: String(col(t, 'Code')[i] || '').trim().toUpperCase() };
+    });
+  } catch (e) { console.warn('Listing Desk: Customers unavailable', e); }
+
+  /* Templates — Store = Vendor rows are the vendor store's; anything else is retail. */
+  S.tpl = { retail: { byFiber: {}, def: null }, vendor: { byFiber: {}, def: null } };
+  S.hasTemplates = { retail: false, vendor: false };
   try {
     const t = await grist.docApi.fetchTable('Product_Templates');
     const names = ['Fiber_Code', 'Title_Pattern', 'Description', 'Product_Category', 'Type', 'Tags',
-      'SEO_Title', 'SEO_Description', 'Active'];
+      'SEO_Title', 'SEO_Description', 'Active', 'Store', 'Shopify_Vendor'];
     const tc = {}; names.forEach(n => { tc[n] = findColumn(t, [n]); });
-    S.hasTemplates = !!(tc.Description || tc.Title_Pattern);
     (t.id || []).forEach((id, i) => {
       if (tc.Active && !col(t, tc.Active)[i]) return;
       const row = {}; names.forEach(n => { row[n] = tc[n] ? col(t, tc[n])[i] : null; });
+      const store = /^vendor$/i.test(String(row.Store || '').trim()) ? 'vendor' : 'retail';
+      if (row.Description || row.Title_Pattern) S.hasTemplates[store] = true;
       const f = fiberCode(row.Fiber_Code || '');
-      if (f) S.tplByFiber[f] = row; else if (!S.tplDefault) S.tplDefault = row;
+      if (f) S.tpl[store].byFiber[f] = row; else if (!S.tpl[store].def) S.tpl[store].def = row;
     });
   } catch (e) { console.warn('Listing Desk: Product_Templates unavailable', e); }
 
-  /* Prices */
-  S.priceByFiber = {};
+  /* Prices: Retail_Price:<fibre> and Vendor_Price:<fibre> in Cost_Settings */
+  S.price = { retail: {}, vendor: {} };
   try {
     const t = await grist.docApi.fetchTable('Cost_Settings');
     const k = findColumn(t, ['Key']), v = findColumn(t, ['Value']);
     (t.id || []).forEach((id, i) => {
-      const m = /^Retail_Price:(.+)$/i.exec(String(col(t, k)[i] || '').trim());
-      if (m) S.priceByFiber[fiberCode(m[1])] = num(col(t, v)[i]);
+      const m = /^(Retail|Vendor)_Price:(.+)$/i.exec(String(col(t, k)[i] || '').trim());
+      if (m) S.price[m[1].toLowerCase()][fiberCode(m[2])] = num(col(t, v)[i]);
     });
   } catch (e) { console.warn('Listing Desk: Cost_Settings unavailable', e); }
 
@@ -261,82 +318,157 @@ async function loadGrist() {
     });
   } catch (e) { console.warn('Listing Desk: Item_Weights unavailable', e); }
 
-  /* Photos: this recipe's own favourite, else its first. Never another fibre's. */
-  S.photoByRecipe = {};
+  /* Origin and HS code per fibre (the customs Products table) */
+  S.productByFiber = {};
+  try {
+    const t = await grist.docApi.fetchTable('Products');
+    (t.id || []).forEach((id, i) => {
+      const f = fiberCode(col(t, 'Product_Code')[i]); if (!f) return;
+      const country = String(col(t, 'Country_of_Origin')[i] || '').trim();
+      S.productByFiber[f] = { hs: String(col(t, 'HS_Code')[i] || '').trim(),
+        country: COUNTRY[country.toLowerCase()] || (/^[A-Z]{2}$/i.test(country) ? country.toUpperCase() : '') };
+    });
+  } catch (e) { console.warn('Listing Desk: Products unavailable', e); }
+
+  /* Photos: all of this recipe's own, favourite first. Never another fibre's. */
+  S.photosByRecipe = {};
   try {
     const t = await grist.docApi.fetchTable('Product_Photos');
-    const rc = findColumn(t, ['Recipe']), uc = findColumn(t, ['Nextcloud_URL']), fc = findColumn(t, ['Is_Favorite']);
+    const rc = findColumn(t, ['Recipe']), uc = findColumn(t, ['Nextcloud_URL']), fc = findColumn(t, ['Is_Favorite']),
+      dc = findColumn(t, ['Lot_Date']), nc = findColumn(t, ['Notes']), sc = findColumn(t, ['Source_Filename']);
     (t.id || []).forEach((id, i) => {
       const rid = getRefId(col(t, rc)[i]), url = String(col(t, uc)[i] || '').trim();
       if (!rid || !url) return;
-      const fav = !!col(t, fc)[i], cur = S.photoByRecipe[rid];
-      if (!cur || (fav && !cur.fav)) S.photoByRecipe[rid] = { url, fav };
+      (S.photosByRecipe[rid] = S.photosByRecipe[rid] || []).push({ id, url, fav: !!col(t, fc)[i],
+        date: num(col(t, dc)[i]), note: String(col(t, nc)[i] || col(t, sc)[i] || '').trim() });
     });
+    Object.values(S.photosByRecipe).forEach(a => a.sort((x, y) => (y.fav - x.fav) || (y.date - x.date) || (x.id - y.id)));
   } catch (e) { console.warn('Listing Desk: Product_Photos unavailable', e); }
+}
+const photoFor = rid => (S.photosByRecipe[rid] || [])[0] || null;
 
-  /* Group by colourway NAME, not the Colorway reference: the E recipes don't
-     reliably point at the same Colorway row as their FF twin, and grouping on
-     the reference put Andromeda FF and Andromeda E on separate lines. A
-     customer-reserved recipe sharing a retail name (FFN_FOXY_CU_R beside
-     FFN_FOXY) is kept on its own line so it can never be listed as the retail
-     one. */
+/* One row per colourway, one cell per fibre. Grouped by NAME (the E recipes
+   don't reliably point at the same Colorway row as their FF twin). A
+   customer's own recipe sharing a retail name stays on its own line — keyed
+   by scope on retail, by the customer on the vendor store — so it can never
+   be listed as the general one. */
+function groupsFor(store) {
   const groups = {};
   S.recipes.forEach(r => {
-    const retail = !NOT_RETAIL.includes(r.scope.toLowerCase());
-    const key = r.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
-      + (retail ? '' : '|' + r.scope.toLowerCase());
-    const g = groups[key] || (groups[key] = { name: r.name, byFiber: {}, scopes: new Set() });
+    let key = fold(r.name);
+    if (store === 'retail') { if (NOT_RETAIL.includes(r.scope.toLowerCase())) key += '|' + r.scope.toLowerCase(); }
+    else if (isReserved(r)) key += '|c' + (r.custId || 'none');
+    const g = groups[key] || (groups[key] = { name: r.name, byFiber: {}, scopes: new Set(), custId: store === 'vendor' && isReserved(r) ? r.custId : null, reserved: isReserved(r) });
     if (!g.byFiber[r.fiber]) g.byFiber[r.fiber] = r;
     if (r.scope) g.scopes.add(r.scope);
   });
-  S.cols = Object.values(groups).sort((a, b) => a.name.localeCompare(b.name));
+  return Object.values(groups).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function checkRetail() {
-  S.retail = null; S.retailError = ''; render();
+async function checkStore(store) {
+  store = store || S.store;
+  S.live[store] = null; S.liveError[store] = ''; render();
   try {
-    const d = await callWebhook({ action: 'check', from: 'listing-desk' });
-    const bySku = {};
-    (d.variants || []).forEach(v => { if (v.sku) bySku[v.sku.toUpperCase()] = v; });
-    S.retail = { bySku, at: d.fetched_at, count: (d.variants || []).length };
+    const payload = { action: 'check', from: 'listing-desk' };
+    if (store === 'vendor') payload.skus = S.recipes.map(r => r.sku);
+    const d = await callWebhook(store, payload);
+    const bySku = {}, handles = new Set();
+    (d.variants || []).forEach(v => { if (v.sku) bySku[v.sku.toUpperCase()] = v; if (v.handle) handles.add(v.handle); });
+    const tagColls = {};
+    (d.collections || []).forEach(c => (c.rules || []).forEach(rl => {
+      if (/tag/i.test(rl.column) && /equal/i.test(rl.relation)) (tagColls[String(rl.condition).toLowerCase()] = tagColls[String(rl.condition).toLowerCase()] || []).push(c.title);
+    }));
+    S.live[store] = { bySku, handles, tagColls, hasCollections: !!(d.collections || []).length,
+      channels: d.channels || null, at: d.fetched_at, count: (d.variants || []).length };
   } catch (e) {
-    S.retailError = (e && e.message) || String(e);
+    S.liveError[store] = (e && e.message) || String(e);
   }
   render();
 }
 
+const isReserved = r => r.scope.toLowerCase() === 'customer reserved';
+/* Who sees a vendor listing. */
+function visibilityFor(r) {
+  if (isReserved(r) && r.custId) {
+    const c = S.customers[r.custId];
+    if (!c || !c.code) return { tag: '', label: c ? c.name : 'linked customer', block: `${c ? c.name : 'the linked customer'} has no Code in Customers` };
+    return { tag: 'Vendor-' + c.code, label: 'only ' + (c.name || c.code), code: c.code };
+  }
+  if (isReserved(r))
+    return { tag: '', label: '?', block: 'Customer Reserved but no Linked_Customer — set it on the recipe (or change the scope if every vendor should see it)' };
+  return { tag: 'Vendor-All', label: 'all vendors', all: true };
+}
+
 /* What a listing would be, and what is wrong with it. block = cannot send. */
-function buildListing(r) {
+function buildListing(r, store) {
+  store = store || S.store;
   const f = FIBRES.find(x => x.code === r.fiber);
-  const tpl = templateFor(r.fiber) || {};
-  const vendor = SSSettings.text('Business_Name', '');
-  const vars = { colorway: r.name, colourway: r.name, fiber: f.name, fibre: f.name, fiber_code: r.fiber, sku: r.sku, vendor };
+  const tpl = templateFor(store, r.fiber) || {};
+  const business = SSSettings.text('Business_Name', '');
+  const vendor = String(tpl.Shopify_Vendor || '').trim() || business;
+  const vars = { colorway: r.name, colourway: r.name, fiber: f.name, fibre: f.name, fiber_code: r.fiber, sku: r.sku, vendor: business };
   const T = (k) => fillTemplate(tpl[k], vars).trim();
   const title = T('Title_Pattern') || `${f.name} - ${r.name}`;
-  const price = S.priceByFiber[r.fiber] || 0;
+  const price = S.price[store][r.fiber] || 0;
   const weightOz = S.weightByFiber[r.fiber] || 0;
-  const photo = S.photoByRecipe[r.id] || null;
-  const tags = (T('Tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const photos = S.photosByRecipe[r.id] || [];
+  let tags = (T('Tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const gaps = [];
   const L = {
     recipeId: r.id, sku: r.sku, title, handle: handleFor(title, r.sku),
     descriptionHtml: T('Description'), vendor, productType: T('Type') || 'Thread', tags,
     category: T('Product_Category'), seoTitle: T('SEO_Title'), seoDescription: T('SEO_Description'),
-    price, weightOz, imageUrl: photo ? photo.url : '', imageAlt: title,
+    price, weightOz,
   };
-  const gaps = [];
-  if (!(price > 0)) gaps.push({ t: `no retail price — add Retail_Price:${r.fiber} to Cost_Settings`, block: true });
-  if (!vendor) gaps.push({ t: 'no Business_Name in Settings', block: true });
-  if (!S.hasTemplates || !L.descriptionHtml) gaps.push({ t: 'no description in Product_Templates', block: true });
+  if (store === 'retail') {
+    const photo = photos[0] || null;
+    Object.assign(L, { imageUrl: photo ? photo.url : '', imageAlt: title });
+    if (!(price > 0)) gaps.push({ t: `no retail price — add Retail_Price:${r.fiber} to Cost_Settings`, block: true });
+    if (!business) gaps.push({ t: 'no Business_Name in Settings', block: true });
+  } else {
+    const vis = visibilityFor(r);
+    L.visibility = vis;
+    if (vis.block) gaps.push({ t: vis.block, block: true });
+    else {
+      L.tags = tags = [...tags.filter(t => !/^vendor-/i.test(t)), vis.tag];
+      const live = S.live.vendor;
+      if (live && live.hasCollections && !live.tagColls[vis.tag.toLowerCase()])
+        gaps.push({ t: `no ${vis.tag} collection on the vendor store — made as a draft; set up their collection first`, block: false, draftOnly: true });
+      // A customer's own recipe that shares a general colourway's title gets their code in its web address.
+      const twin = S.recipes.some(o => o.id !== r.id && !o.custId && o.fiber === r.fiber && fold(o.name) === fold(r.name));
+      if (vis.code && (twin || (live && live.handles.has(L.handle)))) L.handle = handleFor(`${title} ${vis.code || ''}`, r.sku);
+    }
+    const prod = S.productByFiber[r.fiber] || {};
+    Object.assign(L, { countryOfOrigin: prod.country || '', hsCode: prod.hs || '', sellWhenOut: true });
+    const pick = S.photoPick[r.id];
+    L.images = photos.filter((p, k) => pick ? pick.has(p.id) : k === 0).map(p => p.url);
+    if (!(price > 0)) gaps.push({ t: `no vendor price — add Vendor_Price:${r.fiber} to Cost_Settings`, block: true });
+    if (!vendor) gaps.push({ t: 'no Shopify_Vendor on the vendor template (or Business_Name in Settings)', block: true });
+  }
+  if (!S.hasTemplates[store] || !L.descriptionHtml)
+    gaps.push({ t: `no ${store === 'vendor' ? 'Store = Vendor ' : ''}description in Product_Templates`, block: true });
   if (/\{\w+\}/.test(title + L.descriptionHtml + tags.join(','))) gaps.push({ t: 'template has an unknown {placeholder}', block: true });
   if (!(weightOz > 0)) gaps.push({ t: `no ${r.fiber} weight in Item_Weights`, block: false });
-  if (!photo) gaps.push({ t: 'no photo of this recipe', block: false });
-  L.gaps = gaps; L.blocked = gaps.some(g => g.block);
+  if (!photos.length) gaps.push({ t: 'no photo of this recipe', block: false });
+  L.gaps = gaps; L.blocked = gaps.some(g => g.block); L.draftOnly = gaps.some(g => g.draftOnly);
   return L;
 }
 
-function retailFor(r) {
-  if (S.made[r.id]) return { made: true, ...S.made[r.id] };
-  return S.retail ? S.retail.bySku[r.sku.toUpperCase()] || null : null;
+/* An existing vendor listing whose Vendor-… tag says something different
+   from Grist (scope + Linked_Customer). Shown, never changed from here. */
+function tagMismatch(r) {
+  const live = S.live.vendor ? S.live.vendor.bySku[r.sku.toUpperCase()] : null;
+  if (!live || !live.tags) return null;
+  const has = live.tags.filter(t => /^vendor-/i.test(t));
+  const want = visibilityFor(r);
+  if (want.block) return { has, want: null, text: `store: ${has.join(', ') || 'no Vendor tag'} · Grist: ${want.block}` };
+  if (has.length === 1 && has[0].toLowerCase() === want.tag.toLowerCase()) return null;
+  return { has, want: want.tag, text: `store: ${has.join(', ') || 'no Vendor tag'} · Grist says ${want.tag}` };
+}
+function liveFor(r, store) {
+  store = store || S.store;
+  if (S.made[store][r.id]) return { made: true, ...S.made[store][r.id] };
+  return S.live[store] ? S.live[store].bySku[r.sku.toUpperCase()] || null : null;
 }
 
 function isRetailScope(g) {
@@ -347,109 +479,184 @@ function isRetailScope(g) {
 function cellHtml(g, f) {
   const r = g.byFiber[f.code];
   if (!r) return '<span class="chip none">no recipe</span>';
-  const live = retailFor(r);
+  const live = liveFor(r);
   if (live) {
-    if (live.made) return `<a class="chip made" href="${esc(live.admin_url)}" target="_blank" rel="noopener">draft created</a>`;
+    if (live.made) return `<a class="chip made" href="${esc(live.admin_url)}" target="_blank" rel="noopener">${esc(live.label || 'created')}</a>`;
     const cls = live.status === 'ACTIVE' ? 'listed' : live.status === 'DRAFT' ? 'draft' : 'arch';
-    return `<a class="chip ${cls}" href="${esc(live.admin_url)}" target="_blank" rel="noopener">${esc(live.status.toLowerCase())}</a>`;
+    const mm = S.store === 'vendor' ? tagMismatch(r) : null;
+    return `<a class="chip ${cls}" href="${esc(live.admin_url)}" target="_blank" rel="noopener">${esc(live.status.toLowerCase())}</a>`
+      + (mm ? `<div class="gap" title="Fix it in Shopify (tags) or in Grist (Recipe_Scope / Linked_Customer) so they agree">⚠ ${esc(mm.text)}</div>` : '');
   }
-  if (!S.retail) return `<span class="sku">${esc(r.sku)}</span>`;
+  if (!S.live[S.store]) return `<span class="sku">${esc(r.sku)}</span>`;
   const L = buildListing(r);
   return `<div class="cell">
-    <label class="pick"><input type="checkbox" data-pick="${r.id}" ${S.picked.has(r.id) ? 'checked' : ''} ${L.blocked ? 'disabled' : ''}> list it</label>
+    <label class="pick"><input type="checkbox" data-pick="${r.id}" ${S.picked[S.store].has(r.id) ? 'checked' : ''} ${L.blocked ? 'disabled' : ''}> list it</label>
     <span class="sku">${esc(r.sku)}</span>
     ${L.gaps.map(x => `<span class="gap ${x.block ? 'block' : ''}">${esc(x.t)}</span>`).join('')}
   </div>`;
 }
 
+function setFilters() {
+  const scope = document.getElementById('scope'), cust = document.getElementById('cust');
+  const keep = scope.value;
+  scope.innerHTML = S.store === 'retail'
+    ? '<option value="retail">Retail scope</option><option value="all">All scopes</option>'
+    : '<option value="all">Everyone\'s</option><option value="general">For all vendors</option><option value="customer">Customer-only</option><option value="mismatch">Store tag ≠ Grist</option>';
+  if ([...scope.options].some(o => o.value === keep)) scope.value = keep;
+  if (S.store === 'vendor') {
+    const ids = [...new Set(S.recipes.filter(r => isReserved(r) && r.custId).map(r => r.custId))]
+      .filter(id => S.customers[id]).sort((a, b) => S.customers[a].name.localeCompare(S.customers[b].name));
+    const k2 = cust.value;
+    cust.innerHTML = '<option value="">Any customer</option>' + ids.map(id =>
+      `<option value="${id}">${esc(S.customers[id].name)}${S.customers[id].code ? ' (' + esc(S.customers[id].code) + ')' : ''}</option>`).join('');
+    if ([...cust.options].some(o => o.value === k2)) cust.value = k2;
+    cust.style.display = '';
+  } else cust.style.display = 'none';
+}
+
 function visibleCols() {
   const q = document.getElementById('q').value.trim().toLowerCase();
   const show = document.getElementById('show').value, scope = document.getElementById('scope').value;
-  return S.cols.filter(g => {
-    if (scope === 'retail' && !isRetailScope(g)) return false;
+  const cust = Number(document.getElementById('cust').value) || 0;
+  return groupsFor(S.store).filter(g => {
+    if (S.store === 'retail' && scope === 'retail' && !isRetailScope(g)) return false;
+    if (S.store === 'vendor') {
+      const own = g.reserved;
+      if (scope === 'mismatch') return Object.values(g.byFiber).some(r => tagMismatch(r));
+      if (scope === 'general' && own) return false;
+      if (scope === 'customer' && !own) return false;
+      if (cust && g.custId !== cust) return false;
+    }
     if (q && !(g.name.toLowerCase().includes(q) || Object.values(g.byFiber).some(r => r.sku.toLowerCase().includes(q)))) return false;
-    if (show === 'missing' && S.retail) return Object.values(g.byFiber).some(r => !retailFor(r));
+    if (show === 'missing' && S.live[S.store] && scope !== 'mismatch') return Object.values(g.byFiber).some(r => !liveFor(r));
     return true;
   });
 }
 
 function render() {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.store === S.store));
+  document.getElementById('sub').textContent = STORES[S.store].sub;
   const st = document.getElementById('status');
   if (S.loading) { st.textContent = 'Loading Grist…'; return; }
-  if (S.retailError) {
+  const label = STORES[S.store].label, live = S.live[S.store];
+  if (S.liveError[S.store]) {
     st.className = 'status bad';
-    st.textContent = `Couldn't read the retail store: ${S.retailError}`;
-  } else if (!S.retail) {
-    st.className = 'status'; st.textContent = 'Checking what is already on the retail store…';
+    st.textContent = `Couldn't read the ${label}: ${S.liveError[S.store]}`;
+  } else if (!live) {
+    st.className = 'status'; st.textContent = `Checking what is already on the ${label}…`;
   } else {
     st.className = 'status';
-    const t = new Date(S.retail.at);
-    st.textContent = `Retail store has ${S.retail.count} variants (checked ${t.toLocaleTimeString()}). Matched on SKU.`;
+    const t = new Date(live.at);
+    st.textContent = S.store === 'vendor'
+      ? `${live.count} of these recipes' SKUs are on the vendor store (checked ${t.toLocaleTimeString()}). Matched on SKU.`
+        + (() => { const n = S.recipes.filter(r => tagMismatch(r)).length; return n ? ` ${n} listed with a Vendor tag that doesn't match Grist — pick "Store tag ≠ Grist" to see them.` : ''; })()
+      : `Retail store has ${live.count} variants (checked ${t.toLocaleTimeString()}). Matched on SKU.`;
   }
   const rows = visibleCols();
+  const vis = g => {
+    if (S.store !== 'vendor') return `<div class="scope">${esc([...g.scopes].join(', '))}</div>`;
+    const r = Object.values(g.byFiber)[0], v = visibilityFor(r);
+    return `<div class="scope">${esc([...g.scopes].join(', '))}</div><span class="vis ${v.all ? 'all' : ''}">${esc(v.tag || 'not set')} · ${esc(v.label)}</span>`;
+  };
   document.getElementById('list').innerHTML = rows.length ? `<table>
     <tr><th>Colourway</th>${FIBRES.map(f => `<th>${f.name}</th>`).join('')}</tr>
-    ${rows.map(g => `<tr><td><div class="cw">${esc(g.name)}</div><div class="scope">${esc([...g.scopes].join(', '))}</div></td>
+    ${rows.map(g => `<tr><td><div class="cw">${esc(g.name)}</div>${vis(g)}</td>
       ${FIBRES.map(f => `<td>${cellHtml(g, f)}</td>`).join('')}</tr>`).join('')}
   </table>` : '<div class="status">Nothing to show with these filters.</div>';
-  const n = S.picked.size;
-  document.getElementById('count').textContent = n ? `${n} listing${n > 1 ? 's' : ''} selected` : 'Nothing selected';
+  const n = S.picked[S.store].size;
+  document.getElementById('count').textContent = n ? `${n} listing${n > 1 ? 's' : ''} selected for the ${label}` : 'Nothing selected';
   document.getElementById('preview').disabled = !n;
+  document.getElementById('preview').textContent = S.store === 'vendor' ? 'Preview listings' : 'Preview drafts';
 }
 
-function pickedListings() {
-  return S.recipes.filter(r => S.picked.has(r.id)).map(buildListing).filter(L => !L.blocked);
+function pickedRecipes() { return S.recipes.filter(r => S.picked[S.store].has(r.id)); }
+
+function photoPickerHtml(r) {
+  const photos = S.photosByRecipe[r.id] || [];
+  if (!photos.length) return '';
+  const pick = S.photoPick[r.id];
+  return `<div class="photos">${photos.slice(0, 16).map((p, k) => `<label title="${esc(p.note)}">
+      <input type="checkbox" data-photo="${r.id}:${p.id}" ${(pick ? pick.has(p.id) : k === 0) ? 'checked' : ''}>
+      <img src="${esc(p.url)}" alt="" loading="lazy"><div class="cap">${p.fav ? '★ ' : ''}${esc(p.note || '')}</div></label>`).join('')}</div>
+    ${photos.length > 1 ? `<div class="meta">${photos.length} photos of this recipe — tick more to show variations (first ticked is the main one).</div>` : ''}`;
 }
 
 function openPreview() {
-  const list = pickedListings();
+  const store = S.store, recs = pickedRecipes(), list = recs.map(r => buildListing(r, store)).filter(L => !L.blocked);
   const sheet = document.getElementById('sheet');
-  sheet.innerHTML = `<h2>Create ${list.length} draft${list.length > 1 ? 's' : ''} on the retail store</h2>
-    <div class="note">Each is created as a <strong>draft</strong> with stock 0. Nothing goes on sale.
-      Each is put on the store's sales channels as it is made, so once stock is moved to retail, setting it Active is the only step left.</div>
-    ${list.map(L => `<div class="prev">
-      ${L.imageUrl ? `<img src="${esc(L.imageUrl)}" alt="">` : '<div class="noimg">no photo</div>'}
+  const vendor = store === 'vendor';
+  sheet.innerHTML = vendor
+    ? `<h2>Create ${list.length} listing${list.length > 1 ? 's' : ''} on the vendor store</h2>
+      <div class="opt">
+        <label><input type="radio" name="vstat" value="ACTIVE" checked> Active — vendors who can see it can order it now</label>
+        <label><input type="radio" name="vstat" value="DRAFT"> Draft — check it in Shopify first</label>
+      </div>
+      <div class="note">Stock 0 and keeps selling when out (made to order). Who sees it is the tag shown on each listing. Anything without its customer's collection is made as a draft whatever you pick here.</div>`
+    : `<h2>Create ${list.length} draft${list.length > 1 ? 's' : ''} on the retail store</h2>
+      <div class="note">Each is created as a <strong>draft</strong> with stock 0. Nothing goes on sale.
+        Each is put on the store's sales channels as it is made, so once stock is moved to retail, setting it Active is the only step left.</div>`;
+  sheet.innerHTML += list.map(L => {
+    const r = S.recipes.find(x => x.id === L.recipeId);
+    const img = vendor ? '' : (L.imageUrl ? `<img src="${esc(L.imageUrl)}" alt="">` : '<div class="noimg">no photo</div>');
+    return `<div class="prev">${img}
       <div style="min-width:0;flex:1">
-        <div class="t">${esc(L.title)}</div>
+        <div class="t">${esc(L.title)} ${vendor ? `<span class="vis ${L.visibility.all ? 'all' : ''}">${esc(L.visibility.tag)} · ${esc(L.visibility.label)}</span>` : ''}</div>
         <div class="meta">${esc(L.sku)} · $${L.price.toFixed(2)} · ${L.weightOz ? L.weightOz + ' oz' : 'no weight'} · ${esc(L.productType)} · tags: ${esc(L.tags.join(', ') || '—')}</div>
-        <div class="meta">handle: ${esc(L.handle)}</div>
+        <div class="meta">handle: ${esc(L.handle)}${vendor ? ` · vendor: ${esc(L.vendor)}${L.hsCode ? ' · HS ' + esc(L.hsCode) : ''}${L.countryOfOrigin ? ' · origin ' + esc(L.countryOfOrigin) : ''}` : ''}</div>
+        ${L.gaps.filter(g => !g.block).map(g => `<div class="gap">${esc(g.t)}</div>`).join('')}
+        ${vendor ? photoPickerHtml(r) : ''}
         <details><summary>Description</summary><div>${L.descriptionHtml}</div></details>
-      </div></div>`).join('')}
+      </div></div>`;
+  }).join('') + `
     <div id="results"></div>
     <div class="bar" style="justify-content:flex-end">
       <button class="btn" id="cancel">Cancel</button>
-      <button class="btn go" id="create">Create drafts</button>
+      <button class="btn go" id="create">${vendor ? 'Create listings' : 'Create drafts'}</button>
     </div>`;
   document.getElementById('modal').classList.add('on');
   document.getElementById('cancel').onclick = closePreview;
-  document.getElementById('create').onclick = () => createDrafts(list);
+  document.getElementById('create').onclick = () => createListings(store, recs);
+  sheet.querySelectorAll('[data-photo]').forEach(cb => cb.addEventListener('change', () => {
+    const [rid, pid] = cb.dataset.photo.split(':').map(Number);
+    const set = S.photoPick[rid] || (S.photoPick[rid] = new Set([((S.photosByRecipe[rid] || [])[0] || {}).id]));
+    if (cb.checked) set.add(pid); else set.delete(pid);
+  }));
 }
 function closePreview() { document.getElementById('modal').classList.remove('on'); render(); }
 
-async function createDrafts(list) {
+async function createListings(store, recs) {
   const btn = document.getElementById('create'), cancel = document.getElementById('cancel');
   const box = document.getElementById('results');
+  const status = store === 'vendor' ? ((document.querySelector('input[name=vstat]:checked') || {}).value || 'DRAFT') : 'DRAFT';
+  // Built now, so photo ticks made in the preview are included.
+  const list = recs.map(r => buildListing(r, store)).filter(L => !L.blocked);
   btn.disabled = true; cancel.disabled = true; btn.textContent = 'Creating…';
   box.innerHTML = '';
   for (let i = 0; i < list.length; i += BATCH) {
     const chunk = list.slice(i, i + BATCH);
     try {
-      /* Settings.Retail_Channels narrows the sales channels (comma separated,
-         names as Shopify shows them). Blank = every channel the store has. */
-      const channels = SSSettings.text('Retail_Channels', '').split(',').map(x => x.trim()).filter(Boolean);
-      const d = await callWebhook({ action: 'create', from: 'listing-desk', channels,
-        listings: chunk.map(({ gaps, blocked, recipeId, ...L }) => L) });
+      /* Settings.Retail_Channels / Vendor_Channels narrows the sales channels
+         (comma separated, as Shopify shows them). Blank = every channel. */
+      const channels = SSSettings.text(STORES[store].channelsKey, '').split(',').map(x => x.trim()).filter(Boolean);
+      const d = await callWebhook(store, { action: 'create', from: 'listing-desk', channels,
+        listings: chunk.map(({ gaps, blocked, recipeId, visibility, draftOnly, ...L }) =>
+          store === 'vendor' ? Object.assign(L, { status: draftOnly ? 'DRAFT' : status }) : L) });
       (d.results || []).forEach(r => {
         const L = chunk.find(x => x.sku === r.sku);
         const link = r.admin_url ? ` — <a href="${esc(r.admin_url)}" target="_blank" rel="noopener">open in Shopify</a>` : '';
         if (r.ok) {
-          if (L) { S.made[L.recipeId] = { admin_url: r.admin_url }; S.picked.delete(L.recipeId); }
-          const extra = [!r.image && 'no photo', r.category_set === false && 'category not set',
+          const label = store === 'vendor' ? (String(r.status || '').toLowerCase() || 'created') : 'draft created';
+          if (L) { S.made[store][L.recipeId] = { admin_url: r.admin_url, label }; S.picked[store].delete(L.recipeId); }
+          const extra = [
+            store === 'vendor' ? (r.status ? String(r.status).toLowerCase() : '') : '',
+            store === 'vendor' ? (r.images ? `${r.images} photo${r.images > 1 ? 's' : ''}` : 'no photo') : (!r.image && 'no photo'),
+            r.category_set === false && 'category not set',
             r.channels && r.channels.length ? 'on ' + r.channels.join(', ') : '',
-            r.channel_error ? 'sales channels not set: ' + r.channel_error : ''].filter(Boolean).join(' · ');
+            r.channel_error ? 'sales channels not set: ' + r.channel_error : '',
+            r.warning || ''].filter(Boolean).join(' · ');
           box.innerHTML += `<div class="res ok">✓ ${esc(r.title)}${extra ? ` (${esc(extra)})` : ''}${link}</div>`;
         } else if (r.skipped) {
-          if (L) S.picked.delete(L.recipeId);
+          if (L) S.picked[store].delete(L.recipeId);
           box.innerHTML += `<div class="res skip">– ${esc(r.title)}: ${esc(r.error)}${link}</div>`;
         } else {
           box.innerHTML += `<div class="res bad">✗ ${esc(r.title)}: ${esc(r.error)}${link}</div>`;
@@ -462,20 +669,31 @@ async function createDrafts(list) {
   btn.textContent = 'Done'; cancel.disabled = false; cancel.textContent = 'Close';
 }
 
+function setStore(store) {
+  if (!STORES[store] || store === S.store) return;
+  S.store = store;
+  try { localStorage.setItem('listingDeskStore', store); } catch (e) { /* private window */ }
+  setFilters(); render();
+  if (!S.loading && !S.live[store] && !S.liveError[store]) checkStore(store);
+}
+
 function wire() {
-  ['q', 'show', 'scope'].forEach(id => document.getElementById(id).addEventListener('input', render));
-  document.getElementById('recheck').onclick = checkRetail;
-  document.getElementById('clear').onclick = () => { S.picked.clear(); render(); };
+  ['q', 'show', 'scope', 'cust'].forEach(id => document.getElementById(id).addEventListener('input', render));
+  document.querySelectorAll('.tab').forEach(b => b.onclick = () => setStore(b.dataset.store));
+  document.getElementById('recheck').onclick = () => checkStore(S.store);
+  document.getElementById('clear').onclick = () => { S.picked[S.store].clear(); render(); };
   document.getElementById('preview').onclick = openPreview;
   document.getElementById('list').addEventListener('change', (e) => {
     const id = Number(e.target.dataset.pick);
     if (!id) return;
-    if (e.target.checked) S.picked.add(id); else S.picked.delete(id);
+    if (e.target.checked) S.picked[S.store].add(id); else S.picked[S.store].delete(id);
     render();
   });
 }
 
 grist.ready({ requiredAccess: 'full' });
+try { const st = localStorage.getItem('listingDeskStore'); if (STORES[st]) S.store = st; } catch (e) { /* ignore */ }
+setFilters();
 wire();
 (async () => {
   try { await loadGrist(); } catch (e) {
@@ -484,8 +702,9 @@ wire();
     return;
   }
   S.loading = false;
+  setFilters();
   render();
-  checkRetail();
+  checkStore(S.store);
 })();
 </script>
 </body>

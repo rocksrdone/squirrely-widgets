@@ -591,6 +591,8 @@ async function loadListingSources() {
       S.hasProductTemplates = true;
       (t.id || []).forEach((id, i) => {
         if (c.Active && !columnAsArray(t, c.Active)[i]) return;
+        // Store = Vendor rows are the vendor store's wording (Listing Desk, Vendor tab).
+        if (/^vendor$/i.test(String((t.Store || [])[i] || '').trim())) return;
         const row = {};
         Object.keys(c).forEach(n => { row[n] = c[n] ? columnAsArray(t, c[n])[i] : null; });
         const f = fiberCode(row.Fiber_Code || '');
