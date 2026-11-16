@@ -117,6 +117,7 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
 /* Close / reopen. Deliberately small and text-like rather than a big primary
    button: closing an order is a bookkeeping act, not the point of this screen,
    and an eye-catching button beside every card invites mis-clicks. */
+.status-action.armed { background: #8B3A2A !important; color: #fff !important; border-color: #8B3A2A !important; }
 .status-action {
   font-size: 10px; padding: 4px 9px; border-radius: 4px; cursor: pointer;
   border: 1px solid var(--rule); background: white; color: #6B5E52; white-space: nowrap;
@@ -835,27 +836,40 @@ function maybeShowChoiceHint(value) {
      <strong>${esc(CLOSED_STATUS)}</strong> to that column's options in the creator panel. The value itself is stored either way.</div>`;
 }
 
-async function closeOrder(id) {
+/* Close / Reopen confirm with a second click on the same button, not a
+   browser pop-up. A confirm() in a Grist widget can end up hidden (freezing
+   the whole tab), and once the browser has been told to block a page's
+   dialogs it returns "Cancel" without showing anything — so Close order
+   silently did nothing. */
+function armButton(btn, label, title) {
+  if (!btn) return true;                       // called from code: just do it
+  if (btn.dataset.armed === '1') return true;
+  btn.dataset.armed = '1';
+  btn.dataset.label = btn.textContent;
+  btn.textContent = label;
+  btn.classList.add('armed');
+  if (title) btn.title = title;
+  setTimeout(() => {
+    if (!btn.isConnected || btn.dataset.armed !== '1') return;
+    btn.dataset.armed = ''; btn.textContent = btn.dataset.label; btn.classList.remove('armed');
+  }, 4000);
+  return false;
+}
+async function closeOrder(id, btn) {
   const o = allOrders.find(x => x.id === id);
   if (!o) return;
   const out = outstandingText(id);
-  const who = [o.orderNumber, o.customerName].filter(Boolean).join(' — ') || 'this order';
-  let msg = `Close ${who}?\n\nStatus becomes "${CLOSED_STATUS}", which takes it off the active list here and in Order Overview.`;
-  if (out) {
-    msg += `\n\nStill outstanding: ${out}.\n\n` +
-      `That is fine for a custom or limited-edition item you made by hand and never allocated — ` +
-      `closing only changes the status. Production records are left exactly as they are.`;
-  }
-  msg += `\n\nYou can reopen it from the same card.`;
-  if (!confirm(msg)) return;
+  const title = `Status becomes "${CLOSED_STATUS}" and it leaves the active lists.` +
+    (out ? ` Still outstanding: ${out} — fine for hand-made items; production records are left as they are.` : '') +
+    ' You can reopen it from the same card.';
+  if (!armButton(btn, out ? 'Items outstanding — click again to close' : 'Click again to close', title)) return;
   await setOrderStatus(id, CLOSED_STATUS);
 }
 
-async function reopenOrder(id) {
+async function reopenOrder(id, btn) {
   const o = allOrders.find(x => x.id === id);
   if (!o) return;
-  const who = [o.orderNumber, o.customerName].filter(Boolean).join(' — ') || 'this order';
-  if (!confirm(`Reopen ${who}?\n\nStatus goes back to "Active" and it returns to the active list.`)) return;
+  if (!armButton(btn, 'Click again to reopen', 'Status goes back to "Active" and it returns to the active list.')) return;
   await setOrderStatus(id, 'Active');
 }
 
@@ -1190,8 +1204,8 @@ function renderList() {
     const busy = statusBusyId === o.id;
 
     const statusBtn = closed
-      ? `<button class="status-action reopen" ${busy ? 'disabled' : ''} onclick="reopenOrder(${o.id})">${busy ? 'Saving…' : 'Reopen'}</button>`
-      : `<button class="status-action" ${busy ? 'disabled' : ''} onclick="closeOrder(${o.id})"
+      ? `<button class="status-action reopen" ${busy ? 'disabled' : ''} onclick="event.stopPropagation();reopenOrder(${o.id}, this)">${busy ? 'Saving…' : 'Reopen'}</button>`
+      : `<button class="status-action" ${busy ? 'disabled' : ''} onclick="event.stopPropagation();closeOrder(${o.id}, this)"
            title="Set Status to ${esc(CLOSED_STATUS)} — production records are left alone">${busy ? 'Saving…' : 'Close order'}</button>`;
 
     return `
