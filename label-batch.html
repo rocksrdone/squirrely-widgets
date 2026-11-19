@@ -2809,6 +2809,34 @@ function logoUrlFor(cust) {
   return /^https?:\/\//i.test(cust.logoUrl) ? cust.logoUrl : 'https://' + cust.logoUrl;
 }
 
+/* Most logo files carry a white or transparent margin round the artwork
+   (Oboi.st's teal circle fills only 92% of its square). Cover sizes the FILE
+   to the bleed edge, so that margin is what ends up at the cut — a white ring
+   instead of colour running off the label. For Cover, the margin is cropped
+   off first, so the artwork itself is what reaches past the cut.
+   Near-white counts as margin; a logo whose colour IS white at the edge is
+   unaffected because only the outer band is trimmed, never interior white.  */
+async function trimLogo(dataUrl, dims) {
+  try {
+    const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
+    const W = dims.w, H = dims.h;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const x = cv.getContext('2d'); x.drawImage(im, 0, 0);
+    const d = x.getImageData(0, 0, W, H).data;
+    const ink = i => d[i + 3] > 24 && !(d[i] > 242 && d[i + 1] > 242 && d[i + 2] > 242);
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) {
+      if (ink((y * W + xx) * 4)) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 < 0) return null;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    if (w > W * 0.98 && h > H * 0.98) return null;          // nothing worth trimming
+    const out = document.createElement('canvas'); out.width = w; out.height = h;
+    out.getContext('2d').drawImage(cv, x0, y0, w, h, 0, 0, w, h);
+    return { dataUrl: out.toDataURL('image/png'), w, h };
+  } catch (e) { console.warn('logo trim skipped', e); return null; }
+}
+
 async function loadLogo(cust) {
   if (!cust) return null;
   const key = cust.logoAtt ? 'att:' + cust.logoAtt : logoUrlFor(cust);
@@ -2834,7 +2862,7 @@ async function loadLogo(cust) {
       im.onerror = () => rej(new Error('decode failed'));
       im.src = dataUrl;
     });
-    logoCache[key] = { dataUrl, ...dims };
+    logoCache[key] = { dataUrl, ...dims, trim: await trimLogo(dataUrl, dims) };
   } catch (e) {
     console.warn('logo load failed', key, e);
     logoCache[key] = null;
@@ -3022,6 +3050,9 @@ function frontPaneHtml() {
         ${over > 0.0005 ? `overrunning the cut by <strong>${over.toFixed(4)}"</strong> per side` : 'sitting inside the cut'}.
         Every label is clipped at <strong>${(g.dia / 2 + sb).toFixed(4)}"</strong> radius, the most this sheet allows before
         artwork lands on the neighbouring label.
+        ${/cover/i.test(frontFit()) && over <= 0.0005 ? `<div style="margin-top:6px;color:#8B3A2A;font-weight:600">
+          Cover is meant to bleed, but at this size it stops inside the cut — you'll get a white ring.
+          Clear <em>Size × dia</em> (it then fills to the bleed edge) and save.</div>` : ''}
       </div>` : `<div class="alert"><strong>${esc(tpl ? tpl.code : 'This sheet')}</strong> is missing geometry: ${esc((g.missing || []).join(', '))}.</div>`}
       <div class="group-foot" style="border:1px solid var(--rule);border-radius:8px;margin-top:12px">
         <div class="group-total"><strong>${Math.max(0, Number(S.frontQty) || 0)}</strong> front labels${
@@ -3062,7 +3093,9 @@ async function buildFrontPdf() {
   const clipR = g.dia / 2 + sb;
   const target = frontScale(g, tpl) * g.dia;
   const contain = /contain/i.test(frontFit());
-  const ar = logo.w / logo.h;
+  // Cover places the artwork itself, margins cropped, so colour runs past the cut.
+  const art = !contain && logo.trim ? logo.trim : logo;
+  const ar = art.w / art.h;
   // contain fits the whole mark inside the target circle; cover fills it.
   let dw, dh;
   if (contain) { if (ar >= 1) { dw = target; dh = target / ar; } else { dh = target; dw = target * ar; } }
@@ -3080,7 +3113,7 @@ async function buildFrontPdf() {
       doc.circle(cx, cy, clipR, null);
       doc.clip(); doc.discardPath();
     }
-    doc.addImage(logo.dataUrl, cx - dw / 2, cy - dh / 2, dw, dh, undefined, 'FAST');
+    doc.addImage(art.dataUrl, cx - dw / 2, cy - dh / 2, dw, dh, undefined, 'FAST');
     if (canClip) doc.restoreGraphicsState();
     if (S.proof) {
       doc.setDrawColor(200); doc.setLineWidth(0.005);
