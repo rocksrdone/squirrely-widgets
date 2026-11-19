@@ -2816,6 +2816,30 @@ function logoUrlFor(cust) {
    off first, so the artwork itself is what reaches past the cut.
    Near-white counts as margin; a logo whose colour IS white at the edge is
    unaffected because only the outer band is trimmed, never interior white.  */
+/* A round logo on a solid colour (Oboi.st's teal disc) should NOT be bled by
+   scaling it up: that pushes everything inside — the white oval, any lettering
+   — out to the cut too, and a printer a hair out of register then shaves it
+   off. Instead the art is printed at the label's own size and the ring beyond
+   the cut is filled with the disc's edge colour. This finds that colour: the
+   art must be round (blank corners) with one steady colour all the way round
+   just inside its rim. Anything else returns null and is bled by scaling.   */
+function edgeColour(cv) {
+  try {
+    const w = cv.width, h = cv.height, x = cv.getContext('2d');
+    const d = x.getImageData(0, 0, w, h).data;
+    const at = (px, py) => { const i = (Math.min(h - 1, Math.max(0, Math.round(py))) * w + Math.min(w - 1, Math.max(0, Math.round(px)))) * 4; return [d[i], d[i + 1], d[i + 2], d[i + 3]]; };
+    const blank = p => p[3] < 24 || (p[0] > 242 && p[1] > 242 && p[2] > 242);
+    if (Math.abs(w - h) > Math.max(w, h) * 0.04) return null;               // not round
+    if (![at(2, 2), at(w - 3, 2), at(2, h - 3), at(w - 3, h - 3)].every(blank)) return null;
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 * 0.965, pts = [];
+    for (let k = 0; k < 72; k++) { const a = k / 72 * 2 * Math.PI; pts.push(at(cx + r * Math.cos(a), cy + r * Math.sin(a))); }
+    if (pts.some(p => blank(p))) return null;
+    const avg = [0, 1, 2].map(c => pts.reduce((s, p) => s + p[c], 0) / pts.length);
+    if (pts.some(p => [0, 1, 2].some(c => Math.abs(p[c] - avg[c]) > 28))) return null;  // not one colour
+    return avg.map(v => Math.round(v));
+  } catch (e) { return null; }
+}
+
 async function trimLogo(dataUrl, dims) {
   try {
     const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
@@ -2833,7 +2857,7 @@ async function trimLogo(dataUrl, dims) {
     if (w > W * 0.98 && h > H * 0.98) return null;          // nothing worth trimming
     const out = document.createElement('canvas'); out.width = w; out.height = h;
     out.getContext('2d').drawImage(cv, x0, y0, w, h, 0, 0, w, h);
-    return { dataUrl: out.toDataURL('image/png'), w, h };
+    return { dataUrl: out.toDataURL('image/png'), w, h, edge: edgeColour(out) };
   } catch (e) { console.warn('logo trim skipped', e); return null; }
 }
 
@@ -2886,6 +2910,12 @@ function frontFit() {
   const sv = savedSetting();
   if (sv && sv.fit) return sv.fit;
   return (S.frontCust && S.frontCust.logoFit) || 'Cover';
+}
+// A size someone typed or saved — as opposed to the automatic one.
+function explicitScale() {
+  if (Number(S.frontScale) > 0) return true;
+  const sv = savedSetting(); if (sv && sv.scale > 0) return true;
+  return !!(S.frontCust && S.frontCust.logoScale > 0);
 }
 function frontScale(g, tpl) {
   let v = Number(S.frontScale) || 0;
@@ -3091,10 +3121,13 @@ async function buildFrontPdf() {
   const startAt = Math.max(1, Math.min(perSheet, Number(S.frontStart) || 1));
   const sb = safeBleed(tpl, g);
   const clipR = g.dia / 2 + sb;
-  const target = frontScale(g, tpl) * g.dia;
   const contain = /contain/i.test(frontFit());
   // Cover places the artwork itself, margins cropped, so colour runs past the cut.
   const art = !contain && logo.trim ? logo.trim : logo;
+  /* Round logo on a solid colour, and no size chosen by hand: art at the
+     label's own size, its edge colour filling the bleed (see edgeColour). */
+  const ringFill = !contain && art.edge && !explicitScale() ? art.edge : null;
+  const target = ringFill ? g.dia * 1.004 : frontScale(g, tpl) * g.dia;
   const ar = art.w / art.h;
   // contain fits the whole mark inside the target circle; cover fills it.
   let dw, dh;
@@ -3113,7 +3146,14 @@ async function buildFrontPdf() {
       doc.circle(cx, cy, clipR, null);
       doc.clip(); doc.discardPath();
     }
+    if (ringFill) {
+      doc.setFillColor(ringFill[0], ringFill[1], ringFill[2]);
+      doc.circle(cx, cy, clipR, 'F');
+      // The art's square corners are blank; keep them off the coloured ring.
+      if (canClip) { doc.saveGraphicsState(); doc.circle(cx, cy, dw / 2, null); doc.clip(); doc.discardPath(); }
+    }
     doc.addImage(art.dataUrl, cx - dw / 2, cy - dh / 2, dw, dh, undefined, 'FAST');
+    if (ringFill && canClip) doc.restoreGraphicsState();
     if (canClip) doc.restoreGraphicsState();
     if (S.proof) {
       doc.setDrawColor(200); doc.setLineWidth(0.005);
