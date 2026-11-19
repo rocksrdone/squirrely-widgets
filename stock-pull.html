@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<style id="ss-light">/* Light pages: keep dropdowns, inputs and buttons light even when the computer is in dark mode (white text on a white box otherwise). Placed first so this page's own styles still win. */ :root { color-scheme: light; } select, option, input, textarea { color: #1A1614; } option { background: #fff; }</style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Pull</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="settings.js"></script>
+<script src="stock-ops.js?v=20261119"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Baskerville:wght@700&family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --ink: #1A1614; --paper: #F7F3EE; --warm: #E8DFD4; --rule: #D4C9BC; --muted: #8B7D72; --mid: #6B5E52;
+  --accent: #8B3A2A; --teal: #2A6B6B; --teal-light: #E4F0EF; --ok: #2E5E1A; --ok-bg: #EAF3DE;
+  --gold: #7A4A00; --gold-bg: #FFF3D6;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.45; }
+button { font: inherit; cursor: pointer; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 12px 14px 60px; }
+.hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hd h1 { font-family: 'Libre Baskerville', serif; font-size: 19px; margin: 0; }
+.sub { font-size: 11.5px; color: var(--muted); }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 12px; }
+.bar input[type=search] { flex: 1 1 200px; padding: 6px 9px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; font: inherit; }
+.btn { border: 1px solid var(--rule); background: #fff; border-radius: 6px; padding: 6px 11px; font-size: 12px; font-weight: 600; color: var(--ink); }
+.btn:hover { border-color: var(--mid); }
+.btn.go { background: var(--teal); border-color: var(--teal); color: #fff; }
+.btn.go:disabled, .btn:disabled { opacity: .5; cursor: default; }
+.btn.small { padding: 3px 9px; font-size: 11.5px; }
+.status { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.status.bad { color: var(--accent); font-weight: 600; }
+.box { background: #fff; border: 1px solid var(--rule); border-radius: 9px; margin-bottom: 12px; overflow: hidden; }
+.box-hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; background: var(--warm); }
+.box-code { font-family: 'DM Mono', monospace; font-size: 17px; font-weight: 500; background: var(--ink); color: #fff; padding: 2px 9px; border-radius: 5px; }
+.box-code.none { background: var(--accent); font-family: inherit; font-size: 12px; }
+.box-who { font-weight: 700; }
+.box-meta { font-size: 11.5px; color: var(--mid); }
+.due-late { color: var(--accent); font-weight: 700; } .due-soon { color: var(--gold); font-weight: 700; }
+.box-hd .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 7px 12px; border-top: 1px solid #EFE8DE; vertical-align: middle; }
+td.cw b { font-size: 13.5px; } .fib { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--muted); margin-left: 4px; }
+td.from { font-size: 12px; }
+.bin { font-family: 'DM Mono', monospace; font-weight: 600; background: var(--teal-light); color: var(--teal); padding: 1px 6px; border-radius: 4px; }
+.lot { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--muted); }
+td.qty { white-space: nowrap; width: 1%; }
+td.qty input { width: 58px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 5px; font: inherit; font-size: 15px; font-weight: 700; text-align: center; background: #fff; }
+td.act { width: 1%; white-space: nowrap; text-align: right; }
+.tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; }
+.tag.res { background: var(--gold-bg); color: var(--gold); }
+.tag.part { background: #F1EEEA; color: var(--mid); }
+.note { font-size: 11px; color: var(--muted); }
+.done-row td { background: var(--ok-bg); color: var(--ok); }
+.empty { text-align: center; color: var(--muted); padding: 30px 10px; background: #fff; border: 1px dashed var(--rule); border-radius: 9px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 12.5px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
+.toast.show { opacity: 1; } .toast.bad { background: var(--accent); }
+.foot { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <h1>Stock Pull</h1>
+    <span class="sub">Fill new orders from back stock: take the spools out of the bin, put them in the order's box, tick it.</span>
+  </div>
+  <div class="bar">
+    <input type="search" id="q" placeholder="Search order, customer or colourway…">
+    <label class="note"><input type="checkbox" id="onlyFull"> only orders that can be filled completely</label>
+    <button class="btn" id="reload">↻ Reload</button>
+  </div>
+  <div class="status" id="status">Loading…</div>
+  <div id="list"></div>
+  <div class="foot" id="foot"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══ Stock Pull ══════════════════════════════════════════════════════════
+   One card per order = one box (O-<CODE>-<ORDER>, the same code Wind Routing
+   sorts new production into). Each row is a colourway the order still needs
+   that back stock can cover, and the bin to take it from.
+
+   "✓ In the box" does, in one save, what used to be two separate steps on two
+   screens (reserve in Order Builder / pull in Batch Assignment, then sort):
+     · an allocation on the order line, Stock_Source General, status
+       "Wound - Needs Labels", Order_Bin = the box — so it is reserved AND
+       boxed, and no other order or station can take the same spools;
+     · the lot's back stock goes down by the same amount (StockOps.stockMove).
+   Before writing, the lots are re-read and the save is refused if another
+   station changed them meanwhile (StockOps.staleLots), so two people pulling
+   the same colourway can't both take the same spools on paper.
+
+   Spools already RESERVED for an order (Order Builder's "reserve from shelf")
+   but not yet boxed show as their own rows: ticking those only records the box.
+
+   Only wound, held-back stock is offered (On_Hand − Vendor − Store). Spools
+   listed on a storefront are on sale, and hank needs winding first. Lines set
+   to "make fresh" are never filled from stock.                               */
+const SO = window.StockOps;
+const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;
+const S = { data: null, rows: [], allocT: null, A: null, C2: null, lotRow: {}, busy: false, flash: {} };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const $ = id => document.getElementById(id);
+function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 3000); }
+function refId(v) { if (typeof v === 'number') return v || null; if (Array.isArray(v)) return v[1] || null; return null; }
+function col(t, cands) {
+  const keys = Object.keys(t || {});
+  for (const c of cands) { const w = c.toLowerCase().replace(/[^a-z0-9]/g, ''); const k = keys.find(x => x.toLowerCase().replace(/[^a-z0-9]/g, '') === w); if (k) return k; }
+  return null;
+}
+function todayUtc() { const t = new Date(); return Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) / 1000; }
+function dueHtml(due) {
+  if (!due) return '';
+  const d = Math.round((due - todayUtc()) / 86400);
+  const txt = new Date(due * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  if (d < 0) return `<span class="due-late">due ${txt} · ${-d}d late</span>`;
+  if (d <= 3) return `<span class="due-soon">due ${txt}</span>`;
+  return `due ${txt}`;
+}
+
+async function load() {
+  $('status').className = 'status'; $('status').textContent = 'Loading…';
+  const [data, allocT, lotsT, wolT] = await Promise.all([
+    SO.load(grist.docApi), grist.docApi.fetchTable('Lot_Allocations'), grist.docApi.fetchTable('Production_Lots'),
+    grist.docApi.fetchTable('Work_Order_Lines'),
+  ]);
+  S.data = data; S.allocT = allocT;
+  // Every line's order — linesByRecipe only holds lines still SHORT, and a reserved line may not be.
+  const wo = col(wolT, ['Work_Order']);
+  S.lineOrder = {}; (wolT.id || []).forEach((id, i) => { S.lineOrder[id] = data.orders[refId(wolT[wo][i])] || null; });
+  if (data.missing.length) { $('status').className = 'status bad'; $('status').textContent = 'Missing columns: ' + data.missing.join(', '); }
+  S.A = { lot: col(allocT, ['Lot']), qty: col(allocT, ['Qty_Spools']), status: col(allocT, ['Status']),
+    line: col(allocT, ['Work_Order_Line']), customer: col(allocT, ['Customer']),
+    bin: col(allocT, ['Order_Bin']), source: col(allocT, ['Stock_Source']) };
+  S.C2 = SO.stock2Cols(lotsT);
+  S.lotRow = {}; (lotsT.id || []).forEach((id, i) => { S.lotRow[id] = SO.stock2Row(lotsT, S.C2, i); });
+  S.woundStatus = (() => {
+    const seen = new Set((allocT[S.A.status] || []).map(String));
+    return ['Wound - Needs Labels', 'Wound'].find(v => seen.has(v)) || SO.ORDER_STATUS_WOUND;
+  })();
+  plan();
+  render();
+}
+
+/* Build the pick list. Stock is shared out across orders soonest-due first,
+   oldest lot first (clear old thread before new), exactly as Batch Assignment
+   pulls — so two orders wanting the same colourway never both get offered the
+   same spools. */
+function plan() {
+  const D = S.data, rows = [];
+  const lineToOrder = {};
+  Object.values(D.linesByRecipe).forEach(list => list.forEach(l => { lineToOrder[l.lineId] = l; }));
+
+  // Free wound held-back stock per lot.
+  const lotsByRecipe = {};
+  D.lots.forEach(l => {
+    const r = S.lotRow[l.id]; if (!r) return;
+    const free = Math.max(0, r.onHand - r.vendor - r.store);
+    if (free > 0 && l.recipe && l.recipe.id) (lotsByRecipe[l.recipe.id] = lotsByRecipe[l.recipe.id] || []).push({ lot: l, left: free });
+  });
+  Object.values(lotsByRecipe).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
+  S.hankByRecipe = {};
+  D.lots.forEach(l => { if (l.hank > 0 && l.recipe && l.recipe.id) S.hankByRecipe[l.recipe.id] = (S.hankByRecipe[l.recipe.id] || 0) + l.hank; });
+
+  // 1) Lines short of spools: plan a pull.
+  S.noStock = 0;
+  Object.entries(D.linesByRecipe).forEach(([rid, list]) => {
+    const lots = lotsByRecipe[rid] || [];
+    list.forEach(line => {
+      if (line.makeFresh) return;
+      let want = line.short;
+      const take = [];
+      for (const s of lots) {
+        if (want <= 0) break;
+        if (s.left <= 0) continue;
+        const n = Math.min(want, s.left);
+        take.push({ lotId: s.lot.id, lotNumber: s.lot.lotNumber, bin: s.lot.binCode || '', qty: n });
+        s.left -= n; want -= n;
+      }
+      if (!take.length) { S.noStock++; return; }
+      rows.push({ kind: 'pull', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
+        take, qty: take.reduce((a, t) => a + t.qty, 0), short: line.short });
+    });
+  });
+
+  // 2) Reserved from the shelf (Order Builder) but not in a box yet.
+  const A = S.A, T = S.allocT;
+  if (A.bin && A.source) (T.id || []).forEach((id, i) => {
+    if (String(T[A.source][i] || '') !== 'General') return;
+    if (String(T[A.bin][i] || '').trim()) return;
+    if (DONE_ALLOC.test(String((T[A.status] || [])[i] || ''))) return;
+    const lineId = refId(T[A.line][i]); if (!lineId) return;
+    const lotId = refId(T[A.lot][i]);
+    const lot = D.lots.find(l => l.id === lotId);
+    const o = orderForLine(lineId); if (!o || o.status !== 'Active') return;
+    const rid = lot && lot.recipe ? lot.recipe.id : null;
+    rows.push({ kind: 'reserved', key: 'r' + id, allocId: id, order: o, recipe: D.recipes[rid] || (lot && lot.recipe) || { name: '?' },
+      take: [{ lotId, lotNumber: lot ? lot.lotNumber : '', bin: lot ? lot.binCode : '', qty: Number(T[A.qty][i]) || 0 }],
+      qty: Number(T[A.qty][i]) || 0 });
+  });
+  S.rows = rows;
+}
+function orderForLine(lineId) { return (S.lineOrder || {})[lineId] || null; }
+
+function boxes() {
+  const q = $('q').value.trim().toLowerCase(), onlyFull = $('onlyFull').checked;
+  const by = {};
+  S.rows.forEach(r => {
+    const o = r.order; if (!o) return;
+    const b = by[o.id] || (by[o.id] = { order: o, rows: [], code: SO.orderBinCode(o.customerCode, o.number) });
+    b.rows.push(r);
+  });
+  let list = Object.values(by);
+  if (q) list = list.filter(b => [b.order.number, b.order.customerName, b.code, ...b.rows.map(r => r.recipe && r.recipe.name)]
+    .some(x => String(x || '').toLowerCase().includes(q)));
+  if (onlyFull) list = list.filter(b => !orderShortAfter(b));
+  return list.sort((a, b) => (a.order.due || 9e12) - (b.order.due || 9e12) || String(a.order.number).localeCompare(String(b.order.number)));
+}
+// Spools the order would still be missing after everything offered here is pulled.
+function orderShortAfter(b) {
+  let short = 0;
+  Object.values(S.data.linesByRecipe).forEach(list => list.forEach(l => {
+    if (l.order.id !== b.order.id) return;
+    const offered = b.rows.filter(r => r.kind === 'pull' && r.line.lineId === l.lineId).reduce((a, r) => a + r.qty, 0);
+    short += Math.max(0, l.short - offered);
+  }));
+  return short;
+}
+
+function render() {
+  if (!S.data) return;
+  const list = boxes();
+  const spools = list.reduce((a, b) => a + b.rows.reduce((x, r) => x + r.qty, 0), 0);
+  $('status').className = 'status';
+  $('status').textContent = list.length
+    ? `${list.length} order${list.length > 1 ? 's' : ''} · ${spools} spool${spools === 1 ? '' : 's'} to take out of back stock and box. Soonest due first.`
+    : '';
+  $('list').innerHTML = list.length ? list.map(boxHtml).join('') : `<div class="empty">Nothing to pull — no open order needs a colourway that's sitting in back stock.</div>`;
+  $('foot').textContent = S.noStock ? `${S.noStock} other order line${S.noStock > 1 ? 's' : ''} need spools that aren't in back stock — those go to dyeing as usual.` : '';
+  bind();
+}
+function boxHtml(b) {
+  const o = b.order, short = orderShortAfter(b);
+  const all = b.rows.reduce((a, r) => a + r.qty, 0);
+  return `<div class="box" data-box="${o.id}">
+    <div class="box-hd">
+      ${b.code ? `<span class="box-code" title="Write this on the box">${esc(b.code)}</span>` : `<span class="box-code none" title="Add a Code to this customer in Customers so the box has a name">no customer code</span>`}
+      <span class="box-who">${esc(o.customerName || '')}</span>
+      <span class="box-meta">order ${esc(o.number)} ${o.due ? '· ' + dueHtml(o.due) : ''}</span>
+      <span class="box-meta">${short ? `<span class="tag part">${short} more still to dye</span>` : '<span class="tag" style="background:var(--ok-bg);color:var(--ok)">back stock covers the whole order</span>'}</span>
+      <span class="right"><button class="btn go small" data-all="${o.id}" ${S.busy ? 'disabled' : ''}>✓ All ${all} in the box</button></span>
+    </div>
+    <table>${b.rows.map(rowHtml).join('')}</table>
+  </div>`;
+}
+function rowHtml(r) {
+  const rc = r.recipe || {}, fib = rc.fiber || '';
+  const from = r.take.map(t => `<span class="bin">${esc(t.bin || 'no bin')}</span> <span class="lot">${esc(t.lotNumber)}</span>${r.take.length > 1 ? ` ×${t.qty}` : ''}`).join('<br>');
+  const hank = S.hankByRecipe[rc.id] || 0;
+  const extra = r.kind === 'reserved'
+    ? '<span class="tag res" title="Reserved in Order Builder; the spools are still in the bin">reserved — not boxed yet</span>'
+    : (r.qty < r.short ? `<span class="tag part">${r.qty} of ${r.short} — rest to dye${hank ? `, ${hank} in hank` : ''}</span>` : '');
+  return `<tr data-row="${esc(r.key)}">
+    <td class="cw"><b>${esc(rc.name || '?')}</b><span class="fib">${esc(fib)}</span><div>${extra}</div></td>
+    <td class="from">take from ${from}</td>
+    <td class="qty">${r.kind === 'pull'
+      ? `<input type="number" min="0" max="${r.qty}" value="${r.qty}" data-qty="${esc(r.key)}" title="Found fewer? Change this before ticking.">`
+      : `<b style="font-size:15px">${r.qty}</b>`}</td>
+    <td class="act"><button class="btn go small" data-one="${esc(r.key)}" ${S.busy ? 'disabled' : ''}>✓ In the box</button></td>
+  </tr>`;
+}
+function bind() {
+  document.querySelectorAll('[data-one]').forEach(b => b.onclick = () => commit([b.dataset.one]));
+  document.querySelectorAll('[data-all]').forEach(b => b.onclick = () => {
+    const box = boxes().find(x => String(x.order.id) === b.dataset.all);
+    if (box) commit(box.rows.map(r => r.key));
+  });
+}
+
+/* Write one or more rows: allocations + stock, refused if a lot moved. */
+async function commit(keys) {
+  if (S.busy) return;
+  const A = S.A, acts = [], lotDelta = {}, names = {};
+  let spools = 0;
+  keys.forEach(k => {
+    const r = S.rows.find(x => x.key === k); if (!r) return;
+    const code = SO.orderBinCode(r.order.customerCode, r.order.number);
+    if (r.kind === 'reserved') {
+      if (A.bin && code) { acts.push(['UpdateRecord', 'Lot_Allocations', r.allocId, { [A.bin]: code }]); spools += r.qty; }
+      return;
+    }
+    const inp = document.querySelector(`[data-qty="${CSS.escape(k)}"]`);
+    let want = Math.max(0, Math.min(r.qty, Math.floor(Number(inp ? inp.value : r.qty) || 0)));
+    for (const t of r.take) {
+      if (want <= 0) break;
+      const n = Math.min(want, t.qty);
+      const f = { [A.lot]: t.lotId, [A.qty]: n, [A.line]: r.line.lineId };
+      if (A.status) f[A.status] = S.woundStatus;
+      if (A.customer && r.order.customerId) f[A.customer] = r.order.customerId;
+      if (A.source) f[A.source] = 'General';
+      if (A.bin && code) f[A.bin] = code;
+      acts.push(['AddRecord', 'Lot_Allocations', null, f]);
+      lotDelta[t.lotId] = (lotDelta[t.lotId] || 0) + n;
+      names[t.lotId] = t.lotNumber;
+      want -= n; spools += n;
+    }
+  });
+  if (!acts.length) { toast('Nothing to save — quantity is 0'); return; }
+  S.busy = true; render();
+  try {
+    const lotIds = Object.keys(lotDelta).map(Number);
+    if (lotIds.length) {
+      const before = {}; lotIds.forEach(id => { before[id] = S.lotRow[id]; });
+      const stale = await SO.staleLots(grist.docApi, S.C2, lotIds, before, names);
+      if (stale.length) { toast(`${stale.join(', ')} changed at another station — reloaded, check and tick again`, true); S.busy = false; await load(); return; }
+      lotIds.forEach(id => {
+        acts.push(['UpdateRecord', 'Production_Lots', id, SO.stockMove(Object.assign({}, S.lotRow[id]), S.C2, 'general', -lotDelta[id]).fields]);
+      });
+    }
+    await grist.docApi.applyUserActions(acts);
+    toast(`✓ ${spools} spool${spools === 1 ? '' : 's'} in the box`);
+  } catch (e) {
+    console.error(e); toast('Not saved: ' + (e.message || e), true);
+  }
+  S.busy = false;
+  await load();
+}
+
+grist.ready({ requiredAccess: 'full' });
+$('q').addEventListener('input', render);
+$('onlyFull').addEventListener('change', render);
+$('reload').onclick = () => load();
+load().catch(e => { $('status').className = 'status bad'; $('status').textContent = 'Could not load: ' + (e.message || e); });
+</script>
+</body>
+</html>

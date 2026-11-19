@@ -190,6 +190,8 @@
       (linesByRecipe[rid] = linesByRecipe[rid] || []).push({
         lineId: id, order: o, need, short,
         bin: orderBinCode(o.customerCode, o.number),
+        // Spools on the shelf were turned down for this line: dye it fresh, never pull stock for it.
+        makeFresh: !!(WL.makeFresh && arr(wolT, WL.makeFresh)[i]),
       });
     });
     Object.values(linesByRecipe).forEach(list => list.sort((a, b) =>
