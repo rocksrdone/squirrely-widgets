@@ -353,6 +353,8 @@ function renderFix(box) {
       <div class="lab" style="margin-top:6px">Fewer wound than Grist had are recorded as broken — those existed and are gone.${lot.waiting > 0 ? ` Fewer <b>still to put away</b> means the pot made fewer than Grist thought, so ${esc(lot.lotNumber)} stops showing as waiting.` : ' The lot doesn\'t come back as "waiting".'}</div>`}
     </div>
 
+    ${putBackHtml(lot)}
+
     ${lot.recipe.sku ? `<div class="step"><div class="hd"><span class="k">2</span>Vendor store</div>
       <div class="lab" style="margin-bottom:8px">Grist lists ${listed} ${esc(lot.recipe.name)} on the vendor store across all its lots.</div>
       <button class="btn ghost small" id="fvs">Vendor store ↗</button></div>` : ''}
@@ -387,6 +389,7 @@ function renderFix(box) {
   </div>`;
 
   const $ = (id) => document.getElementById(id);
+  bindPutBack(lot);
   if ($('leask')) $('leask').addEventListener('click', () => { S.leAsk = true; renderMain(); });
   if ($('leno')) $('leno').addEventListener('click', () => { S.leAsk = false; renderMain(); });
   if ($('leyes')) $('leyes').addEventListener('click', async () => {
@@ -477,6 +480,71 @@ function renderFix(box) {
       S.fix = null; S.delAsk = false;
       await load();
     } catch (e) { console.error(e); toast('Could not delete'); }
+    finally { S.busy = false; }
+  });
+}
+
+/* ── Put it back ──────────────────────────────────────────────────────────
+   A bag got taken out of its back-stock bin (to look at, photograph, count…)
+   and needs to go home. Find the lot, and this makes a Put away job in Jobs —
+   the same kind put-away makes — for the bag to go back into the bin. The
+   stock numbers don't change: those spools never left the lot in Grist, only
+   the bag left the shelf. Picking a different bin also moves the lot there. */
+function putBackHtml(lot) {
+  if (!(lot.onHand + lot.hank > 0)) return '';
+  const open = (lot.jobs || {}).open || 0;
+  const made = S.putBack && S.putBack.lot === lot.id ? S.putBack : null;
+  const bins = S.model.bins.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+    .map(b => `<option value="${b.id}" ${b.id === lot.binId ? 'selected' : ''}>${esc(b.code)} · ${
+      StockOps.binFillFor(S.model, b.id, lot)}/${b.cap}${b.fiber ? ' ' + esc(b.fiber) : ''}${b.reserved ? ' · reserved' : ''}</option>`).join('');
+  return `<div class="step ${made ? 'done' : ''}"><div class="hd">Bag taken out? Put it back</div>
+    ${made ? `<div class="lab" style="color:var(--teal);font-weight:600">✓ Job made — ${esc(made.text)}. It's on the Jobs list now.</div>` : `
+    ${open ? `<div class="lab" style="margin-bottom:6px;color:var(--gold);font-weight:600">This lot already has ${open} job${open === 1 ? '' : 's'} to do.</div>` : ''}
+    <div class="row" style="border:none;padding:0">
+      <span class="lab">Wound</span><input class="q" type="number" min="0" id="pbw" value="${lot.onHand}">
+      <span class="lab">Hank</span><input class="q" type="number" min="0" id="pbh" value="${lot.hank}">
+      <span class="lab">into bin</span><select id="pbbin"><option value="">—</option>${bins}</select>
+    </div>
+    <div class="actions" style="margin-top:6px"><button class="btn small" id="pbgo">Make a put-back job</button></div>
+    <div class="lab" style="margin-top:6px">Adds a Put away job to Jobs. Grist's counts stay as they are — the spools never left the lot, only the bag left the shelf.</div>`}
+  </div>`;
+}
+function bindPutBack(lot) {
+  const go = document.getElementById('pbgo'); if (!go) return;
+  go.addEventListener('click', async () => {
+    if (S.busy) return;
+    const T = S.model.cols.T, L = S.model.cols.L;
+    if (!T) { toast('No Worker_Tasks table — jobs are off'); return; }
+    const w = Math.max(0, Math.round(Number(document.getElementById('pbw').value) || 0));
+    const h = Math.max(0, Math.round(Number(document.getElementById('pbh').value) || 0));
+    const binId = Number(document.getElementById('pbbin').value) || null;
+    const binCode = binId ? (S.model.binById[binId] || '') : '';
+    if (!w && !h) { toast('Nothing to put back — both counts are 0'); return; }
+    if (!binCode) { toast('Pick the bin it goes back into'); return; }
+    const tag = `${lot.lotNumber} ${lot.recipe.name}${lot.fiber ? ' ' + lot.fiber : ''}`;
+    const acts = [], parts = [];
+    [['Wound', w], ['Hank', h]].forEach(([form, q]) => {
+      if (!q) return;
+      parts.push(`${q} ${form.toLowerCase()}`);
+      acts.push(['AddRecord', 'Worker_Tasks', null, StockOps.taskFields(T, {
+        type: 'Put away', lotId: lot.id, recipeId: lot.recipe.id, qty: q, form, bin: binCode, sku: lot.recipe.sku,
+        instruction: `${tag}: ${q} ${form.toLowerCase()} → back stock bin ${binCode} (put back — was taken out)`,
+      })]);
+    });
+    const moved = L && L.bin && binId !== lot.binId;
+    if (moved) acts.push(['UpdateRecord', 'Production_Lots', lot.id, { [L.bin]: binId }]);
+    S.busy = true;
+    try {
+      const r = await grist.docApi.applyUserActions(acts);
+      const ids = (r && r.retValues ? r.retValues : []).filter(x => typeof x === 'number');
+      const undo = ids.map(id => ['RemoveRecord', 'Worker_Tasks', id]);
+      if (moved) undo.push(['UpdateRecord', 'Production_Lots', lot.id, { [L.bin]: lot.binId || 0 }]);
+      const text = `${parts.join(' + ')} → bin ${binCode}${moved ? ` (lot moved from ${lot.binCode || 'no bin'})` : ''}`;
+      S.putBack = { lot: lot.id, text };
+      S.log.unshift({ text: `${lot.lotNumber}: put-back job, ${text}`, undo });
+      toast('Put-back job made ✓');
+      await load();
+    } catch (e) { console.error(e); toast('Could not make the job — nothing was changed'); }
     finally { S.busy = false; }
   });
 }
