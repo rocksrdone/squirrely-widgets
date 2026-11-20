@@ -34,6 +34,8 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
   padding: 14px; margin-bottom: 18px;
 }
 .lookup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.desc-input { width: 100%; max-width: 320px; border: 1px solid transparent; background: transparent; font: inherit; color: inherit; padding: 2px 4px; border-radius: 4px; }
+.desc-input:hover, .desc-input:focus { border-color: var(--rule); background: #fff; outline: none; }
 .lookup-row input {
   flex: 1; min-width: 180px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
   font-size: 13px; font-family: 'DM Mono', monospace; background: #fff; color: #1A1614;
@@ -1180,9 +1182,14 @@ async function lookupOrder() {
     if (!st.country && cName) document.getElementById('toCountry').value = cName;
     // The work order says who the customer is; trust that over the lookup's
     // guess (by SKU code or name), which misses retail-style SKUs.
+    const appliedNotes = [];
     if (!autoLoadedOrder || normNum(autoLoadedOrder) !== normNum(data.order_number)) currentWorkOrderId = null;
     currentWorkOrderId = await findWorkOrderId(data.order_number);
     const woCust = await gristCustomerForOrder(currentWorkOrderId);
+    if (data.order_type !== 'Grist') {
+      const renamed = await applyGristLineNames(currentWorkOrderId);
+      if (renamed) appliedNotes.push(`${renamed} line${renamed > 1 ? 's' : ''} printed under the colourway Grist now has (was different in Shopify)`);
+    }
     if (woCust && (!data.customer || !data.customer.matched || data.customer.row_id !== woCust.row_id)) {
       data.customer = woCust;
       const cc2 = countryCodeOf(woCust.ship_country);
@@ -1190,7 +1197,7 @@ async function lookupOrder() {
         applyDestinationHints(cc2 || isoFromChoice(woCust.ship_country), choiceLabel(woCust.ship_country) || woCust.ship_country);
       }
     }
-    const appliedFields = applyCustomerRecord(data.customer);
+    const appliedFields = applyCustomerRecord(data.customer).concat(appliedNotes);
     if (!st.address1 && consigneeFromGrist(data.customer)) appliedFields.push('ship-to address from the Grist customer card');
     applyConsigneeWording(data.customer, st);
     const profile = applyCustomerProfile();
@@ -2092,6 +2099,45 @@ function applyShipmentPreset(idx) {
 
 /* ------------------------------------------------------------- item table */
 
+/* Shopify keeps the line as it was pushed; Grist may since have moved it to
+   another recipe (Natalia custom 8-16-26 → Aurora Mist). A Shopify line whose
+   SKU is not on the work order is paired with the work-order line whose SKU
+   is not on Shopify, when exactly one has the same quantity, and printed with
+   Grist's colourway and SKU. The Shopify name shows underneath. */
+async function applyGristLineNames(woId) {
+  if (!woId || !shopifyLines.length) return 0;
+  try {
+    const [wol, rec] = await Promise.all([grist.docApi.fetchTable('Work_Order_Lines'), grist.docApi.fetchTable('Recipes')]);
+    const ref = v => Array.isArray(v) ? v[1] : v;
+    const recName = {}, recFib = {};
+    (rec.id || []).forEach((id, k) => { recName[id] = rec.Recipe_Name[k] || ''; recFib[id] = rec.Fiber_Type[k] || ''; });
+    const g = [];
+    (wol.id || []).forEach((id, k) => {
+      if (ref(wol.Work_Order[k]) !== woId) return;
+      const r = ref((wol.Recipe || [])[k]);
+      g.push({ sku: String((wol.SKU || [])[k] || '').toUpperCase(), qty: Number(wol.Qty_Needed[k]) || 0,
+        name: recName[r] ? (recFib[r] ? `${recFib[r]} - ${recName[r]}` : recName[r]) : '', rawSku: String((wol.SKU || [])[k] || '') });
+    });
+    const shopSkus = new Set(shopifyLines.map(li => String(li.sku || '').toUpperCase()));
+    const gSkus = new Set(g.map(x => x.sku));
+    const orphanG = g.filter(x => x.sku && !shopSkus.has(x.sku) && x.name);
+    let n = 0;
+    shopifyLines.forEach(li => {
+      if (gSkus.has(String(li.sku || '').toUpperCase())) return;
+      const m = orphanG.filter(x => x.qty === li.orderedQty);
+      if (m.length !== 1) return;
+      li.renamedFrom = `${li.name}${li.sku ? ' (' + li.sku + ')' : ''}`;
+      li.name = m[0].name; li.sku = m[0].rawSku; n++;
+      orphanG.splice(orphanG.indexOf(m[0]), 1);
+    });
+    return n;
+  } catch (e) { console.warn('Grist line names', e); return 0; }
+}
+document.addEventListener('input', e => {
+  const i = e.target && e.target.dataset ? e.target.dataset.desc : undefined;
+  if (i !== undefined && shopifyLines[Number(i)]) shopifyLines[Number(i)].name = e.target.value;
+});
+
 function renderItems() {
   const body = document.getElementById('itemsBody');
 
@@ -2101,7 +2147,8 @@ function renderItems() {
     return `
     <tr class="zero-qty${remaining === 0 ? ' fully-shipped' : ''}" data-kind="shopify" data-idx="${i}">
       <td class="col-check"><input type="checkbox" aria-label="Include ${esc(li.name)}" ${remaining === 0 ? 'disabled' : ''}></td>
-      <td>${esc(li.name)}${li.sku ? ` <span style="color:#8B7D72">(${esc(li.sku)})</span>` : ''}${
+      <td><input type="text" class="desc-input" data-desc="${i}" value="${esc(li.name)}" title="Edit what prints for this line (this invoice only)">${li.sku ? ` <span style="color:#8B7D72">(${esc(li.sku)})</span>` : ''}${
+        li.renamedFrom ? `<div style="font-size:11px;color:#8B7D72">Shopify: ${esc(li.renamedFrom)}</div>` : ''}${
         mergedOrders.length > 1 && li.srcOrder ? ` <span class="src-tag">${esc(li.srcOrder)}</span>` : ''}</td>
       <td class="col-hs"><input type="text" class="hs-input" value="${esc(li.hs)}" placeholder="—"></td>
       <td class="col-qty-ordered">${li.orderedQty}</td>
