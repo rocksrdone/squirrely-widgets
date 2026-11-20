@@ -191,6 +191,23 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
 .net-note { font-size: 9px; color: var(--teal); margin-top: 2px; }
 .net-note.warn { color: var(--gold); }
 @media print { .net-note, .renamed-from { display: none !important; } }
+.ready-panel { margin: 18px 0 8px; padding: 12px 14px; border-radius: 8px; border: 1.5px solid #E2C9A0; background: #FFF8EC; font-size: 13px; }
+.ready-panel.ok { border-color: #B9D8D2; background: #E9F2F0; }
+.ready-panel h4 { margin: 0 0 6px; font-size: 13px; }
+.ready-panel ul { margin: 0; padding: 0; list-style: none; }
+.ready-panel li { padding: 2px 0; }
+.ready-panel li.bad { color: #8B3A2A; font-weight: 600; }
+.ready-panel li.warn { color: #7A4A00; }
+.ready-panel li.good { color: #2E5E1A; }
+.ready-panel a { color: inherit; }
+.print-actions .btn:disabled { opacity: .45; cursor: not-allowed; }
+#notReadyBanner { display: none; }
+@media print {
+  .ready-panel { display: none !important; }
+  /* Printed with Ctrl+P while something required is missing: say so on the paper. */
+  body.not-ready #notReadyBanner { display: block !important; border: 3px solid #8B3A2A; color: #8B3A2A; font: 700 16px sans-serif;
+    padding: 10px; margin-bottom: 10px; text-align: center; }
+}
 .meta-item.internal-only { background: var(--warm); }
 .meta-item.internal-only label::after { content: ' (internal, not printed)'; font-style: italic; }
 
@@ -405,7 +422,7 @@ tr.fully-shipped td { opacity: .5; }
 <body>
 
 <h1>Split Shipment Invoice</h1>
-<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-b</span></div>
+<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-c</span></div>
 
 <div class="no-print-box">
   <div class="lookup-row">
@@ -698,14 +715,16 @@ tr.fully-shipped td { opacity: .5; }
 
   </div>
 
+  <div class="ready-panel" id="readyPanel"></div>
   <div class="print-actions">
-    <button class="btn" onclick="downloadPDF()" id="pdfBtn">⬇ Download PDF</button>
-    <button class="btn secondary" onclick="downloadShipStationCSV()" id="ssBtn">⬇ ShipStation CSV</button>
-    <button class="btn secondary" onclick="window.print()">🖨 Print</button>
+    <button class="btn" onclick="if (readyCheck().ok) downloadPDF()" id="pdfBtn">⬇ Download PDF</button>
+    <button class="btn secondary" onclick="if (readyCheck().ok) downloadShipStationCSV()" id="ssBtn">⬇ ShipStation CSV</button>
+    <button class="btn secondary" onclick="if (readyCheck().ok) window.print()" id="printBtn">🖨 Print</button>
     <button class="btn secondary" onclick="resetAll()">Start Over</button>
   </div>
 </div>
 
+<div id="notReadyBanner"></div>
 <script>
 const LOOKUP_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/split-invoice-lookup';
 const LIST_ORDERS_WEBHOOK_URL = 'https://squirrelystash.app.n8n.cloud/webhook/split-invoice-list-orders';
@@ -2380,6 +2399,7 @@ function recalcTotals() {
 
   updateCapReadout(total);
   updateRemainingNote();
+  if (typeof renderReady === 'function') setTimeout(renderReady, 0);
 }
 
 function updateCapReadout(total) {
@@ -2566,6 +2586,70 @@ function buildPrintableSnapshot() {
 
   return clone;
 }
+
+/* ── Ready to print? ───────────────────────────────────────────────────────
+   The PDF, Print and ShipStation buttons stay greyed out until the things a
+   carrier or customs office will reject are filled in; the list under the
+   invoice says what is left. "Should" items are warnings, not blocks. If the
+   page is printed anyway (Ctrl+P), the paper says NOT READY across the top. */
+function readyCheck() {
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  const items = [];
+  const need = (ok, text, focus) => items.push({ ok, text, level: 'need', focus });
+  const should = (ok, text, focus) => items.push({ ok, text, level: 'should', focus });
+  const loaded = document.getElementById('invoiceWrap').classList.contains('ready');
+  if (!loaded) return { ok: false, items: [{ ok: false, level: 'need', text: 'Look up an order first' }] };
+
+  // Lines in this box
+  const rows = [...document.querySelectorAll('#itemsBody tr')].filter(r => {
+    const q = r.querySelector('input[type="number"]');
+    return q && !q.disabled && (parseFloat(q.value) || 0) > 0;
+  });
+  need(rows.length > 0, rows.length ? `${rows.length} line${rows.length > 1 ? 's' : ''} in this shipment` : 'Choose what goes in this box (This Shipment quantities)');
+  const noHs = rows.filter(r => !((r.querySelector('.hs-input') || {}).value || '').trim()).length;
+  need(!noHs, noHs ? `HS code missing on ${noHs} line${noHs > 1 ? 's' : ''} in this box` : 'HS codes on every line');
+
+  // Weight — the one that's easy to forget
+  const gross = (() => { const m = /([\d.,]+)\s*(kg|g|lb|lbs|oz)?/i.exec(v('grossWeight')); if (!m) return 0;
+    const n = parseFloat(m[1].replace(',', '.')) || 0, u = (m[2] || 'kg').toLowerCase();
+    return u === 'g' ? n / 1000 : u.startsWith('lb') ? n * 0.4536 : u === 'oz' ? n * 0.02835 : n; })();
+  need(gross > 0, gross > 0 ? `Gross weight ${v('grossWeight')}` : 'Weigh the packed box and enter the Gross Weight', 'grossWeight');
+  const net = (() => { const m = /([\d.,]+)\s*(kg|g)?/i.exec(v('netWeight')); if (!m) return 0; const n = parseFloat(m[1].replace(',', '.')) || 0; return (m[2] || 'kg').toLowerCase() === 'g' ? n / 1000 : n; })();
+  if (gross > 0 && net > 0) should(gross >= net, gross >= net ? 'Gross weight is more than the net weight' : `Gross weight (${gross.toFixed(2)} kg) is less than the thread alone (${net.toFixed(2)} kg) — re-weigh?`, 'grossWeight');
+
+  // Who it's going to
+  need(!!v('toName'), v('toName') ? 'Consignee name' : 'Consignee name is empty', 'toName');
+  need(!!v('toAddr1') && !!v('toCityStateZip'), v('toAddr1') && v('toCityStateZip') ? 'Consignee address' : 'Consignee street and city/postcode', v('toAddr1') ? 'toCityStateZip' : 'toAddr1');
+  need(!!v('toCountry'), v('toCountry') ? `Destination ${v('toCountry')}` : 'Destination country is empty', 'toCountry');
+  const intl = !!v('toCountry') && !/^(united states( of america)?|usa?|us)$/i.test(v('toCountry'));
+  if (intl) {
+    should(!!v('toPhone'), v('toPhone') ? 'Consignee phone' : 'Consignee phone — carriers ask for one on international parcels', 'toPhone');
+    if (typeof DESTINATION_TAX_ID !== 'undefined' && DESTINATION_TAX_ID[currentDestinationISO])
+      should(!!v('toTaxId'), v('toTaxId') ? 'Importer tax / customs ID' : `Importer ID for ${v('toCountry')} — ${DESTINATION_TAX_ID[currentDestinationISO].label}`, 'toTaxId');
+    const decl = document.getElementById('includeDeclaration');
+    need(!decl || decl.checked, !decl || decl.checked ? 'Signed declaration included — sign and date the printout' : 'Tick "Include the signed declaration" — carriers need the invoice signed');
+  }
+  const ok = items.every(i => i.ok || i.level !== 'need');
+  return { ok, items };
+}
+function renderReady() {
+  const r = readyCheck(), box = document.getElementById('readyPanel');
+  if (!box) return r;
+  const left = r.items.filter(i => !i.ok && i.level === 'need').length;
+  box.className = 'ready-panel' + (r.ok ? ' ok' : '');
+  box.innerHTML = `<h4>${r.ok ? '✓ Ready to print' : `Before printing — ${left} thing${left === 1 ? '' : 's'} to do`}</h4><ul>${
+    r.items.map(i => `<li class="${i.ok ? 'good' : i.level === 'need' ? 'bad' : 'warn'}">${i.ok ? '✓' : i.level === 'need' ? '✗' : '⚠'} ${
+      i.focus && !i.ok ? `<a href="#" data-focus="${i.focus}">${esc(i.text)}</a>` : esc(i.text)}</li>`).join('')}</ul>`;
+  box.querySelectorAll('[data-focus]').forEach(a => a.onclick = e => { e.preventDefault(); const el = document.getElementById(a.dataset.focus); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } });
+  ['pdfBtn', 'ssBtn', 'printBtn'].forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = !r.ok; b.title = r.ok ? '' : 'Finish the list above the buttons first'; } });
+  document.body.classList.toggle('not-ready', !r.ok);
+  const banner = document.getElementById('notReadyBanner');
+  if (banner) banner.textContent = r.ok ? '' : 'NOT READY — ' + r.items.filter(i => !i.ok && i.level === 'need').map(i => i.text).join(' · ');
+  return r;
+}
+let _readyT = null;
+['input', 'change', 'click'].forEach(ev => document.addEventListener(ev, () => { clearTimeout(_readyT); _readyT = setTimeout(renderReady, 120); }));
+window.addEventListener('beforeprint', renderReady);
 
 async function downloadPDF() {
   if (!window.jspdf || !window.html2canvas) {
