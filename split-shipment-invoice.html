@@ -422,7 +422,7 @@ tr.fully-shipped td { opacity: .5; }
 <body>
 
 <h1>Split Shipment Invoice</h1>
-<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-c</span></div>
+<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-d</span></div>
 
 <div class="no-print-box">
   <div class="lookup-row">
@@ -569,6 +569,15 @@ tr.fully-shipped td { opacity: .5; }
       <div class="meta-item">
         <label>Gross Weight (incl. packaging)</label>
         <input id="grossWeight" placeholder="e.g. 1.4 kg">
+      </div>
+      <div class="meta-item internal-only">
+        <label>Carrier</label>
+        <select id="carrier" onchange="applyShipperForCarrier(); renderReady();">
+          <option value="USPS" selected>USPS</option>
+          <option value="FedEx">FedEx</option>
+          <option value="UPS">UPS</option>
+          <option value="DHL">DHL</option>
+        </select>
       </div>
       <div class="meta-item internal-only">
         <label>Source Order #</label>
@@ -1522,10 +1531,17 @@ function splitBusinessAddress(text) {
   const csz = lines.length > 1 ? lines.pop() : '';
   return { addr1: lines[0] || '', addr2: lines.slice(1).join(', '), csz };
 }
+/* USPS returns to the PO Box; FedEx, UPS and DHL can't, so for them the
+   shipper is the physical address (Settings → Business_Street_Address). */
+function isPoBox(t) { return /\bp\.?\s*o\.?\s*box\b|\bpost\s*office\s*box\b/i.test(String(t || '')); }
+function carrierNeedsStreet() { return (((document.getElementById('carrier') || {}).value) || 'USPS') !== 'USPS'; }
+function applyShipperForCarrier() { shipperFromSettings(); }
 async function shipperFromSettings() {
   try {
     await SSSettings.load();
-    const a = splitBusinessAddress(SSSettings.text('Business_Address', ''));
+    const street = SSSettings.text('Business_Street_Address', '');
+    const useStreet = carrierNeedsStreet() && street;
+    const a = splitBusinessAddress(useStreet ? street : SSSettings.text('Business_Address', ''));
     const note = document.getElementById('shipperSavedNote');
     if (!a) {
       if (!document.getElementById('fromAddr1').value.trim()) {
@@ -1541,7 +1557,8 @@ async function shipperFromSettings() {
     document.getElementById('fromCityStateZip').value = a.csz;
     set('fromPhone', SSSettings.text('Business_Phone', ''));
     set('fromTaxId', SSSettings.text('Exporter_Tax_ID', ''));
-    note.textContent = 'From Settings → Business.';
+    note.textContent = useStreet ? `From Settings → Business_Street_Address (street address for ${document.getElementById('carrier').value}).`
+      : carrierNeedsStreet() ? 'No Business_Street_Address in Settings — add your street address there for FedEx/UPS/DHL.' : 'From Settings → Business.';
     note.style.color = '#3A8B7A';
     markEmptyFieldsForPrint();
   } catch (e) { console.warn('settings', e); }
@@ -2621,6 +2638,11 @@ function readyCheck() {
   need(!!v('toName'), v('toName') ? 'Consignee name' : 'Consignee name is empty', 'toName');
   need(!!v('toAddr1') && !!v('toCityStateZip'), v('toAddr1') && v('toCityStateZip') ? 'Consignee address' : 'Consignee street and city/postcode', v('toAddr1') ? 'toCityStateZip' : 'toAddr1');
   need(!!v('toCountry'), v('toCountry') ? `Destination ${v('toCountry')}` : 'Destination country is empty', 'toCountry');
+  if (carrierNeedsStreet()) {
+    const box = isPoBox(v('fromAddr1')) || isPoBox(v('fromAddr2'));
+    need(!box && !!v('fromAddr1'), !box ? `Shipper street address for ${v('carrier')}`
+      : `${v('carrier')} won't take a PO Box as the shipper — add Business_Street_Address in Settings Desk, or type your street address in Shipper`, 'fromAddr1');
+  }
   const intl = !!v('toCountry') && !/^(united states( of america)?|usa?|us)$/i.test(v('toCountry'));
   if (intl) {
     should(!!v('toPhone'), v('toPhone') ? 'Consignee phone' : 'Consignee phone — carriers ask for one on international parcels', 'toPhone');
