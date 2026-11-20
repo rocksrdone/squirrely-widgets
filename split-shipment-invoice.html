@@ -36,7 +36,7 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
 .lookup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .lookup-row input {
   flex: 1; min-width: 180px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
-  font-size: 13px; font-family: 'DM Mono', monospace;
+  font-size: 13px; font-family: 'DM Mono', monospace; background: #fff; color: #1A1614;
 }
 .btn {
   font-size: 12px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
@@ -940,6 +940,39 @@ let currentWorkOrderId = null;
 let savedRows = [];
 
 const normNum = v => String(v || '').toUpperCase().replace(/^SV/, '').replace(/[^A-Z0-9]/g, '');
+/* An order that only exists in Grist — built in Order Builder and not pushed
+   (or pushed only as a draft that Shopify numbers differently). Shaped like
+   the Shopify lookup so the rest of the page doesn't care where it came from:
+   lines from Work_Order_Lines (Unit_Price), the ship-to filled afterwards from
+   the customer card (consigneeFromGrist), customer from the work order.     */
+async function gristOrderAsLookup(raw) {
+  try {
+    const [wo, wol, rec] = await Promise.all([grist.docApi.fetchTable('Work_Orders'),
+      grist.docApi.fetchTable('Work_Order_Lines'), grist.docApi.fetchTable('Recipes')]);
+    const want = normNum(raw);
+    const i = (wo.Order_Number || []).findIndex(n => normNum(n) === want);
+    if (i < 0) return null;
+    const woId = wo.id[i];
+    const ref = v => Array.isArray(v) ? v[1] : v;
+    const recName = {}, recFib = {};
+    (rec.id || []).forEach((id, k) => { recName[id] = rec.Recipe_Name[k] || ''; recFib[id] = rec.Fiber_Type[k] || ''; });
+    const lines = [];
+    (wol.id || []).forEach((id, k) => {
+      if (ref(wol.Work_Order[k]) !== woId) return;
+      if (/cancel/i.test(String((wol.Queue_Status || [])[k] || ''))) return;
+      const qty = Number(wol.Qty_Needed[k]) || 0; if (!qty) return;
+      const r = ref((wol.Recipe || [])[k]);
+      const nm = recName[r] || String((wol.SKU || [])[k] || 'Thread');
+      lines.push({ id: 'wol-' + id, sku: String((wol.SKU || [])[k] || ''),
+        name: recFib[r] ? `${recFib[r]} - ${nm}` : nm, quantity: qty, price: String(Number((wol.Unit_Price || [])[k]) || 0) });
+    });
+    if (!lines.length) return null;
+    currentWorkOrderId = woId;
+    return { found: true, order_type: 'Grist', order_number: String(wo.Order_Number[i]), currency: 'USD',
+      line_items: lines, ship_to: {}, products: {}, customer: await gristCustomerForOrder(woId) };
+  } catch (e) { console.warn('Grist order lookup', e); return null; }
+}
+
 async function findWorkOrderId(orderNumber) {
   if (currentWorkOrderId) return currentWorkOrderId;
   try {
@@ -1076,8 +1109,13 @@ async function lookupOrder() {
 
   try {
     const res = await fetch(`${LOOKUP_WEBHOOK_URL}?order_number=${encodeURIComponent(raw)}`, { headers: await SSSettings.hookHeaders() });
-    const data = await res.json();
+    let data = await res.json();
 
+    // Not in Shopify: a Grist order that was never pushed (M-2) is built from its own lines.
+    if (!data.found) {
+      const g = await gristOrderAsLookup(raw);
+      if (g) data = g;
+    }
     if (!data.found) {
       const s = data.scanned || {};
       const detail = (s.regular === undefined)
@@ -1164,7 +1202,7 @@ async function lookupOrder() {
 
     const kind = data.order_type === 'Draft'
       ? `draft order (${data.draft_status || 'open'})`
-      : 'order';
+      : data.order_type === 'Grist' ? 'Grist order (not in Shopify — lines and prices from the work order)' : 'order';
     statusEl.textContent = `Loaded ${kind} ${data.order_number} — ${shopifyLines.length} line item(s).`;
 
     fillHsFromProducts(false);
