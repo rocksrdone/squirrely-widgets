@@ -190,7 +190,7 @@ h1 { font-family: 'Libre Baskerville', serif; font-size: 20px; margin: 0 0 4px; 
    filling the invoice in, not statements to the destination's customs. */
 .net-note { font-size: 9px; color: var(--teal); margin-top: 2px; }
 .net-note.warn { color: var(--gold); }
-@media print { .net-note { display: none !important; } }
+@media print { .net-note, .renamed-from { display: none !important; } }
 .meta-item.internal-only { background: var(--warm); }
 .meta-item.internal-only label::after { content: ' (internal, not printed)'; font-style: italic; }
 
@@ -405,7 +405,7 @@ tr.fully-shipped td { opacity: .5; }
 <body>
 
 <h1>Split Shipment Invoice</h1>
-<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-a</span></div>
+<div class="sub">Pull a Shopify order or draft, choose what is physically going in this box, print a standalone commercial invoice for just that box. <span style="font-family:'DM Mono',monospace; color:#B0A396;">build 2026-11-20-b</span></div>
 
 <div class="no-print-box">
   <div class="lookup-row">
@@ -2148,7 +2148,7 @@ function renderItems() {
     <tr class="zero-qty${remaining === 0 ? ' fully-shipped' : ''}" data-kind="shopify" data-idx="${i}">
       <td class="col-check"><input type="checkbox" aria-label="Include ${esc(li.name)}" ${remaining === 0 ? 'disabled' : ''}></td>
       <td><input type="text" class="desc-input" data-desc="${i}" value="${esc(li.name)}" title="Edit what prints for this line (this invoice only)">${li.sku ? ` <span style="color:#8B7D72">(${esc(li.sku)})</span>` : ''}${
-        li.renamedFrom ? `<div style="font-size:11px;color:#8B7D72">Shopify: ${esc(li.renamedFrom)}</div>` : ''}${
+        li.renamedFrom ? `<div class="renamed-from" style="font-size:11px;color:#8B7D72">Shopify: ${esc(li.renamedFrom)}</div>` : ''}${
         mergedOrders.length > 1 && li.srcOrder ? ` <span class="src-tag">${esc(li.srcOrder)}</span>` : ''}</td>
       <td class="col-hs"><input type="text" class="hs-input" value="${esc(li.hs)}" placeholder="—"></td>
       <td class="col-qty-ordered">${li.orderedQty}</td>
@@ -2365,7 +2365,11 @@ function recalcTotals() {
 
   // Freight wording. DAP with a 0.00 shipping line looks like an omitted cost
   // unless the invoice says the carriage is already inside the unit prices.
-  const freight = document.getElementById('freightTerms').value;
+  /* A shipping charge on the invoice means freight is NOT inside the unit
+     prices; "Included" plus a Shipping line contradicts itself (SS-2026-0038). */
+  const fSel = document.getElementById('freightTerms');
+  if ((parseFloat(document.getElementById('shippingValue').value) || 0) > 0 && fSel.value === 'included') fSel.value = 'separate';
+  const freight = fSel.value;
   const incoterm = (document.getElementById('incoterms').value || '').trim().toUpperCase();
   const note = document.getElementById('freightNote');
   if (freight === 'included') {
