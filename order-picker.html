@@ -196,6 +196,26 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   background: var(--teal); color: white; font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .refresh-btn:disabled { opacity: .55; cursor: default; }
+#pickPrint { display: none; }
+.pick-cb { margin: 0 6px 0 0; width: 15px; height: 15px; cursor: pointer; flex: none; }
+@media print {
+  body > *:not(#pickPrint) { display: none !important; }
+  #pickPrint { display: block !important; font: 11px/1.35 Arial, sans-serif; color: #000; }
+  .pk-title { font-size: 10px; color: #444; margin-bottom: 6px; }
+  .pk-order { page-break-inside: avoid; break-inside: avoid; margin-bottom: 14px; }
+  .pk-order + .pk-order { border-top: 1px dashed #999; padding-top: 10px; }
+  .pk-hd { font-size: 14px; margin-bottom: 4px; display: flex; gap: 8px; align-items: baseline; }
+  .pk-hd span { margin-left: auto; font-size: 11px; }
+  .pk-note { font-size: 10.5px; margin-bottom: 4px; }
+  .pk-t { width: 100%; border-collapse: collapse; }
+  .pk-t th { text-align: left; font-size: 9.5px; text-transform: uppercase; border-bottom: 1px solid #000; padding: 3px 4px; }
+  .pk-t td { border-bottom: 1px solid #ccc; padding: 4px; vertical-align: top; }
+  .pk-t .c { width: 18px; font-size: 14px; } .pk-t .n { text-align: right; width: 40px; }
+  .pk-t .m { font-family: 'Courier New', monospace; font-size: 9.5px; }
+  .pk-t i { color: #555; font-style: normal; } .pk-ln { font-size: 9.5px; color: #333; }
+  .pk-tot td { border-bottom: none; font-size: 10px; padding-top: 6px; }
+  .pk-sum { page-break-before: always; break-before: page; border-top: none !important; }
+}
 </style>
 </head>
 <body>
@@ -223,7 +243,10 @@ body { background: var(--paper); color: var(--ink); font-family: 'Inter', sans-s
   </select>
   <button class="view-toggle-btn active" id="closedToggle" onclick="toggleClosed()">Hiding closed</button>
   <button class="view-toggle-btn" id="denseToggle" onclick="toggleDense()">Compact view</button>
+  <button class="view-toggle-btn" id="pickBtn" onclick="printPickList()" title="Tick orders to print just those; with none ticked it prints every order shown">🖨 Pick list</button>
+  <span id="pickSelInfo" style="font-size:11px;color:#8B7D72"></span>
 </div>
+<div id="pickPrint"></div>
 
 <div class="filter-row" id="statusFilters"></div>
 <div class="filter-row" id="channelFilters"></div>
@@ -1211,6 +1234,8 @@ function renderList() {
     return `
       <div class="order-card ${o.id === selectedId ? 'selected' : ''} ${borderClass} ${closed ? 'is-closed' : ''}" data-order-id="${o.id}" onclick="selectOrder(${o.id})">
         <div class="card-top">
+          <input type="checkbox" class="pick-cb" title="Include in the pick list" ${pickSel.has(o.id) ? 'checked' : ''}
+            onclick="event.stopPropagation(); togglePick(${o.id}, this.checked)">
           <span class="card-ordernum">${esc(o.orderNumber || '—')}</span>
           <span class="card-customer">${esc(o.customerName || '(no customer)')}</span>
           <div class="card-badges">
@@ -1249,6 +1274,8 @@ function renderList() {
     `;
   };
 
+  lastShown = list;
+  updatePickInfo();
   let html = '';
   if (pinnedIsHidden) {
     html += `<div class="pinned-label">Currently selected (hidden by filter/search)</div>`;
@@ -1257,6 +1284,57 @@ function renderList() {
   }
   html += list.map(cardHtml).join('');
   box.innerHTML = html || `<div class="empty-state">No orders match.</div>`;
+}
+
+/* ── Pick list ─────────────────────────────────────────────────────────────
+   A printable sheet per order: every colourway, how many, where it stands
+   (boxed / wound / in hank / to dye), which lots and order bins it's in, and
+   a box to tick as it's picked. Ticked orders only; none ticked = every order
+   on screen (after filters and search). With more than one order it ends with
+   the same lines added up by colourway, for pulling from stock in one pass. */
+let pickSel = new Set(), lastShown = [];
+function togglePick(id, on) { if (on) pickSel.add(id); else pickSel.delete(id); updatePickInfo(); }
+function updatePickInfo() {
+  const el = document.getElementById('pickSelInfo'); if (!el) return;
+  [...pickSel].forEach(id => { if (!allOrders.some(o => o.id === id)) pickSel.delete(id); });
+  el.innerHTML = pickSel.size
+    ? `${pickSel.size} ticked · <a href="#" onclick="event.preventDefault(); pickSel.clear(); renderList();">clear</a>`
+    : (lastShown.length ? `none ticked — prints all ${lastShown.length} shown` : '');
+}
+function printPickList() {
+  const orders = pickSel.size ? allOrders.filter(o => pickSel.has(o.id)) : lastShown.slice();
+  if (!orders.length) return;
+  const by = {}, now = new Date();
+  const stage = l => { const toDye = Math.max(0, l.needed - l.hank - l.wound - l.boxed);
+    return [l.boxed && `${l.boxed} boxed`, l.wound && `${l.wound} wound`, l.hank && `${l.hank} hank`, toDye && `${toDye} to dye`].filter(Boolean).join(' · ') || '—'; };
+  const pages = orders.map(o => {
+    const d = orderLineData[o.id] || { detail: [], needed: 0 };
+    d.detail.forEach(l => {
+      const k = (l.sku || l.name || '?').toUpperCase();
+      const g = by[k] || (by[k] = { name: l.name, fiber: l.fiber, sku: l.sku, need: 0, orders: [] });
+      g.need += l.needed; g.orders.push(`${o.orderNumber} ×${l.needed}`);
+    });
+    return `<section class="pk-order">
+      <div class="pk-hd"><b>${esc(o.orderNumber || '—')}</b> · ${esc(o.customerName || '')}
+        <span>${o.dueDate ? 'Due ' + esc(fmtDate(o.dueDate)) : ''}${orderHasRush(o.id) ? ' · ★ RUSH' : ''}</span></div>
+      ${o.notes ? `<div class="pk-note">Note: ${esc(o.notes)}</div>` : ''}
+      <table class="pk-t"><tr><th class="c"></th><th>Colourway</th><th>SKU</th><th class="n">Qty</th><th>Where it stands</th><th>Lots / box</th></tr>
+      ${d.detail.map(l => `<tr><td class="c">☐</td><td><b>${esc(l.name || '—')}</b>${l.fiber ? ` <i>${esc(l.fiber)}</i>` : ''}${l.priority === 'Rush' ? ' ★' : ''}
+          ${l.notes ? `<div class="pk-ln">${esc(l.notes)}</div>` : ''}</td>
+        <td class="m">${esc(l.sku)}</td><td class="n"><b>${l.needed}</b></td><td>${esc(stage(l))}</td>
+        <td class="m">${esc([l.lots.join(', '), l.bins.join(', ')].filter(Boolean).join(' · '))}</td></tr>`).join('')}
+      <tr class="pk-tot"><td></td><td colspan="2">${d.detail.length} line${d.detail.length === 1 ? '' : 's'}</td><td class="n"><b>${d.needed || 0}</b></td><td colspan="2">Picked by ______ &nbsp; Checked by ______</td></tr>
+      </table></section>`;
+  });
+  const sum = Object.values(by).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  document.getElementById('pickPrint').innerHTML = `
+    <div class="pk-title">Pick list · ${orders.length} order${orders.length === 1 ? '' : 's'} · printed ${esc(now.toLocaleString())}</div>
+    ${pages.join('')}
+    ${orders.length > 1 ? `<section class="pk-order pk-sum"><div class="pk-hd"><b>All orders, by colourway</b></div>
+      <table class="pk-t"><tr><th class="c"></th><th>Colourway</th><th>SKU</th><th class="n">Total</th><th colspan="2">Orders</th></tr>
+      ${sum.map(g => `<tr><td class="c">☐</td><td><b>${esc(g.name || '—')}</b>${g.fiber ? ` <i>${esc(g.fiber)}</i>` : ''}</td><td class="m">${esc(g.sku)}</td>
+        <td class="n"><b>${g.need}</b></td><td colspan="2" class="m">${esc(g.orders.join(', '))}</td></tr>`).join('')}</table></section>` : ''}`;
+  setTimeout(() => window.print(), 50);
 }
 
 async function selectOrder(id) {
