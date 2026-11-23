@@ -188,7 +188,7 @@ function plan() {
   // 2) Reserved from the shelf (Order Builder) but not in a box yet.
   const A = S.A, T = S.allocT;
   if (A.bin && A.source) (T.id || []).forEach((id, i) => {
-    if (String(T[A.source][i] || '') !== 'General') return;
+    if (!String(T[A.source][i] || '').trim()) return;   // blank = new production (Wind Routing boxes those)
     if (String(T[A.bin][i] || '').trim()) return;
     if (DONE_ALLOC.test(String((T[A.status] || [])[i] || ''))) return;
     const lineId = refId(T[A.line][i]); if (!lineId) return;

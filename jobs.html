@@ -32,6 +32,7 @@ h2 .n { background: var(--ink); color: white; border-radius: 10px; padding: 1px 
 .job.put { border-left-color: var(--teal); }
 .job.retail { border-left-color: var(--gold); }
 .job.vendor { border-left-color: var(--purple); }
+.job.pull { border-left-color: #C98A2B; }
 /* Accent, not teal: a disputed count is something to look into, not a job to
    work through. It should not read like the put-away list. */
 .job.check { border-left-color: var(--accent); }
@@ -191,7 +192,64 @@ async function load() {
   }));
   render();                       // jobs first — the bins are an extra, not a gate
   S.bins = await loadBins();
+  try { S.pulls = await loadPulls(); } catch (e) { console.warn('pull jobs', e); S.pulls = []; }
   render();
+}
+
+/* ── Pull for orders ───────────────────────────────────────────────────────
+   Not Worker_Tasks rows: these are read straight from the reservations
+   themselves, so they can't go stale or be forgotten. A reservation is an
+   allocation an order line holds on stock that's still in its bag — made by
+   Order Builder ("reserve from shelf", "take from vendor/retail…") — with no
+   order box recorded yet. The job is: take it out of the bin, put it in the
+   order's box. ✓ records the box on the allocation, and it leaves the list.
+   (Stock Pull does the same thing, a whole order at a time.)                */
+const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;
+async function loadPulls() {
+  const [data, alloc, wol] = await Promise.all([StockOps.load(grist.docApi),
+    grist.docApi.fetchTable('Lot_Allocations'), grist.docApi.fetchTable('Work_Order_Lines')]);
+  const c = n => findCol(alloc, [n]);
+  const A = { lot: c('Lot'), qty: c('Qty_Spools'), status: c('Status'), line: c('Work_Order_Line'), bin: c('Order_Bin'), src: c('Stock_Source') };
+  if (!A.bin || !A.line || !A.src) return [];
+  const woCol = findCol(wol, ['Work_Order']);
+  const lineOrder = {}; (wol.id || []).forEach((id, i) => { lineOrder[id] = refIdOf(wol[woCol][i]); });
+  const lots = {}; data.lots.forEach(l => { lots[l.id] = l; });
+  const out = [];
+  (alloc.id || []).forEach((id, i) => {
+    const src = String(alloc[A.src][i] || '').trim();
+    if (!src) return;                                    // new production: Wind Routing boxes those
+    if (String(alloc[A.bin][i] || '').trim()) return;    // already in a box
+    if (DONE_ALLOC.test(String((alloc[A.status] || [])[i] || ''))) return;
+    const lineId = refIdOf(alloc[A.line][i]); const o = data.orders[lineOrder[lineId]];
+    if (!o || o.status !== 'Active') return;
+    const lot = lots[refIdOf(alloc[A.lot][i])] || {};
+    out.push({ allocId: id, qty: Number(alloc[A.qty][i]) || 0, src, order: o, lot,
+      box: StockOps.orderBinCode(o.customerCode, o.number) });
+  });
+  return out.sort((a, b) => (a.order.due || 9e12) - (b.order.due || 9e12) || String(a.order.number).localeCompare(String(b.order.number)));
+}
+function pullHtml(p) {
+  const rc = p.lot.recipe || {};
+  const from = p.src === 'General' ? 'back stock' : p.src.toLowerCase() + ' stock';
+  return `<div class="job pull" data-pull="${p.allocId}">
+    <div class="what"><b>${esc(rc.name || 'Thread')}${p.lot.fiber ? ' ' + esc(p.lot.fiber) : ''}</b>
+      <div class="d">Take from ${from}${p.lot.lotNumber ? ` (${esc(p.lot.lotNumber)})` : ''} → put in box <b>${esc(p.box || 'for ' + p.order.number)}</b> · ${esc(p.order.customerName || '')} ${esc(p.order.number)}</div>
+      ${p.src !== 'General' ? `<div class="d" style="color:var(--purple)">Taken from the ${esc(p.src.toLowerCase())} store's stock — lower its quantity there if not done yet.</div>` : ''}</div>
+    <span class="pill">${p.qty} spools</span>
+    ${p.lot.binCode ? `<span class="pill">bin ${esc(p.lot.binCode)}</span>` : ''}
+    <div class="acts"><button class="btn go done" data-pullok="${p.allocId}" title="In the box">✓</button></div>
+  </div>`;
+}
+async function pullDone(allocId) {
+  const p = (S.pulls || []).find(x => x.allocId === allocId); if (!p || S.busy) return;
+  if (!p.box) { toast('This customer has no Code, so the box has no name — add it in Customers'); return; }
+  S.busy = true;
+  try {
+    await grist.docApi.applyUserActions([['UpdateRecord', 'Lot_Allocations', allocId, { Order_Bin: p.box }]]);
+    toast(`In box ${p.box} ✓`);
+    S.pulls = await loadPulls(); render();
+  } catch (e) { console.error(e); toast('Could not save — try again'); }
+  finally { S.busy = false; }
 }
 
 /* Which bins a job points at, as data rather than markup, so the screen pill
@@ -271,11 +329,13 @@ function render() {
     .sort((a, b) => b.doneAt - a.doneAt);
   let html = '';
   if (problems.length) html += `<h2>Problems <span class="n">${problems.length}</span></h2>${problems.map(jobHtml).join('')}`;
+  const pulls = S.pulls || [];
+  if (pulls.length) html += `<h2>Pull for orders <span class="n">${pulls.length}</span></h2>${pulls.map(pullHtml).join('')}`;
   TYPES.forEach(ty => {
     const list = todo.filter(j => j.type === ty.key).sort((a, b) => a.created - b.created || a.id - b.id);
     if (list.length) html += `<h2>${esc(ty.title)} <span class="n">${list.length}</span></h2>${list.map(jobHtml).join('')}`;
   });
-  if (!todo.length && !problems.length) html += `<div class="empty">Nothing to do right now. ✓</div>`;
+  if (!todo.length && !problems.length && !pulls.length) html += `<div class="empty">Nothing to do right now. ✓</div>`;
   if (doneToday.length) html += `<h2>Done today <span class="n">${doneToday.length}</span></h2><div class="donelist">${doneToday.map(j =>
     `<div><span>${esc(j.text)}</span><a data-undo="${j.id}">undo</a></div>`).join('')}</div>`;
   /* A vendor store job with no Recipe reference can never find a bin, and
@@ -336,6 +396,7 @@ function wire() {
       return setStatus(id, 'Problem', { found: found === '' ? null : num(found), note });
     }
   }));
+  document.querySelectorAll('[data-pullok]').forEach(b => b.addEventListener('click', () => pullDone(Number(b.dataset.pullok))));
   document.querySelectorAll('[data-undo]').forEach(a => a.addEventListener('click', () => setStatus(Number(a.dataset.undo), 'To do')));
 }
 
