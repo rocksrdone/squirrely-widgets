@@ -89,7 +89,41 @@ table.days td.num { font-family: 'DM Mono', monospace; text-align: right; white-
   pointer-events: none; transition: opacity .2s; z-index: 999; }
 .toast.show { opacity: 1; }
 
+/* ── pay log ── */
+.ledger { background: white; border: 1px solid var(--rule); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+.lhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px solid var(--warm); }
+.lhead .t { font-family: 'Libre Baskerville', serif; font-size: 16px; font-weight: 700; }
+.owed { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.owed.due { background: var(--accent-light); color: var(--accent); }
+.owed.ok { background: var(--done-bg); color: var(--done-text); }
+.lhead .sp { flex: 1; }
+.lhead label { font-size: 11px; color: #6B5E52; display: flex; align-items: center; gap: 6px; }
+.lhead input[type=date] { font: 12px 'Inter', sans-serif; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 5px; background: white; }
+.lrow { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--warm); flex-wrap: wrap; }
+.lrow:last-child { border-bottom: none; }
+.lrow.cur { background: var(--paper); }
+.lrow .per { flex: 1 1 170px; min-width: 0; cursor: pointer; }
+.lrow .per b { font-weight: 600; }
+.lrow .per .who { font-size: 11px; color: #8B7D72; }
+.lrow .per:hover b { color: var(--accent); text-decoration: underline; }
+.lrow .h, .lrow .m { font-family: 'DM Mono', monospace; text-align: right; min-width: 64px; }
+.lrow .m { min-width: 84px; font-weight: 500; }
+.lrow .st { min-width: 170px; text-align: right; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.paid { color: var(--done-text); background: var(--done-bg); border: 1px solid #B9D79A; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.prog { color: #8B7D72; font-size: 11px; font-style: italic; }
+.payb { font: 600 12px 'Inter', sans-serif; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--teal); background: var(--teal); color: white; cursor: pointer; white-space: nowrap; }
+.payb:hover { filter: brightness(1.08); }
+.payb.arm { background: var(--gold); border-color: var(--gold); }
+.undo { font-size: 10px; color: #8B7D72; background: none; border: none; cursor: pointer; text-decoration: underline; font-family: 'Inter', sans-serif; }
+.undo.arm { color: var(--accent); font-weight: 600; }
+.chg { flex-basis: 100%; font-size: 11px; color: var(--accent); background: var(--accent-light); border-radius: 5px; padding: 4px 8px; }
+.lmore { padding: 8px 14px; font-size: 11px; color: #8B7D72; cursor: pointer; text-align: center; }
+.lmore:hover { color: var(--accent); }
+.pbadge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--done-bg); color: var(--done-text); }
+.pbadge.no { background: var(--accent-light); color: var(--accent); }
+
 @media print {
+  .ledger { display: none; }
   body { background: white; padding: 0; }
   .periodbar, .actions, .toast { display: none !important; }
   .wbody { display: block !important; }
@@ -104,6 +138,8 @@ table.days td.num { font-family: 'DM Mono', monospace; text-align: right; white-
   <button class="abtn" id="reloadBtn">&#8635; Reload</button>
 </div>
 <div class="head-sub" id="headSub">Loading&hellip;</div>
+
+<div id="ledger"></div>
 
 <div class="periodbar">
   <button class="pnav" id="prevBtn" title="Previous pay period">&#9664;</button>
@@ -226,6 +262,11 @@ let punches = [];     // {id, workerId, inSec, outSec}
 let rateCol = null;
 let period = periodOf(new Date());
 let openCards = new Set();
+let payments = [];          // Payroll_Payments rows: {id, workerId, key, hours, amount, paidOn, notes}
+let payTableOk = true;
+let showAllPeriods = false;
+let paidOnInput = null;     // the "Paid on" date chosen in the pay log (kept across re-renders)
+const armed = {};           // click-twice buttons: key -> timeout
 
 async function loadEverything() {
   await SSSettings.load();
@@ -255,6 +296,16 @@ async function loadEverything() {
       inSec: toEpochSec(columnAsArray(ct, inCol)[i]),
       outSec: toEpochSec(columnAsArray(ct, outCol)[i]),
     })).filter(p => p.inSec && p.workerId);
+
+    payments = []; payTableOk = true;
+    try {
+      const pt = await grist.docApi.fetchTable('Payroll_Payments');
+      payments = (pt.id || []).map((id, i) => ({
+        id, workerId: getRefId(columnAsArray(pt, 'Worker')[i]), key: String(columnAsArray(pt, 'Period_Key')[i] || ''),
+        hours: Number(columnAsArray(pt, 'Hours')[i]) || 0, amount: Number(columnAsArray(pt, 'Amount')[i]) || 0,
+        paidOn: toEpochSec(columnAsArray(pt, 'Paid_On')[i]), notes: String(columnAsArray(pt, 'Notes')[i] || ''),
+      }));
+    } catch (e) { console.warn('Payroll_Payments', e); payTableOk = false; }
 
     document.getElementById('headSub').textContent =
       `${workers.length} worker${workers.length === 1 ? '' : 's'} · ${punches.length} punch${punches.length === 1 ? '' : 'es'} on record · semi-monthly, exact minutes`;
@@ -354,6 +405,7 @@ function render() {
   document.getElementById('nextBtn').disabled = periodKeyNum(period) >= periodKeyNum(cur);
 
   const sums = workers.map(w => summarise(w, period));
+  renderLedger();
   renderBanners(sums);
   renderWorkers(sums);
   renderTotals(sums);
@@ -424,7 +476,7 @@ function renderWorkers(sums) {
     return `
       <div class="wcard ${open ? 'open' : ''}">
         <div class="whead" data-worker="${s.worker.id}">
-          <span class="wname">${esc(s.worker.name)}</span>
+          <span class="wname">${esc(s.worker.name)} ${paidBadge(s)}</span>
           <span class="wfig"><span class="n">${fmtHours(s.paidSec)}</span><span class="l">Hours</span></span>
           <span class="wfig"><span class="n">${esc(rateLabel)}</span><span class="l">Rate</span></span>
           <span class="wfig pay"><span class="n">${fmtMoney(s.pay)}</span><span class="l">Gross</span></span>
@@ -498,8 +550,8 @@ function renderTotals(sums) {
 
 function renderFoot() {
   document.getElementById('foot').innerHTML =
-    `Pay periods run the 1st&ndash;15th and the 16th&ndash;end of the month. A shift is counted in the
-     period its <b>clock-in</b> falls in, so a shift crossing midnight on the 15th belongs to the first half.
+    `Pay periods run the 1st&ndash;${FIRST_HALF_LAST_DAY}th and the ${FIRST_HALF_LAST_DAY + 1}th&ndash;end of the month (Settings: Pay_Period_Split_Day). A shift is counted in the
+     period its <b>clock-in</b> falls in, so a shift crossing midnight on the ${FIRST_HALF_LAST_DAY}th belongs to the first half.
      Hours are exact clock-in to clock-out with no rounding. Workweeks run Sunday&ndash;Saturday and are
      totalled from all punches, including ones outside this period.
      <br>This is a view of hours and gross pay &mdash; it does not withhold tax or file anything.`;
@@ -543,6 +595,132 @@ document.getElementById('todayBtn').addEventListener('click', () => { period = p
 document.getElementById('reloadBtn').addEventListener('click', loadEverything);
 document.getElementById('copyBtn').addEventListener('click', copySummary);
 document.getElementById('printBtn').addEventListener('click', () => window.print());
+
+/* ── Pay log ────────────────────────────────────────────────────────────────
+   One row per worker per pay period that has hours. "Mark paid" writes a
+   Payroll_Payments row holding the hours and amount AS PAID, so if a punch is
+   corrected afterwards the row says so (and by how much) instead of silently
+   disagreeing with what was handed over. Buttons are tap-twice — no pop-ups,
+   which freeze inside Grist.                                               */
+function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function periodKey(p) { return `${ymd(periodStart(p))}|${ymd(new Date(periodEndExclusive(p).getTime() - 1))}`; }
+function dateToGrist(str) { const [y, m, d] = str.split('-').map(Number); return Date.UTC(y, m - 1, d) / 1000; }
+function fmtGristDate(sec) { const d = new Date(sec * 1000); return `${MONTHS[d.getUTCMonth()].slice(0, 3)} ${d.getUTCDate()}, ${d.getUTCFullYear()}`; }
+function paymentFor(workerId, p) { const k = periodKey(p); return payments.find(x => x.workerId === workerId && x.key === k) || null; }
+function paidBadge(s) {
+  if (!payTableOk || !s.paidSec) return '';
+  const cur = periodKeyNum(period) >= periodKeyNum(periodOf(new Date()));
+  return paymentFor(s.worker.id, period) ? '<span class="pbadge">✓ paid</span>' : cur ? '' : '<span class="pbadge no">not paid</span>';
+}
+
+function ledgerRows() {
+  const cur = periodOf(new Date()), curN = periodKeyNum(cur);
+  const rows = [];
+  workers.forEach(w => {
+    const mine = punches.filter(x => x.workerId === w.id);
+    if (!mine.length) return;
+    let p = periodOf(new Date(Math.min(...mine.map(x => x.inSec)) * 1000));
+    for (; periodKeyNum(p) <= curN; p = periodShift(p, 1)) {
+      const s = summarise(w, p), pay = paymentFor(w.id, p);
+      if (!s.paidSec && !pay) continue;
+      rows.push({ w, p, s, pay, current: periodKeyNum(p) === curN });
+    }
+  });
+  return rows.sort((a, b) => periodKeyNum(b.p) - periodKeyNum(a.p) || String(a.w.name).localeCompare(String(b.w.name)));
+}
+
+function renderLedger() {
+  const el = document.getElementById('ledger');
+  if (!payTableOk) {
+    el.innerHTML = `<div class="banner warn"><b>Pay log not set up</b>Add a table called <b>Payroll_Payments</b> (Worker, Period_Key, Period_Start, Period_End, Hours, Amount, Paid_On, Notes) to tick off paid periods here.</div>`;
+    return;
+  }
+  const rows = ledgerRows();
+  const owed = rows.filter(r => !r.pay && !r.current);
+  const owedAmt = owed.reduce((a, r) => a + r.s.pay, 0);
+  const lastPaid = rows.filter(r => r.pay).map(r => periodEndExclusive(r.p)).sort((a, b) => b - a)[0];
+  if (!paidOnInput) paidOnInput = ymd(new Date());
+  const shown = showAllPeriods ? rows : rows.slice(0, 8);
+
+  const rowHtml = r => {
+    let st;
+    if (r.pay) {
+      st = `<span class="paid">✓ Paid${r.pay.paidOn ? ' ' + esc(fmtGristDate(r.pay.paidOn)) : ''}</span>
+            <button class="undo" data-undo="${r.pay.id}">undo</button>`;
+    } else if (r.current) {
+      st = `<span class="prog">period still running</span>`;
+    } else {
+      st = `<button class="payb" data-pay="${r.w.id}|${periodKeyNum(r.p)}">Mark paid</button>`;
+    }
+    let chg = '';
+    if (r.pay && Math.abs(r.pay.hours - r.s.hours) > 0.01) {
+      const diff = r.s.pay - r.pay.amount;
+      chg = `<div class="chg">Hours changed since this was paid: paid ${r.pay.hours.toFixed(2)} h (${fmtMoney(r.pay.amount)}), now ${r.s.hours.toFixed(2)} h (${fmtMoney(r.s.pay)}) —
+        ${diff > 0 ? `still owe <b>${fmtMoney(diff)}</b>` : `overpaid <b>${fmtMoney(-diff)}</b>`}.</div>`;
+    }
+    return `<div class="lrow ${r.current ? 'cur' : ''}">
+      <div class="per" data-goto="${periodKeyNum(r.p)}"><b>${esc(periodLabel(r.p))}</b>${workers.length > 1 ? `<div class="who">${esc(r.w.name)}</div>` : ''}</div>
+      <span class="h">${r.s.hours.toFixed(2)} h</span>
+      <span class="m">${fmtMoney(r.s.pay)}</span>
+      <span class="st">${st}</span>${chg}</div>`;
+  };
+
+  el.innerHTML = `<div class="ledger">
+    <div class="lhead">
+      <span class="t">Pay log</span>
+      ${owed.length ? `<span class="owed due">Owed ${fmtMoney(owedAmt)}</span>` : `<span class="owed ok">All paid${lastPaid ? ' through ' + esc(fmtDay(new Date(lastPaid.getTime() - 1))) : ''}</span>`}
+      <span class="sp"></span>
+      <label>Paid on <input type="date" id="paidOn" value="${esc(paidOnInput)}"></label>
+      ${owed.length > 1 ? `<button class="payb" id="payAll">Mark all ${owed.length} paid</button>` : ''}
+    </div>
+    ${shown.length ? shown.map(rowHtml).join('') : '<div class="empty">No hours on record yet.</div>'}
+    ${rows.length > 8 ? `<div class="lmore" id="lmore">${showAllPeriods ? 'Show fewer' : `Show all ${rows.length} periods`}</div>` : ''}
+  </div>`;
+
+  el.querySelector('#paidOn').addEventListener('change', e => { paidOnInput = e.target.value || ymd(new Date()); });
+  el.querySelectorAll('[data-goto]').forEach(a => a.addEventListener('click', () => {
+    const n = Number(a.dataset.goto); period = periodShift({ y: 0, m: 0, half: 1 }, n); render();
+    document.getElementById('periodLabel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  el.querySelectorAll('[data-pay]').forEach(b => b.addEventListener('click', () => armThen(b, 'pay' + b.dataset.pay, 'Tap again to confirm', () => {
+    const [wid, n] = b.dataset.pay.split('|').map(Number);
+    const r = rows.find(x => x.w.id === wid && periodKeyNum(x.p) === n);
+    return r ? markPaid([r]) : null;
+  })));
+  el.querySelectorAll('[data-undo]').forEach(b => b.addEventListener('click', () => armThen(b, 'undo' + b.dataset.undo, 'tap again to un-mark', () => unmark(Number(b.dataset.undo)))));
+  const all = el.querySelector('#payAll');
+  if (all) all.addEventListener('click', () => armThen(all, 'payall', `Tap again — mark ${fmtMoney(owedAmt)} paid`, () => markPaid(owed)));
+  const more = el.querySelector('#lmore');
+  if (more) more.addEventListener('click', () => { showAllPeriods = !showAllPeriods; renderLedger(); });
+}
+
+function armThen(btn, key, armedLabel, action) {
+  if (armed[key]) { clearTimeout(armed[key]); delete armed[key]; action(); return; }
+  const orig = btn.textContent; btn.textContent = armedLabel; btn.classList.add('arm');
+  armed[key] = setTimeout(() => { delete armed[key]; btn.textContent = orig; btn.classList.remove('arm'); }, 4000);
+}
+
+let saving = false;
+async function markPaid(list) {
+  if (saving || !list.length) return; saving = true;
+  const paidOn = dateToGrist(paidOnInput || ymd(new Date()));
+  try {
+    await grist.docApi.applyUserActions(list.map(r => ['AddRecord', 'Payroll_Payments', null, {
+      Worker: r.w.id, Period_Key: periodKey(r.p),
+      Period_Start: dateToGrist(ymd(periodStart(r.p))), Period_End: dateToGrist(ymd(new Date(periodEndExclusive(r.p).getTime() - 1))),
+      Hours: Math.round(r.s.hours * 10000) / 10000, Amount: Math.round(r.s.pay * 100) / 100, Paid_On: paidOn,
+    }]));
+    showToast(list.length === 1 ? 'Marked paid ✓' : `${list.length} periods marked paid ✓`);
+    await loadEverything();
+  } catch (e) { console.error(e); showToast('Could not save — try again'); }
+  finally { saving = false; }
+}
+async function unmark(id) {
+  if (saving) return; saving = true;
+  try { await grist.docApi.applyUserActions([['RemoveRecord', 'Payroll_Payments', id]]); showToast('Un-marked'); await loadEverything(); }
+  catch (e) { console.error(e); showToast('Could not save — try again'); }
+  finally { saving = false; }
+}
 
 // ── GRIST INTEGRATION ──
 grist.ready({ requiredAccess: 'full' });
