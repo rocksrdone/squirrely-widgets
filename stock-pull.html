@@ -50,6 +50,7 @@ td.qty input { width: 58px; padding: 4px 6px; border: 1px solid var(--rule); bor
 td.act { width: 1%; white-space: nowrap; text-align: right; }
 .tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; }
 .tag.res { background: var(--gold-bg); color: var(--gold); }
+.tag.ven { background: #EFE8F6; color: #6A4A8C; }
 .tag.part { background: #F1EEEA; color: var(--mid); }
 .note { font-size: 11px; color: var(--muted); }
 .done-row td { background: var(--ok-bg); color: var(--ok); }
@@ -95,9 +96,17 @@ td.act { width: 1%; white-space: nowrap; text-align: right; }
    Spools already RESERVED for an order (Order Builder's "reserve from shelf")
    but not yet boxed show as their own rows: ticking those only records the box.
 
-   Only wound, held-back stock is offered (On_Hand − Vendor − Store). Spools
-   listed on a storefront are on sale, and hank needs winding first. Lines set
-   to "make fresh" are never filled from stock.                               */
+   Back stock is offered first (On_Hand − Vendor − Store). Whatever a line is
+   still short after that is offered from VENDOR stock, tagged: for an order
+   that came from squirrelvendor, Shopify's checkout already took those spools
+   off the site, so this is Grist catching up; for a manual order the vendor
+   quantity must be lowered in Shopify by hand. Retail stock is never offered
+   here, and hank needs winding first. Lines set to "make fresh" are never
+   filled from stock.
+
+   "→ Jobs" reserves the same spools WITHOUT boxing them: the allocation has no
+   Order_Bin, so it shows in Jobs → Pull for orders for whoever is on the
+   floor, who ticks it there once it's in the box.                            */
 const SO = window.StockOps;
 const DONE_ALLOC = /pack|ship|sent|deliver|complete|fulfil/i;
 const S = { data: null, rows: [], allocT: null, A: null, C2: null, lotRow: {}, busy: false, flash: {} };
@@ -161,6 +170,14 @@ function plan() {
     if (free > 0 && l.recipe && l.recipe.id) (lotsByRecipe[l.recipe.id] = lotsByRecipe[l.recipe.id] || []).push({ lot: l, left: free });
   });
   Object.values(lotsByRecipe).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
+  // Vendor-listed wound stock per lot, offered only after back stock runs out.
+  const vendorByRecipe = {};
+  D.lots.forEach(l => {
+    const r = S.lotRow[l.id]; if (!r) return;
+    const v = Math.max(0, Math.min(r.vendor, r.onHand));
+    if (v > 0 && l.recipe && l.recipe.id) (vendorByRecipe[l.recipe.id] = vendorByRecipe[l.recipe.id] || []).push({ lot: l, left: v });
+  });
+  Object.values(vendorByRecipe).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
   S.hankByRecipe = {};
   D.lots.forEach(l => { if (l.hank > 0 && l.recipe && l.recipe.id) S.hankByRecipe[l.recipe.id] = (S.hankByRecipe[l.recipe.id] || 0) + l.hank; });
 
@@ -179,9 +196,21 @@ function plan() {
         take.push({ lotId: s.lot.id, lotNumber: s.lot.lotNumber, bin: s.lot.binCode || '', qty: n });
         s.left -= n; want -= n;
       }
-      if (!take.length) { S.noStock++; return; }
-      rows.push({ kind: 'pull', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
-        take, qty: take.reduce((a, t) => a + t.qty, 0), short: line.short });
+      const got = take.reduce((a, t) => a + t.qty, 0);
+      if (take.length) rows.push({ kind: 'pull', src: 'general', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
+        take, qty: got, short: line.short });
+      // Still short: vendor stock.
+      const vtake = [];
+      for (const s of (vendorByRecipe[rid] || [])) {
+        if (want <= 0) break;
+        if (s.left <= 0) continue;
+        const n = Math.min(want, s.left);
+        vtake.push({ lotId: s.lot.id, lotNumber: s.lot.lotNumber, bin: s.lot.binCode || '', qty: n });
+        s.left -= n; want -= n;
+      }
+      if (vtake.length) rows.push({ kind: 'pull', src: 'vendor', key: 'v' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
+        take: vtake, qty: vtake.reduce((a, t) => a + t.qty, 0), short: line.short - got });
+      if (!take.length && !vtake.length) S.noStock++;
     });
   });
 
@@ -202,6 +231,7 @@ function plan() {
   });
   S.rows = rows;
 }
+function isManualOrder(o) { return /^M-\d+$/i.test(String((o && o.number) || '').trim()); }
 function orderForLine(lineId) { return (S.lineOrder || {})[lineId] || null; }
 
 function boxes() {
@@ -250,7 +280,7 @@ function boxHtml(b) {
       <span class="box-who">${esc(o.customerName || '')}</span>
       <span class="box-meta">order ${esc(o.number)} ${o.due ? '· ' + dueHtml(o.due) : ''}</span>
       <span class="box-meta">${short ? `<span class="tag part">${short} more still to dye</span>` : '<span class="tag" style="background:var(--ok-bg);color:var(--ok)">back stock covers the whole order</span>'}</span>
-      <span class="right"><button class="btn go small" data-all="${o.id}" ${S.busy ? 'disabled' : ''}>✓ All ${all} in the box</button></span>
+      <span class="right">${b.rows.some(r => r.kind === 'pull') ? `<button class="btn small" data-alljob="${o.id}" ${S.busy ? 'disabled' : ''} title="Reserve everything here and put the pulls on the Jobs list">→ All to Jobs</button> ` : ''}<button class="btn go small" data-all="${o.id}" ${S.busy ? 'disabled' : ''}>✓ All ${all} in the box</button></span>
     </div>
     <table>${b.rows.map(rowHtml).join('')}</table>
   </div>`;
@@ -259,16 +289,20 @@ function rowHtml(r) {
   const rc = r.recipe || {}, fib = rc.fiber || '';
   const from = r.take.map(t => `<span class="bin">${esc(t.bin || 'no bin')}</span> <span class="lot">${esc(t.lotNumber)}</span>${r.take.length > 1 ? ` ×${t.qty}` : ''}`).join('<br>');
   const hank = S.hankByRecipe[rc.id] || 0;
-  const extra = r.kind === 'reserved'
-    ? '<span class="tag res" title="Reserved in Order Builder; the spools are still in the bin">reserved — not boxed yet</span>'
+  let extra = r.kind === 'reserved'
+    ? '<span class="tag res" title="Reserved already; the spools are still in the bin">reserved — not boxed yet</span>'
     : (r.qty < r.short ? `<span class="tag part">${r.qty} of ${r.short} — rest to dye${hank ? `, ${hank} in hank` : ''}</span>` : '');
+  if (r.src === 'vendor') extra = (isManualOrder(r.order)
+    ? '<span class="tag ven" title="These are for sale on squirrelvendor.com">vendor stock — lower it in Shopify</span>'
+    : '<span class="tag ven" title="This order came from squirrelvendor.com, so Shopify already took these off the site">vendor stock — Shopify already counted it</span>') + ' ' + extra;
   return `<tr data-row="${esc(r.key)}">
     <td class="cw"><b>${esc(rc.name || '?')}</b><span class="fib">${esc(fib)}</span><div>${extra}</div></td>
     <td class="from">take from ${from}</td>
     <td class="qty">${r.kind === 'pull'
       ? `<input type="number" min="0" max="${r.qty}" value="${r.qty}" data-qty="${esc(r.key)}" title="Found fewer? Change this before ticking.">`
       : `<b style="font-size:15px">${r.qty}</b>`}</td>
-    <td class="act"><button class="btn go small" data-one="${esc(r.key)}" ${S.busy ? 'disabled' : ''}>✓ In the box</button></td>
+    <td class="act"><button class="btn go small" data-one="${esc(r.key)}" ${S.busy ? 'disabled' : ''}>✓ In the box</button>
+      ${r.kind === 'pull' ? `<button class="btn small" data-job="${esc(r.key)}" ${S.busy ? 'disabled' : ''} title="Reserve these spools and put the pull on the Jobs list instead">→ Jobs</button>` : ''}</td>
   </tr>`;
 }
 function bind() {
@@ -277,17 +311,23 @@ function bind() {
     const box = boxes().find(x => String(x.order.id) === b.dataset.all);
     if (box) commit(box.rows.map(r => r.key));
   });
+  document.querySelectorAll('[data-job]').forEach(b => b.onclick = () => commit([b.dataset.job], true));
+  document.querySelectorAll('[data-alljob]').forEach(b => b.onclick = () => {
+    const box = boxes().find(x => String(x.order.id) === b.dataset.alljob);
+    if (box) commit(box.rows.filter(r => r.kind === 'pull').map(r => r.key), true);
+  });
 }
 
 /* Write one or more rows: allocations + stock, refused if a lot moved. */
-async function commit(keys) {
+async function commit(keys, toJobs) {
   if (S.busy) return;
-  const A = S.A, acts = [], lotDelta = {}, names = {};
+  const A = S.A, acts = [], lotDelta = {}, names = {};   // lotDelta[lotId] = { general: n, vendor: n }
   let spools = 0;
   keys.forEach(k => {
     const r = S.rows.find(x => x.key === k); if (!r) return;
     const code = SO.orderBinCode(r.order.customerCode, r.order.number);
     if (r.kind === 'reserved') {
+      if (toJobs) return;
       if (A.bin && code) { acts.push(['UpdateRecord', 'Lot_Allocations', r.allocId, { [A.bin]: code }]); spools += r.qty; }
       return;
     }
@@ -299,10 +339,11 @@ async function commit(keys) {
       const f = { [A.lot]: t.lotId, [A.qty]: n, [A.line]: r.line.lineId };
       if (A.status) f[A.status] = S.woundStatus;
       if (A.customer && r.order.customerId) f[A.customer] = r.order.customerId;
-      if (A.source) f[A.source] = 'General';
-      if (A.bin && code) f[A.bin] = code;
+      if (A.source) f[A.source] = r.src === 'vendor' ? 'Vendor' : 'General';
+      if (A.bin && code && !toJobs) f[A.bin] = code;
       acts.push(['AddRecord', 'Lot_Allocations', null, f]);
-      lotDelta[t.lotId] = (lotDelta[t.lotId] || 0) + n;
+      const d = lotDelta[t.lotId] = lotDelta[t.lotId] || { general: 0, vendor: 0 };
+      d[r.src === 'vendor' ? 'vendor' : 'general'] += n;
       names[t.lotId] = t.lotNumber;
       want -= n; spools += n;
     }
@@ -316,11 +357,13 @@ async function commit(keys) {
       const stale = await SO.staleLots(grist.docApi, S.C2, lotIds, before, names);
       if (stale.length) { toast(`${stale.join(', ')} changed at another station — reloaded, check and tick again`, true); S.busy = false; await load(); return; }
       lotIds.forEach(id => {
-        acts.push(['UpdateRecord', 'Production_Lots', id, SO.stockMove(Object.assign({}, S.lotRow[id]), S.C2, 'general', -lotDelta[id]).fields]);
+        const row = Object.assign({}, S.lotRow[id]), fields = {};
+        ['vendor', 'general'].forEach(w => { if (lotDelta[id][w]) Object.assign(fields, SO.stockMove(row, S.C2, w, -lotDelta[id][w]).fields); });
+        acts.push(['UpdateRecord', 'Production_Lots', id, fields]);
       });
     }
     await grist.docApi.applyUserActions(acts);
-    toast(`✓ ${spools} spool${spools === 1 ? '' : 's'} in the box`);
+    toast(toJobs ? `→ ${spools} spool${spools === 1 ? '' : 's'} reserved and on the Jobs list` : `✓ ${spools} spool${spools === 1 ? '' : 's'} in the box`);
   } catch (e) {
     console.error(e); toast('Not saved: ' + (e.message || e), true);
   }

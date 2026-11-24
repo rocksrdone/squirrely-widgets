@@ -234,7 +234,7 @@ function pullHtml(p) {
   return `<div class="job pull" data-pull="${p.allocId}">
     <div class="what"><b>${esc(rc.name || 'Thread')}${p.lot.fiber ? ' ' + esc(p.lot.fiber) : ''}</b>
       <div class="d">Take from ${from}${p.lot.lotNumber ? ` (${esc(p.lot.lotNumber)})` : ''} → put in box <b>${esc(p.box || 'for ' + p.order.number)}</b> · ${esc(p.order.customerName || '')} ${esc(p.order.number)}</div>
-      ${p.src !== 'General' ? `<div class="d" style="color:var(--purple)">Taken from the ${esc(p.src.toLowerCase())} store's stock — lower its quantity there if not done yet.</div>` : ''}</div>
+      ${p.src !== 'General' && !(p.src === 'Vendor' && !/^M-\d+$/i.test(String(p.order.number || '').trim())) ? `<div class="d" style="color:var(--purple)">Taken from the ${esc(p.src.toLowerCase())} store's stock — lower its quantity there if not done yet.</div>` : ''}</div>
     <span class="pill">${p.qty} spools</span>
     ${p.lot.binCode ? `<span class="pill">bin ${esc(p.lot.binCode)}</span>` : ''}
     <div class="acts"><button class="btn go done" data-pullok="${p.allocId}" title="In the box">✓</button></div>
