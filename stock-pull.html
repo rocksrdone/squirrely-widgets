@@ -96,8 +96,10 @@ td.act { width: 1%; white-space: nowrap; text-align: right; }
    Spools already RESERVED for an order (Order Builder's "reserve from shelf")
    but not yet boxed show as their own rows: ticking those only records the box.
 
-   Back stock is offered first (On_Hand − Vendor − Store). Whatever a line is
-   still short after that is offered from VENDOR stock, tagged: for an order
+   A line is offered ONLY when one lot can cover all of it — two dye lots can
+   differ in colour, so a line stock can only partly fill is dyed fresh
+   instead. Within that lot, back stock (On_Hand − Vendor − Store) is used
+   first, then VENDOR stock, tagged: for an order
    that came from squirrelvendor, Shopify's checkout already took those spools
    off the site, so this is Grist catching up; for a manual order the vendor
    quantity must be lowered in Shopify by hand. Retail stock is never offered
@@ -181,36 +183,30 @@ function plan() {
   S.hankByRecipe = {};
   D.lots.forEach(l => { if (l.hank > 0 && l.recipe && l.recipe.id) S.hankByRecipe[l.recipe.id] = (S.hankByRecipe[l.recipe.id] || 0) + l.hank; });
 
-  // 1) Lines short of spools: plan a pull.
+  // 1) Lines short of spools: plan a pull — ONLY from a single lot that covers
+  //    the whole line. Spools from two dye lots can differ in colour, so a line
+  //    stock can only partly fill is left to be dyed fresh, all together.
+  //    Within that one lot, back stock is used before vendor stock.
   S.noStock = 0;
+  const genLeft = {}, venLeft = {};
+  Object.values(lotsByRecipe).forEach(a => a.forEach(s => { genLeft[s.lot.id] = s.left; }));
+  Object.values(vendorByRecipe).forEach(a => a.forEach(s => { venLeft[s.lot.id] = s.left; }));
   Object.entries(D.linesByRecipe).forEach(([rid, list]) => {
-    const lots = lotsByRecipe[rid] || [];
+    const cand = {};
+    [...(lotsByRecipe[rid] || []), ...(vendorByRecipe[rid] || [])].forEach(s => { cand[s.lot.id] = s.lot; });
+    const lots = Object.values(cand).sort((x, y) => (x.date || 0) - (y.date || 0) || x.id - y.id);
     list.forEach(line => {
       if (line.makeFresh) return;
-      let want = line.short;
+      const want = line.short;
+      const lot = lots.find(l => (genLeft[l.id] || 0) + (venLeft[l.id] || 0) >= want);
+      if (!lot) { S.noStock++; return; }
+      const g = Math.min(want, genLeft[lot.id] || 0), v = want - g;
+      genLeft[lot.id] = (genLeft[lot.id] || 0) - g; venLeft[lot.id] = (venLeft[lot.id] || 0) - v;
       const take = [];
-      for (const s of lots) {
-        if (want <= 0) break;
-        if (s.left <= 0) continue;
-        const n = Math.min(want, s.left);
-        take.push({ lotId: s.lot.id, lotNumber: s.lot.lotNumber, bin: s.lot.binCode || '', qty: n });
-        s.left -= n; want -= n;
-      }
-      const got = take.reduce((a, t) => a + t.qty, 0);
-      if (take.length) rows.push({ kind: 'pull', src: 'general', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
-        take, qty: got, short: line.short });
-      // Still short: vendor stock.
-      const vtake = [];
-      for (const s of (vendorByRecipe[rid] || [])) {
-        if (want <= 0) break;
-        if (s.left <= 0) continue;
-        const n = Math.min(want, s.left);
-        vtake.push({ lotId: s.lot.id, lotNumber: s.lot.lotNumber, bin: s.lot.binCode || '', qty: n });
-        s.left -= n; want -= n;
-      }
-      if (vtake.length) rows.push({ kind: 'pull', src: 'vendor', key: 'v' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
-        take: vtake, qty: vtake.reduce((a, t) => a + t.qty, 0), short: line.short - got });
-      if (!take.length && !vtake.length) S.noStock++;
+      if (g) take.push({ lotId: lot.id, lotNumber: lot.lotNumber, bin: lot.binCode || '', qty: g, src: 'general' });
+      if (v) take.push({ lotId: lot.id, lotNumber: lot.lotNumber, bin: lot.binCode || '', qty: v, src: 'vendor' });
+      rows.push({ kind: 'pull', src: v ? 'vendor' : 'general', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
+        take, qty: want, short: want });
     });
   });
 
@@ -267,8 +263,8 @@ function render() {
   $('status').textContent = list.length
     ? `${list.length} order${list.length > 1 ? 's' : ''} · ${spools} spool${spools === 1 ? '' : 's'} to take out of back stock and box. Soonest due first.`
     : '';
-  $('list').innerHTML = list.length ? list.map(boxHtml).join('') : `<div class="empty">Nothing to pull — no open order needs a colourway that's sitting in back stock.</div>`;
-  $('foot').textContent = S.noStock ? `${S.noStock} other order line${S.noStock > 1 ? 's' : ''} need spools that aren't in back stock — those go to dyeing as usual.` : '';
+  $('list').innerHTML = list.length ? list.map(boxHtml).join('') : `<div class="empty">Nothing to pull — no open order line can be filled completely from one lot in stock.</div>`;
+  $('foot').textContent = S.noStock ? `${S.noStock} other order line${S.noStock > 1 ? 's' : ''} can't be filled from a single lot in stock — those go to dyeing as usual (mixing lots risks a colour mismatch).` : '';
   bind();
 }
 function boxHtml(b) {
@@ -287,7 +283,9 @@ function boxHtml(b) {
 }
 function rowHtml(r) {
   const rc = r.recipe || {}, fib = rc.fiber || '';
-  const from = r.take.map(t => `<span class="bin">${esc(t.bin || 'no bin')}</span> <span class="lot">${esc(t.lotNumber)}</span>${r.take.length > 1 ? ` ×${t.qty}` : ''}`).join('<br>');
+  const from = r.take.length > 1
+    ? `<span class="bin">${esc(r.take[0].bin || 'no bin')}</span> <span class="lot">${esc(r.take[0].lotNumber)}</span> · ${r.take.map(t => `${t.qty} ${t.src === 'vendor' ? 'vendor' : 'back stock'}`).join(' + ')}`
+    : `<span class="bin">${esc(r.take[0].bin || 'no bin')}</span> <span class="lot">${esc(r.take[0].lotNumber)}</span>`;
   const hank = S.hankByRecipe[rc.id] || 0;
   let extra = r.kind === 'reserved'
     ? '<span class="tag res" title="Reserved already; the spools are still in the bin">reserved — not boxed yet</span>'
@@ -298,9 +296,7 @@ function rowHtml(r) {
   return `<tr data-row="${esc(r.key)}">
     <td class="cw"><b>${esc(rc.name || '?')}</b><span class="fib">${esc(fib)}</span><div>${extra}</div></td>
     <td class="from">take from ${from}</td>
-    <td class="qty">${r.kind === 'pull'
-      ? `<input type="number" min="0" max="${r.qty}" value="${r.qty}" data-qty="${esc(r.key)}" title="Found fewer? Change this before ticking.">`
-      : `<b style="font-size:15px">${r.qty}</b>`}</td>
+    <td class="qty"><b style="font-size:15px">${r.qty}</b></td>
     <td class="act"><button class="btn go small" data-one="${esc(r.key)}" ${S.busy ? 'disabled' : ''}>✓ In the box</button>
       ${r.kind === 'pull' ? `<button class="btn small" data-job="${esc(r.key)}" ${S.busy ? 'disabled' : ''} title="Reserve these spools and put the pull on the Jobs list instead">→ Jobs</button>` : ''}</td>
   </tr>`;
@@ -331,19 +327,18 @@ async function commit(keys, toJobs) {
       if (A.bin && code) { acts.push(['UpdateRecord', 'Lot_Allocations', r.allocId, { [A.bin]: code }]); spools += r.qty; }
       return;
     }
-    const inp = document.querySelector(`[data-qty="${CSS.escape(k)}"]`);
-    let want = Math.max(0, Math.min(r.qty, Math.floor(Number(inp ? inp.value : r.qty) || 0)));
+    let want = r.qty;   // all or nothing: one lot covers the whole line
     for (const t of r.take) {
       if (want <= 0) break;
       const n = Math.min(want, t.qty);
       const f = { [A.lot]: t.lotId, [A.qty]: n, [A.line]: r.line.lineId };
       if (A.status) f[A.status] = S.woundStatus;
       if (A.customer && r.order.customerId) f[A.customer] = r.order.customerId;
-      if (A.source) f[A.source] = r.src === 'vendor' ? 'Vendor' : 'General';
+      if (A.source) f[A.source] = t.src === 'vendor' ? 'Vendor' : 'General';
       if (A.bin && code && !toJobs) f[A.bin] = code;
       acts.push(['AddRecord', 'Lot_Allocations', null, f]);
       const d = lotDelta[t.lotId] = lotDelta[t.lotId] || { general: 0, vendor: 0 };
-      d[r.src === 'vendor' ? 'vendor' : 'general'] += n;
+      d[t.src === 'vendor' ? 'vendor' : 'general'] += n;
       names[t.lotId] = t.lotNumber;
       want -= n; spools += n;
     }
