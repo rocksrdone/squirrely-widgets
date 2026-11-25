@@ -224,6 +224,7 @@ async function loadPulls() {
     if (!o || o.status !== 'Active') return;
     const lot = lots[refIdOf(alloc[A.lot][i])] || {};
     out.push({ allocId: id, qty: Number(alloc[A.qty][i]) || 0, src, order: o, lot,
+      hank: /unwound|hank/i.test(String((alloc[A.status] || [])[i] || '')),
       box: StockOps.orderBinCode(o.customerCode, o.number) });
   });
   return out.sort((a, b) => (a.order.due || 9e12) - (b.order.due || 9e12) || String(a.order.number).localeCompare(String(b.order.number)));
@@ -234,8 +235,9 @@ function pullHtml(p) {
   return `<div class="job pull" data-pull="${p.allocId}">
     <div class="what"><b>${esc(rc.name || 'Thread')}${p.lot.fiber ? ' ' + esc(p.lot.fiber) : ''}</b>
       <div class="d">Take from ${from}${p.lot.lotNumber ? ` (${esc(p.lot.lotNumber)})` : ''} → put in box <b>${esc(p.box || 'for ' + p.order.number)}</b> · ${esc(p.order.customerName || '')} ${esc(p.order.number)}</div>
+      ${p.hank ? `<div class="d" style="color:#A0522D">Still in hank — bag it into the box; Wind Routing will list it to wind.</div>` : ''}
       ${p.src !== 'General' && !(p.src === 'Vendor' && !/^M-\d+$/i.test(String(p.order.number || '').trim())) ? `<div class="d" style="color:var(--purple)">Taken from the ${esc(p.src.toLowerCase())} store's stock — lower its quantity there if not done yet.</div>` : ''}</div>
-    <span class="pill">${p.qty} spools</span>
+    <span class="pill">${p.qty} spools${p.hank ? ' · hank' : ''}</span>
     ${p.lot.binCode ? `<span class="pill">bin ${esc(p.lot.binCode)}</span>` : ''}
     <div class="acts"><button class="btn go done" data-pullok="${p.allocId}" title="In the box">✓</button></div>
   </div>`;

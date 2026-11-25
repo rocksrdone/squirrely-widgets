@@ -50,6 +50,7 @@ td.qty input { width: 58px; padding: 4px 6px; border: 1px solid var(--rule); bor
 td.act { width: 1%; white-space: nowrap; text-align: right; }
 .tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; }
 .tag.res { background: var(--gold-bg); color: var(--gold); }
+.tag.hank { background: #FBEBDD; color: #A0522D; }
 .tag.ven { background: #EFE8F6; color: #6A4A8C; }
 .tag.part { background: #F1EEEA; color: var(--mid); }
 .note { font-size: 11px; color: var(--muted); }
@@ -164,22 +165,6 @@ function plan() {
   const lineToOrder = {};
   Object.values(D.linesByRecipe).forEach(list => list.forEach(l => { lineToOrder[l.lineId] = l; }));
 
-  // Free wound held-back stock per lot.
-  const lotsByRecipe = {};
-  D.lots.forEach(l => {
-    const r = S.lotRow[l.id]; if (!r) return;
-    const free = Math.max(0, r.onHand - r.vendor - r.store);
-    if (free > 0 && l.recipe && l.recipe.id) (lotsByRecipe[l.recipe.id] = lotsByRecipe[l.recipe.id] || []).push({ lot: l, left: free });
-  });
-  Object.values(lotsByRecipe).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
-  // Vendor-listed wound stock per lot, offered only after back stock runs out.
-  const vendorByRecipe = {};
-  D.lots.forEach(l => {
-    const r = S.lotRow[l.id]; if (!r) return;
-    const v = Math.max(0, Math.min(r.vendor, r.onHand));
-    if (v > 0 && l.recipe && l.recipe.id) (vendorByRecipe[l.recipe.id] = vendorByRecipe[l.recipe.id] || []).push({ lot: l, left: v });
-  });
-  Object.values(vendorByRecipe).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
   S.hankByRecipe = {};
   D.lots.forEach(l => { if (l.hank > 0 && l.recipe && l.recipe.id) S.hankByRecipe[l.recipe.id] = (S.hankByRecipe[l.recipe.id] || 0) + l.hank; });
 
@@ -188,25 +173,37 @@ function plan() {
   //    stock can only partly fill is left to be dyed fresh, all together.
   //    Within that one lot, back stock is used before vendor stock.
   S.noStock = 0;
-  const genLeft = {}, venLeft = {};
-  Object.values(lotsByRecipe).forEach(a => a.forEach(s => { genLeft[s.lot.id] = s.left; }));
-  Object.values(vendorByRecipe).forEach(a => a.forEach(s => { venLeft[s.lot.id] = s.left; }));
+  // Per lot: what's held back (back stock) and what's listed on the vendor site,
+  // counting hank as well as wound — hank is wound for the order on the way
+  // (Wind Routing shows it). Retail-listed spools are never offered.
+  const st = {};
+  D.lots.forEach(l => {
+    const r = S.lotRow[l.id]; if (!r || !l.recipe || !l.recipe.id) return;
+    const held = r.onHand + r.hank;
+    st[l.id] = { lot: l, wound: r.onHand, gen: Math.max(0, held - r.vendor - r.store), ven: Math.max(0, Math.min(r.vendor, held)) };
+  });
+  const lotsFor = {};
+  Object.values(st).forEach(x => { if (x.gen + x.ven > 0) (lotsFor[x.lot.recipe.id] = lotsFor[x.lot.recipe.id] || []).push(x); });
+  Object.values(lotsFor).forEach(a => a.sort((x, y) => (x.lot.date || 0) - (y.lot.date || 0) || x.lot.id - y.lot.id));
   Object.entries(D.linesByRecipe).forEach(([rid, list]) => {
-    const cand = {};
-    [...(lotsByRecipe[rid] || []), ...(vendorByRecipe[rid] || [])].forEach(s => { cand[s.lot.id] = s.lot; });
-    const lots = Object.values(cand).sort((x, y) => (x.date || 0) - (y.date || 0) || x.id - y.id);
+    const lots = lotsFor[rid] || [];
     list.forEach(line => {
       if (line.makeFresh) return;
       const want = line.short;
-      const lot = lots.find(l => (genLeft[l.id] || 0) + (venLeft[l.id] || 0) >= want);
-      if (!lot) { S.noStock++; return; }
-      const g = Math.min(want, genLeft[lot.id] || 0), v = want - g;
-      genLeft[lot.id] = (genLeft[lot.id] || 0) - g; venLeft[lot.id] = (venLeft[lot.id] || 0) - v;
+      const x = lots.find(c => c.gen + c.ven >= want);
+      if (!x) { S.noStock++; return; }
+      const g = Math.min(want, x.gen), v = want - g;
+      x.gen -= g; x.ven -= v;
       const take = [];
-      if (g) take.push({ lotId: lot.id, lotNumber: lot.lotNumber, bin: lot.binCode || '', qty: g, src: 'general' });
-      if (v) take.push({ lotId: lot.id, lotNumber: lot.lotNumber, bin: lot.binCode || '', qty: v, src: 'vendor' });
+      [['general', g], ['vendor', v]].forEach(([src, n]) => {
+        if (!n) return;
+        const w = Math.min(n, x.wound); x.wound -= w;      // wound spools go first, as stockMove takes them
+        const base = { lotId: x.lot.id, lotNumber: x.lot.lotNumber, bin: x.lot.binCode || '', src };
+        if (w) take.push(Object.assign({}, base, { qty: w, hank: false }));
+        if (n - w) take.push(Object.assign({}, base, { qty: n - w, hank: true }));
+      });
       rows.push({ kind: 'pull', src: v ? 'vendor' : 'general', key: 'p' + line.lineId, line, order: line.order, recipe: D.recipes[rid],
-        take, qty: want, short: want });
+        take, qty: want, short: want, hankQty: take.filter(t => t.hank).reduce((a, t) => a + t.qty, 0) });
     });
   });
 
@@ -283,13 +280,14 @@ function boxHtml(b) {
 }
 function rowHtml(r) {
   const rc = r.recipe || {}, fib = rc.fiber || '';
-  const from = r.take.length > 1
-    ? `<span class="bin">${esc(r.take[0].bin || 'no bin')}</span> <span class="lot">${esc(r.take[0].lotNumber)}</span> · ${r.take.map(t => `${t.qty} ${t.src === 'vendor' ? 'vendor' : 'back stock'}`).join(' + ')}`
-    : `<span class="bin">${esc(r.take[0].bin || 'no bin')}</span> <span class="lot">${esc(r.take[0].lotNumber)}</span>`;
+  const srcs = [...new Set(r.take.map(t => t.src))];
+  const from = `<span class="bin">${esc(r.take[0].bin || 'no bin')}</span> <span class="lot">${esc(r.take[0].lotNumber)}</span>` +
+    (srcs.length > 1 ? ' · ' + srcs.map(sv => `${r.take.filter(t => t.src === sv).reduce((a, t) => a + t.qty, 0)} ${sv === 'vendor' ? 'vendor' : 'back stock'}`).join(' + ') : '');
   const hank = S.hankByRecipe[rc.id] || 0;
   let extra = r.kind === 'reserved'
     ? '<span class="tag res" title="Reserved already; the spools are still in the bin">reserved — not boxed yet</span>'
     : (r.qty < r.short ? `<span class="tag part">${r.qty} of ${r.short} — rest to dye${hank ? `, ${hank} in hank` : ''}</span>` : '');
+  if (r.hankQty) extra = `<span class="tag hank" title="Grist has these as hank — wind them for this order (Wind Routing shows them once boxed)">${r.hankQty === r.qty ? 'hank — wind first' : r.hankQty + ' in hank — wind first'}</span> ` + extra;
   if (r.src === 'vendor') extra = (isManualOrder(r.order)
     ? '<span class="tag ven" title="These are for sale on squirrelvendor.com">vendor stock — lower it in Shopify</span>'
     : '<span class="tag ven" title="This order came from squirrelvendor.com, so Shopify already took these off the site">vendor stock — Shopify already counted it</span>') + ' ' + extra;
@@ -332,7 +330,7 @@ async function commit(keys, toJobs) {
       if (want <= 0) break;
       const n = Math.min(want, t.qty);
       const f = { [A.lot]: t.lotId, [A.qty]: n, [A.line]: r.line.lineId };
-      if (A.status) f[A.status] = S.woundStatus;
+      if (A.status) f[A.status] = t.hank ? SO.ORDER_STATUS_HANK : S.woundStatus;
       if (A.customer && r.order.customerId) f[A.customer] = r.order.customerId;
       if (A.source) f[A.source] = t.src === 'vendor' ? 'Vendor' : 'General';
       if (A.bin && code && !toJobs) f[A.bin] = code;
